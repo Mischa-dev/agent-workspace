@@ -8,36 +8,14 @@
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use super::{a1_runs_record::seed, support::db::row_rules_role, tenancy_tables::migrated_schema};
+use agent_workspace_server::tenancy::tables::{DIRECT_SCOPE_TABLES, TENANT_TABLES};
 
-/// H1.4's tables, the first batch with row rules (H1.21).
-const CHAT_TABLES: &[&str] = &[
-    "conversations",
-    "conversation_entries",
-    "conversation_members",
-    "conversation_notification_levels",
-    "conversation_pins",
-    "conversation_read_states",
-    "messages",
-    "message_link_previews",
-    "message_mentions",
-    "message_reactions",
-    "message_revisions",
-    "message_work_item_references",
-    "reply_requests",
-    "notifications",
-    "notification_occurrences",
-    "notification_project_mutes",
-    "outbox_events",
-    "person_questions",
-    "project_decisions",
-    "push_deliveries",
-    "thing_references",
-];
+use super::{a1_runs_record::seed, support::db::row_rules_role, tenancy_tables::migrated_schema};
 
 /// What is wrong with `tables`' row rules, in words: each must have row
 /// security on and forced, and one policy named `tenancy` that applies
-/// `tenancy_allows` to its tenant column for reads and writes.
+/// `tenancy_allows` to its tenant column for reads and writes (and, on a
+/// table that may hold direct-scope rows, the direct branch too).
 async fn policy_problems(pool: &PgPool, tables: &[(&str, &str)]) -> Vec<String> {
     let mut problems = Vec::new();
     for (table, column) in tables {
@@ -56,10 +34,17 @@ async fn policy_problems(pool: &PgPool, tables: &[(&str, &str)]) -> Vec<String> 
         .await
         .expect("read a table's row rules");
         let rule = format!("tenancy_allows({column})");
+        let direct = DIRECT_SCOPE_TABLES.contains(table);
+        let covers = |expression: &str| {
+            expression.contains(&rule) && (!direct || expression.contains("tenancy_direct_allows"))
+        };
         match found {
-            (true, true, Some(using), Some(check))
-                if using.contains(&rule) && check.contains(&rule) => {}
-            other => problems.push(format!("{table}: {other:?}, expected {rule}")),
+            (true, true, Some(using), Some(check)) if covers(&using) && covers(&check) => {}
+            other => problems.push(format!(
+                "{table}: {other:?}; protect it in its migration with \
+                 SELECT tenancy_protect('{table}', '{column}'{})",
+                if direct { ", '<its conversation>'" } else { "" }
+            )),
         }
     }
     problems
@@ -115,7 +100,7 @@ async fn count(
 }
 
 #[tokio::test]
-async fn chat_rows_follow_the_scope_once_strict_and_nothing_is_refused_before() {
+async fn rows_follow_the_scope_once_strict_and_nothing_is_refused_before() {
     let Some((pool, schema)) = migrated_schema("tenancy_row_rules").await else {
         return;
     };
@@ -130,12 +115,26 @@ async fn chat_rows_follow_the_scope_once_strict_and_nothing_is_refused_before() 
         .await
         .expect("another workspace");
 
-    // The guard: every chat table has its policy.
-    let chat = CHAT_TABLES
-        .iter()
-        .map(|table| (*table, "workspace_id"))
-        .collect::<Vec<_>>();
-    let problems = policy_problems(&pool, &chat).await;
+    // A message in the seeded thread, so the counts below have rows.
+    sqlx::query(
+        r#"
+        INSERT INTO messages (id, project_id, conversation_id, author_actor_id, content, plain_text)
+        VALUES ($1, $2, $3, $4,
+                jsonb_build_object('version', 1, 'nodes',
+                    jsonb_build_array(jsonb_build_object('type', 'text', 'text', 'Hello'))),
+                'Hello')
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(seed.project_id)
+    .bind(seed.thread_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("a message in the thread");
+
+    // The guard: every tenant table has its policy.
+    let problems = policy_problems(&pool, TENANT_TABLES).await;
     assert!(problems.is_empty(), "{problems:#?}");
 
     let conversations = "SELECT count(*) FROM conversations WHERE project_id = $1";
@@ -143,6 +142,7 @@ async fn chat_rows_follow_the_scope_once_strict_and_nothing_is_refused_before() 
     let all = count(&pool, None, None, false, conversations, seed.project_id).await;
     assert!(all >= 2, "the seed has a channel and a thread");
     let all_messages = count(&pool, None, None, false, messages, seed.project_id).await;
+    assert!(all_messages >= 1);
     let own = format!("w:|{}", seed.organization_id);
     let elsewhere = format!("w:|{other}");
     let member_of_both = format!(
@@ -201,19 +201,43 @@ async fn chat_rows_follow_the_scope_once_strict_and_nothing_is_refused_before() 
     assert!(moved.is_err(), "a row was written outside the scope");
     transaction.rollback().await.expect("rollback");
 
-    // The direct scope's branch (R20) reaches every chat table through the
-    // row's conversation: a participant reads their DM from any scope. K4
-    // owns the helper's body; here a stand-in names one conversation and one
-    // account.
+    // The direct scope (R20): a DM's rows are invisible under every member
+    // and workspace scope, including a scope naming every workspace its
+    // participants belong to as their admins, and visible to a participant
+    // from any scope. K4 makes the direct scope and owns the helper's body;
+    // here the seeded thread stands in for a DM, moved
+    // into a stand-in direct workspace, and the helper names one participant.
+    let direct = Uuid::now_v7();
+    let dm = seed.thread_id;
     let mut transaction = pool.begin().await.expect("begin");
-    sqlx::query(&format!(
-        "CREATE OR REPLACE FUNCTION tenancy_direct_allows(workspace UUID, conversation UUID) \
-         RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT conversation = '{}' AND tenancy_account() = '{}' $$",
-        seed.thread_id, seed.collaborator_actor_id
-    ))
-    .execute(&mut *transaction)
-    .await
-    .expect("stand-in direct branch");
+    for statement in [
+        format!(
+            "INSERT INTO organizations (id, name, slug) VALUES ('{direct}', 'Direct', 'direct-{}')",
+            direct.simple()
+        ),
+        "ALTER TABLE messages DISABLE TRIGGER USER".to_owned(),
+        format!("UPDATE conversations SET workspace_id = '{direct}' WHERE id = '{dm}'"),
+        format!("UPDATE messages SET workspace_id = '{direct}' WHERE conversation_id = '{dm}'"),
+        "ALTER TABLE messages ENABLE TRIGGER USER".to_owned(),
+        format!(
+            "CREATE OR REPLACE FUNCTION tenancy_direct_allows(workspace UUID, conversation UUID) \
+             RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT workspace = '{direct}' \
+             AND conversation = '{}' AND tenancy_account() = '{}' $$",
+            dm, seed.collaborator_actor_id
+        ),
+    ] {
+        sqlx::query(&statement)
+            .execute(&mut *transaction)
+            .await
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    }
+    let in_dm =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM messages WHERE conversation_id = $1")
+            .bind(dm)
+            .fetch_one(&mut *transaction)
+            .await
+            .expect("the DM's messages");
+    assert!(in_dm > 0, "the stand-in DM has messages");
     if let Some(role) = role {
         sqlx::query(&format!("SET LOCAL ROLE {role}"))
             .execute(&mut *transaction)
@@ -224,28 +248,38 @@ async fn chat_rows_follow_the_scope_once_strict_and_nothing_is_refused_before() 
         .execute(&mut *transaction)
         .await
         .expect("strict");
-    sqlx::query("SELECT set_config('app.tenancy', $1, true)")
-        .bind(format!("m:{}|{other}", seed.collaborator_actor_id))
-        .execute(&mut *transaction)
+    let human = seed.human_actor_id;
+    let collaborator = seed.collaborator_actor_id;
+    let organization = seed.organization_id;
+    let dm_scopes = [
+        (format!("w:|{organization}"), 0),
+        (format!("w:{human}|{organization}"), 0),
+        (format!("m:{human}|{organization},{other}"), 0),
+        (format!("m:{collaborator}|{organization}"), in_dm),
+        (format!("m:{collaborator}|{other}"), in_dm),
+        (format!("w:{collaborator}|{other}"), in_dm),
+        ("a".to_owned(), 0),
+    ];
+    for (scope, expected) in dm_scopes {
+        sqlx::query("SELECT set_config('app.tenancy', $1, true)")
+            .bind(&scope)
+            .execute(&mut *transaction)
+            .await
+            .expect("scope");
+        let seen = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT (SELECT count(*) FROM messages WHERE conversation_id = $1), \
+                    (SELECT count(*) FROM conversations WHERE id = $1)",
+        )
+        .bind(dm)
+        .fetch_one(&mut *transaction)
         .await
-        .expect("a participant elsewhere");
-    let seen = sqlx::query_as::<_, (i64, i64)>(
-        r#"
-        SELECT (SELECT count(*) FROM conversations WHERE project_id = $1),
-               (SELECT count(*) FROM messages WHERE conversation_id = $2)
-                 - (SELECT count(*) FROM messages WHERE project_id = $1)
-        "#,
-    )
-    .bind(seed.project_id)
-    .bind(seed.thread_id)
-    .fetch_one(&mut *transaction)
-    .await
-    .expect("read the DM as a participant");
-    assert_eq!(
-        seen,
-        (1, 0),
-        "only the participant's conversation, and its messages"
-    );
+        .expect("read the DM");
+        assert_eq!(
+            seen,
+            (expected, i64::from(expected > 0)),
+            "the DM under {scope}"
+        );
+    }
     transaction.rollback().await.expect("rollback");
 
     agent_workspace_server::test_support::drop_schema(&pool, &schema)
