@@ -1162,7 +1162,7 @@ struct ReachableAgent {
 /// Agents a person can message that aren't in the Messages space yet: active
 /// agents of the space's workspace that share a project with the person and
 /// can actually work there (`agent_connection_can_access`, so not one whose
-/// home project is archived),
+/// connection is off),
 /// named as they are in the earliest such project. `only` narrows the list
 /// to those Actors. Members of the space, enabled or not, are left out, so
 /// an agent switched off there stays off.

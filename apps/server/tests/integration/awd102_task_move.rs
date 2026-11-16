@@ -966,11 +966,12 @@ async fn a_move_named_by_its_old_key_replays_or_conflicts() {
     assert_eq!(moves_made(&setup).await, after, "nothing moved twice");
 }
 
-/// An agent's reach rests on its connection's home project. Archiving that
-/// project while the agent's move waits for a lock stops the move: it reads
-/// reach only once it holds its locks.
+/// An agent's reach rests on its connection (K1.6: the connection belongs
+/// to the workspace; the project it was first added to only anchors it).
+/// Switching the connection off while the agent's move waits for a lock
+/// stops the move: it reads reach only once it holds its locks.
 #[tokio::test]
-async fn archiving_an_agents_home_while_its_move_waits_stops_the_move() {
+async fn switching_off_an_agent_while_its_move_waits_stops_the_move() {
     let Some(setup) = setup("awd102_move_anchor").await else {
         return;
     };
@@ -997,8 +998,15 @@ async fn archiving_an_agents_home_while_its_move_waits_stops_the_move() {
         .fetch_one(&mut *held)
         .await
         .expect("holder");
+    let connection = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT id, version FROM external_agent_connections WHERE actor_id = $1",
+    )
+    .bind(agent)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the agent's connection");
     // The raw call: the result's schema check would ask again with the agent's
-    // credential, which archiving its home has made useless by then.
+    // credential, which switching it off has made useless by then.
     let moving = call_tool(
         app,
         &token,
@@ -1011,10 +1019,10 @@ async fn archiving_an_agents_home_while_its_move_waits_stops_the_move() {
         let (status, body) = send(
             app,
             setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{home}/archive"),
-                Some("archive-home"),
-                json!({"expectedVersion": 1}),
+                "PATCH",
+                &format!("/api/v1/projects/{home}/external-agents/{}", connection.0),
+                None,
+                json!({"expectedVersion": connection.1, "enabled": false}),
             ),
         )
         .await;

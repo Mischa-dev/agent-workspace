@@ -289,8 +289,9 @@ async fn agents_in_your_projects_can_be_messaged() {
     let watcher = connect(build, "Watcher", "viewer").await;
     let off = connect(build, "Off", "member").await;
     let ghost = connect(elsewhere, "Ghost", "member").await;
-    // Stale also works in Build, but its home project is archived, so its
-    // connection can't reach anything any more.
+    // Stale also works in Build, but its connection is switched off, so it
+    // can't reach anything any more. (K1.6: archiving the project it was
+    // first added to no longer does that; the connection is the workspace's.)
     let attic = project("ATTIC").await;
     let stale = connect(attic, "Stale", "member").await;
     let owner = owner_actor(&pool).await;
@@ -306,12 +307,13 @@ async fn agents_in_your_projects_can_be_messaged() {
     .execute(&pool)
     .await
     .expect("add Stale to Build");
-    sqlx::query("UPDATE projects SET archived_at = now(), archived_by_actor_id = $2 WHERE id = $1")
-        .bind(attic)
-        .bind(owner)
-        .execute(&pool)
-        .await
-        .expect("archive Attic");
+    sqlx::query(
+        "UPDATE external_agent_connections SET status = 'disabled', disabled_at = now() WHERE actor_id = $1",
+    )
+    .bind(stale)
+    .execute(&pool)
+    .await
+    .expect("switch Stale's connection off");
     // The owner leaves Elsewhere, so Ghost shares no project with them.
     sqlx::query(
         "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
@@ -346,7 +348,7 @@ async fn agents_in_your_projects_can_be_messaged() {
     );
     assert!(
         !listed.contains(&stale),
-        "an agent whose home project is archived can't answer"
+        "an agent whose connection is off can't answer"
     );
 
     let (status, dm) = call(
