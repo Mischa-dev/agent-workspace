@@ -75,7 +75,7 @@ impl ThreadSpec {
         self
     }
 
-    pub(crate) fn from_message(mut self, origin_message_id: Option<Uuid>) -> Self {
+    pub(crate) fn opened_from(mut self, origin_message_id: Option<Uuid>) -> Self {
         self.origin_message_id = origin_message_id;
         self
     }

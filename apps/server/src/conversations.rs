@@ -1111,7 +1111,7 @@ async fn create_thread(
         &mut transaction,
         &creator,
         channel.id,
-        threads::ThreadSpec::new(name).from_message(command.origin_message_id),
+        threads::ThreadSpec::new(name).opened_from(command.origin_message_id),
     )
     .await
     {

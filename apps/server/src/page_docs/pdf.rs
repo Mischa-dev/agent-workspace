@@ -24,6 +24,10 @@ use skrifa::{
 use super::markdown::Align;
 use super::tree::{Block, Cell, Inline, Item, Marks, Node};
 
+/// One table cell as the layout sees it: its text, whether it is a header,
+/// and its alignment.
+type TableCell = (Vec<Inline>, bool, Option<Align>);
+
 pub const CONTENT_TYPE: &str = "application/pdf";
 
 const FONT: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.otf");
@@ -542,7 +546,7 @@ impl<'a> Layout<'a> {
         self.gap(4.0);
     }
 
-    fn table(&mut self, rows: &[Vec<(Vec<Inline>, bool, Option<Align>)>], indent: f32) {
+    fn table(&mut self, rows: &[Vec<TableCell>], indent: f32) {
         let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
         if columns == 0 {
             return;
@@ -953,7 +957,7 @@ fn write_document(title: &str, face: &Face<'_>, finished: Finished) -> Vec<u8> {
     let _ = write!(writer.bytes, "xref\n0 {count}\n0000000000 65535 f \n");
     for id in 1..count {
         let offset = writer.offsets.get(&id).copied().unwrap_or(0);
-        let _ = write!(writer.bytes, "{offset:010} 00000 n \n");
+        let _ = writeln!(writer.bytes, "{offset:010} 00000 n ");
     }
     let _ = write!(
         writer.bytes,

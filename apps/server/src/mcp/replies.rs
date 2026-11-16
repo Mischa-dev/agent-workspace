@@ -1062,7 +1062,7 @@ async fn open_answer_thread(
         crate::conversations::threads::ThreadSpec::new(
             crate::conversations::threads::ThreadName::Derived,
         )
-        .from_message(Some(message_id))
+        .opened_from(Some(message_id))
         .reusing()
         .audited_with(serde_json::json!({ "reply_request_id": request_id })),
     )

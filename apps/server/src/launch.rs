@@ -2973,7 +2973,7 @@ async fn thread_under(
         crate::conversations::threads::ThreadSpec::new(
             crate::conversations::threads::ThreadName::Derived,
         )
-        .from_message(Some(message_id))
+        .opened_from(Some(message_id))
         .reusing(),
     )
     .await?;

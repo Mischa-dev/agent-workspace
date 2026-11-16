@@ -224,7 +224,7 @@ async fn direct_overview(
     .fetch_all(&mut *transaction)
     .await?;
     let summary = crate::read_state::unread_by_conversation(
-        &mut *transaction,
+        &mut transaction,
         principal.actor_id,
         crate::read_state::UnreadScope::Space(space.project_id),
     )

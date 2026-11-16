@@ -2141,7 +2141,7 @@ pub(super) async fn thread_start(
             &mut transaction,
             &ThreadCreator::mcp(principal),
             parent_id,
-            ThreadSpec::new(name).from_message(origin_id).reusing(),
+            ThreadSpec::new(name).opened_from(origin_id).reusing(),
         )
         .await
         {

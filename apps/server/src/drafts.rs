@@ -139,7 +139,7 @@ pub async fn save(
         .execute(&mut **transaction)
         .await?;
     }
-    let view = listed(&mut **transaction, account_id, None, Some(conversation_id))
+    let view = listed(transaction, account_id, None, Some(conversation_id))
         .await?
         .into_iter()
         .next();

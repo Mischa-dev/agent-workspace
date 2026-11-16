@@ -145,7 +145,7 @@ async fn every_entry_point_makes_a_thread_the_same_way() {
     assert_eq!(started["outcome"], "ok", "{started}");
     let mcp_thread = started["value"]["id"].as_str().expect("mcp").to_owned();
     assert_made_once(pool, &mcp_thread, rook.actor, "thread_start").await;
-    assert_eq!(thread_name(pool, &mcp_thread).await.1, true);
+    assert!(thread_name(pool, &mcp_thread).await.1);
     // Starting it again finds the same thread, and makes nothing new.
     let again = tool(
         app,
