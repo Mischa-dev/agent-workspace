@@ -68,6 +68,8 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     ("jobs.claim", &["jobs.rs"]),
     // Jobs queued for no workspace (the server's own recurring work).
     ("jobs.server", &["jobs.rs"]),
+    // Pruning finished jobs and counting the queue for the Server page.
+    ("jobs.queue", &["jobs.rs"]),
     // Taking, renewing and releasing a server-wide maintenance lease.
     ("maintenance.lease", &["maintenance_lease.rs"]),
 ];

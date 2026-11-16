@@ -110,7 +110,7 @@ pub async fn reload(state: &AppState) -> Result<(), AppError> {
     let rows = sqlx::query_as::<_, HarnessRow>(&format!(
         "SELECT {COLUMNS} FROM custom_harnesses ORDER BY created_at"
     ))
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let adapters = rows
         .iter()
@@ -199,7 +199,7 @@ async fn view(state: &AppState, row: HarnessRow) -> Result<HarnessView, AppError
             )
             .bind(actor_id)
             .bind(row.organization_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
         }
         None => None,
@@ -238,7 +238,7 @@ pub async fn list_for(
         "SELECT {COLUMNS} FROM custom_harnesses WHERE organization_id = $1 ORDER BY name"
     ))
     .bind(organization_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut harnesses = Vec::with_capacity(rows.len());
     for row in rows {
@@ -256,7 +256,7 @@ pub async fn list_for(
         "#,
     )
     .bind(organization_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(HarnessList {
         harnesses,
@@ -364,7 +364,7 @@ async fn valid_runner(
     )
     .bind(actor_id)
     .bind(organization_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     if ok {
         Ok(())
@@ -458,7 +458,7 @@ async fn create(
         return Ok(refused(message));
     }
     check(&state, &row).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM custom_harnesses WHERE organization_id = $1",
     )
@@ -551,7 +551,7 @@ async fn load(state: &AppState, organization_id: Uuid, id: Uuid) -> Result<Harne
     ))
     .bind(organization_id)
     .bind(id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("harness"))
 }
@@ -597,7 +597,7 @@ async fn update(
         return Ok(refused(message));
     }
     check(&state, &row).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE custom_harnesses
@@ -652,7 +652,7 @@ async fn remove(
     require_authenticated_write(&state, &headers, &principal)?;
     crate::settings::authorize_workspace_manage(&state.pool, &principal, organization_id).await?;
     let row = load(&state, organization_id, harness_id).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // Accounts and runs of the kind keep their history; the harness can
     // only go once nothing uses it.
     let in_use = sqlx::query_scalar::<_, bool>(
