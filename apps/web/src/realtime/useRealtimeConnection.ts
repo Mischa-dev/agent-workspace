@@ -16,6 +16,7 @@ import {
   type ReactionUpdates,
 } from '../conversations/liveMessages'
 import { createLiveStore, NO_STREAMS, type Streams } from './liveStore'
+import { modulesChanged } from './moduleSwitches'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
 import {
   durableMessageId,
@@ -332,17 +333,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
             invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
             return
           }
-          if (envelope.type === 'project.modules.updated') {
-            // A space's own module switches changed: the project list
-            // carries each space's modules off, and Settings › Modules the
-            // workspace's.
-            void queryClient.invalidateQueries({ queryKey: ['projects'] })
-            const workspaceId = envelope.payload?.workspaceId
-            if (typeof workspaceId === 'string') {
-              void queryClient.invalidateQueries({ queryKey: ['organization', workspaceId, 'modules'] })
-            }
-            return
-          }
+          if (modulesChanged(queryClient, envelope)) return
           if (
             envelope.type === 'whiteboard.updated' ||
             envelope.type === 'page.updated' ||
