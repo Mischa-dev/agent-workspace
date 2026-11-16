@@ -22,7 +22,11 @@ export type Content = { body?: Record<string, unknown> | null; key: string; kind
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
 
+export type CustomEmojiView = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
+
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
+
+export type DraftView = { conversationId: string; conversationKind: string; conversationName?: string | null; draft: unknown; previous?: unknown; spaceId: string; updatedAt: string }
 
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
@@ -50,9 +54,27 @@ export type RunRecord = { activityCount: number; cancelRequestedAt?: string | nu
 
 export type RunResultInput = { branch?: string | null; id?: string | null; kind: string; number?: number | null; thingKind?: string | null; title?: string | null; url?: string | null }
 
+export type StatusView = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
+
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type ConversationsMarkReadInput = { spaceId?: string | null }
+
+export type ConversationsMarkReadOutput = { marked: number; more: boolean }
+
+export type CustomEmojiCreateInput = { imageBase64: string; name: string }
+
+export type CustomEmojiCreateOutput = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
+
+export type CustomEmojiListInput = { includeRetired?: boolean }
+
+export type CustomEmojiListOutput = { emoji: CustomEmojiView[] }
+
+export type CustomEmojiUpdateInput = { id: string; retired: boolean }
+
+export type CustomEmojiUpdateOutput = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -81,6 +103,14 @@ export type HostListOutput = { hosts: HostView[] }
 export type HostUnlinkInput = { hostId: string }
 
 export type HostUnlinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
+
+export type MessageDraftListInput = { conversationId?: string | null }
+
+export type MessageDraftListOutput = { drafts: DraftView[] }
+
+export type MessageDraftSetInput = { conversationId: string; draft?: unknown; savedAt?: string | null }
+
+export type MessageDraftSetOutput = { draft?: DraftView | null; keptNewer: boolean }
 
 export type PackageExportInput = { includePages?: boolean; includeSkills?: boolean; module?: string | null; spaceId?: string | null; wholeWorkspace?: boolean }
 
@@ -114,8 +144,24 @@ export type RunUsageReportInput = { cachedInputTokens?: number | null; cost?: nu
 
 export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId?: string | null }
 
+export type StatusDeleteInput = { account?: string | null; workspaceOnly?: boolean }
+
+export type StatusDeleteOutput = { cleared: boolean }
+
+export type StatusListInput = { accounts: string[] }
+
+export type StatusListOutput = { statuses: StatusView[] }
+
+export type StatusSetInput = { account?: string | null; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; workspaceOnly?: boolean }
+
+export type StatusSetOutput = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
+
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
+  custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
+  custom_emoji_list: { input: CustomEmojiListInput; output: CustomEmojiListOutput }
+  custom_emoji_update: { input: CustomEmojiUpdateInput; output: CustomEmojiUpdateOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
@@ -123,6 +169,8 @@ export type Operations = {
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
+  message_draft_list: { input: MessageDraftListInput; output: MessageDraftListOutput }
+  message_draft_set: { input: MessageDraftSetInput; output: MessageDraftSetOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }
@@ -131,6 +179,9 @@ export type Operations = {
   run_result_report: { input: RunResultReportInput; output: RunResultReportOutput }
   run_update: { input: RunUpdateInput; output: RunUpdateOutput }
   run_usage_report: { input: RunUsageReportInput; output: RunUsageReportOutput }
+  status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
+  status_list: { input: StatusListInput; output: StatusListOutput }
+  status_set: { input: StatusSetInput; output: StatusSetOutput }
 }
 
 export type OpName = keyof Operations

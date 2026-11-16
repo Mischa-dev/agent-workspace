@@ -58,7 +58,11 @@ import type {
 } from './types'
 import { ReplyingTo } from './ReplyQuote'
 import { Bold, Code, Italic, Paperclip, SquareCode, TextQuote, Type } from '../files/icons'
+import { useDraftSync } from './draftSync'
 import { useToastOffset } from './toastOffset'
+import { useHomeWorkspaceId } from '../experience/layout'
+import { shownStatus, useStatuses } from '../status/api'
+import { StatusText } from '../status/StatusText'
 import '../styles/conversation.css'
 
 type StructuredComposerProps = {
@@ -248,6 +252,11 @@ function ComposerBox({
   const [trigger, setTrigger] = useState<Trigger | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [active, setActive] = useState(0)
+  // C2.15: statuses next to the names offered for a mention.
+  const mentionStatuses = useStatuses(
+    useHomeWorkspaceId(),
+    suggestions.flatMap((suggestion) => (suggestion.kind === 'mention' ? [suggestion.actor.id] : [])),
+  )
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [sending, setBusy] = useState(false)
@@ -273,6 +282,13 @@ function ComposerBox({
     if (!draftKey) return
     writeLocal<ComposerDraft>(`draft:${draftKey}`, text.trim() ? { text, mentions, workItems } : null)
   }, [draftKey, text, mentions, workItems])
+  // C2.28: and kept on the server, to wait on this person's other devices.
+  useDraftSync(draftKey, { text, mentions, workItems }, !initialDraft && !saved?.text.trim(), (draft) => {
+    if (textRef.current.trim()) return
+    setText(draft.text)
+    setMentions(draft.mentions)
+    setWorkItems(draft.workItems)
+  })
 
   // While it's on screen, this box sends its own queue; the app sends it after.
   useEffect(() => (draftKey && !keepDraftWhileSaving ? holdUnsent(draftKey) : undefined), [draftKey, keepDraftWhileSaving])
@@ -881,6 +897,7 @@ function ComposerBox({
                     <span className="aw-mentions__name">{suggestion.actor.displayName}</span>
                     <ActorTag kind={actorKind(suggestion.actor.kind)} />
                     <span className="aw-mentions__handle">@{suggestion.actor.handle}</span>
+                    <StatusText status={shownStatus(mentionStatuses.data ?? [], suggestion.actor.id)} />
                   </>
                 ) : (
                   <>

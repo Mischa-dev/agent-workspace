@@ -16,6 +16,68 @@
     "title": "Set agent managers"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.read_state.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "conversations_mark_read",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Mark all read"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "custom_emoji.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "custom_emoji_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Add custom emoji"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "custom_emoji_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List custom emoji"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "custom_emoji.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "custom_emoji_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Retire custom emoji"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -122,6 +184,36 @@
     "preview": false,
     "proposable": false,
     "title": "Unlink a host"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "message_draft_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List drafts"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "message_draft.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "message_draft_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save draft"
   },
   {
     "automation": false,
@@ -248,5 +340,51 @@
     "preview": false,
     "proposable": false,
     "title": "Report usage"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "status_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Clear status"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "status_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List statuses"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "status_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set status"
   }
 ]

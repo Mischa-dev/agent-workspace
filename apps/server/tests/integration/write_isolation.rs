@@ -484,7 +484,11 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "question_answer",
     "launch_cancel",
     "mark_read",
+    "conversations_mark_read",
+    "custom_emoji_create",
+    "custom_emoji_update",
     "message_delete",
+    "message_draft_set",
     "message_edit",
     "message_forward",
     "message_preview_hide",
@@ -535,6 +539,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "scheduled_message_update",
     "session_bind",
     "settings_set",
+    "status_delete",
+    "status_set",
     "task_claim",
     "task_comment",
     "task_comment_delete",
@@ -1279,7 +1285,12 @@ struct Targets {
     /// Runs the owner reports on themselves (A1.3): one to report on, one
     /// to stop, and one whose start is uncertain.
     reported_runs: [Uuid; 3],
+    /// The workspace's own emoji (C2.19).
+    custom_emoji: Uuid,
 }
+
+/// The smallest PNG header a custom emoji passes with (C2.19).
+const NET_PNG: &[u8] = b"\x89PNG\r\n\x1a\nnet";
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
     let a_side = world.marker.is_empty();
@@ -1701,9 +1712,25 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .expect("host agent");
         }
     }
+    // C2.19: a custom emoji, to retire.
+    let custom_emoji = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id)
+        VALUES ($1, $2, 'net_emoji', 'image/png', $3, $4)
+        "#,
+    )
+    .bind(custom_emoji)
+    .bind(organization)
+    .bind(NET_PNG)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("custom emoji");
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
+        custom_emoji,
         hosts,
         questions,
         reported_runs,
@@ -5983,6 +6010,30 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
         ),
+        // C2.15: an agent's status is set by those who manage it; B's agent
+        // isn't A's to set.
+        mcp_case(
+            "status_set",
+            json!({"text": "Net status", "account": a.agent}),
+            vec![json!({"text": "Net status", "account": b.agent})],
+        ),
+        mcp_case(
+            "status_delete",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
+        // C2.19: an emoji goes in the workspace called; B's can't be retired
+        // from A.
+        mcp_case(
+            "custom_emoji_create",
+            json!({"name": "net_new", "imageBase64": "iVBORw0KGgpuZXQ=", "clientRequestId": "net-emoji"}),
+            vec![json!({"workspace": b.organization, "name": "net_new", "imageBase64": "iVBORw0KGgpuZXQ=", "clientRequestId": "net-emoji-b"})],
+        ),
+        mcp_case(
+            "custom_emoji_update",
+            json!({"id": ax.custom_emoji, "retired": true}),
+            vec![json!({"id": bx.custom_emoji, "retired": true})],
+        ),
         mcp_case(
             "agent_profile_write",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),
@@ -6180,6 +6231,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "mark_read",
             json!({"conversationId": a.channel}),
             vec![json!({"conversationId": b.channel})],
+        ),
+        mcp_case(
+            "message_draft_set",
+            json!({"conversationId": a.channel, "draft": {"text": "Net draft"}}),
+            vec![json!({"conversationId": b.channel, "draft": {"text": "Net draft"}})],
+        ),
+        mcp_case(
+            "conversations_mark_read",
+            json!({"spaceId": a.project}),
+            vec![json!({"spaceId": b.project})],
         ),
         mcp_case(
             "notification_update",
