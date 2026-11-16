@@ -477,6 +477,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "field_write",
     "collection_write",
     "record_write",
+    "button_press",
     "sheet_write",
     "later_save",
     "later_update",
@@ -6635,6 +6636,15 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+        ]),
+        mcp_case(
+            "button_press",
+            json!({"collection": a.collection, "field": a.collection_button, "record": "#1"}),
+            vec![json!({"collection": b.collection, "field": b.collection_button, "record": "#1"})],
+        )
+        .rejecting(vec![
+            json!({"collection": a.collection, "field": b.collection_button, "record": "#1"}),
+            json!({"collection": a.collection, "field": a.collection_button, "record": b.record}),
         ]),
         mcp_case(
             "sheet_write",

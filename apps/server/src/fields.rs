@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 use crate::{error::AppError, work_item_labels};
 
+pub mod button;
 pub mod formula;
 
 /// Active fields one record kind of a project can have.
@@ -122,10 +123,13 @@ pub enum FieldType {
     /// Worked out from the record's other fields by a formula (T1.17,
     /// `formula`); kept in `computed_values`, never written.
     Formula,
+    /// A button that runs operations as whoever presses it (T1.21,
+    /// `button`); it has no value.
+    Button,
 }
 
 impl FieldType {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::Text,
         Self::LongText,
         Self::Number,
@@ -145,12 +149,13 @@ impl FieldType {
         Self::EditedBy,
         Self::AutoId,
         Self::Formula,
+        Self::Button,
     ];
 
     /// Every type, with the ones only module manifests name: the list the
     /// web app's field registry is checked against (T1.13a,
     /// `apps/web/src/fields/fieldTypes.generated.json`).
-    pub const EVERY: [Self; 21] = [
+    pub const EVERY: [Self; 22] = [
         Self::Text,
         Self::LongText,
         Self::Number,
@@ -170,6 +175,7 @@ impl FieldType {
         Self::EditedBy,
         Self::AutoId,
         Self::Formula,
+        Self::Button,
         Self::People,
         Self::Labels,
     ];
@@ -240,6 +246,7 @@ impl FieldType {
             Self::EditedBy => "edited_by",
             Self::AutoId => "auto_id",
             Self::Formula => "formula",
+            Self::Button => "button",
         }
     }
 
@@ -275,6 +282,7 @@ impl FieldType {
             "editedby" | "lasteditedby" | "updatedby" | "modifiedby" => Self::EditedBy,
             "autoid" | "autonumber" | "uniqueid" => Self::AutoId,
             "formula" | "computed" | "calculated" | "calculation" => Self::Formula,
+            "button" | "action" => Self::Button,
             _ => return None,
         })
     }
@@ -284,13 +292,15 @@ impl FieldType {
     pub fn suits_tasks(self) -> bool {
         // Formulas are worked out on collection records; task fields get
         // them when they move onto the Tasks collection (T1.11).
-        self.is_stored() && !self.is_system() && !matches!(self, Self::Status | Self::Formula)
+        self.is_stored()
+            && !self.is_system()
+            && !matches!(self, Self::Status | Self::Formula | Self::Button)
     }
 
-    /// Whether nobody writes a value of it: the record's own columns, or
-    /// a formula's result.
+    /// Whether nobody writes a value of it: the record's own columns, a
+    /// formula's result, or a button (which has none).
     pub fn is_read_only(self) -> bool {
-        self.is_system() || self == Self::Formula
+        self.is_system() || matches!(self, Self::Formula | Self::Button)
     }
 
     pub fn has_options(self) -> bool {
@@ -334,6 +344,8 @@ impl FieldType {
             | Self::AutoId
             // A formula filters as its result does (`FieldDefinition::ops`).
             | Self::Formula => &[Empty, NotEmpty],
+            // Nothing to filter by.
+            Self::Button => &[],
         }
     }
 }
@@ -352,7 +364,7 @@ pub fn web_type_list() -> Value {
                     "type": field_type.as_str(),
                     "stored": field_type.is_stored(),
                     "system": field_type.is_system(),
-                    // Nobody writes its values: system fields and formulas.
+                    // Nobody writes its values: system fields, formulas, buttons.
                     "readOnly": field_type.is_read_only(),
                 })
             })
@@ -472,6 +484,9 @@ pub struct FieldConfig {
     /// Formula fields: the formula, stored with field IDs (T1.17).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formula: Option<formula::FormulaConfig>,
+    /// Button fields: what pressing it runs (T1.21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub button: Option<button::ButtonConfig>,
 }
 
 /// Where a field's value comes from in SQL (T1.5), so stored values, a
@@ -659,7 +674,7 @@ impl TryFrom<DefinitionRow> for FieldDefinition {
             position: row.position,
             archived: row.archived,
             version: row.version,
-            accessor: if field_type == FieldType::Formula {
+            accessor: if matches!(field_type, FieldType::Formula | FieldType::Button) {
                 Accessor::Computed
             } else {
                 field_type.system_accessor().unwrap_or_default()
@@ -691,6 +706,9 @@ pub struct FieldView {
     /// Formula fields: the formula and what it gives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formula: Option<formula::FormulaView>,
+    /// Button fields: what it says and the operations it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub button: Option<button::ButtonView>,
     /// 1 is first.
     pub position: i32,
     pub archived: bool,
@@ -736,6 +754,7 @@ impl From<&FieldDefinition> for FieldView {
                 .formula
                 .as_ref()
                 .map(formula::FormulaView::from),
+            button: field.config.button.as_ref().map(button::ButtonView::from),
             position: field.position + 1,
             archived: field.archived,
             version: field.version,
@@ -1213,6 +1232,9 @@ pub fn normalize_value_keeping(
         FieldType::Formula => Err(format!(
             "\"{name}\" is worked out by its formula, so it can't be written."
         )),
+        FieldType::Button => Err(format!(
+            "\"{name}\" is a button: it runs when pressed and has no value to write."
+        )),
         FieldType::LongText => {
             let Value::String(text) = input else {
                 return Err(format!("\"{name}\" takes text."));
@@ -1642,7 +1664,8 @@ pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(),
             | FieldType::CreatedBy
             | FieldType::EditedBy
             | FieldType::AutoId
-            | FieldType::Formula => false,
+            | FieldType::Formula
+            | FieldType::Button => false,
         };
         if !ok {
             return Err(match field.behaves_as() {
@@ -2293,7 +2316,8 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         | FieldType::CreatedBy
         | FieldType::EditedBy
         | FieldType::AutoId
-        | FieldType::Formula => key(
+        | FieldType::Formula
+        | FieldType::Button => key(
             format!("left(lower(COALESCE({text}, '')), {SORT_PREFIX_CHARACTERS})"),
             "text",
         ),
@@ -2769,6 +2793,8 @@ pub struct NewField {
     pub position: Option<i32>,
     /// A formula field's formula, as written (fields by name).
     pub formula: Option<String>,
+    /// A button field's button, as written.
+    pub button: Option<button::ButtonInput>,
 }
 
 #[derive(Clone, Debug)]
@@ -2778,8 +2804,9 @@ pub enum CreateFieldOutcome {
     NameTaken(FieldDefinition),
     /// MAX_ACTIVE_FIELDS active fields, or MAX_FIELD_ROWS in all.
     ProjectFull,
-    /// The formula can't be saved; the message says what to fix.
-    InvalidFormula(String),
+    /// A setting can't be saved (`formula` or `button`); the message says
+    /// what to fix.
+    InvalidSetting(&'static str, String),
 }
 
 /// Checks a formula written for a field of `kind` (`own` once it exists)
@@ -2839,6 +2866,60 @@ async fn formula_config(
             own,
         },
     ))
+}
+
+/// Checks a button written for a field of `kind` called `field_name` and
+/// gives its settings, or what to fix.
+async fn button_config(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    kind: RecordKind,
+    field_type: FieldType,
+    field_name: &str,
+    input: Option<&button::ButtonInput>,
+) -> Result<Result<button::ButtonConfig, String>, AppError> {
+    if field_type != FieldType::Button {
+        return Ok(Err("Only a button field takes a button.".to_owned()));
+    }
+    let Some(title_name) = plain_collection_title(connection, project_id, kind).await? else {
+        return Ok(Err(
+            "Button fields are for collections whose records aren't tasks, for now.".to_owned(),
+        ));
+    };
+    let Some(input) = input else {
+        return Ok(Err(
+            "Say what the button runs: steps, each an operation and its arguments.".to_owned(),
+        ));
+    };
+    let definitions = list(&mut *connection, project_id, kind, true).await?;
+    Ok(button::compile(
+        input,
+        &button::Scope {
+            fields: &definitions,
+            title_name: &title_name,
+            field_name,
+        },
+    ))
+}
+
+/// The title's name in a collection whose records aren't tasks; None for
+/// tasks, task-like and built-in collections.
+async fn plain_collection_title(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    kind: RecordKind,
+) -> Result<Option<String>, AppError> {
+    let Some(collection_id) = kind.collection_id() else {
+        return Ok(None);
+    };
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT title_name FROM collections WHERE project_id = $1 AND id = $2 \
+         AND NOT acts_like_task AND builtin IS NULL",
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .fetch_optional(&mut *connection)
+    .await?)
 }
 
 /// After a change to a collection's fields that changes what its formulas
@@ -2923,7 +3004,22 @@ pub async fn create(
         .await?
         {
             Ok(formula) => config.formula = Some(formula),
-            Err(message) => return Ok(CreateFieldOutcome::InvalidFormula(message)),
+            Err(message) => return Ok(CreateFieldOutcome::InvalidSetting("formula", message)),
+        }
+    }
+    if new.field_type == FieldType::Button || new.button.is_some() {
+        match button_config(
+            connection,
+            project_id,
+            kind,
+            new.field_type,
+            &new.name,
+            new.button.as_ref(),
+        )
+        .await?
+        {
+            Ok(button) => config.button = Some(button),
+            Err(message) => return Ok(CreateFieldOutcome::InvalidSetting("button", message)),
         }
     }
     let id = Uuid::now_v7();
@@ -3031,6 +3127,8 @@ pub struct FieldChange {
     pub archived: Option<bool>,
     /// A formula field's new formula, as written (fields by name).
     pub formula: Option<String>,
+    /// A button field's new button, as written.
+    pub button: Option<button::ButtonInput>,
     /// Checked only when something would change.
     pub expected_version: Option<i64>,
 }
@@ -3043,7 +3141,8 @@ pub enum ChangeFieldOutcome {
     Changed {
         field: FieldDefinition,
         previous: FieldDefinition,
-        /// Any of name, description, options, formula, position, archived.
+        /// Any of name, description, options, formula, button, position,
+        /// archived.
         changed: Vec<&'static str>,
     },
     Unchanged(FieldDefinition),
@@ -3053,9 +3152,9 @@ pub enum ChangeFieldOutcome {
     NameTaken(String),
     /// Restoring would pass MAX_ACTIVE_FIELDS.
     ProjectFull,
-    /// The formula can't be saved (or a formula field can't come back);
-    /// the message says what to fix.
-    InvalidFormula(String),
+    /// A setting can't be saved (`formula` or `button`), or a field with
+    /// one can't come back; the message says what to fix.
+    InvalidSetting(&'static str, String),
 }
 
 /// Renames, describes, reorders, archives or restores a field, or changes
@@ -3120,7 +3219,22 @@ pub async fn change(
         .await?
         {
             Ok(formula) => config.formula = Some(formula),
-            Err(message) => return Ok(ChangeFieldOutcome::InvalidFormula(message)),
+            Err(message) => return Ok(ChangeFieldOutcome::InvalidSetting("formula", message)),
+        }
+    }
+    if let Some(input) = &change.button {
+        match button_config(
+            connection,
+            project_id,
+            kind,
+            current.field_type,
+            &name,
+            Some(input),
+        )
+        .await?
+        {
+            Ok(button) => config.button = Some(button),
+            Err(message) => return Ok(ChangeFieldOutcome::InvalidSetting("button", message)),
         }
     }
     if normalize_name(&name).as_deref() != Some(name.as_str())
@@ -3149,11 +3263,15 @@ pub async fn change(
     if config.formula != current.config.formula {
         changed.push("formula");
     }
-    let without_formula = |config: &FieldConfig| FieldConfig {
+    if config.button != current.config.button {
+        changed.push("button");
+    }
+    let options_part = |config: &FieldConfig| FieldConfig {
         formula: None,
+        button: None,
         ..config.clone()
     };
-    if without_formula(&config) != without_formula(&current.config) {
+    if options_part(&config) != options_part(&current.config) {
         changed.push("options");
     }
     if moves {

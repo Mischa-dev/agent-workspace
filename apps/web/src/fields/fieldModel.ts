@@ -51,11 +51,17 @@ export type FieldDefinition = {
   collection?: string | null
   /** Formula fields: the formula as stored (fields as `{#<id>}`, the title as `{#title}`) and what it gives. */
   formula?: FormulaSettings | null
+  /** Button fields: what it says and the operations pressing it runs (placeholders as stored). */
+  button?: ButtonSettings | null
   /** 1 is first. */
   position: number
   archived: boolean
   version: number
 }
+
+/** One operation a button runs: its name, its title, and its arguments with `{{...}}` placeholders (fields as `{{#<id>}}`). */
+export type ButtonStep = { operation: string; title: string; arguments: Record<string, unknown> }
+export type ButtonSettings = { label: string; steps: ButtonStep[] }
 
 /** What a formula gives, which decides how it filters, sorts and groups. */
 export type FormulaResult = 'number' | 'text' | 'boolean' | 'date' | 'list'
@@ -91,9 +97,9 @@ export function isSystemType(type: FieldType) {
   return typeInfo(type).system
 }
 
-/** Whether nobody fills in a field of the type: a system field, or a formula the server works out. */
+/** Whether nobody fills in a field of the type: a system field, a formula the server works out, or a button. */
 export function isReadOnlyType(type: FieldType) {
-  return typeInfo(type).system || type === 'formula'
+  return typeInfo(type).system || type === 'formula' || type === 'button'
 }
 
 /** A field, or only its type. */
@@ -148,6 +154,7 @@ export function normalizeField(value: unknown): FieldDefinition {
     target: field.target === 'page' || field.target === 'task' || field.target === 'record' ? field.target : null,
     collection: typeof field.collection === 'string' ? field.collection : null,
     formula: formulaOf(field.formula),
+    button: buttonOf(field.button),
     position: typeof field.position === 'number' ? field.position : 0,
     archived: field.archived === true,
     version: typeof field.version === 'number' ? field.version : 1,
@@ -161,6 +168,33 @@ export function formulaShown(source: string, fields: readonly FieldDefinition[],
     const field = fields.find((entry) => entry.id === id)
     return field && !/[{}]/.test(field.name) ? `{${field.name}}` : whole
   })
+}
+
+/** A button's stored arguments as people write them: `{{#<id>}}` by today's field name. */
+export function buttonArgumentsShown(value: unknown, fields: readonly FieldDefinition[]): unknown {
+  if (typeof value === 'string') {
+    return value.replace(/\{\{\s*#([^}]*?)\s*\}\}/g, (whole, id: string) => {
+      const field = fields.find((entry) => entry.id === id)
+      return field && !field.name.includes('}}') ? `{{${field.name}}}` : whole
+    })
+  }
+  if (Array.isArray(value)) return value.map((item) => buttonArgumentsShown(item, fields))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, buttonArgumentsShown(item, fields)]))
+  }
+  return value
+}
+
+function buttonOf(value: unknown): ButtonSettings | null {
+  const button = asRecord(value)
+  if (!Array.isArray(button.steps)) return null
+  return {
+    label: asString(button.label),
+    steps: button.steps.map((entry) => {
+      const step = asRecord(entry)
+      return { operation: asString(step.operation), title: asString(step.title) || asString(step.operation), arguments: asRecord(step.arguments) }
+    }),
+  }
 }
 
 const FORMULA_RESULTS: readonly FormulaResult[] = ['number', 'text', 'boolean', 'date', 'list']

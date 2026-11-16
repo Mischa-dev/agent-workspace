@@ -305,6 +305,7 @@ pub(super) async fn field_write(
                     config,
                     position: arguments.position,
                     formula: None,
+                    button: None,
                 },
             )
             .await?;
@@ -347,8 +348,8 @@ pub(super) async fn field_write(
                         fields::MAX_FIELD_ROWS
                     )));
                 }
-                CreateFieldOutcome::InvalidFormula(message) => {
-                    return Ok(ToolResult::invalid("formula", message));
+                CreateFieldOutcome::InvalidSetting(at, message) => {
+                    return Ok(ToolResult::invalid(at, message));
                 }
             };
             transaction.commit().await?;
@@ -420,6 +421,7 @@ pub(super) async fn field_write(
                 position: arguments.position,
                 archived: arguments.archived,
                 formula: None,
+                button: None,
                 expected_version: arguments.expected_version,
             },
         )
@@ -485,8 +487,8 @@ pub(super) async fn field_write(
                     fields::MAX_ACTIVE_FIELDS
                 )));
             }
-            ChangeFieldOutcome::InvalidFormula(message) => {
-                return Ok(ToolResult::invalid("formula", message));
+            ChangeFieldOutcome::InvalidSetting(at, message) => {
+                return Ok(ToolResult::invalid(at, message));
             }
         };
         transaction.commit().await?;

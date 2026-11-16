@@ -44,6 +44,8 @@ const DRAWINGS: Record<FieldType, Drawing> = {
   link: { Renderer: TextRenderer, Editor: LinkFieldEditor },
   // Worked out by the server; nobody fills it in.
   formula: { Renderer: FormulaRenderer, Editor: null },
+  // No value to show: collections draw it as a button that runs its steps.
+  button: shown,
   created_time: shown,
   edited_time: shown,
   created_by: shown,

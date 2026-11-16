@@ -572,3 +572,26 @@
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
+
+/* A button field (T1.21): its button in a cell or the record panel, and
+   each step in the field dialog. */
+.aw-recordbutton {
+  display: inline-flex;
+  max-inline-size: 100%;
+}
+.aw-buttonfield {
+  display: grid;
+  gap: var(--space-3);
+}
+.aw-buttonfield__step {
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+}
+.aw-buttonfield__step legend {
+  font-weight: var(--weight-semibold);
+  padding-inline: var(--space-1);
+}

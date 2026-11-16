@@ -234,6 +234,7 @@ fn builtin(
             target: None,
             collection: None,
             formula: None,
+            button: None,
         },
         position,
         archived: false,

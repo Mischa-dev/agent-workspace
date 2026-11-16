@@ -5,6 +5,7 @@ import { displayText, isEmpty, isReadOnlyType, type FieldDefinition, type FieldR
 import { Icon, IconButton, TextField } from '../ui'
 import type { CollectionRecord } from './api'
 import { recordName } from './collectionModel'
+import { RecordButton } from './RecordButton'
 
 /**
  * A record's title in the table: a click renames it in place (Enter saves,
@@ -76,6 +77,7 @@ export function TitleCell({
  * the field's editor beside the cell, and a checkbox flips at once.
  */
 export function ValueCell({
+  collection,
   editable,
   field,
   onEdit,
@@ -83,6 +85,8 @@ export function ValueCell({
   record,
   references,
 }: {
+  /** Where the record is, for a button field to press. */
+  collection?: { projectId: string; id: string }
   editable: boolean
   field: FieldDefinition
   onEdit: (anchor: HTMLElement) => void
@@ -91,6 +95,13 @@ export function ValueCell({
   references: readonly FieldReference[]
 }) {
   const value = record.values[field.id]
+  if (field.type === 'button') {
+    return (
+      <span className="aw-records__value">
+        {collection && !record.archived ? <RecordButton collectionId={collection.id} field={field} projectId={collection.projectId} record={record} /> : null}
+      </span>
+    )
+  }
   // A system field shows the record's own: nobody edits it.
   if (!editable || isReadOnlyType(field.type)) {
     return (

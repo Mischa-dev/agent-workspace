@@ -211,6 +211,105 @@ fn decode_error(error: &serde_json::Error) -> OpError {
     }
 }
 
+/// Where a call acts, located, once the module gate and access let the
+/// caller run `O` there. A call that can't name its workspace gets the one
+/// the caller reaches, when there is one.
+async fn admit<O: Operation>(
+    state: &AppState,
+    caller: &Caller,
+    workspace: &mut Option<Uuid>,
+    target: &Target,
+) -> Result<target::Located, OpError> {
+    let writes = O::KIND.writes();
+    let mut connection = state
+        .pool
+        .acquire()
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+    // A call that can't name its workspace needs none named when the
+    // caller reaches only one.
+    if workspace.is_none() && matches!(target, Target::Account | Target::Workspace(None)) {
+        let reach = access_shim::reach(&mut connection, caller).await?;
+        match reach.as_slice() {
+            [only] => *workspace = Some(*only),
+            [] => {}
+            several => return Err(name_the_workspace(&mut connection, several).await),
+        }
+    }
+    let located = target::locate(&mut connection, target, caller.account_id, *workspace).await?;
+    let mode = state.config.access_mode("ops");
+    let old = if mode == AccessMode::New {
+        None
+    } else {
+        Some(old_check::<O>(&mut connection, caller, target, &located, writes).await)
+    };
+    if mode != AccessMode::Old {
+        let need = crate::access::Need::maybe(O::PERMISSION)
+            .writing(writes)
+            .in_module(O::MODULE);
+        let access_target = access_target(target, &located);
+        let new = crate::access::check(&mut connection, caller, need, access_target)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error))?;
+        match &old {
+            Some(old) => {
+                crate::access::compare::compare(
+                    &mut connection,
+                    crate::access::compare::Compared {
+                        area: "ops",
+                        operation: O::NAME,
+                        caller,
+                        need: &need,
+                        target: &access_target,
+                        workspace_id: Some(located.workspace_id),
+                        space_id: located.space_id,
+                        old_allowed: old.is_ok(),
+                    },
+                    &new,
+                )
+                .await;
+            }
+            None => {
+                let _grant = new.map_err(|denied| denied_error::<O>(denied, caller, &located))?;
+            }
+        }
+    }
+    if let Some(old) = old {
+        old?;
+    }
+    drop(connection);
+    Ok(located)
+}
+
+/// Whether `caller` may run `O` on `target`, by the checks a call makes,
+/// without running it: for a control shown unavailable with the reason.
+pub(super) async fn check<O: Operation>(
+    state: &AppState,
+    caller: &Caller,
+    workspace: Option<Uuid>,
+    target: &Target,
+) -> Result<(), OpError> {
+    let mut workspace = workspace;
+    admit::<O>(state, caller, &mut workspace, target)
+        .await
+        .map(|_| ())
+}
+
+/// Whether `caller` may run the operation called `name` on `target`
+/// (`check`), such as the ones a button field calls.
+pub async fn may_run(
+    state: &AppState,
+    caller: &Caller,
+    workspace: Option<Uuid>,
+    name: &str,
+    target: &Target,
+) -> Result<(), OpError> {
+    let Some(check) = registry().get(name).map(|entry| entry.check) else {
+        return Err(OpError::not_found("That operation"));
+    };
+    check(state, caller, workspace, target).await
+}
+
 async fn pipeline<O: Operation>(
     state: &AppState,
     mut request: DispatchRequest,
@@ -230,70 +329,7 @@ async fn pipeline<O: Operation>(
     let target = decoded.target();
     let writes = O::KIND.writes();
 
-    let mut connection = state
-        .pool
-        .acquire()
-        .await
-        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
-    // A call that can't name its workspace needs none named when the
-    // caller reaches only one.
-    if request.workspace.is_none() && matches!(target, Target::Account | Target::Workspace(None)) {
-        let reach = access_shim::reach(&mut connection, &request.caller).await?;
-        match reach.as_slice() {
-            [only] => request.workspace = Some(*only),
-            [] => {}
-            several => return Err(name_the_workspace(&mut connection, several).await),
-        }
-    }
-    let located = target::locate(
-        &mut connection,
-        &target,
-        request.caller.account_id,
-        request.workspace,
-    )
-    .await?;
-    let mode = state.config.access_mode("ops");
-    let old = if mode == AccessMode::New {
-        None
-    } else {
-        Some(old_check::<O>(&mut connection, &request.caller, &target, &located, writes).await)
-    };
-    if mode != AccessMode::Old {
-        let need = crate::access::Need::maybe(O::PERMISSION)
-            .writing(writes)
-            .in_module(O::MODULE);
-        let access_target = access_target(&target, &located);
-        let new = crate::access::check(&mut connection, &request.caller, need, access_target)
-            .await
-            .map_err(|error| OpError::logged(O::NAME, &error))?;
-        match &old {
-            Some(old) => {
-                crate::access::compare::compare(
-                    &mut connection,
-                    crate::access::compare::Compared {
-                        area: "ops",
-                        operation: O::NAME,
-                        caller: &request.caller,
-                        need: &need,
-                        target: &access_target,
-                        workspace_id: Some(located.workspace_id),
-                        space_id: located.space_id,
-                        old_allowed: old.is_ok(),
-                    },
-                    &new,
-                )
-                .await;
-            }
-            None => {
-                let _grant =
-                    new.map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
-            }
-        }
-    }
-    if let Some(old) = old {
-        old?;
-    }
-    drop(connection);
+    let located = admit::<O>(state, &request.caller, &mut request.workspace, &target).await?;
 
     let key = request_id_for::<O>(&request)?;
     let ctx = OpContext {

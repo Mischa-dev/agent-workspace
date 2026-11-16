@@ -8,6 +8,7 @@ import { displayText, isEmpty, isReadOnlyType, type FieldDefinition, type FieldR
 import { Banner, DocumentSkeleton, ErrorState, Icon, IconButton, Menu, TextArea, formatFullDate, formatRelative, showToast, type MenuEntry } from '../ui'
 import { useRecord, type CollectionBody, type HistoryEntry } from './api'
 import { historyValue, recordName, referenceKind } from './collectionModel'
+import { RecordButton } from './RecordButton'
 import type { RecordEdits } from './useRecordEdits'
 
 // Where the record is linked from loads beside it (AWD-112).
@@ -133,7 +134,13 @@ export function RecordPanel({
           const value = current.values[field.id]
           const shown = displayText(field, value, references)
           let control
-          if (!editable || isReadOnlyType(field.type)) {
+          if (field.type === 'button') {
+            control = current.archived ? (
+              <span className="aw-prop__empty">Restore the record to press it</span>
+            ) : (
+              <RecordButton collectionId={body.collection.id} field={field} projectId={projectId} record={current} />
+            )
+          } else if (!editable || isReadOnlyType(field.type)) {
             control = <FieldValueView empty="Empty" field={field} references={references} value={value} />
           } else if (field.type === 'checkbox') {
             control = (

@@ -1942,6 +1942,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "collection_list",
     "collection_describe",
     "formula_preview",
+    "button_get",
     "record_query",
     "sheet_list",
     "sheet_read",
@@ -2128,6 +2129,15 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"collection": a.collection, "formula": "{Title} & \"!\"", "record": 1}),
             ],
             vec![json!({"collection": b.collection, "formula": "1 + 1"})],
+            vec![],
+        ),
+        case(
+            "button_get",
+            vec![json!({"collection": a.collection, "field": a.collection_button})],
+            vec![
+                json!({"collection": b.collection, "field": b.collection_button}),
+                json!({"collection": a.collection, "field": b.collection_button}),
+            ],
             vec![],
         ),
         case(

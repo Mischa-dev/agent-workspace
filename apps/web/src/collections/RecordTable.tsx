@@ -124,6 +124,7 @@ function RecordGrid({
       columns.map(({ field }) => [
         field.id,
         <ValueCell
+          collection={{ projectId, id: body.collection.id }}
           editable={editable}
           field={field}
           key={field.id}

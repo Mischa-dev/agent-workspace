@@ -18,6 +18,10 @@ export type Envelope<T> =
   | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }
   | OpError
 
+export type ButtonStepView = { arguments: Record<string, unknown>; operation: string; title: string }
+
+export type ButtonView = { label: string; steps: ButtonStepView[] }
+
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
@@ -35,6 +39,8 @@ export type OwnerView = { id: string; kind: string; name: string }
 export type Package = { contents: Content[]; description?: string; digest?: string | null; format: string; id: string; name: string; needsAdmin?: string[]; publisher?: Publisher | null; requires?: Requires; target: PackageTarget; version: string }
 
 export type PackageTarget = "space" | "workspace"
+
+export type PressedStep = { operation: string; value: unknown }
 
 export type PreviewRecord = { number: number; title: string }
 
@@ -57,6 +63,14 @@ export type RunResultInput = { branch?: string | null; id?: string | null; kind:
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type ButtonGetInput = { collection: string; field: string }
+
+export type ButtonGetOutput = { button: ButtonView; canPress: boolean; reason?: string | null }
+
+export type ButtonPressInput = { collection: string; field: string; record: string }
+
+export type ButtonPressOutput = { record: PreviewRecord; steps: PressedStep[] }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -124,6 +138,8 @@ export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId
 
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  button_get: { input: ButtonGetInput; output: ButtonGetOutput }
+  button_press: { input: ButtonPressInput; output: ButtonPressOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }

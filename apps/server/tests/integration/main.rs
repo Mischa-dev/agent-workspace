@@ -107,6 +107,7 @@ mod server_operators;
 mod settings_accounts;
 mod spaces;
 mod support;
+mod t1_buttons;
 mod t1_formulas;
 mod t1_task_record_owner;
 mod t1_task_records_migration;

@@ -54,6 +54,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "set",
             "cancel",
             "retry",
+            "press",
         ],
     ),
     (

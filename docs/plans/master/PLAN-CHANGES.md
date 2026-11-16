@@ -33,3 +33,9 @@ and why (R50). Newest last.
   W1.24, C1.29 and C1.35. T1 notes that #262, #265 and #268 already did tasks-into-records
   steps 2, 3, 5 and 6. Admin retention rules and moving AI suggestions onto requests are
   open questions in `decisions.md` (Lead Q1, Q2). No slice removed.
+- **2026-11-16.** T1.21 (button field): a button runs one to three registered operations in
+  order, not one, so "Mark shipped" can set a status and post a message. Each step is
+  checked against the presser's access before any runs; a press stops at the first step
+  refused and says which. The Mark-shipped acceptance waits for K2.7 and K2.13 (message
+  and task operations, build 2O); until then buttons run the operations the registry has.
+  T1.11 moved from build 4T's task into AWD-190 (early field work), after T1.29.

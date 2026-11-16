@@ -769,6 +769,8 @@ async fn carry_value(
         | FieldType::AutoId => None,
         // Worked out where it lands, never carried.
         FieldType::Formula => None,
+        // A button has no value.
+        FieldType::Button => None,
         FieldType::Text
         | FieldType::LongText
         | FieldType::Number
@@ -2750,6 +2752,7 @@ mod tests {
                 target: (field_type == FieldType::Link).then_some(LinkTarget::Task),
                 collection: None,
                 formula: None,
+                button: None,
             },
             position: 0,
             archived: false,

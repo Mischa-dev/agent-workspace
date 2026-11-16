@@ -85,6 +85,12 @@ fn field_ty(field: &FieldDefinition) -> Result<Ty, String> {
             Some(formula) => formula.result.ty(),
             None => Ty::Any,
         },
+        FieldType::Button => {
+            return Err(format!(
+                "\"{}\" is a button, which has no value for a formula to use.",
+                field.name
+            ));
+        }
         FieldType::Text
         | FieldType::LongText
         | FieldType::Url

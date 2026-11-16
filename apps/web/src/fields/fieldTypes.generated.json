@@ -114,6 +114,12 @@
     "type": "formula"
   },
   {
+    "readOnly": true,
+    "stored": true,
+    "system": false,
+    "type": "button"
+  },
+  {
     "readOnly": false,
     "stored": false,
     "system": false,

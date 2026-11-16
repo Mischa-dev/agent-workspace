@@ -75,6 +75,8 @@ const SAMPLES: Record<FieldType, FieldValue> = {
   phone: '+44 20 7946 0958',
   checkbox: true,
   link: 't1',
+  // A button has no value; drawn as text if one ever arrives.
+  button: 'Ship it',
   created_time: '2026-11-14 10:00:00+00',
   edited_time: '2026-11-15 09:30:00+00',
   created_by: 'p1',
@@ -149,7 +151,8 @@ describe('the field registry', () => {
       expect(spec.type).toBe(type)
       expect(spec.label).toBeTruthy()
       expect(spec.width).toBeGreaterThan(0)
-      expect(spec.ops.length).toBeGreaterThan(0)
+      // A button has no value to filter by; every other type filters.
+      if (type !== 'button') expect(spec.ops.length).toBeGreaterThan(0)
     }
   })
 
