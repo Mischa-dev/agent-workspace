@@ -2673,6 +2673,107 @@ async fn connecting_an_app_as_an_agent_stays_within_the_project_role() {
     );
 }
 
+/// AWD-181: disabling an agent turns its workspace membership off, and a
+/// named manager (an admin without `agents.manage_any`) still re-enables it
+/// and removes it afterwards. The manager's own membership must be on.
+#[tokio::test]
+async fn a_named_manager_reenables_and_removes_an_agent_they_disabled() {
+    let Some(setup) = setup("awd181_disabled_agent_managed").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    make_admin(&setup, alex).await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is an admin in Work");
+    let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    name_manager(&setup, mara, alex).await;
+    let update = |connection: Uuid, body: Value| {
+        alex_browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/external-agents/{connection}"),
+            None,
+            body,
+        )
+    };
+
+    let (connection, version, _) = agent_connection(&setup, mara).await;
+    let (status, disabled) = send(
+        app,
+        update(connection, json!({"expectedVersion": version, "enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    let enabled = sqlx::query_scalar::<_, bool>(
+        "SELECT enabled FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(mara)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("mara's membership");
+    assert!(!enabled, "disabling turns the agent's membership off");
+
+    let (_, version, _) = agent_connection(&setup, mara).await;
+    let (status, reenabled) = send(
+        app,
+        update(connection, json!({"expectedVersion": version, "enabled": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "a named manager re-enables: {reenabled}");
+    let (_, version, state) = agent_connection(&setup, mara).await;
+    assert_eq!(state, "active");
+
+    let (status, disabled) = send(
+        app,
+        update(connection, json!({"expectedVersion": version, "enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    let (_, version, _) = agent_connection(&setup, mara).await;
+
+    // A manager whose own membership is off manages nothing.
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = false WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is turned off");
+    let remove = || {
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/external-agents/{connection}/remove"),
+            None,
+            json!({"expectedVersion": version}),
+        )
+    };
+    let (status, refused) = send(app, remove()).await;
+    assert_ne!(status, StatusCode::OK, "a disabled manager removed an agent: {refused}");
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = true WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is back");
+
+    let (status, removed) = send(app, remove()).await;
+    assert_eq!(status, StatusCode::OK, "a named manager removes a disabled agent: {removed}");
+    let (_, _, state) = agent_connection(&setup, mara).await;
+    assert_eq!(state, "removed");
+}
+
 /// A project invitation with a custom role based on Admin never makes a
 /// workspace admin, whether the invitee is new or already in the workspace.
 #[tokio::test]
