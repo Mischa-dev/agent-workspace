@@ -34,6 +34,7 @@ import { SHORTCUTS } from './shortcutSheet'
 import { parseTaskKey } from './shortcuts'
 import { useProjectByKey } from './useProjectByKey'
 import { projectPath, useRouteProject } from './useRouteProject'
+import { queryKeys } from '../api/queryKeys'
 
 
 /** A module's palette entry (M1.4), as the menu lists it. */
@@ -59,7 +60,7 @@ function useTaskResults(query: string, current: Project | null) {
   const target = key ? keyProject : current
   const enabled = Boolean(target && settled.length >= 2)
   const results = useQuery({
-    queryKey: ['project', target?.id ?? '', 'command-menu', 'tasks', settled],
+    queryKey: queryKeys.commandMenuTasks(target?.id ?? '', settled),
     queryFn: async () => {
       if (!target) return []
       const results = await searchWorkItemReferences(target.id, settled)

@@ -40,5 +40,6 @@
     "ui/identity.tsx": 1,
     "work-items/TaskDetail.tsx": 2,
     "work-items/codexDeepLink.ts": 3
-  }
+  },
+  "web_inline_query_keys": {}
 }

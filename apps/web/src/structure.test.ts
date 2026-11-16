@@ -61,6 +61,14 @@ const rules: Rule[] = [
     count: (source) => countAll(squeeze(source), kindNeedles),
   },
   {
+    // W1.2 (guard 6.5): keys come from a feature's key factory (or the op
+    // client once a module moves to it), never an array written where it's used.
+    id: "web_inline_query_keys",
+    what: "a query key written inline; add it to the feature's key factory",
+    ceiling: 0,
+    count: (source) => squeeze(source).split("queryKey:[").length - 1,
+  },
+  {
     id: "web_vendor_names",
     what: "a provider or harness name in the app; use the name its manifest gives",
     ceiling: 20,
@@ -118,6 +126,13 @@ describe("web structure guards", () => {
     ).toHaveLength(1);
     expect(
       scan(roles, { "./scratch.tsx": 'if (can("tasks.edit")) show()' }).over,
+    ).toEqual([]);
+    const keys = rules.find((rule) => rule.id === "web_inline_query_keys")!;
+    expect(
+      scan(keys, { "./scratch.ts": "useQuery({ queryKey: ['project', id, 'x'] })" }).over,
+    ).toHaveLength(1);
+    expect(
+      scan(keys, { "./scratch.ts": "useQuery({ queryKey: projectKeys.x(id) })" }).over,
     ).toEqual([]);
     const kinds = rules[1];
     expect(

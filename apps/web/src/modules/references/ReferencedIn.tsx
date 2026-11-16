@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
+import { queryKeys } from '../../api/queryKeys'
 import { Icon, Row, RowList, Section } from '../../ui'
 import { thingIcon, thingQuery } from './thingQuery'
 import './references.css'
@@ -25,7 +26,7 @@ const KIND_WORDS: Record<string, string> = {
 export default function ReferencedIn({ kind, id }: { kind: string; id: string }) {
   // Its own key, under the thing's: realtime refetches every list like this
   // when any message, page or task changes, as any of them may link here.
-  const query = useQuery({ ...thingQuery(kind, id), queryKey: ['things', kind, id, 'references'] })
+  const query = useQuery({ ...thingQuery(kind, id), queryKey: queryKeys.thingReferences(kind, id) })
   const references = (query.data?.links ?? []).filter((link) => link.kind === 'about' && link.direction === 'incoming')
   if (references.length === 0) return null
   return (

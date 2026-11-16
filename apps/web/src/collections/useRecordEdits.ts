@@ -49,7 +49,7 @@ export function useRecordEdits(projectId: string, collectionId: string) {
 
   const patch = useCallback(
     (recordId: string, change: (record: CollectionRecord) => CollectionRecord, references: readonly FieldReference[] = []) => {
-      client.setQueriesData<InfiniteData<RecordPage>>({ queryKey: [...collectionKeys.one(projectId, collectionId), 'records'] }, (data) =>
+      client.setQueriesData<InfiniteData<RecordPage>>({ queryKey: collectionKeys.allRecords(projectId, collectionId) }, (data) =>
         data
           ? {
               ...data,

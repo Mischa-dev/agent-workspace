@@ -5,6 +5,7 @@ import { getConversationMessage } from './api'
 import { MessageReactions } from './Reactions'
 import { MessageRow } from './Timeline'
 import type { ConversationTimelineEntry } from './types'
+import { queryKeys } from '../api/queryKeys'
 
 /**
  * The message a thread was started from. Kept under its channel's timeline
@@ -12,7 +13,7 @@ import type { ConversationTimelineEntry } from './types'
  */
 function useOriginMessage(projectId: string, parentId: string | null, originId: string | null) {
   return useQuery({
-    queryKey: ['project', projectId, 'conversation', parentId ?? '', 'timeline', 'origin', originId ?? ''],
+    queryKey: queryKeys.originMessage(projectId, parentId ?? '', originId ?? ''),
     queryFn: async (): Promise<{ entries: ConversationTimelineEntry[] }> => {
       const entry = await getConversationMessage(parentId ?? '', originId ?? '')
       return { entries: entry ? [entry] : [] }

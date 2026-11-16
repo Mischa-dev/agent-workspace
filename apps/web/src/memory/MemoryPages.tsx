@@ -136,7 +136,7 @@ function WorkspacePagesPage() {
   const session = useAuthenticatedSession()
   const organizationId = useHomeWorkspaceId()
   const space = useQuery({
-    queryKey: ['organization', organizationId, 'pages-space'],
+    queryKey: memoryKeys.workspacePagesSpace(organizationId),
     queryFn: () => workspacePagesSpace(organizationId ?? ''),
     enabled: Boolean(organizationId),
     staleTime: Infinity,
@@ -755,7 +755,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
   const [showSuperseded, setShowSuperseded] = useState(false)
   const [recording, setRecording] = useState(false)
   const decisions = useQuery({
-    queryKey: [...memoryKeys.decisions(projectId), showSuperseded],
+    queryKey: memoryKeys.decisionList(projectId, showSuperseded),
     queryFn: () => listDecisions(projectId, showSuperseded),
   })
   const target = location.hash ? decodeURIComponent(location.hash.slice(1)) : ''

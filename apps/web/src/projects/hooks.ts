@@ -35,7 +35,7 @@ export function useProjects() {
 export function useProjectSearch(query: string) {
   const normalized = query.trim()
   return useQuery({
-    queryKey: ['projects', 'search', normalized] as const,
+    queryKey: queryKeys.projectSearch(normalized),
     queryFn: () => listProjects(normalized),
     enabled: Boolean(normalized),
     staleTime: 15_000,
@@ -45,7 +45,7 @@ export function useProjectSearch(query: string) {
 /** Archived projects you still belong to, most recently archived first. */
 export function useArchivedProjects() {
   return useQuery({
-    queryKey: ['projects', 'archived'] as const,
+    queryKey: queryKeys.projectsArchived,
     queryFn: () => listProjects(undefined, { archived: true }),
     staleTime: 30_000,
   })
@@ -91,7 +91,7 @@ export function useArchiveProject() {
     onSuccess: (project) => {
       queryClient.setQueryData(queryKeys.project(project.id), project)
       removeProjectFromListCaches(queryClient, project.id)
-      void queryClient.invalidateQueries({ queryKey: ['projects'] })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
     },
   })
 }
@@ -109,7 +109,7 @@ export function useRestoreProject() {
     onSuccess: (project) => {
       queryClient.setQueryData(queryKeys.project(project.id), project)
       removeProjectFromListCaches(queryClient, project.id)
-      void queryClient.invalidateQueries({ queryKey: ['projects'] })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
     },
   })
 }
@@ -119,7 +119,7 @@ export function removeProjectFromListCaches(
   projectId: string,
 ) {
   queryClient.setQueriesData<ProjectListResponse>(
-    { queryKey: ['projects'] },
+    { queryKey: queryKeys.projectLists },
     (current) =>
       current
         ? {
@@ -163,7 +163,7 @@ export function useSetRailOrder() {
           : current,
       )
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.projectLists }),
   })
 }
 

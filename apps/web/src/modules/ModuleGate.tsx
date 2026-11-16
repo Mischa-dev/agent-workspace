@@ -4,6 +4,8 @@ import { useLocation, useParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
 import { useHomeWorkspaceId, useProjectExperience, useWorkspaceExperience } from '../experience/layout'
+import { runKeys } from '../runs/keys'
+import { whiteboardKeys } from '../whiteboards/keys'
 import { moduleSwitchable } from './ownership'
 import { moduleOfPath } from './pageOwners'
 
@@ -34,7 +36,7 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
   // (whiteboardKeys.detail, runKeys.detail), so it's asked for once.
   const id = whiteboardId ?? runId ?? ''
   const target = useQuery({
-    queryKey: [whiteboardId ? 'whiteboards' : 'runs', 'detail', id],
+    queryKey: whiteboardId ? whiteboardKeys.detail(id) : runKeys.detail(id),
     queryFn: () =>
       requestJson<Owner & { whiteboard?: Owner }>(`/api/v1/${whiteboardId ? 'whiteboards' : 'agent-runs'}/${encodeURIComponent(id)}`),
     enabled: !!id,

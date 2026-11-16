@@ -5,6 +5,7 @@ import { showToast } from '../ui'
 import { useSetWorkItemArchived } from './hooks'
 import { conflictCurrent, editErrorMessage } from './taskEdits'
 import type { WorkItem } from './types'
+import { whiteboardKeys } from '../whiteboards/keys'
 
 // The full page puts the fields in a rail beside the text once it is this wide.
 const WIDE_AT = 880
@@ -52,7 +53,7 @@ export function useArchive(item: WorkItem, projectArchived: boolean) {
 /** How many whiteboards the task has, from the same query as its Whiteboards section; null until it's known. */
 export function useBoardCount(taskId: string) {
   const boards = useQuery({
-    queryKey: ['whiteboards', 'linked', 'task', taskId],
+    queryKey: whiteboardKeys.linked('task', taskId),
     // The whiteboards' API stays in their own chunk until a task page asks.
     queryFn: () => import('../whiteboards/api').then((api) => api.linkedWhiteboards('task', taskId)),
   })

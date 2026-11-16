@@ -132,7 +132,7 @@ function RunBody({ run }: { run: RunDetail }) {
     if (!wasBusy.current) return
     wasBusy.current = false
     void queryClient.invalidateQueries({ queryKey: runKeys.detail(run.id) })
-    void queryClient.invalidateQueries({ queryKey: ['runs', 'list'] })
+    void queryClient.invalidateQueries({ queryKey: runKeys.lists })
   }, [actions.busyAction, queryClient, run.id])
 
   const copyLog = () => {

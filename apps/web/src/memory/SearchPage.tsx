@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
@@ -95,7 +96,7 @@ export function SearchPage() {
     setDraft(query)
   }
   const results = useQuery({
-    queryKey: ['search', query, projectId],
+    queryKey: queryKeys.search(query, projectId),
     queryFn: () => {
       const search = new URLSearchParams({ q: query })
       if (projectId) search.set('projectId', projectId)

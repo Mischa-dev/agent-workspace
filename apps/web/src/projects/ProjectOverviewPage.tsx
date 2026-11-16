@@ -141,7 +141,7 @@ function pathOf(href: string) {
 /** This project's unread inbox items, under the inbox's key so reading one anywhere refreshes it. */
 function useProjectUnread(projectId: string) {
   return useQuery({
-    queryKey: [...inboxKeys.root, 'project', projectId],
+    queryKey: inboxKeys.project(projectId),
     queryFn: async () => {
       const search = new URLSearchParams({ view: 'unread', category: 'all', projectId, limit: '20' })
       return normalizePage(await requestJson<unknown>(`/api/v1/inbox?${search}`))

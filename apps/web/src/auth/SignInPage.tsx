@@ -5,7 +5,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
 import { Banner, Button, TextField } from '../ui'
-import { startWorkOs, workOsStatus } from './workos'
+import { authKeys, startWorkOs, workOsStatus } from './workos'
 import { AuthLayout } from './AuthLayout'
 import {
   installAuthenticatedSession,
@@ -31,10 +31,10 @@ function safeReturnTo(search: string) {
 }
 
 export function SignInPage() {
-  const workos = useQuery({ queryKey: ['workos-status'], queryFn: workOsStatus })
+  const workos = useQuery({ queryKey: authKeys.workOsStatus, queryFn: workOsStatus })
   // Whether this server can email a reset link; without email the operator resets it.
   const resetByEmail = useQuery({
-    queryKey: ['password-reset-available'],
+    queryKey: authKeys.passwordResetAvailable,
     queryFn: () => requestJson<{ available: boolean }>('/api/v1/auth/password-reset'),
   })
   const session = useSession()

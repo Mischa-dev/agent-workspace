@@ -11,6 +11,7 @@ import { useProjectConversationSidebar } from './hooks'
 import { useRestoreConversation } from './useArchiveConversation'
 import './chat.css'
 import '../styles/pages.css'
+import { queryKeys } from '../api/queryKeys'
 
 /** "Archived Oct 12", with the full date on hover. */
 function ArchivedOn({ at }: { at: string | null }) {
@@ -28,7 +29,7 @@ function ArchivedOn({ at }: { at: string | null }) {
  */
 function RestoreButton({ conversationId, kind, label, projectId }: { conversationId: string; kind: 'channel' | 'thread'; label: string; projectId: string }) {
   const facts = useQuery({
-    queryKey: ['project', projectId, 'conversation', conversationId, 'restorable'],
+    queryKey: queryKeys.conversationRestorable(projectId, conversationId),
     queryFn: () => getConversationTimeline(conversationId, undefined, 1, true),
     staleTime: 30_000,
     retry: false,
