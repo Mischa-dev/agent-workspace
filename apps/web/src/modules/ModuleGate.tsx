@@ -3,7 +3,8 @@ import { lazy, Suspense, type ReactNode } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
-import { useHomeWorkspaceId, useProjectExperience, useWorkspaceExperience } from '../experience/layout'
+import { useWorkspaceId } from '../app/workspace'
+import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { runKeys } from '../runs/keys'
 import { whiteboardKeys } from '../whiteboards/keys'
 import { moduleSwitchable } from './ownership'
@@ -31,7 +32,7 @@ type Owner = { projectId: string | null; organizationId: string }
 export function ModuleGate({ children, waiting }: { children: ReactNode; waiting: ReactNode }) {
   const { pathname } = useLocation()
   const { projectId, whiteboardId, runId, taskKey } = useParams()
-  const homeId = useHomeWorkspaceId()
+  const homeId = useWorkspaceId()
   // The same request and cache entry as the board's or run's own page
   // (whiteboardKeys.detail, runKeys.detail), so it's asked for once.
   const id = whiteboardId ?? runId ?? ''

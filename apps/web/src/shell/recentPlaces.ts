@@ -1,3 +1,4 @@
+import { legacyPathOf } from '../app/href'
 import type { IconName } from '../ui'
 
 /**
@@ -30,7 +31,8 @@ const NAMED_BY_PAGE = [
 ]
 
 /** Whether a page is worth remembering, given its title and whether the page named itself. */
-export function isRememberedPlace(path: string, title: string, namedByPage: boolean) {
+export function isRememberedPlace(address: string, title: string, namedByPage: boolean) {
+  const path = legacyPathOf(address)
   if (!title.trim()) return false
   if (SKIPPED.some((pattern) => pattern.test(path))) return false
   // Before the page loads, its title is only "Channel" or "Task": wait for the real one.
@@ -79,7 +81,8 @@ export function forgetRecentPlaces(actorId: string) {
 }
 
 /** An icon for the kind of place an address is. */
-export function placeIcon(path: string): IconName {
+export function placeIcon(address: string): IconName {
+  const path = legacyPathOf(address)
   if (/\/channels\//.test(path)) return 'hash'
   if (/\/threads\//.test(path)) return 'messages'
   if (/^\/messages\//.test(path)) return 'message'

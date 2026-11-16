@@ -33,7 +33,7 @@ export const seeded = {
   channelName: 'general',
 }
 
-export function seededValue(name: 'E2E_PASSWORD' | 'E2E_PROJECT_ID' | 'E2E_CHANNEL_ID'): string {
+export function seededValue(name: 'E2E_PASSWORD' | 'E2E_PROJECT_ID' | 'E2E_CHANNEL_ID' | 'E2E_DATABASE_URL'): string {
   const value = process.env[name]
   if (!value) throw new Error(`${name} is missing; the global setup didn't run`)
   return value

@@ -21,10 +21,13 @@ const MAX_SHARED_FILES = 10
 const SHELL_URL = '/index.html'
 const CONFIG_URL = '/client-config'
 const MAX_ASSETS = 120
-// Client-side routes that the server answers with index.html, and a task's
-// short link (/AW-12). Keep in step with the routes in app/routes.tsx.
+// Client-side routes that the server answers with index.html: a workspace's
+// pages under /w/<slug>/, a DM's own address (/dm/<id>), the old addresses
+// that redirect there, and a task's short link (/AW-12). Keep in step with
+// the first segments of the routes in app/routes.tsx (serviceWorker.test.ts
+// checks).
 const APP_ROUTE =
-  /^\/(?:|home|welcome|inbox|later|my-work|runs|whiteboards|messages|projects|settings|search|share|new-task|sign-in|forgot-password|reset-password|verify-email|join|design-system)(?:\/|$)|^\/[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\/?$/
+  /^\/(?:|w|dm|home|welcome|inbox|later|my-work|runs|whiteboards|pages|messages|projects|settings|search|share|new-task|forms|sign-in|forgot-password|reset-password|verify-email|join|design-system)(?:\/|$)|^\/[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\/?$/
 
 self.addEventListener('install', (event) => {
   event.waitUntil(cacheShell().catch(() => undefined).then(() => self.skipWaiting()))
@@ -194,9 +197,9 @@ function showPush(event) {
 
 // A share with files: keep the files for the share page (it reads and deletes
 // them), and open the page with the title, text and link in its address, as a
-// share without files arrives.
+// share without files arrives, in the workspace used last (`-`).
 async function receiveShare(request) {
-  const target = new URL('/share', self.location.origin)
+  const target = new URL('/w/-/share', self.location.origin)
   try {
     const form = await request.formData()
     for (const name of ['title', 'text', 'url']) {

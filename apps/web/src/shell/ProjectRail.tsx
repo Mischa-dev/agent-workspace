@@ -3,14 +3,16 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { legacyPathOf, workspaceHref } from '../app/href'
 import { toastError } from '../app/toastError'
-import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/session'
+import { useWorkspace, useWorkspaceHref } from '../app/workspace'
+import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession, type OrganizationSummary, type SessionUser } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
 import { useHomeExperience } from '../experience/layout'
 import { projectLocationHref } from '../projects/locations'
 import { useProjects, useSetRailOrder, useSwitchProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
-import { Avatar, Badge, Icon, Menu, Tooltip, showToast, swatchFor, type IconName } from '../ui'
+import { Avatar, Badge, Icon, Menu, Tooltip, initials, showToast, swatchFor, type IconName } from '../ui'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { openCommandMenu, useCommandState } from './commandStore'
 import { inHomeSpace, useInboxUnread } from './homeSpace'
@@ -86,7 +88,59 @@ function UtilityTile({
 }
 
 /**
- * The far-left column: Home, Messages, each project, and the account. Home's
+ * The workspace switcher (W1.14a, R19): every workspace the account is in,
+ * each with what needs the person in its projects, and the one they're in
+ * ticked. Shown once there's more than one. The counts come from the
+ * projects list until the live connection carries them per workspace (W1.6).
+ */
+function WorkspaceSwitcher({
+  current,
+  onNavigate,
+  projects,
+  workspaces,
+}: {
+  current: OrganizationSummary
+  onNavigate: () => void
+  projects: readonly Project[]
+  workspaces: readonly OrganizationSummary[]
+}) {
+  const navigate = useNavigate()
+  const unread = (workspace: OrganizationSummary) =>
+    projects.reduce((sum, project) => sum + (project.organizationId === workspace.id ? project.attentionCount : 0), 0)
+  const elsewhere = workspaces.reduce((sum, workspace) => sum + (workspace.id === current.id ? 0 : unread(workspace)), 0)
+  return (
+    <Menu
+      items={[
+        { heading: 'Workspaces' },
+        ...workspaces.map((workspace) => ({
+          label: workspace.name,
+          checked: workspace.id === current.id,
+          badge: workspace.id === current.id ? undefined : unread(workspace) || undefined,
+          onSelect: () => {
+            onNavigate()
+            navigate(workspaceHref(workspace.slug))
+          },
+        })),
+      ]}
+      label="Workspaces"
+      placement="right-start"
+      trigger={
+        <button
+          aria-label={`Workspace: ${current.name}${elsewhere ? `, ${elsewhere} unread in others` : ''}`}
+          className={`aw-tile aw-tile--space aw-tile--workspace${elsewhere ? ' is-unread' : ''}`}
+          data-region="workspace-switcher"
+          type="button"
+        >
+          <TileFace swatch={swatchFor(current.id)}>{initials(current.name)}</TileFace>
+          {elsewhere > 0 ? <Badge className="aw-tile__badge" count={elsewhere} max={9} /> : null}
+        </button>
+      }
+    />
+  )
+}
+
+/**
+ * The far-left column: the workspace, Home, Messages, each project, and the account. Home's
  * own pages (Inbox, My work, Later...) live in its sidebar, so projects get the room.
  */
 export function ProjectRail({
@@ -107,6 +161,10 @@ export function ProjectRail({
   user: SessionUser
 }) {
   const projectsQuery = useProjects()
+  const session = useAuthenticatedSession()
+  const workspace = useWorkspace()
+  const href = useWorkspaceHref()
+  const several = session.organizations.length > 1
   const direct = useDirectOverview()
   const unreadConversations = direct.data?.conversations.filter((conversation) => conversation.unread).length ?? 0
   const switchProject = useSwitchProject()
@@ -119,7 +177,11 @@ export function ProjectRail({
   const commandMenuOpen = useCommandState().open === 'commands'
   const pausedUntil = usePausedUntil()
   // AWD-75: no tile for a project where Projects is off for you.
-  const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt && !project.modulesOff?.includes('projects'))
+  const openProjects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
+  // W1.14a: the projects of the workspace you're in.
+  const projects = openProjects.filter(
+    (project) => !project.modulesOff?.includes('projects') && (!several || !workspace || project.organizationId === workspace.id),
+  )
   const inboxUnread = useInboxUnread() ?? 0
   // AWD-75: no Messages tile with Messages off, and no New project tile
   // with Projects off at Home, where a new project goes.
@@ -183,7 +245,8 @@ export function ProjectRail({
     }
   }
 
-  const inMessages = location.pathname.startsWith('/messages')
+  const here = legacyPathOf(location.pathname)
+  const inMessages = here.startsWith('/messages')
   // Settings open on the project you were in.
   const fromProjectId = /^\/projects\/([^/]+)/.exec(location.pathname)?.[1]
   const settingsState = fromProjectId && fromProjectId !== 'new' ? { fromProjectId } : undefined
@@ -191,13 +254,19 @@ export function ProjectRail({
   return (
     <>
       <nav aria-label="Spaces" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
+        {several && workspace ? (
+          <>
+            <WorkspaceSwitcher current={workspace} onNavigate={onSpaceSelected} projects={openProjects} workspaces={session.organizations} />
+            <span className="aw-rail__divider" role="separator" />
+          </>
+        ) : null}
         <UtilityTile
           active={inHomeSpace(location.pathname)}
           badge={inboxUnread}
           icon="home"
           label="Home"
           onClick={onSpaceSelected}
-          to="/home"
+          to={href('/home')}
         />
         {experience.moduleOn('messages') ? (
           <UtilityTile
@@ -206,7 +275,7 @@ export function ProjectRail({
             icon="message"
             label="Messages"
             onClick={onSpaceSelected}
-            to="/messages"
+            to={href('/messages')}
           />
         ) : null}
         <span className="aw-rail__divider" role="separator" />
@@ -247,7 +316,7 @@ export function ProjectRail({
           })}
         </div>
         {user.capabilities.createProject && experience.moduleOn('projects') ? (
-          <UtilityTile icon="plus" label="New project" onClick={onNavigate} to="/projects/new" />
+          <UtilityTile icon="plus" label="New project" onClick={onNavigate} to={href('/projects/new')} />
         ) : null}
         <span className="aw-rail__spacer" />
         <Tooltip label="Go anywhere or run a command" shortcut="⌘K" side="right">
@@ -316,7 +385,7 @@ export function ProjectRail({
         />
       </nav>
 
-      {location.pathname === '/home' && projectsQuery.isError && (
+      {here === '/home' && projectsQuery.isError && (
         <p className="visually-hidden" role="alert">
           Projects didn’t load.
         </p>

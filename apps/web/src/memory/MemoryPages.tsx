@@ -9,7 +9,8 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
 import type { Project, ProjectLocation } from '../projects/types'
-import { useHomeWorkspaceId, useProjectExperience } from '../experience/layout'
+import { useWorkspaceId } from '../app/workspace'
+import { useProjectExperience } from '../experience/layout'
 import { useShellPage } from '../shell/shellStore'
 import { MemoryTabs } from '../shell/ProjectTabs'
 import { usePageTitle } from '../shell/documentTitleModel'
@@ -127,7 +128,7 @@ const pagesHref = (projectId: string) => `/projects/${encodeURIComponent(project
 
 /** The workspace's own pages, outside any project: they live in its hidden space. */
 function WorkspacePagesPage() {
-  const organizationId = useHomeWorkspaceId()
+  const organizationId = useWorkspaceId()
   const space = useQuery({
     queryKey: memoryKeys.workspacePagesSpace(organizationId),
     queryFn: () => workspacePagesSpace(organizationId ?? ''),

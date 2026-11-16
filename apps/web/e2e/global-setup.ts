@@ -131,6 +131,8 @@ export default async function globalSetup() {
     process.env.E2E_PASSWORD = password
     process.env.E2E_PROJECT_ID = seededIds.projectId
     process.env.E2E_CHANNEL_ID = seededIds.channelId
+    // For specs that set up what the API can't yet, such as a second workspace.
+    process.env.E2E_DATABASE_URL = `${databaseBase}/${databaseName}`
   } catch (error) {
     await teardown()
     throw error
