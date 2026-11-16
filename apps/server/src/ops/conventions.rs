@@ -9,7 +9,7 @@ use super::{Idempotency, OpKind, OpMeta};
 /// The verbs each kind may use: `<thing>_<verb>`.
 pub const VERBS: &[(OpKind, &[&str])] = &[
     (OpKind::Describe, &["get", "open"]),
-    (OpKind::Query, &["list", "search", "history", "export"]),
+    (OpKind::Query, &["list", "search", "history", "export", "preview"]),
     (
         OpKind::Create,
         &[
@@ -24,6 +24,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "duplicate",
             "forward",
             "report",
+            "install",
         ],
     ),
     (
@@ -55,6 +56,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "set",
             "cancel",
             "retry",
+            "remove",
         ],
     ),
     (

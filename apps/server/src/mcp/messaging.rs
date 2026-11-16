@@ -34,7 +34,7 @@ use crate::{
 
 /// The caller as the commands read it: the account, the credential it came
 /// through, and the space dispatch located the target in.
-fn principal_of(ctx: &OpContext) -> McpPrincipal {
+pub(crate) fn principal_of(ctx: &OpContext) -> McpPrincipal {
     let (credential_id, oauth_grant_id, client_name, authentication_class) = match &ctx.edge {
         Edge::Mcp {
             credential_id,

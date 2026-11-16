@@ -39,6 +39,11 @@
     "workspace_template_apply": "change",
     "workspace_template_save": "create",
     "package_export": "query",
+    "package_preview": "query",
+    "package_install": "create",
+    "package_list": "query",
+    "package_remove": "change",
+    "agent_template_list": "query",
     "role_assign": "change",
     "thing_open": "describe"
   },

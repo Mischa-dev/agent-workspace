@@ -1923,6 +1923,7 @@ fn mcp_case_names() -> BTreeSet<String> {
 const MCP_CASE_TOOLS: &[&str] = &[
     "agent_list",
     "agent_profile_list",
+    "agent_template_list",
     "ai_suggestions_list",
     "approval_get",
     "approval_list",
@@ -1960,6 +1961,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_work",
     "notification_list",
     "package_export",
+    "package_list",
+    "package_preview",
     "page_blocks",
     "page_comments",
     "page_get",
@@ -2265,6 +2268,20 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         ),
         by_project("settings_get"),
         by_project("module_list"),
+        by_project("package_list"),
+        by_project("agent_template_list"),
+        case(
+            "package_preview",
+            vec![json!({"package": {
+                "format": "agent-workspace-package/1", "id": "own_tiny", "version": "1.0.0",
+                "name": "Tiny", "target": "space", "contents": []},
+                "target": {"spaceId": a.project}})],
+            vec![json!({"package": {
+                "format": "agent-workspace-package/1", "id": "net_tiny", "version": "1.0.0",
+                "name": "Tiny", "target": "space", "contents": []},
+                "target": {"spaceId": b.project}})],
+            vec![],
+        ),
         case(
             "thing_open",
             vec![

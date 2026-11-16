@@ -501,6 +501,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "module_update",
     "model_catalog_write",
     "notification_update",
+    "package_install",
+    "package_remove",
     "page_comment",
     "page_comment_update",
     "page_edit",
@@ -6803,6 +6805,20 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": b.task}),
             json!({"whiteboardId": a.whiteboard, "targetKind": "page", "targetId": b.page}),
         ]),
+        // Packages (M1.9). An install needs a fresh preview's planHash
+        // (packages_install.rs installs for real); another workspace's
+        // space or install is never reached.
+        mcp_case(
+            "package_install",
+            json!({}),
+            vec![json!({"package": tiny_package(), "target": {"spaceId": b.project}, "planHash": "sha256:0", "clientRequestId": "net-package-b"})],
+        )
+        .without_own("needs a planHash from a preview; packages_install.rs covers installing"),
+        mcp_case(
+            "package_remove",
+            json!({"installId": a.package_install, "parts": "keep", "clientRequestId": "net-package-remove-own"}),
+            vec![json!({"installId": b.package_install, "parts": "archive", "clientRequestId": "net-package-remove-b"})],
+        ),
         // Built modules (M1.6). Linked, then unlinked, so A's collection
         // stays visible to the cases after these.
         mcp_case(
@@ -7262,4 +7278,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             })],
         ),
     ]
+}
+
+/// The smallest package (M1.9's isolation cases).
+fn tiny_package() -> Value {
+    json!({
+        "format": "agent-workspace-package/1",
+        "id": "net_tiny",
+        "version": "1.0.0",
+        "name": "Tiny",
+        "target": "space",
+        "contents": [{"kind": "collection", "key": "tiny", "body": {
+            "name": "Tiny", "titleName": "Name", "fields": [], "views": []}}],
+    })
 }

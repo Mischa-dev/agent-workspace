@@ -99,6 +99,7 @@ mod ops_edges;
 mod ops_kernel;
 mod ops_messages;
 mod packages;
+mod packages_install;
 mod phase3_takedown;
 mod phase4_groundwork;
 mod polish_leftovers;

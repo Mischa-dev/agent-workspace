@@ -130,6 +130,11 @@ const KINDS: &[(&str, &str)] = &[
         "module",
         "SELECT workspace_id, space_id FROM modules WHERE id = $1 AND $2::uuid IS NOT NULL",
     ),
+    // M1.9: a package install, in its space or the workspace.
+    (
+        "package_install",
+        "SELECT workspace_id, space_id FROM package_installs WHERE id = $1 AND $2::uuid IS NOT NULL",
+    ),
 ];
 
 /// The kinds `locate` knows; a test checks every operation's thing kind is
@@ -229,6 +234,7 @@ fn what_of(kind: &str) -> &'static str {
         "task" => "That task",
         "run" => "That run",
         "module" => "That module",
+        "package_install" => "That install",
         _ => "That",
     }
 }
