@@ -27,6 +27,8 @@ type Rule = {
   what: string;
   ceiling: number;
   count: (source: string) => number;
+  /** Files the rule doesn't look at (`src/`-relative). */
+  skip?: (file: string) => boolean;
 };
 
 /** Whitespace squeezed out, so `role  ===  'admin'` and `role==='admin'` match alike. */
@@ -46,6 +48,9 @@ const kindNeedles = ["external_agent", "human"].flatMap((kind) => [
   `kind!=='${kind}'`,
 ]);
 const vendorNeedles = ["Codex", "Claude"];
+
+/** `<AppShell` uses left when W1.12a landed; lower it as folders move off. */
+const CEILING_APP_SHELL = 59;
 
 const rules: Rule[] = [
   {
@@ -69,6 +74,15 @@ const rules: Rule[] = [
     count: (source) => squeeze(source).split("queryKey:[").length - 1,
   },
   {
+    // W1.12 (guard 6.3): pages tell the persistent shell what they need with
+    // useShellPage; they don't wrap themselves in AppShell. W1.12c ends it.
+    id: "web_app_shell_in_pages",
+    what: "a page wrapped in <AppShell>; call useShellPage and render only the page",
+    ceiling: CEILING_APP_SHELL,
+    count: (source) => (source.match(/<AppShell[\s>]/g) ?? []).length,
+    skip: (file) => file.startsWith("shell/"),
+  },
+  {
     id: "web_vendor_names",
     what: "a provider or harness name in the app; use the name its manifest gives",
     ceiling: 20,
@@ -82,6 +96,7 @@ function scan(rule: Rule, files: Record<string, string>) {
   const lower: string[] = [];
   for (const [path, source] of Object.entries(files)) {
     const file = path.replace(/^\.\//, "");
+    if (rule.skip?.(file)) continue;
     const found = rule.count(source);
     const allowance = allowed[file] ?? 0;
     if (found > allowance)
@@ -133,6 +148,13 @@ describe("web structure guards", () => {
     ).toHaveLength(1);
     expect(
       scan(keys, { "./scratch.ts": "useQuery({ queryKey: projectKeys.x(id) })" }).over,
+    ).toEqual([]);
+    const shells = rules.find((rule) => rule.id === "web_app_shell_in_pages")!;
+    expect(
+      scan(shells, { "./inbox/Scratch.tsx": "return <AppShell home user={user}>{page}</AppShell>" }).over,
+    ).toHaveLength(1);
+    expect(
+      scan(shells, { "./shell/Scratch.tsx": "return <AppShell home user={user}>{page}</AppShell>" }).over,
     ).toEqual([]);
     const kinds = rules[1];
     expect(

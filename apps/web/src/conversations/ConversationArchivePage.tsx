@@ -1,10 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
-import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Section, formatFullDate, formatShortDate } from '../ui'
 import { getConversationTimeline } from './api'
 import { useProjectConversationSidebar } from './hooks'
@@ -51,25 +50,29 @@ function RestoreButton({ conversationId, kind, label, projectId }: { conversatio
 }
 
 export function ConversationArchivePage() {
-  const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
   const conversations = useProjectConversationSidebar(projectId, '', {
     includeArchived: true,
   })
 
+  // Until the page can draw, the shell keeps the space the address names.
+  useShellPage(
+    project.data
+      ? {
+          mainClassName: 'aw-main--page',
+          project: project.data,
+        }
+      : {},
+  )
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading />
-      </AppShell>
+      <ProjectPageLoading />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
@@ -83,7 +86,7 @@ export function ConversationArchivePage() {
 
   const base = `/projects/${encodeURIComponent(projectId)}`
   return (
-    <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
+    <>
       <div className="aw-page aw-page--reading">
         <PageHeader icon="archive" title="Archived conversations" />
         {conversations.isPending ? <ListSkeleton label="Loading archived conversations" rows={4} /> : null}
@@ -134,6 +137,6 @@ export function ConversationArchivePage() {
           </Section>
         ) : null}
       </div>
-    </AppShell>
+    </>
   )
 }

@@ -41,5 +41,36 @@
     "work-items/TaskDetail.tsx": 2,
     "work-items/codexDeepLink.ts": 3
   },
-  "web_inline_query_keys": {}
+  "web_inline_query_keys": {},
+  "web_app_shell_in_pages": {
+    "ai/frame.tsx": 3,
+    "app/NotFoundPage.tsx": 1,
+    "app/TaskKeyRedirect.tsx": 1,
+    "app/boundaries.tsx": 1,
+    "collections/CollectionPage.tsx": 5,
+    "collections/CollectionsListPage.tsx": 3,
+    "design/DesignSystemPage.tsx": 1,
+    "memory/MemoryPages.tsx": 4,
+    "memory/SearchPage.tsx": 1,
+    "modules/TurnedOffPage.tsx": 1,
+    "onboarding/OnboardingPage.tsx": 1,
+    "pieces/PieceGallery.tsx": 1,
+    "projects/CreateProjectPage.tsx": 2,
+    "projects/HomePage.tsx": 1,
+    "projects/ProjectOverviewPage.tsx": 3,
+    "projects/ProjectsPage.tsx": 1,
+    "quick-add/QuickAddPage.tsx": 1,
+    "runs/RunPage.tsx": 1,
+    "runs/RunsPage.tsx": 3,
+    "settings/SettingsArea.tsx": 1,
+    "sheets/SheetPage.tsx": 5,
+    "sheets/SheetsListPage.tsx": 3,
+    "views/MyWorkPage.tsx": 1,
+    "views/TimelinePage.tsx": 3,
+    "whiteboards/WhiteboardPage.tsx": 1,
+    "whiteboards/WhiteboardsPage.tsx": 1,
+    "work-items/MilestonesPage.tsx": 3,
+    "work-items/WorkItemDetailPage.tsx": 3,
+    "work-items/WorkItemsPage.tsx": 3
+  }
 }
