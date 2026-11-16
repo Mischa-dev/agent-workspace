@@ -1,6 +1,9 @@
 # Repository guidance
 
-The plan is in `docs/plans/master/`. Before you start a slice, read, in this
+The plan's source of truth is the "Master plan: ..." pages in the app's AWD
+project; `docs/plans/master/` is their mirror in the repository, and a plan
+change goes into both in the same step (the page wins if they differ). A
+build's assignment and brief are its AWD task. Before you start a slice, read, in this
 order: `docs/plans/master/END-STATE.md` (what the product is becoming; its
 words are used the same way everywhere), `docs/plans/master/LEAD-RULINGS.md`
 (binding where a plan disagrees), your workstream's plan in
