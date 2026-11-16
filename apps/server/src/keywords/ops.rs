@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{MAX_KEYWORDS, normalize};
-use crate::ops::{Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted};
+use crate::ops::{
+    Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
+};
 
 pub fn register_ops(registry: &mut Registry) {
     registry

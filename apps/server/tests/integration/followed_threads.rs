@@ -23,7 +23,10 @@ async fn followed(app: &axum::Router, browser: &Browser, workspace: Uuid) -> Vec
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{listed}");
-    listed["value"]["threads"].as_array().expect("threads").clone()
+    listed["value"]["threads"]
+        .as_array()
+        .expect("threads")
+        .clone()
 }
 
 #[tokio::test]
@@ -54,7 +57,10 @@ async fn followed_threads_are_the_ones_you_can_read() {
         async move {
             let (status, made) = send(app, request).await;
             assert!(status.is_success(), "{made}");
-            made["conversation"]["id"].as_str().expect("thread").to_owned()
+            made["conversation"]["id"]
+                .as_str()
+                .expect("thread")
+                .to_owned()
         }
     };
     let post = |browser: &Browser, thread: &str, text: &'static str| {
@@ -117,7 +123,10 @@ async fn followed_threads_are_the_ones_you_can_read() {
         .collect::<Vec<_>>();
     assert_eq!(ids[0], budget, "newest reply first: {listed:?}");
     assert_eq!(ids.len(), 3, "{listed:?}");
-    let launch_row = listed.iter().find(|row| row["id"] == launch.as_str()).expect("launch");
+    let launch_row = listed
+        .iter()
+        .find(|row| row["id"] == launch.as_str())
+        .expect("launch");
     assert_eq!(launch_row["status"], "Decided");
     assert_eq!(launch_row["outcome"], "Ship on Friday");
     assert_eq!(launch_row["parentName"], "general");

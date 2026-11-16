@@ -75,7 +75,10 @@ mod tests {
 
     #[test]
     fn keywords_are_trimmed_words() {
-        assert_eq!(normalize("  launch   date "), Some("launch date".to_owned()));
+        assert_eq!(
+            normalize("  launch   date "),
+            Some("launch date".to_owned())
+        );
         assert_eq!(normalize("x"), None);
         assert_eq!(normalize(&"a".repeat(61)), None);
         assert_eq!(normalize("bad\u{7}"), None);

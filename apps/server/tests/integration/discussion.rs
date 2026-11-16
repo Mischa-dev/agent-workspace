@@ -580,7 +580,12 @@ async fn sheet_anchor_follows_a_row_insert() {
         )
         .await;
         assert_eq!(made["outcome"], "ok", "{made}");
-        threads.push(made["value"]["threadId"].as_str().expect("thread").to_owned());
+        threads.push(
+            made["value"]["threadId"]
+                .as_str()
+                .expect("thread")
+                .to_owned(),
+        );
     }
 
     // Two rows above C3 and the first column out: the cell is now B5, and
@@ -635,7 +640,11 @@ async fn sheet_anchor_follows_a_row_insert() {
     .await;
     assert_eq!(listed["outcome"], "ok", "{listed}");
     let threads = listed["value"]["threads"].as_array().expect("threads");
-    assert_eq!(threads.len(), 2, "both threads keep their comments: {listed}");
+    assert_eq!(
+        threads.len(),
+        2,
+        "both threads keep their comments: {listed}"
+    );
     assert!(
         threads.iter().all(|thread| thread["messageCount"] == 1),
         "{listed}"

@@ -75,7 +75,11 @@ async fn keywords_reach_only_people_who_can_read_and_listen() {
         )
         .await;
         assert!(status.is_success(), "{set}");
-        assert_eq!(set["value"]["keywords"], json!(["Launch", "design review"]), "{set}");
+        assert_eq!(
+            set["value"]["keywords"],
+            json!(["Launch", "design review"]),
+            "{set}"
+        );
     }
     let (_, refused) = op(
         app,
@@ -86,8 +90,19 @@ async fn keywords_reach_only_people_who_can_read_and_listen() {
     )
     .await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
-    let (_, listed) = op(app, &mara.browser, workspace, "notification_keyword_list", json!({})).await;
-    assert_eq!(listed["value"]["keywords"], json!(["Launch", "design review"]), "{listed}");
+    let (_, listed) = op(
+        app,
+        &mara.browser,
+        workspace,
+        "notification_keyword_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        listed["value"]["keywords"],
+        json!(["Launch", "design review"]),
+        "{listed}"
+    );
 
     let channel = |browser: &Browser, project: String, name: &'static str| {
         let request = browser.request(
@@ -137,7 +152,12 @@ async fn keywords_reach_only_people_who_can_read_and_listen() {
         .expect("notifications")
     };
 
-    let work = channel(&world.owner.browser, world.project("WORK").to_owned(), "general").await;
+    let work = channel(
+        &world.owner.browser,
+        world.project("WORK").to_owned(),
+        "general",
+    )
+    .await;
     let elsewhere = channel(&world.owner.browser, other.to_string(), "plans").await;
 
     // In a channel all three read: Mara and Nina hear, Lena wrote it.
@@ -173,7 +193,10 @@ async fn keywords_reach_only_people_who_can_read_and_listen() {
     )
     .await;
     assert!(status.is_success(), "{thread}");
-    let thread = thread["conversation"]["id"].as_str().expect("thread").to_owned();
+    let thread = thread["conversation"]["id"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
     let private = post(
         &lena.browser,
         format!("/api/v1/threads/{thread}/messages"),
@@ -218,7 +241,10 @@ async fn keywords_reach_only_people_who_can_read_and_listen() {
     .fetch_one(pool)
     .await
     .expect("detail");
-    assert!(!detail.to_string().to_lowercase().contains("friday"), "{detail}");
+    assert!(
+        !detail.to_string().to_lowercase().contains("friday"),
+        "{detail}"
+    );
 
     world.finish().await;
 }
