@@ -6,12 +6,14 @@ import { isApiError } from '../api/errors'
 import { toastError } from '../app/toastError'
 import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
-import { useHomeExperience } from '../experience/layout'
+import { useHomeExperience, useHomeWorkspaceId } from '../experience/layout'
 import { projectLocationHref } from '../projects/locations'
 import { useProjects, useSetRailOrder, useSwitchProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { Avatar, Badge, Icon, Menu, Tooltip, showToast, swatchFor, type IconName } from '../ui'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
+import { shownStatus, useStatuses } from '../status/api'
+import { statusLine } from '../status/statusWords'
 import { openCommandMenu, useCommandState } from './commandStore'
 import { inHomeSpace, useInboxUnread } from './homeSpace'
 import { loadShellLazy } from './loadShellLazy'
@@ -21,6 +23,7 @@ import { railOrderAfterDrop, railProjects } from './railProjects'
 
 // Loaded after the first paint: whether you've paused notifications.
 const PausedMark = lazy(() => loadShellLazy().then((module) => ({ default: module.PausedMark })))
+const StatusDialog = lazy(() => import('../status/StatusDialog').then((module) => ({ default: module.StatusDialog })))
 
 /** What a dragged project tile carries, so other drags (files, text) don't reorder the rail. */
 const RAIL_DRAG_TYPE = 'application/x-agent-workspace-project'
@@ -184,6 +187,10 @@ export function ProjectRail({
   }
 
   const inMessages = location.pathname.startsWith('/messages')
+  const workspaceId = useHomeWorkspaceId()
+  const statuses = useStatuses(workspaceId, [user.actorId])
+  const myStatus = shownStatus(statuses.data ?? [], user.actorId)
+  const [statusOpen, setStatusOpen] = useState(false)
   // Settings open on the project you were in.
   const fromProjectId = /^\/projects\/([^/]+)/.exec(location.pathname)?.[1]
   const settingsState = fromProjectId && fromProjectId !== 'new' ? { fromProjectId } : undefined
@@ -280,6 +287,12 @@ export function ProjectRail({
         <Menu
           items={[
             { heading: user.displayName },
+            {
+              label: myStatus ? `Status: ${statusLine(myStatus)}` : 'Set a status',
+              icon: 'smile-plus',
+              disabled: !workspaceId,
+              onSelect: () => setStatusOpen(true),
+            },
             // The choices (an hour, until morning) and the resume live in the command menu.
             pausedUntil
               ? {
@@ -315,6 +328,11 @@ export function ProjectRail({
           }
         />
       </nav>
+      {statusOpen && workspaceId ? (
+        <Suspense fallback={null}>
+          <StatusDialog current={myStatus} onClose={() => setStatusOpen(false)} open workspaceId={workspaceId} />
+        </Suspense>
+      ) : null}
 
       {location.pathname === '/home' && projectsQuery.isError && (
         <p className="visually-hidden" role="alert">

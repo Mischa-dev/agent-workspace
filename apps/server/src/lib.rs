@@ -22,8 +22,10 @@ pub mod collections;
 pub mod config;
 pub mod connected_apps;
 pub mod conversations;
+pub mod custom_emoji;
 pub mod direct;
 pub mod domain;
+pub mod drafts;
 pub mod environments;
 pub mod error;
 pub mod events;
@@ -99,6 +101,7 @@ pub mod seed;
 pub mod server_status;
 pub mod settings;
 pub mod sheets;
+pub mod statuses;
 pub mod storage_admission;
 #[cfg(test)]
 mod structure_guards;
