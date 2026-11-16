@@ -203,7 +203,6 @@ pub use crate::access::catalogue::{
     PermissionSet,
 };
 
-
 /// The role a membership holds: its built-in role (which every check that
 /// reads the plain role sees) and the permissions it grants, which a custom
 /// role narrows from its base.
@@ -1533,7 +1532,10 @@ mod tests {
             .collect::<Vec<_>>();
         indexes.sort_unstable();
         assert_eq!(indexes, (0..PERMISSIONS.len()).collect::<Vec<_>>());
-        assert_eq!(Permission::AutomationsManage as usize, PERMISSIONS.len() - 1);
+        assert_eq!(
+            Permission::AutomationsManage as usize,
+            PERMISSIONS.len() - 1
+        );
         for info in PERMISSIONS {
             assert_eq!(Permission::from_key(info.key), Some(info.permission));
             assert_eq!(info.permission.info().key, info.key);

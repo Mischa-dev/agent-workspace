@@ -5402,16 +5402,11 @@ async fn validate_issue_command(
         ) && (!wants_write
             || RoleGrant::stored(&role, role_permissions.as_deref()).is_ok_and(|grant| {
                 grant.permissions().iter().any(|permission| {
-                    !matches!(
-                        permission,
-                        Permission::ProjectsView
-                            | Permission::TasksView
-                            | Permission::CodeView
-                            | Permission::MembersView
-                            | Permission::DirectoryView
-                            | Permission::RunsReport
-                            | Permission::RequestsRaise
-                    )
+                    !permission.only_sees()
+                        && !matches!(
+                            permission,
+                            Permission::RunsReport | Permission::RequestsRaise
+                        )
                 })
             }))
     }) {
