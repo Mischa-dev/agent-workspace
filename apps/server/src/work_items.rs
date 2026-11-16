@@ -22,9 +22,6 @@ use crate::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
     message_content::{MessageContent, MessageContentError, MessageNode},
-    outbox::{
-        ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload, enqueue_typed,
-    },
     policy::{Action, Decision, Permission, RoleGrant},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
@@ -1566,64 +1563,41 @@ async fn work_with_worker(
         if current.archived_at.is_some() {
             return Err(AppError::Conflict("work_item", "archived"));
         }
-        let channel_exists = sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM conversations
-                WHERE project_id = $1 AND id = $2 AND kind = 'channel' AND archived_at IS NULL
-                  AND conversation_visible_to(id, $3)
-            )
-            "#,
+        // A worker's thread goes in a channel of this project the person can
+        // see; `threads::create` locks it and checks again.
+        let channel_here = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM conversations WHERE project_id = $1 AND id = $2 AND kind = 'channel' AND conversation_visible_to(id, $3))",
         )
         .bind(project_id)
         .bind(request.channel_id)
         .bind(principal.actor_id)
         .fetch_one(&mut *transaction)
         .await?;
-        if !channel_exists {
+        if !channel_here {
             return Err(AppError::NotFound("channel"));
         }
-
-        let thread_id = Uuid::now_v7();
         let work_item_key = format!("{}-{}", current.project_key, current.number);
-        let thread_name = worker_thread_name(&work_item_key, &current.title, thread_id);
-        sqlx::query(
-            r#"
-            INSERT INTO conversations (id, project_id, kind, parent_channel_id, name)
-            VALUES ($1, $2, 'thread', $3, $4)
-            "#,
+        let creator = crate::conversations::threads::ThreadCreator::browser(&principal, &headers)?;
+        let thread = match crate::conversations::threads::create(
+            &mut transaction,
+            &creator,
+            request.channel_id,
+            crate::conversations::threads::ThreadSpec::new(
+                crate::conversations::threads::ThreadName::Composed(worker_thread_name(
+                    &work_item_key,
+                    &current.title,
+                    Uuid::now_v7(),
+                )),
+            )
+            .linked_to_task(work_item_id),
         )
-        .bind(thread_id)
-        .bind(project_id)
-        .bind(request.channel_id)
-        .bind(&thread_name)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO conversation_read_states (
-                project_id, conversation_id, actor_id, highest_seen_sequence
-            ) VALUES ($1, $2, $3, 0)
-            "#,
-        )
-        .bind(project_id)
-        .bind(thread_id)
-        .bind(principal.actor_id)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO work_item_conversation_links (
-                project_id, work_item_id, conversation_id, created_by_actor_id
-            ) VALUES ($1, $2, $3, $4)
-            "#,
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(thread_id)
-        .bind(principal.actor_id)
-        .execute(&mut *transaction)
-        .await?;
+        .await
+        {
+            Ok(thread) => thread,
+            Err(AppError::NotFound(_)) => return Err(AppError::NotFound("channel")),
+            Err(error) => return Err(error),
+        };
+        let thread_id = thread.id;
 
         let setup = crate::api::select_run_setup(
             &mut transaction,
@@ -1636,16 +1610,6 @@ async fn work_with_worker(
         let version =
             advance_work_item_version(&mut transaction, project_id, work_item_id, current.version)
                 .await?;
-        enqueue_typed(
-            &mut transaction,
-            project_id,
-            OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
-                conversation_id: thread_id,
-                kind: OutboxConversationKind::Thread,
-                version: 1,
-            }),
-        )
-        .await?;
         record_work_item_change(
             &mut transaction,
             &headers,

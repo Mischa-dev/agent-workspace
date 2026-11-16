@@ -35,6 +35,8 @@ use crate::{
     replies::{self, ReplyRequestView},
 };
 
+pub(crate) mod threads;
+
 // A valid v1 Message can contain 20,000 four-byte Unicode scalar values plus
 // bounded AST structure. Keep the transport cap above that exact domain
 // maximum while remaining far below Axum's general default.
@@ -1047,88 +1049,27 @@ async fn create_thread(
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
 
-    let mut origin_text = None;
-    if let Some(origin_message_id) = command.origin_message_id {
-        let origin = sqlx::query_as::<_, (bool, String)>(
-            r#"
-            SELECT removed_at IS NOT NULL, plain_text
-            FROM messages
-            WHERE id = $1
-              AND project_id = $2
-              AND conversation_id = $3
-            "#,
-        )
-        .bind(origin_message_id)
-        .bind(channel.project_id)
-        .bind(channel.id)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        match origin {
-            None => return Err(AppError::Validation("Thread origin Message")),
-            Some((true, _)) => return Err(AppError::Conflict("message", "removed")),
-            Some((false, text)) => origin_text = Some(text),
-        }
-    }
-    let auto_named = command.name.is_none();
+    let creator = threads::ThreadCreator::browser(&principal, &headers)?;
     let name = match &command.name {
-        Some(name) => name.clone(),
-        None => origin_text
-            .as_deref()
-            .and_then(thread_name_from_text)
-            .unwrap_or_else(|| UNNAMED_THREAD.to_owned()),
+        Some(name) => threads::ThreadName::Given(name.clone()),
+        None => threads::ThreadName::Derived,
     };
-
-    let thread_id = Uuid::now_v7();
-    let inserted = sqlx::query(
-        r#"
-        INSERT INTO conversations (
-            id, project_id, kind, parent_channel_id, origin_message_id, name, auto_named
-        )
-        VALUES ($1, $2, 'thread', $3, $4, $5, $6)
-        "#,
-    )
-    .bind(thread_id)
-    .bind(channel.project_id)
-    .bind(channel.id)
-    .bind(command.origin_message_id)
-    .bind(&name)
-    .bind(auto_named)
-    .execute(&mut *transaction)
-    .await;
-    map_conversation_insert(inserted)?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_read_states (
-            project_id, conversation_id, actor_id, highest_seen_sequence
-        )
-        VALUES ($1, $2, $3, 0)
-        "#,
-    )
-    .bind(channel.project_id)
-    .bind(thread_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    enqueue_event(
+    let created = match threads::create(
         &mut transaction,
-        channel.project_id,
-        OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
-            conversation_id: thread_id,
-            kind: OutboxConversationKind::Thread,
-            version: 1,
-        }),
+        &creator,
+        channel.id,
+        threads::ThreadSpec::new(name).from_message(command.origin_message_id),
     )
-    .await?;
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        channel.project_id,
-        "conversation.thread_created",
-        thread_id,
-        serde_json::json!({"parent_channel_id": channel.id}),
-    )
-    .await?;
+    .await
+    {
+        Ok(created) => created,
+        Err(AppError::NotFound("message")) => {
+            return Err(AppError::Validation("Thread origin Message"));
+        }
+        Err(error) => return Err(error),
+    };
+    let thread_id = created.id;
+    let name = created.name;
     let body = ConversationCreateResponse {
         conversation: ConversationView {
             id: thread_id,
@@ -3372,6 +3313,17 @@ async fn project_conversation_sidebar(
     if access.project_archived {
         return Err(AppError::NotFound("project"));
     }
+    // C2.1: the space that holds DMs and groups has no channels, and its
+    // threads belong to their DM or group: being in it shows nobody theirs.
+    if is_direct_project(&state.pool, project_id).await? {
+        return Ok(Json(SidebarResponse {
+            project_id,
+            channels: Vec::new(),
+            capabilities: SidebarCapabilities {
+                create_channel: false,
+            },
+        }));
+    }
     let include_archived = query.include_archived.unwrap_or(false);
     let channels = sqlx::query_as::<_, SidebarChannelRow>(
         r#"
@@ -3640,6 +3592,18 @@ fn thread_attention(row: &SidebarThreadRow) -> ThreadAttention {
             label: "Seen",
         },
     }
+}
+
+/// Whether a project is the hidden one that holds a workspace's DMs and
+/// groups (until K4 moves them to the direct scope).
+async fn is_direct_project(pool: &sqlx::PgPool, project_id: Uuid) -> Result<bool, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or(false),
+    )
 }
 
 async fn authorized_project(
@@ -4884,7 +4848,8 @@ pub(crate) async fn refresh_auto_thread_names(
     conversation_id: Uuid,
     started_from: Option<Uuid>,
     only_unnamed: bool,
-) -> Result<(), AppError> {
+) -> Result<i64, AppError> {
+    let mut renamed = 0;
     let threads = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
         r#"
         SELECT id, name, origin_message_id FROM conversations
@@ -4949,6 +4914,7 @@ pub(crate) async fn refresh_auto_thread_names(
         .fetch_optional(&mut **transaction)
         .await?;
         if let Some(version) = version {
+            renamed += 1;
             enqueue_event(
                 transaction,
                 project_id,
@@ -4962,7 +4928,7 @@ pub(crate) async fn refresh_auto_thread_names(
             .await?;
         }
     }
-    Ok(())
+    Ok(renamed)
 }
 
 pub(crate) fn normalize_conversation_name(value: &str) -> Result<String, AppError> {

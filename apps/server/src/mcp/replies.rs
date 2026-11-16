@@ -11,19 +11,15 @@ use super::{
     McpPrincipal,
     collaboration::{ReadFailure, begin_authorized_read},
     common::insert_audit,
-    talk::unique_thread_name,
 };
 use crate::{
     AppState,
     conversations::{
         MessageCommandActor, MessageMcpCredential, ReplyCompletion, append_message_command_with,
-        enqueue_event, lock_conversation_for,
     },
-    conversations::{normalize_conversation_name, suggested_thread_name},
     error::AppError,
     idempotency::IdempotencyKey,
-    outbox::{ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload},
-    policy::{Action, ActorKind},
+    policy::ActorKind,
     replies::{LEASE_MINUTES, notify_request, retry_request_in, stop_request_in},
     runs::launch_paths::{self, ReplyStep},
 };
@@ -1052,101 +1048,38 @@ async fn open_answer_thread(
     channel_id: Uuid,
     message_id: Uuid,
 ) -> Result<(), AppError> {
-    // The conversation's lock comes before the request's row.
-    let channel = match lock_conversation_for(
+    // The conversation's lock (taken by `threads::create`) comes before the
+    // request's row.
+    let created = match crate::conversations::threads::create(
         transaction,
-        principal.actor_id,
-        principal.actor_kind,
+        // The request names the channel; the call's own project doesn't
+        // confine it.
+        &crate::conversations::threads::ThreadCreator {
+            project_id: None,
+            ..crate::conversations::threads::ThreadCreator::mcp(principal)
+        },
         channel_id,
-        Action::ThreadCreate,
-        false,
+        crate::conversations::threads::ThreadSpec::new(
+            crate::conversations::threads::ThreadName::Derived,
+        )
+        .from_message(Some(message_id))
+        .reusing()
+        .audited_with(serde_json::json!({ "reply_request_id": request_id })),
     )
     .await
     {
-        Ok(channel) => channel,
-        Err(AppError::Forbidden | AppError::NotFound(_)) => return Ok(()),
+        Ok(created) => created,
+        // A viewer, a removed message or a parent that can't hold threads:
+        // the answer stays in the channel.
+        Err(
+            AppError::Forbidden
+            | AppError::NotFound(_)
+            | AppError::Refused { .. }
+            | AppError::Conflict("message", "removed"),
+        ) => return Ok(()),
         Err(error) => return Err(error),
     };
-    let existing = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id FROM conversations
-        WHERE origin_message_id = $1 AND parent_channel_id = $2 AND kind = 'thread'
-          AND archived_at IS NULL
-        ORDER BY created_at
-        LIMIT 1
-        "#,
-    )
-    .bind(message_id)
-    .bind(channel.id)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    let thread_id = match existing {
-        Some(thread_id) => thread_id,
-        None => {
-            let Some(text) = sqlx::query_scalar::<_, String>(
-                r#"
-                SELECT plain_text FROM messages
-                WHERE id = $1 AND conversation_id = $2 AND removed_at IS NULL
-                "#,
-            )
-            .bind(message_id)
-            .bind(channel.id)
-            .fetch_optional(&mut **transaction)
-            .await?
-            else {
-                return Ok(());
-            };
-            let base = normalize_conversation_name(&suggested_thread_name(&text))
-                .unwrap_or_else(|_| "Agent reply".to_owned());
-            let name = unique_thread_name(transaction, channel.id, &base).await?;
-            let thread_id = Uuid::now_v7();
-            sqlx::query(
-                r#"
-                INSERT INTO conversations (id, project_id, kind, parent_channel_id, origin_message_id, name)
-                VALUES ($1, $2, 'thread', $3, $4, $5)
-                "#,
-            )
-            .bind(thread_id)
-            .bind(channel.project_id)
-            .bind(channel.id)
-            .bind(message_id)
-            .bind(&name)
-            .execute(&mut **transaction)
-            .await?;
-            sqlx::query(
-                r#"
-                INSERT INTO conversation_read_states (project_id, conversation_id, actor_id, highest_seen_sequence)
-                VALUES ($1, $2, $3, 0)
-                "#,
-            )
-            .bind(channel.project_id)
-            .bind(thread_id)
-            .bind(principal.actor_id)
-            .execute(&mut **transaction)
-            .await?;
-            enqueue_event(
-                transaction,
-                channel.project_id,
-                OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
-                    conversation_id: thread_id,
-                    kind: OutboxConversationKind::Thread,
-                    version: 1,
-                }),
-            )
-            .await?;
-            insert_audit(
-                transaction,
-                principal,
-                channel.project_id,
-                "conversation.thread_created",
-                "conversation",
-                thread_id,
-                serde_json::json!({ "parent_channel_id": channel.id, "reply_request_id": request_id }),
-            )
-            .await?;
-            thread_id
-        }
-    };
+    let thread_id = created.id;
     sqlx::query("UPDATE reply_requests SET thread_id = $2, updated_at = now() WHERE id = $1")
         .bind(request_id)
         .bind(thread_id)
