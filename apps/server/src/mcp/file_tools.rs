@@ -43,7 +43,7 @@ const MCP_FILE_BYTES: usize = 4 * 1024 * 1024;
 /// A file on a message or task.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct FileSummary {
+pub(crate) struct FileSummary {
     pub file_id: String,
     pub name: String,
     pub content_type: String,

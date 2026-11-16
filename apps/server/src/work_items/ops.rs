@@ -26,6 +26,9 @@ use crate::{
     },
 };
 
+pub mod claims;
+pub mod planning;
+
 pub fn register_ops(registry: &mut Registry) {
     registry
         .add::<TaskCreate>()
@@ -35,7 +38,10 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<TaskCommentCreate>()
         .add::<TaskCommentUpdate>()
         .add::<TaskCommentDelete>()
-        .add::<TaskCriteriaUpdate>();
+        .add::<TaskCriteriaUpdate>()
+        .add::<claims::TaskClaim>()
+        .add::<claims::TaskRelease>();
+    planning::register_ops(registry);
 }
 
 /// The bookkeeping every task write shares: a keyed call is retry-safe

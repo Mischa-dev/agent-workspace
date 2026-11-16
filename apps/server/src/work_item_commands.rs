@@ -6,6 +6,8 @@
 //! workflow checks, version advancement, and exactly-once mutation side
 //! effects inside the caller's transaction.
 
+pub mod claims;
+
 use std::collections::HashMap;
 
 use chrono::NaiveDate;

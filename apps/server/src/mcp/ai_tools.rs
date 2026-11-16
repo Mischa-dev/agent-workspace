@@ -3,7 +3,7 @@
 //! call the same functions as the browser routes in `ai/http.rs`.
 
 use rmcp::schemars;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -116,7 +116,7 @@ async fn task_in_project(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct AiSuggestionsListArguments {
+pub(crate) struct AiSuggestionsListArguments {
     pub project_id: String,
     /// pending (the default), accepted, dismissed, applied, or all.
     pub status: Option<String>,
@@ -131,7 +131,7 @@ pub(super) struct AiSuggestionsListArguments {
     pub cursor: Option<String>,
 }
 
-pub(super) async fn ai_suggestions_list(
+pub(crate) async fn ai_suggestions_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: AiSuggestionsListArguments,
@@ -181,14 +181,14 @@ pub(super) async fn ai_suggestions_list(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct AiSuggestionDecideArguments {
+pub(crate) struct AiSuggestionDecideArguments {
     pub project_id: String,
     pub suggestion_id: String,
     /// accept (apply it, as you) or dismiss (never suggest it again).
     pub decision: String,
 }
 
-pub(super) async fn ai_suggestion_decide(
+pub(crate) async fn ai_suggestion_decide(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: AiSuggestionDecideArguments,
@@ -252,7 +252,7 @@ pub(super) async fn ai_suggestion_decide(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct AiAnalyzeArguments {
+pub(crate) struct AiAnalyzeArguments {
     pub project_id: String,
     /// Triage this one task now (labels, priority, type, parent,
     /// duplicates), instead of looking at the whole project.
@@ -265,7 +265,7 @@ pub(super) struct AiAnalyzeArguments {
     pub check: Option<bool>,
 }
 
-pub(super) async fn ai_analyze(
+pub(crate) async fn ai_analyze(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: AiAnalyzeArguments,
@@ -383,7 +383,7 @@ pub(super) async fn ai_analyze(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskReadyListArguments {
+pub(crate) struct TaskReadyListArguments {
     pub project_id: String,
     /// ready (the default: not started, blockers done, not marked blocked),
     /// agents (ready, with criteria, a description and a repository, and
@@ -399,7 +399,7 @@ pub(super) struct TaskReadyListArguments {
     pub offset: Option<usize>,
 }
 
-pub(super) async fn task_ready_list(
+pub(crate) async fn task_ready_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskReadyListArguments,
@@ -460,7 +460,7 @@ pub(super) async fn task_ready_list(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct DependencyGraphArguments {
+pub(crate) struct DependencyGraphArguments {
     pub project_id: String,
     /// Only tasks in this milestone (ID), with what links to them.
     pub milestone_id: Option<String>,
@@ -468,7 +468,7 @@ pub(super) struct DependencyGraphArguments {
     pub include_finished: Option<bool>,
 }
 
-pub(super) async fn dependency_graph(
+pub(crate) async fn dependency_graph(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: DependencyGraphArguments,
@@ -505,7 +505,7 @@ pub(super) async fn dependency_graph(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct AiSummarizeArguments {
+pub(crate) struct AiSummarizeArguments {
     pub project_id: String,
     /// A task to catch up on (key such as AWD-12, or ID).
     pub task_id: Option<String>,
@@ -513,7 +513,7 @@ pub(super) struct AiSummarizeArguments {
     pub conversation_id: Option<String>,
 }
 
-pub(super) async fn ai_summarize(
+pub(crate) async fn ai_summarize(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: AiSummarizeArguments,
@@ -576,9 +576,9 @@ pub(super) async fn ai_summarize(
 // ---------------------------------------------------------------------------
 // plan_import
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PlanImportArguments {
+pub(crate) struct PlanImportArguments {
     pub project_id: String,
     /// Start a new import: the plan's title.
     pub title: Option<String>,
@@ -597,7 +597,7 @@ pub(super) struct PlanImportArguments {
     pub expected_version: Option<i64>,
 }
 
-pub(super) async fn plan_import(
+pub(crate) async fn plan_import(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PlanImportArguments,

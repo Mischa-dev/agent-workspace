@@ -203,7 +203,7 @@ pub(super) struct ThreadUpdateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ConversationSummary {
+pub(crate) struct ConversationSummary {
     pub id: String,
     pub kind: String,
     pub name: String,
@@ -227,7 +227,7 @@ pub(super) struct ConversationSummary {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LastMessage {
+pub(crate) struct LastMessage {
     pub author: String,
     /// "Message removed" when it was removed.
     pub text: String,

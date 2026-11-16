@@ -34,7 +34,7 @@ pub(super) struct NotificationListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct NotificationLine {
+pub(crate) struct NotificationLine {
     pub id: String,
     /// mention, comment_mention, assigned, approval_requested, run_waiting,
     /// run_completed, run_failed, checks_failed, review_requested,

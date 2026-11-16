@@ -43,7 +43,7 @@ pub(super) fn archived_task_message(task: &str) -> String {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-pub(super) enum ToolResult<T> {
+pub(crate) enum ToolResult<T> {
     Ok {
         value: T,
     },

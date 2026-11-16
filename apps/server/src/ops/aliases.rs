@@ -127,10 +127,31 @@ macro_rules! written {
             },
             runs: &[$create, $update],
             adapt_in: same_in,
-            adapt_out: same_out,
+            adapt_out: enveloped,
             sunset: None,
         }
     };
+}
+
+/// `task_link_pull_request` took `expectedVersion`, `pullRequestId` and a
+/// `projectId`; `task_link` finds the space from the task.
+fn link_pull_request_in(arguments: JsonObject) -> JsonObject {
+    without_project(arguments)
+}
+
+/// `task_link_pull_request` answered a task write (`"outcome": "applied"`).
+fn link_pull_request_out(_canonical: &str, value: Value) -> Value {
+    let changed = value["changed"].as_bool().unwrap_or(false);
+    serde_json::json!({
+        "outcome": "applied",
+        "workItemId": value["taskId"],
+        "version": value["version"],
+        "changedFields": if changed { vec!["pullRequests"] } else { Vec::new() },
+        "resultId": value["targetId"],
+        "idempotentReplay": false,
+        "key": value["key"],
+        "url": value["taskUrl"],
+    })
 }
 
 /// The rename plan of K2 section 3.6. Adapters beyond the identity land
@@ -145,11 +166,13 @@ pub const ALIASES: &[Alias] = &[
     renamed!("page_edit" => "page_update_blocks"),
     written!("sheet_write", "sheetId" => "sheet_create", "sheet_update"),
     written!("collection_write", "collectionId" => "collection_create", "collection_update"),
-    written!("view_write", "viewId" => "view_create", "view_update"),
-    written!("label_write", "labelId" => "label_create", "label_update"),
-    written!("field_write", "fieldId" => "field_create", "field_update"),
+    written!("view_write", "view" => "view_create", "view_update"),
+    written!("label_write", "label" => "label_create", "label_update"),
+    written!("field_write", "field" => "field_create", "field_update"),
     written!("milestone_write", "milestoneId" => "milestone_create", "milestone_update"),
-    written!("template_write", "templateId" => "template_create", "template_update"),
+    written!("template_write", "template" => "template_create", "template_update"),
+    // K2.14: recurring_write names the schedule as `recurring`.
+    written!("recurring_write", "recurring" => "recurring_create", "recurring_update"),
     written!("automation_write", "ruleId" => "automation_create", "automation_update"),
     written!("webhook_write", "webhookId" => "webhook_create", "webhook_update"),
     written!("environment_write", "environmentId" => "environment_create", "environment_update"),
@@ -188,8 +211,19 @@ pub const ALIASES: &[Alias] = &[
         adapt_out: task_written,
         sunset: None,
     },
-    renamed!("task_watch" => "task_watch_set"),
-    renamed!("task_link_pull_request" => "task_link"),
+    // K2.14: these answered in the envelope already; task_link takes the
+    // arguments of each.
+    run_renamed!("task_watch" => "task_watch_set"),
+    run_renamed!("task_depend" => "task_link"),
+    run_renamed!("task_relate" => "task_link"),
+    Alias {
+        name: "task_link_pull_request",
+        canonical: |_| "task_link",
+        runs: &["task_link"],
+        adapt_in: link_pull_request_in,
+        adapt_out: link_pull_request_out,
+        sunset: None,
+    },
     run_renamed!("mark_read" => "conversation_mark_read"),
     renamed!("briefing" => "briefing_get"),
     renamed!("settings_set" => "setting_update"),

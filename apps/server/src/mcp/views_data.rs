@@ -62,16 +62,16 @@ fn to_value(value: impl Serialize) -> Result<Value, AppError> {
 // ---------------------------------------------------------------------------
 // Saved views
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ViewListArguments {
+pub(crate) struct ViewListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ViewListValue {
+pub(crate) struct ViewListValue {
     /// Each view: id, name, builtin (my_tasks, ready_for_agents, blocked,
     /// recently_changed), shared, pinned, its query as the list page keeps
     /// it, resolvedQuery ("me" replaced by you), version (for view_write)
@@ -80,7 +80,7 @@ pub(super) struct ViewListValue {
     pub how_to_use: String,
 }
 
-pub(super) async fn view_list(
+pub(crate) async fn view_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ViewListArguments,
@@ -123,9 +123,9 @@ fn view_value(state: &AppState, mut view: views::SavedViewView) -> Result<Value,
     })
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ViewWriteArguments {
+pub(crate) struct ViewWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The view to change, pin or delete: its ID, its name, or a built-in's
@@ -165,7 +165,7 @@ pub(super) struct ViewWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ViewWriteValue {
+pub(crate) struct ViewWriteValue {
     /// The view as it is now (as view_list shows it, with its version).
     /// Absent once it's deleted.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -269,7 +269,7 @@ async fn find_view(
     })
 }
 
-pub(super) async fn view_write(
+pub(crate) async fn view_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ViewWriteArguments,
@@ -477,7 +477,7 @@ pub(super) async fn view_write(
 /// task list applies them, less the fields the caller passed (theirs
 /// replace the view's), and its sort unless the caller gave one. The view's
 /// "me" is the caller.
-pub(super) async fn apply_view(
+pub(crate) async fn apply_view(
     state: &AppState,
     principal: &McpPrincipal,
     mut arguments: TaskListArguments,
@@ -588,7 +588,7 @@ pub(super) async fn apply_view(
 
 #[derive(Clone, Debug, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct MyWorkArguments {
+pub(crate) struct MyWorkArguments {
     /// Only this project (ID, link or key). Leave it out for all of yours.
     /// The MCP middleware scopes the call to it.
     #[allow(dead_code)]
@@ -597,7 +597,7 @@ pub(super) struct MyWorkArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MyWorkValue {
+pub(crate) struct MyWorkValue {
     /// Tasks assigned to you that aren't finished, due first.
     pub assigned: Value,
     /// Tasks you, or agents you set up, are working on now.
@@ -606,7 +606,7 @@ pub(super) struct MyWorkValue {
     pub review: Value,
 }
 
-pub(super) async fn my_work(
+pub(crate) async fn my_work(
     state: &AppState,
     principal: &McpPrincipal,
     _arguments: MyWorkArguments,
@@ -642,16 +642,16 @@ pub(super) async fn my_work(
 // ---------------------------------------------------------------------------
 // Templates
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TemplateListArguments {
+pub(crate) struct TemplateListArguments {
     /// The project's ID, link or key.
     pub project_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TemplateListValue {
+pub(crate) struct TemplateListValue {
     /// Each template: id, name, title, description, type, priority, labels,
     /// acceptanceCriteria, subtasks, estimate.
     pub templates: Vec<Value>,
@@ -660,7 +660,7 @@ pub(super) struct TemplateListValue {
     pub recurring: Vec<Value>,
 }
 
-pub(super) async fn template_list(
+pub(crate) async fn template_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TemplateListArguments,
@@ -691,18 +691,18 @@ pub(super) async fn template_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "template_list"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TemplateSubtask {
+pub(crate) struct TemplateSubtask {
     /// One line, up to 240 characters.
     pub title: String,
     /// Up to 5,000 characters of Markdown.
     pub description: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TemplateWriteArguments {
+pub(crate) struct TemplateWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The template to change: its name or ID (see template_list). Leave it
@@ -741,7 +741,7 @@ pub(super) struct TemplateWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TemplateWriteValue {
+pub(crate) struct TemplateWriteValue {
     /// The template as it is now, as template_list shows it, with its
     /// version.
     pub template: Value,
@@ -811,7 +811,7 @@ async fn find_type(
     )))
 }
 
-pub(super) async fn template_write(
+pub(crate) async fn template_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TemplateWriteArguments,
@@ -980,9 +980,9 @@ pub(super) async fn template_write(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "template_write"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RecurringWriteArguments {
+pub(crate) struct RecurringWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The schedule to change, pause or delete: its ID from
@@ -1024,7 +1024,7 @@ pub(super) struct RecurringWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RecurringWriteValue {
+pub(crate) struct RecurringWriteValue {
     /// The schedule as it is now, as template_list shows it: its next run,
     /// whether it's paused and why, who it acts as, and its version.
     /// Absent once it's deleted.
@@ -1056,7 +1056,7 @@ fn recurring_outcome<T>(
     }
 }
 
-pub(super) async fn recurring_write(
+pub(crate) async fn recurring_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RecurringWriteArguments,
@@ -1293,7 +1293,7 @@ pub(super) async fn recurring_write(
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskFromTemplateArguments {
+pub(crate) struct TaskFromTemplateArguments {
     /// The project's ID, link or key.
     pub project_id: String,
     /// The template's name or ID (see template_list).
@@ -1315,7 +1315,7 @@ pub(super) struct TaskFromTemplateArguments {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskFromTemplateValue {
+pub(crate) struct TaskFromTemplateValue {
     pub id: String,
     pub key: String,
     pub subtasks: usize,
@@ -1327,7 +1327,7 @@ pub(super) struct TaskFromTemplateValue {
     pub idempotent_replay: bool,
 }
 
-pub(super) async fn task_from_template(
+pub(crate) async fn task_from_template(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskFromTemplateArguments,
@@ -1483,9 +1483,9 @@ pub(super) async fn task_from_template(
 // ---------------------------------------------------------------------------
 // Imports and exports
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskImportArguments {
+pub(crate) struct TaskImportArguments {
     /// The project's ID, link or key.
     pub project_id: String,
     /// An import you started earlier, to read again or commit. Leave it out
@@ -1515,7 +1515,7 @@ pub(super) struct TaskImportArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskImportValue {
+pub(crate) struct TaskImportValue {
     /// The import: id, status (fetching, draft, queued, running, completed,
     /// failed, canceled), counts, and while it's a draft a preview of what
     /// each row becomes.
@@ -1523,7 +1523,7 @@ pub(super) struct TaskImportValue {
     pub next_step: String,
 }
 
-pub(super) async fn task_import(
+pub(crate) async fn task_import(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskImportArguments,
@@ -1630,7 +1630,7 @@ pub(super) async fn task_import(
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ProjectExportArguments {
+pub(crate) struct ProjectExportArguments {
     /// The project's ID, link or key.
     pub project_id: String,
     /// Include archived tasks.
@@ -1639,7 +1639,7 @@ pub(super) struct ProjectExportArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProjectExportValue {
+pub(crate) struct ProjectExportValue {
     /// The project's statuses, types, labels, milestones and tasks (at
     /// most 500 here; use the download links for everything).
     pub export: Value,
@@ -1649,7 +1649,7 @@ pub(super) struct ProjectExportValue {
 
 const MCP_EXPORT_TASKS: usize = 500;
 
-pub(super) async fn project_export(
+pub(crate) async fn project_export(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ProjectExportArguments,
