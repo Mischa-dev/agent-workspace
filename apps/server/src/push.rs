@@ -772,7 +772,7 @@ async fn subscribe_http(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<SubscribeRequest>,
 ) -> Result<(StatusCode, Json<DeviceView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let _ = &request.expiration_time;
     Ok((
         StatusCode::CREATED,
@@ -786,7 +786,7 @@ async fn remove_http(
     principal: AuthenticatedActor,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if remove_device(&state.pool, principal.actor_id, id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -811,7 +811,7 @@ async fn test_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<TestResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let device = sqlx::query_as::<_, DeviceRow>(
         "SELECT id, organization_id, secret_id FROM push_subscriptions WHERE id = $1 AND actor_id = $2",
     )

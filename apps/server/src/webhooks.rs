@@ -1682,7 +1682,7 @@ async fn create_route(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<CreateWebhook>,
 ) -> Result<(StatusCode, Json<CreatedWebhook>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok((
         StatusCode::CREATED,
@@ -1697,7 +1697,7 @@ async fn update_route(
     ApiPath(webhook_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateWebhook>,
 ) -> Result<Json<WebhookView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok(Json(update(&state, &caller, webhook_id, request).await?))
 }
@@ -1708,7 +1708,7 @@ async fn delete_route(
     principal: AuthenticatedActor,
     ApiPath(webhook_id): ApiPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     delete(&state, &caller, webhook_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -1720,7 +1720,7 @@ async fn rotate_route(
     principal: AuthenticatedActor,
     ApiPath(webhook_id): ApiPath<Uuid>,
 ) -> Result<Json<CreatedWebhook>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok(Json(rotate_secret(&state, &caller, webhook_id).await?))
 }
@@ -1731,7 +1731,7 @@ async fn test_route(
     principal: AuthenticatedActor,
     ApiPath(webhook_id): ApiPath<Uuid>,
 ) -> Result<(StatusCode, Json<DeliveryView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok((
         StatusCode::ACCEPTED,
@@ -1771,7 +1771,7 @@ async fn redeliver_route(
     principal: AuthenticatedActor,
     ApiPath((webhook_id, delivery_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<(StatusCode, Json<DeliveryView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok((
         StatusCode::ACCEPTED,

@@ -222,11 +222,15 @@ async fn login(
             return Err(error);
         }
     };
-    if let Err(error) = state
+    let allowed = match state
         .rate_limits
         .check_login_sender(crate::rate_limit::client_address(&state.config, &headers))
-        .and_then(|()| state.rate_limits.check_login(&login_name))
+        .await
     {
+        Ok(()) => state.rate_limits.check_login(&login_name).await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = allowed {
         request.password.zeroize();
         return Err(error);
     }
@@ -274,18 +278,18 @@ async fn login(
 
     let Some(credential) = credential else {
         password::verify_unknown_login(request.password).await?;
-        state.rate_limits.note_login_failure();
+        state.rate_limits.note_login_failure().await;
         return Err(AppError::InvalidCredentials);
     };
     let verified =
         password::verify_password(request.password, credential.password_phc.clone()).await?;
     if !verified {
-        state.rate_limits.note_login_failure();
+        state.rate_limits.note_login_failure().await;
         return Err(AppError::InvalidCredentials);
     }
     // A right password lets the name through while junk sign-ins flood in,
     // even when a second factor is still to come.
-    state.rate_limits.note_login_success(&login_name);
+    state.rate_limits.note_login_success(&login_name).await;
 
     let mut transaction = state.pool.begin().await?;
     if crate::account_security::two_factor_enabled(&mut transaction, credential.user_id).await? {
@@ -470,7 +474,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
     Ok((StatusCode::NO_CONTENT, response_headers).into_response())
 }
 
-pub fn require_authenticated_write(
+pub async fn require_authenticated_write(
     state: &AppState,
     headers: &HeaderMap,
     principal: &AuthenticatedActor,
@@ -479,6 +483,7 @@ pub fn require_authenticated_write(
     state
         .rate_limits
         .check_authenticated_write(principal.session_id)
+        .await
 }
 
 pub fn require_csrf(
@@ -818,7 +823,7 @@ mod tests {
         AuthenticatedActor, csrf_cookie, hash_secret, normalize_login_name, require_allowed_origin,
         require_csrf, session_cookie,
     };
-    use crate::{config::AppConfig, error::AppError, rate_limit::RateLimiters};
+    use crate::config::AppConfig;
     use uuid::Uuid;
 
     fn config() -> AppConfig {
@@ -928,7 +933,7 @@ mod tests {
     }
 
     #[test]
-    fn logout_csrf_remains_valid_after_the_write_budget_is_exhausted() {
+    fn logout_needs_only_the_csrf_boundary() {
         let config = config();
         let csrf = "csrf-token";
         let principal = AuthenticatedActor {
@@ -947,19 +952,9 @@ mod tests {
             "cookie",
             HeaderValue::from_static("agent_workspace_csrf=csrf-token"),
         );
-        let limits = RateLimiters::default();
-        for _ in 0..240 {
-            assert!(
-                limits
-                    .check_authenticated_write(principal.session_id)
-                    .is_ok()
-            );
-        }
-        assert!(matches!(
-            limits.check_authenticated_write(principal.session_id),
-            Err(AppError::RateLimited { .. })
-        ));
-
+        // The write budget is shared and counted in the database
+        // (`cluster.rs::write_budget_is_never_exceeded`); logout never spends
+        // it, it checks only the CSRF boundary.
         assert!(
             require_csrf(&config, &headers, &principal).is_ok(),
             "logout uses the CSRF boundary directly and remains available"

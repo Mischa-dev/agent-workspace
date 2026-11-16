@@ -467,7 +467,7 @@ async fn register_personal_execution_profile(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<RegisterProfileRequest>,
 ) -> Result<(StatusCode, Json<ExecutionProfileView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
     let scope =
@@ -762,7 +762,7 @@ async fn refresh_catalog(
     headers: HeaderMap,
     ApiPath((project_id, kind)): ApiPath<(Uuid, String)>,
 ) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = idempotency::resource_bound_scope("project", project_id, "catalog_refresh")?;
     // Same boundary as the other catalog edits: the project is visible and
@@ -789,7 +789,7 @@ async fn refresh_workspace_catalog(
     headers: HeaderMap,
     ApiPath((organization_id, kind)): ApiPath<(Uuid, String)>,
 ) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope =
         idempotency::resource_bound_scope("organization", organization_id, "catalog_refresh")?;
@@ -971,7 +971,7 @@ async fn save_model_overrides(
     ApiPath((project_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
     ApiJson(overrides): ApiJson<ModelOverrides>,
 ) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     IdempotencyKey::from_headers(&headers)?;
     valid_model_id(&model_id)?;
     overrides.validate().map_err(AppError::Validation)?;
@@ -996,7 +996,7 @@ async fn save_workspace_model(
     ApiPath((organization_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
     ApiJson(overrides): ApiJson<ModelOverrides>,
 ) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     IdempotencyKey::from_headers(&headers)?;
     valid_model_id(&model_id)?;
     overrides.validate().map_err(AppError::Validation)?;
@@ -1045,7 +1045,7 @@ async fn remove_model(
     headers: HeaderMap,
     ApiPath((project_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
 ) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     IdempotencyKey::from_headers(&headers)?;
     valid_model_id(&model_id)?;
     let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
@@ -1060,7 +1060,7 @@ async fn remove_workspace_model(
     headers: HeaderMap,
     ApiPath((organization_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
 ) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     IdempotencyKey::from_headers(&headers)?;
     valid_model_id(&model_id)?;
     require_workspace_catalog_editor(&state, &principal, organization_id).await?;

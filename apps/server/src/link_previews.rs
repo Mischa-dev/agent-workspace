@@ -539,7 +539,7 @@ async fn hide_http(
     principal: AuthenticatedActor,
     ApiPath((conversation_id, message_id, preview_id)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let actor = MessageCommandActor {
         actor_id: principal.actor_id,
         actor_kind: principal.actor_kind.clone(),

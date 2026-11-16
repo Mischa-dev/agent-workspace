@@ -558,7 +558,7 @@ async fn manage(
     principal: &AuthenticatedActor,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     if principal.actor_kind != "human" {
         return Err(AppError::Forbidden);
     }

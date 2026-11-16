@@ -933,7 +933,7 @@ async fn schedule_http(
     ApiPath(conversation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ScheduleRequest>,
 ) -> Result<(StatusCode, Json<ItemResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let scheduled_message = schedule(
         &state,
         &browser_actor(&principal),
@@ -963,7 +963,7 @@ async fn update_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateRequest>,
 ) -> Result<Json<ItemResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let scheduled_message = update(
         &state,
         &browser_actor(&principal),
@@ -987,7 +987,7 @@ async fn send_now_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<ItemResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let scheduled_message = send_now(&state, principal.actor_id, id).await?;
     Ok(Json(ItemResponse { scheduled_message }))
 }
@@ -998,7 +998,7 @@ async fn cancel_http(
     principal: AuthenticatedActor,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     cancel(&state.pool, principal.actor_id, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

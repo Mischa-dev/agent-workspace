@@ -506,7 +506,7 @@ pub(super) async fn save_as_template(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<SaveAsTemplateRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if let Some(refused) = check_name_and_description(&request.name, &request.description) {
         return Ok(outcome_response(refused, StatusCode::CREATED));
     }
@@ -680,7 +680,7 @@ pub(super) async fn update_project_template(
     ApiPath((organization_id, template_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<UpdateProjectTemplateRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = state.pool.begin().await?;
     let outcome = change_project_template(
         &mut transaction,

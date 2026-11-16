@@ -909,3 +909,107 @@ async fn module_switch_is_seen_everywhere() {
     }
     cluster.finish().await;
 }
+
+// ---------------------------------------------------------------------------
+// K5.6 shared limits
+// ---------------------------------------------------------------------------
+
+/// One sign-in for `login` with a wrong password: its status and its
+/// Retry-After, if any.
+async fn wrong_sign_in(
+    instance: &crate::cluster_support::Instance,
+    login: &str,
+) -> (StatusCode, Option<u64>) {
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/login")
+        .header("origin", "http://127.0.0.1:3100")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&json!({"loginName": login, "password": "not the password"}))
+                .expect("body"),
+        ))
+        .expect("request");
+    let (status, headers, _) = instance.send_raw(request).await;
+    let retry_after = headers
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok()?.parse().ok());
+    (status, retry_after)
+}
+
+#[tokio::test]
+async fn login_limit_holds_across_instances() {
+    let Some(cluster) = cluster("k5_6_login", 2).await else {
+        return;
+    };
+    let mut reached = 0;
+    for attempt in 0..10 {
+        let (status, _) = wrong_sign_in(cluster.instance(attempt % 2), "owner").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "attempt {attempt}");
+        reached += 1;
+    }
+    assert_eq!(reached, 10);
+    let (status, retry_after) = wrong_sign_in(cluster.instance(0), "owner").await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        retry_after.is_some_and(|seconds| (1..=60).contains(&seconds)),
+        "{retry_after:?}"
+    );
+    cluster.finish().await;
+}
+
+#[tokio::test]
+async fn write_budget_is_never_exceeded() {
+    let Some(cluster) = cluster("k5_6_writes", 2).await else {
+        return;
+    };
+    let browser = cluster.instance(0).login("owner").await;
+    let (_, channel) = work_channel(&cluster, &browser).await;
+    let started = Instant::now();
+    let mut accepted = 0;
+    let mut refused = 0;
+    for batch in 0..15 {
+        let sends = (0..20).map(|index| {
+            let attempt = batch * 20 + index;
+            let instance = cluster.instance(attempt % 2);
+            let request = browser.request(
+                "POST",
+                &format!("/api/v1/conversations/{channel}/messages"),
+                Some(&format!("k5-6-write-{attempt}")),
+                json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Hi"}]}}),
+            );
+            async move { instance.send(request).await.0 }
+        });
+        for status in join_all(sends).await {
+            match status {
+                StatusCode::CREATED => accepted += 1,
+                StatusCode::TOO_MANY_REQUESTS => refused += 1,
+                other => panic!("unexpected {other}"),
+            }
+        }
+    }
+    // The 300 went out inside one window, or the bound says nothing.
+    assert!(started.elapsed() < Duration::from_secs(55));
+    // The channel set-up spent a few of the 240; at most one chunk (10) per
+    // other instance is left unused.
+    assert!(accepted <= 240, "{accepted} writes got through");
+    assert!(accepted >= 240 - 10 - 5, "only {accepted} got through");
+    assert_eq!(accepted + refused, 300);
+    cluster.finish().await;
+}
+
+#[tokio::test]
+async fn limits_survive_a_restart() {
+    let Some(mut cluster) = cluster("k5_6_restart", 1).await else {
+        return;
+    };
+    for attempt in 0..10 {
+        let (status, _) = wrong_sign_in(cluster.instance(0), "owner").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "attempt {attempt}");
+    }
+    cluster.instance_mut(0).stop().await;
+    cluster.start(&[]).await;
+    let (status, _) = wrong_sign_in(cluster.instance(1), "owner").await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    cluster.finish().await;
+}

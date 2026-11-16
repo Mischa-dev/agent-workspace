@@ -4415,19 +4415,28 @@ async fn authenticate_mcp(
     // body read counts toward it, as it does for the client waiting.
     let started = std::time::Instant::now();
     let authentication_key = exact_bearer_token(request.headers()).unwrap_or("invalid");
-    if let Err(error) = state.rate_limits.check_mcp_auth(authentication_key) {
+    if let Err(error) = state.rate_limits.check_mcp_auth(authentication_key).await {
         return error.into_response();
     }
     let resolved = resolve_bearer_principal(&state, request.headers()).await;
     match &resolved {
-        Ok(Some(_)) => state.rate_limits.note_mcp_auth_success(authentication_key),
-        Ok(None) => state.rate_limits.note_mcp_auth_failure(),
+        Ok(Some(_)) => {
+            state
+                .rate_limits
+                .note_mcp_auth_success(authentication_key)
+                .await
+        }
+        Ok(None) => state.rate_limits.note_mcp_auth_failure().await,
         Err(_) => {}
     }
     match resolved {
         Ok(Some(mut principal)) => {
             let mut handshake = None;
-            if let Err(error) = state.rate_limits.check_mcp_request(principal.credential_id) {
+            if let Err(error) = state
+                .rate_limits
+                .check_mcp_request(principal.credential_id)
+                .await
+            {
                 return error.into_response();
             }
             // The alias path names a workspace the credential must reach.

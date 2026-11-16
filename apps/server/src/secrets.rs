@@ -1455,7 +1455,7 @@ async fn put_workspace(
     ApiPath((organization_id, name)): ApiPath<(Uuid, String)>,
     ApiJson(request): ApiJson<PutSecretRequest>,
 ) -> Result<Json<SecretMetadata>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     store_from_request(
         &state,
         &headers,
@@ -1474,7 +1474,7 @@ async fn put_project(
     ApiPath((project_id, name)): ApiPath<(Uuid, String)>,
     ApiJson(request): ApiJson<PutSecretRequest>,
 ) -> Result<Json<SecretMetadata>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     store_from_request(
         &state,
         &headers,
@@ -1493,7 +1493,7 @@ async fn put_personal(
     ApiPath((organization_id, name)): ApiPath<(Uuid, String)>,
     ApiJson(request): ApiJson<PutSecretRequest>,
 ) -> Result<Json<SecretMetadata>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     store_from_request(
         &state,
         &headers,
@@ -1610,7 +1610,7 @@ async fn delete_workspace(
     principal: AuthenticatedActor,
     ApiPath((organization_id, name)): ApiPath<(Uuid, String)>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     delete_from_request(
         &state,
         &headers,
@@ -1627,7 +1627,7 @@ async fn delete_project(
     principal: AuthenticatedActor,
     ApiPath((project_id, name)): ApiPath<(Uuid, String)>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     delete_from_request(
         &state,
         &headers,
@@ -1644,7 +1644,7 @@ async fn delete_personal(
     principal: AuthenticatedActor,
     ApiPath((organization_id, name)): ApiPath<(Uuid, String)>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     delete_from_request(
         &state,
         &headers,

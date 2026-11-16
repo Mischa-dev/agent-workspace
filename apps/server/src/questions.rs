@@ -413,7 +413,7 @@ async fn answer_http(
     ApiPath(question_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<AnswerRequest>,
 ) -> Result<Json<AnswerResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let key = IdempotencyKey::from_headers(&headers)?;
     let (question, _) = answer(
         &state.pool,

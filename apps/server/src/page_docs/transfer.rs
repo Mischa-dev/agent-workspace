@@ -142,7 +142,7 @@ pub async fn import_page(
     ApiQuery(query): ApiQuery<ImportQuery>,
     body: Body,
 ) -> Result<Json<ImportView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
     let format =
         format_of(query.format.as_deref(), query.name.as_deref()).ok_or(AppError::Refused {

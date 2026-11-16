@@ -165,7 +165,7 @@ async fn save_http(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(mut request): ApiJson<SaveRequest>,
 ) -> Result<Json<MailSettingsView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     require_owner(&state, &principal, organization_id).await?;
     if request.provider != "smtp" {
         return Err(AppError::Validation("provider"));
@@ -297,7 +297,7 @@ async fn remove_http(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     require_owner(&state, &principal, organization_id).await?;
     let mut transaction = state.pool.begin().await?;
     sqlx::query("DELETE FROM workspace_mail_settings WHERE organization_id = $1")
@@ -351,7 +351,7 @@ async fn test_http(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<TestRequest>,
 ) -> Result<Json<TestResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     require_owner(&state, &principal, organization_id).await?;
     let Some(row) = super::settings_row(&state.pool, organization_id).await? else {
         return Err(AppError::Conflict("mail", "mail isn't set up yet"));

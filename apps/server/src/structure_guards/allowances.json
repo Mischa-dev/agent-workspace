@@ -287,7 +287,6 @@
     "provider/codex_cloud.rs": 1,
     "provider/demo.rs": 2,
     "provider/registry.rs": 1,
-    "rate_limit.rs": 2,
     "secrets.rs": 1
   },
   "raw_role_checks": {

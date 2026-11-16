@@ -120,7 +120,7 @@ async fn limit_webhook_attempts(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if let Err(error) = state.rate_limits.check_webhook_attempt() {
+    if let Err(error) = state.rate_limits.check_webhook_attempt().await {
         return error.into_response();
     }
     next.run(request).await
@@ -1316,7 +1316,7 @@ async fn update_github_automation_settings(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateGitHubAutomationSettingsRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.expected_version < 1 {
         return Err(AppError::Validation("expectedVersion"));
     }
@@ -1644,7 +1644,7 @@ async fn sync_installation(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<SyncInstallationRequest>,
 ) -> Result<Json<GitHubStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let SyncedInstallation {
         mut transaction,
         installation_id,
@@ -1909,7 +1909,7 @@ async fn publish_agent_run(
     principal: AuthenticatedActor,
     ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if state.config.github.is_none() {
         return Err(AppError::Conflict("github_integration", "not_configured"));
     }
@@ -2180,7 +2180,7 @@ async fn create_pull_request(
     ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(mut request): ApiJson<CreatePullRequestRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if state.config.github.is_none() {
         return Err(AppError::Conflict("github_integration", "not_configured"));
     }
@@ -2358,7 +2358,7 @@ async fn refresh_pull_request(
     principal: AuthenticatedActor,
     ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if state.config.github.is_none() {
         return Err(AppError::Conflict("github_integration", "not_configured"));
     }
@@ -6171,7 +6171,7 @@ async fn merge_pull_request(
     ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<MergePullRequestRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let actor = CommandActor {
         actor_id: principal.actor_id,
         actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,

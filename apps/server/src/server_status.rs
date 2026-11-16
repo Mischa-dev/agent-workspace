@@ -243,7 +243,8 @@ async fn read_http(
     }
     state
         .rate_limits
-        .check_expensive_read(principal.session_id)?;
+        .check_expensive_read(principal.session_id)
+        .await?;
     let report = preflight::run(&state.config, &state.pool)
         .await
         .map_err(|_| AppError::Internal("server checks"))?;

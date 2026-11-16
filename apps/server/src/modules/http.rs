@@ -192,7 +192,7 @@ async fn change_modules(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ChangeRequest>,
 ) -> Result<Json<ModulesResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = state.pool.begin().await?;
     let metadata = change_modules_in(
         &mut transaction,

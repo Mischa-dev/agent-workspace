@@ -54,6 +54,7 @@ pub mod jobs;
 pub mod later;
 pub mod launch;
 pub mod layouts;
+pub mod limits;
 pub mod link_previews;
 pub mod links;
 pub mod mail;
@@ -164,6 +165,9 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    // Request budgets are counted in the database every instance shares
+    // (K5.6).
+    state.rate_limits.attach(&state.pool);
     state
         .supervisors
         .set_host(Arc::new(harness_host::ServerHost::new(

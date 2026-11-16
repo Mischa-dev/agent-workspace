@@ -166,6 +166,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the permissions the server knows, the same for every workspace (K1.3)",
     ),
     (
+        "rate_limit_counters",
+        "short-lived request budgets keyed by digests; sign-in budgets count before any workspace is known, and a per-workspace bucket carries workspace_id (K5.6)",
+    ),
+    (
         "secret_master_keys_retired",
         "the server's own key history, not any workspace's",
     ),

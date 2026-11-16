@@ -154,7 +154,7 @@ pub async fn create_comment(
     ApiPath(page_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CommentRequest>,
 ) -> Result<Json<CommentCreated>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = state.pool.begin().await?;
     let (writer, page) = locked_for_comment(&state, &mut transaction, &principal, page_id).await?;
     let (id, thread_id) = comments::create(
@@ -204,7 +204,7 @@ pub async fn update_comment(
     ApiPath((page_id, comment_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<CommentPatch>,
 ) -> Result<Json<CommentChanged>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let change = match (&request.body, request.resolved) {
         (Some(body), None) => CommentChange::Edit(body),
         (None, Some(resolved)) => CommentChange::Resolve(resolved),
@@ -241,7 +241,7 @@ pub async fn delete_comment(
     principal: AuthenticatedActor,
     ApiPath((page_id, comment_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<CommentChanged>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = state.pool.begin().await?;
     let (writer, page) = locked_for_comment(&state, &mut transaction, &principal, page_id).await?;
     let thread_id = comments::change(
@@ -287,7 +287,7 @@ pub async fn decide_suggestion(
     ApiPath((page_id, suggestion_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<DecisionRequest>,
 ) -> Result<Json<DecisionView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = state.pool.begin().await?;
     let writer = memory::browser_writer(&principal)?;
     let project_id = memory::page_project(&state.pool, page_id).await?;

@@ -172,7 +172,7 @@ async fn register_repository(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<RegisterRepositoryRequest>,
 ) -> Result<(StatusCode, Json<RepositoryView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request = validate_registration(request)?;
     let request_hash = RequestHash::for_value(&request)?;
@@ -323,7 +323,7 @@ async fn prepare_registered_repository(
     ApiPath((project_id, repository_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<EmptyRequest>,
 ) -> Result<Json<RepositoryView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = idempotency::resource_bound_scope("repository", repository_id, "prepare")?;
     let request_hash = RequestHash::for_value(&request)?;
@@ -547,7 +547,7 @@ async fn archive_repository(
     ApiPath((project_id, repository_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<ArchiveRepositoryRequest>,
 ) -> Result<Json<RepositoryView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     if request.expected_version < 1 {
         return Err(AppError::Validation("expectedVersion"));

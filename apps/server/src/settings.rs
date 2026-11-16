@@ -1419,7 +1419,7 @@ async fn set_value(
     ApiPath(key): ApiPath<String>,
     ApiJson(request): ApiJson<SetRequest>,
 ) -> Result<Json<WriteResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
     if has_own_routes(definition.key) {
         return Err(AppError::Validation("setting key"));
@@ -1471,7 +1471,7 @@ async fn reset_value(
     ApiPath(key): ApiPath<String>,
     ApiJson(request): ApiJson<ResetRequest>,
 ) -> Result<Json<WriteResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
     if has_own_routes(definition.key) {
         return Err(AppError::Validation("setting key"));

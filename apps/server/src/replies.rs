@@ -804,7 +804,7 @@ async fn continue_conversation(
     principal: AuthenticatedActor,
     ApiPath(conversation_id): ApiPath<Uuid>,
 ) -> Result<Json<ContinueResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = state.pool.begin().await?;
     let outcome = continue_conversation_in(
         &mut transaction,
@@ -965,7 +965,7 @@ async fn retry_request(
     principal: AuthenticatedActor,
     ApiPath(request_id): ApiPath<Uuid>,
 ) -> Result<Json<RetryResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = state.pool.begin().await?;
     retry_request_in(
         &mut transaction,
@@ -1098,7 +1098,7 @@ async fn stop_request(
     principal: AuthenticatedActor,
     ApiPath(request_id): ApiPath<Uuid>,
 ) -> Result<Json<StopResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = state.pool.begin().await?;
     let outcome = stop_request_in(
         &mut transaction,
