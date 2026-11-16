@@ -45,6 +45,8 @@ struct Registry {
     browser_errors_dropped: Mutex<u64>,
     browser_window: Mutex<Option<(Instant, u32)>>,
     server_errors: Mutex<BTreeMap<&'static str, u64>>,
+    tenancy_transactions: Mutex<BTreeMap<&'static str, u64>>,
+    tenancy_unscoped_sites: Mutex<BTreeMap<(&'static str, u32), u64>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -92,6 +94,27 @@ pub fn job_dead(kind: &str) {
 /// Record a server error by category (`AppError::log_category`).
 pub fn server_error(category: &'static str) {
     bump(&registry().server_errors, category);
+}
+
+/// Record a scoped transaction by the kind of tenancy scope it carried
+/// (`unscoped` when it had none: observe mode's count).
+pub fn tenancy_transaction(scope: &'static str) {
+    bump(&registry().tenancy_transactions, scope);
+}
+
+/// Count an unscoped transaction by the source line that began it (observe
+/// mode, H1.20). Whether it is that line's first in this process, so the
+/// caller logs it once.
+pub fn unscoped_call_site(file: &'static str, line: u32) -> bool {
+    registry()
+        .tenancy_unscoped_sites
+        .lock()
+        .map(|mut sites| {
+            let count = sites.entry((file, line)).or_default();
+            *count += 1;
+            *count == 1
+        })
+        .unwrap_or(false)
 }
 
 /// Middleware: count and time every request by route class and status.
@@ -324,6 +347,36 @@ async fn render(state: &AppState) -> Result<String, AppError> {
         let _ = writeln!(
             out,
             "aw_server_errors_total{{category=\"{category}\"}} {count}"
+        );
+    }
+    out.push_str(
+        "# HELP aw_tenancy_transactions_total Scoped transactions by the tenancy scope they carried.\n",
+    );
+    out.push_str("# TYPE aw_tenancy_transactions_total counter\n");
+    for (scope, count) in registry
+        .tenancy_transactions
+        .lock()
+        .map(|map| map.clone())
+        .unwrap_or_default()
+    {
+        let _ = writeln!(
+            out,
+            "aw_tenancy_transactions_total{{scope=\"{scope}\"}} {count}"
+        );
+    }
+    out.push_str(
+        "# HELP aw_tenancy_unscoped_sites_total Transactions begun with no tenancy scope, by the source line that began them.\n",
+    );
+    out.push_str("# TYPE aw_tenancy_unscoped_sites_total counter\n");
+    for ((file, line), count) in registry
+        .tenancy_unscoped_sites
+        .lock()
+        .map(|map| map.clone())
+        .unwrap_or_default()
+    {
+        let _ = writeln!(
+            out,
+            "aw_tenancy_unscoped_sites_total{{site=\"{file}:{line}\"}} {count}"
         );
     }
     out.push_str("# TYPE aw_browser_errors_dropped_total counter\n");

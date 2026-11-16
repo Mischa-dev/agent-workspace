@@ -1661,7 +1661,9 @@ place first).
 - **Depends on:** A1.2, A1.3; W1 list and detail pieces (soft).
 - **Acceptance:** `web/runs/runModel.test.ts` covers state, liveness and confidence labels;
   a browser check (`check-in-browser` skill) of a self-reported run with a gap and an open
-  request, light and dark, narrow and wide; isolation cases for the new GET routes.
+  request, light and dark, narrow and wide; isolation cases for the new GET routes; a
+  browser smoke test on W1.35's harness starts a run on the demo adapter, sees it on the
+  Runs page and opens its finished notice in the inbox (roadmap P8; added 2026-11-14).
 
 ### A1.6 Run service reads, part 2, and neutral wording (M)
 
@@ -1830,11 +1832,15 @@ live "Current changes" panel action; switch `AGENT_WORKSPACE_BUILTIN_HOST_TRANSP
 `agent-workspace-host` binary; `host_builtin` schema and migrations; automatic enrolment on
 self-host; account and backend screens as the host's own offers, actions and panels;
 deploy units; `AGENT_WORKSPACE_BUILTIN_HOST=off` default.
-- **Depends on:** A1.16; H1.13 (the compose `host` profile and image that ship this binary);
-  M1.14 panel blocks (soft: plain forms until then).
+- **Depends on:** A1.16, A1.24 (plan windows on the protocol); H1.13 (the compose `host`
+  profile and image that ship this binary); M1.14 panel blocks (soft: plain forms until
+  then).
 - **Acceptance:** a test brings up server and host as separate processes against one
   database, runs the demo adapter end to end, restarts the server mid-run and the run
   completes; restarts the host mid-run and the run recovers or is interrupted honestly.
+  With the host as its own program, a window that resets within an alert rule's hours with
+  capacity unused still reaches the inbox and the phone, and its Launch starts the batch
+  (A1.24; roadmap U3, U4; added 2026-11-14).
 
 ### A1.18 Code-host seam, part 1 (M)
 
@@ -1896,6 +1902,43 @@ what it lacks). The minimal host and the built-in host both pass it in CI.
   stops at "proposed" until then).
 - **Acceptance:** the minimal host passes the suite in CI; the suite run against the server
   passes; a host that drops acks is reported as "start not idempotent", not as a pass.
+
+### A1.24 Plan windows over the host protocol (M)
+
+Added 2026-11-14 by the roadmap coverage check (roadmap U1, U3 to U6). A host reports each
+provider account's plan windows on the host protocol (3.9): per window, the account it
+belongs to, percent used, the limit, the reset time, and any banked resets the host can
+spend (spending one is a host action that asks for confirmation). The server keeps what it
+does with those reports: the capacity alert rules, the inbox and push notices ("resets in
+2 h, 38% unused" with Launch) and the suggested one-tap batch of ready tasks through the
+launch path. The reports replace the server's own reads of the usage window tables, so
+the alerts, the push and the batch keep working once A1.17 makes the built-in host its own
+program. No provider is named in core code; window labels come from the host's `describe`
+manifest.
+- **Depends on:** A1.12, A1.15. **Before:** A1.17.
+- **Acceptance:** with the demo adapter reporting a window that resets within an alert
+  rule's hours with capacity unused, the notice reaches the inbox and push once (not again
+  on the next report) and its Launch starts the suggested batch; a window report for an
+  account the host isn't bound to is refused; the usage page shows windows from reports;
+  an isolation case for the windows read.
+
+### A1.25 Built-in host: a default assistant on the workspace's model key (M)
+
+Added 2026-11-14 by the roadmap coverage check (AWD-57). The built-in host offers an
+assistant in the directory that needs no setup: on a fresh install where the workspace has
+a model key set, adding it is one step (pick it, pick its role). Its turns call the model
+through the server's AI gateway with the run's narrow token (K1.24), so the key stays in
+the server's secrets store and never reaches the host, a child process or the browser. It
+answers DMs and mentions and acts through the same tools as any agent; every turn is a run
+with its usage recorded and counted against the workspace's model budget. With no model
+key, the offer says what to set instead of failing. No model or provider is named in core
+code.
+- **Depends on:** A1.17, A2.17 (the add-agent flow), K1.24 (narrow run tokens).
+- **Acceptance:** on a fresh compose install with only a model key set, the directory
+  offers the assistant; added as a member, it answers a DM and updates a task through the
+  tools, with its run and cost recorded; no response, log line, event, host command or
+  host environment contains the key (G11); with no key, the offer explains and adds
+  nothing.
 
 ---
 
@@ -2083,13 +2126,15 @@ Questions only the owner can answer, with a recommendation:
 | A1.14 | Built-in host, step (a) | L | A1.8, A1.9, A1.10, A1.12 | A1.13, A1.15, A1.18 |
 | A1.15 | Usage by window with confidence | M | A1.3 | A1.4 onwards |
 | A1.16 | Built-in host, step (b) | L | A1.14 | A1.19, A1.20 |
-| A1.17 | Built-in host, step (c) | L | A1.16, H1.13; M1.14 (soft) | A1.19 to A1.21 |
+| A1.17 | Built-in host, step (c) | L | A1.16, A1.24, H1.13; M1.14 (soft) | A1.19 to A1.21 |
 | A1.18 | Code-host seam, part 1 | M | none (A1.12 for the start token) | A1.1 to A1.14 |
 | A1.19 | Code-host seam, part 2 | L | A1.18, A1.3; T1 task commands; P0.11 | A1.14 to A1.17 |
 | A1.20 | A2A binding | L | A1.12, A1.8 | A1.16, A1.17, A1.19 |
 | A1.21 | ACP in the built-in host | L | A1.16 | A1.17, A1.19, A1.20 |
 | A1.22 | Contract | M | A1.6, A1.8, A1.14 (A1.17 for the last step) | A1.20, A1.21 |
 | A1.23 | Example host and conformance suite | M | A1.11, A1.12; A2.19 (soft) | A1.13 to A1.22 |
+| A1.24 | Plan windows over the host protocol | M | A1.12, A1.15 | A1.13 to A1.16 |
+| A1.25 | Built-in host: a default assistant on the workspace's model key | M | A1.17, A2.17, K1.24 | A1.21, A1.23 |
 
 ## Review changes
 

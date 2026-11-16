@@ -76,6 +76,16 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: ./tools/ci/changed-areas.sh "${BASE_SHA}" "${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+      # backup_restore.rs (H1.16) restores a real backup set: it needs a
+      # pg_dump and pg_restore at least as new as the service's PostgreSQL,
+      # and age for an encrypted set, and skips without them.
+      - name: PostgreSQL 18 client and age
+        run: |
+          [ -x /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh ] ||
+            { sudo apt-get update && sudo apt-get install -y postgresql-common; }
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-18 age
+          pg_dump --version
       - name: Checks
         env:
           AREAS: ${{ steps.changes.outputs.areas || 'rust,web' }}

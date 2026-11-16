@@ -29,18 +29,18 @@ by hand.
 ## 1. The short version
 
 <!-- gen:counts -->
-- **471 slices** in the fourteen plans (P0 39, K1 34, K2 23, K3 25, K4 26, K5 21, T1 45, A1 23, A2 27, M1 20, C1 37, C2 41, W1 47, H1 63). 468 are in builds; 3 are parked with a reason (K5.16, C2.33, C2.38). 6 more ids are retired and kept only as pointers (A2.21, W1.16, W1.23, W1.27a, W1.27b, W1.27d).
+- **481 slices** in the fourteen plans (P0 39, K1 34, K2 23, K3 26, K4 26, K5 21, T1 47, A1 25, A2 27, M1 20, C1 38, C2 42, W1 50, H1 63). 478 are in builds; 3 are parked with a reason (K5.16, C2.33, C2.38). 6 more ids are retired and kept only as pointers (A2.21, W1.16, W1.23, W1.27a, W1.27b, W1.27d).
 - **31 builds in 6 stages.** One build is one long session, one branch and one pull request.
 
 | Stage | Name | Builds | Slices |
 | --- | --- | --- | --- |
 | 0 | Steady ground | 1 | 39 |
 | 1 | Foundations | 7 | 102 |
-| 2 | Agents are accounts everywhere | 7 | 99 |
-| 3 | The whole product on the foundations | 9 | 128 |
-| 4 | Complete, hosted and connected | 6 | 83 |
+| 2 | Agents are accounts everywhere | 7 | 100 |
+| 3 | The whole product on the foundations | 9 | 130 |
+| 4 | Complete, hosted and connected | 6 | 90 |
 | 5 | Clean-up and release | 1 | 17 |
-| | **Total** | **31** | **468** |
+| | **Total** | **31** | **478** |
 <!-- /gen:counts -->
 
 - **A slice is a line in a build's work list**, not a pull request. A build's session does
@@ -266,9 +266,9 @@ Messages, threads, tasks, whiteboards, automations and long operations on the op
 
 Workspace in the address with a switcher, the thing store, table, list, board and detail pieces, pages off the old shell, install and push.
 
-- **Slices:** 10 (3 S, 6 M, 1 L), from W1.
+- **Slices:** 11 (3 S, 7 M, 1 L), from W1.
 - **Starts after:** build 1A, build 1C, build 1E, build 1G, build 1O.
-- **In this order:** W1.37 Role choices from the server, not account kind; W1.5 The thing store; W1.14a Workspace in the address, switcher with unread marks, DM routes, redirects; W1.38 The web app as static files, config fetched at start; W1.12a Pages off AppShell: chat and inbox folders; W1.18 Table and list pieces; collections onto them; W1.32 Install, push and capture; W1.2 Every key from a factory; W1.19 Board piece; collections onto it; W1.21 Detail view, history panel, chips, discussion shell.
+- **In this order:** W1.37 Role choices from the server, not account kind; W1.5 The thing store; W1.14a Workspace in the address, switcher with unread marks, DM routes, redirects; W1.38 The web app as static files, config fetched at start; W1.12a Pages off AppShell: chat and inbox folders; W1.18 Table and list pieces; collections onto them; W1.32 Install, push and capture; W1.2 Every key from a factory; W1.19 Board piece; collections onto it; W1.21 Detail view, history panel, chips, discussion shell; W1.40 UI hill climb, round 1: visual directions the owner picks.
 
 ### Stage 3: The whole product on the foundations
 
@@ -295,19 +295,19 @@ DMs that belong to the people in them, chat standing alone, profiles, guests, gr
 
 Write-time domain events, links from text and as operations, the search index, activity feeds and the audit trail from the log, cold log and history, direct upload and a workspace's own bucket.
 
-- **Slices:** 14 (3 S, 11 M), from K3, K5.
-- **Starts after:** build 2E.
+- **Slices:** 15 (3 S, 12 M), from K3, K5.
+- **Starts after:** build 2E, build 2O.
 - **Stopgap unless it has landed:** K3.14 on T1.18 (build 4T).
-- **In this order:** K3.7 Write-time domain events for tasks, records, messages, runs, PRs; K3.13 Links from text, without route regexes; K3.17 The search index; K5.13 Moving files between stores; K5.21 Live document rooms under the contract; K3.5 Pages, sheets and whiteboards in events, automations and webhooks; K3.14 One link reader; K3.15 Links as operations; K3.18 Search reads the index; K3.20 Activity feeds and the audit trail from the log; K3.16 Dependency and relation readers move to links; K5.20 Direct upload and download, and a workspace's own bucket; K3.9 Notifications read the log; K3.25 Cold log and history.
+- **In this order:** K3.7 Write-time domain events for tasks, records, messages, runs, PRs; K3.13 Links from text, without route regexes; K3.17 The search index; K5.13 Moving files between stores; K5.21 Live document rooms under the contract; K3.5 Pages, sheets and whiteboards in events, automations and webhooks; K3.14 One link reader; K3.15 Links as operations; K3.18 Search reads the index; K3.20 Activity feeds and the audit trail from the log; K3.26 Incoming webhooks as an automation trigger; K3.16 Dependency and relation readers move to links; K5.20 Direct upload and download, and a workspace's own bucket; K3.9 Notifications read the log; K3.25 Cold log and history.
 
 #### Build 3G: Add an agent three ways; one launch path; open protocols
 
 The add-agent flow, offers and registration, starting one on a linked host, the built-in host packaged, one launch path, A2A and ACP, the reference channel adapter, the bridged Agent OS connector.
 
-- **Slices:** 16 (2 S, 10 M, 4 L), from A1, A2.
+- **Slices:** 17 (2 S, 11 M, 4 L), from A1, A2.
 - **Starts after:** build 1C, build 1T, build 2G, build 2H.
 - **Stopgap unless it has landed:** A1.17 on M1.14 (build 3O); A1.13 on T1.22 (build 4T); A2.20 on M1.14 (build 3O).
-- **In this order:** A1.17 Built-in host, step (c); A2.10 Status, pause, presence and unresponsive handling; A2.12 Echoes, client ids, attachments, content marking; A2.13 Ask an agent; A2.17 Agent Plugin and generic setup; A1.15 Usage by window with confidence; A2.18 Add-agent flow: pick, connect, add one you already have, reconnect; A2.19 Offers, registration, actions and notices; A2.22 Reference channel adapter; A2.25 Agent OS connector, bridged; A1.13 One launch path; A1.19 Code-host seam, part 2; A1.20 A2A binding; A1.21 ACP in the built-in host; A2.6 Merge the three old systems behind the new one; A2.20 Start one on a linked host.
+- **In this order:** A2.10 Status, pause, presence and unresponsive handling; A2.12 Echoes, client ids, attachments, content marking; A2.13 Ask an agent; A2.17 Agent Plugin and generic setup; A1.15 Usage by window with confidence; A1.24 Plan windows over the host protocol; A1.17 Built-in host, step (c); A2.18 Add-agent flow: pick, connect, add one you already have, reconnect; A2.19 Offers, registration, actions and notices; A2.22 Reference channel adapter; A2.25 Agent OS connector, bridged; A1.13 One launch path; A1.19 Code-host seam, part 2; A1.20 A2A binding; A1.21 ACP in the built-in host; A2.6 Merge the three old systems behind the new one; A2.20 Start one on a linked host.
 
 #### Build 3H: Sign-up, sign-in, billing seam, staff console
 
@@ -361,26 +361,26 @@ Per-event handlers, the live client on protocol 2, space routes and thing addres
 
 Channel details and tabs, make a page, record, row or sticky from messages, presence and @here, answers with sources, agents in the room, request cards, saved inbox views, phone flows, speed.
 
-- **Slices:** 12 (4 S, 8 M), from C1, C2.
+- **Slices:** 13 (4 S, 9 M), from C1, C2.
 - **Starts after:** build 3C, build 3E, build 3W.
-- **In this order:** C2.8 Channel details and tabs (part `channel.tabs`); C1.26 A page tab on a channel (`conversation_tabs`); C2.20 Make from messages: registry and chip; C2.21 Make a page or a record; C2.22 Make a sheet row or a sticky; C2.11 Saved inbox views; C2.16 Presence, typing, @here (K5's presence); C2.27 Answers with sources; C2.29 Speed; C2.31 Phone flows; C2.35 Agents in the room; C2.12 Request cards.
+- **In this order:** C2.8 Channel details and tabs (part `channel.tabs`); C1.26 A page tab on a channel (`conversation_tabs`); C2.20 Make from messages: registry and chip; C2.21 Make a page or a record; C2.22 Make a sheet row or a sticky; C2.11 Saved inbox views; C2.16 Presence, typing, @here (K5's presence); C2.27 Answers with sources; C2.29 Speed; C2.31 Phone flows; C2.35 Agents in the room; C2.12 Request cards; C2.41 Search by meaning.
 
 #### Build 4D: Documents complete
 
 Validation and charts in sheets, page sharing levels and public links, live cursors, element comments, history on every document, files from an outside source, moving a page between spaces.
 
-- **Slices:** 13 (1 S, 1 S/M, 11 M), from C1.
+- **Slices:** 14 (1 S, 1 S/M, 12 M), from C1.
 - **Starts after:** build 3A, build 3C, build 3E, build 3O, build 3T.
-- **In this order:** C1.28 Documents in events and search; C1.10 Recent-edit outlines in the editors; C1.15 Validation and dropdowns; C1.18 Charts; C1.27 Page sharing levels and public links; C1.29 Board images through the storage seam; C1.30 Live cursors, selections and follow; C1.31 Element comments and ask about a selection; C1.32 Stickies into tasks, a board into a page; C1.34 History on every document via K3's seam; compaction; C1.36 Files from an outside source, by reference; C1.37 Move a page between spaces; C1.35 Document-kind contract test.
+- **In this order:** C1.28 Documents in events and search; C1.10 Recent-edit outlines in the editors; C1.15 Validation and dropdowns; C1.18 Charts; C1.27 Page sharing levels and public links; C1.29 Board images through the storage seam; C1.30 Live cursors, selections and follow; C1.31 Element comments and ask about a selection; C1.32 Stickies into tasks, a board into a page; C1.34 History on every document via K3's seam; compaction; C1.36 Files from an outside source, by reference; C1.37 Move a page between spaces; C1.35 Document-kind contract test; C1.38 Pages inside pages.
 
 #### Build 4G: Agent plugins, memory, consent and ambient mode
 
 Following and ambient mode, scope and consent screens, memory pages, the Hermes and OpenClaw plugins, the bridged connector's runs and offers, the team guard.
 
-- **Slices:** 7 (7 M), from A2.
+- **Slices:** 8 (8 M), from A1, A2.
 - **Starts after:** build 2A, build 3G.
 - **Stopgap unless it has landed:** A2.16 on C1.27 (build 4D).
-- **In this order:** A2.9 Following and ambient mode; A2.15 Scope, requested-by and app consent; A2.16 Memory pages; A2.23 Hermes plugin; A2.24 OpenClaw plugin; A2.26 Bridged connector: runs, offers and actions; A2.27 Team guard.
+- **In this order:** A1.25 Built-in host: a default assistant on the workspace's model key; A2.9 Following and ambient mode; A2.15 Scope, requested-by and app consent; A2.16 Memory pages; A2.23 Hermes plugin; A2.24 OpenClaw plugin; A2.26 Bridged connector: runs, offers and actions; A2.27 Team guard.
 
 #### Build 4H: The hosted service
 
@@ -394,19 +394,19 @@ Spend limits and budgets, checkout and plans, strict row rules, noisy-neighbour 
 
 Relations and rollups, validation, file and button fields, triage, cycles, initiatives, forms, templates and recurring records, automations on records, delegation, the keyboard-first pass.
 
-- **Slices:** 19 (4 S, 14 M, 1 L), from T1.
+- **Slices:** 21 (5 S, 15 M, 1 L), from T1.
 - **Starts after:** build 2E, build 3C, build 3G, build 3T.
 - **Stopgap unless it has landed:** T1.36 on C1.27 (build 4D).
-- **In this order:** T1.22 Delegate; T1.33 Sheets as a dashboard source; T1.12 Step 5: `fields` and `collection` on task tools (done early by #268); T1.13a The field registry (from W1.16); T1.18 Two-way relations, rollups, recalculation jobs; T1.19 Validation, required, defaults, builder-only; T1.20 File field; T1.21 Button field; T1.23 Triage queue; T1.24 Cycles; T1.26 Initiatives (containment by `parent_id`); T1.28 Forms: definitions, internal, conditions; T1.30 Record templates and recurring records; T1.35 Reviewed queries, shared results; T1.36 Fields on pages; page lists through views; T1.38 Automations on records; T1.41 Records and tasks proposable, with K3 history; T1.25 Step 6: acts like a task (done early by #268; left: forms for task-like collections, switching off once it has records, per-collection workflows, the switch in workspace templates); T1.27 Keyboard-first pass.
+- **In this order:** T1.22 Delegate; T1.33 Sheets as a dashboard source; T1.12 Step 5: `fields` and `collection` on task tools (done early by #268); T1.13a The field registry (from W1.16); T1.18 Two-way relations, rollups, recalculation jobs; T1.19 Validation, required, defaults, builder-only; T1.20 File field; T1.21 Button field; T1.23 Triage queue; T1.24 Cycles; T1.26 Initiatives (containment by `parent_id`); T1.28 Forms: definitions, internal, conditions; T1.30 Record templates and recurring records; T1.35 Reviewed queries, shared results; T1.36 Fields on pages; page lists through views; T1.38 Automations on records; T1.41 Records and tasks proposable, with K3 history; T1.25 Step 6: acts like a task (done early by #268; left: forms for task-like collections, switching off once it has records, per-collection workflows, the switch in workspace templates); T1.27 Keyboard-first pass; T1.42 Milestone order and roll-up; T1.43 Project status and update posts.
 
 #### Build 4W: Web on operations and pieces everywhere
 
 Every page onto the op client and the shared pieces, the panel renderer and framed panels, built modules in the app, package upgrades, offline reading, speed in CI.
 
-- **Slices:** 19 (2 S, 17 M), from M1, W1.
+- **Slices:** 21 (2 S, 19 M), from M1, W1.
 - **Starts after:** build 3G, build 3O, build 3T, build 3W.
 - **Stopgap unless it has landed:** W1.22 on T1.13a (build 4T); W1.28 on C2.11 (build 4C).
-- **In this order:** M1.15 Framed panels; W1.14c Internal links through href helpers; M1.3k Kinds, events, search from registrations; M1.7 Built modules in the app; M1.10 Package upgrades; W1.9b Conversations, inbox, later onto the op client; W1.9c Pages, sheets, whiteboards onto the op client; W1.9d Collections, fields, views, forms onto the op client; W1.9e Runs, launch, agents onto the op client; W1.9f Settings, team, spaces, onboarding onto the op client; W1.22 Form piece (filter builder is T1.13); W1.25 Panel block renderer; W1.26 Embeds through registrations and pieces; W1.27c Task detail onto the detail view; W1.28 Other lists onto the list piece; W1.31 Offline reading (opt-in per person, workspace can switch off); W1.33 Speed in CI; W1.34 Test diet; M1.16 Agent-creation offers, panels and actions end to end.
+- **In this order:** M1.15 Framed panels; W1.14c Internal links through href helpers; M1.3k Kinds, events, search from registrations; M1.7 Built modules in the app; M1.10 Package upgrades; W1.9b Conversations, inbox, later onto the op client; W1.9c Pages, sheets, whiteboards onto the op client; W1.9d Collections, fields, views, forms onto the op client; W1.9e Runs, launch, agents onto the op client; W1.9f Settings, team, spaces, onboarding onto the op client; W1.22 Form piece (filter builder is T1.13); W1.25 Panel block renderer; W1.26 Embeds through registrations and pieces; W1.27c Task detail onto the detail view; W1.28 Other lists onto the list piece; W1.31 Offline reading (opt-in per person, workspace can switch off); W1.33 Speed in CI; W1.34 Test diet; M1.16 Agent-creation offers, panels and actions end to end; W1.41 UI hill climb, later rounds on the shared pieces; W1.42 Automation builder on the pieces.
 
 ### Stage 5: Clean-up and release
 

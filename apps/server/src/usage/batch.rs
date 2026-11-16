@@ -133,8 +133,9 @@ async fn places(
     account: &UsageAccount,
     runs_only: bool,
 ) -> Result<Places, AppError> {
-    let projects = sqlx::query_as::<_, (Uuid, String)>(
-        r#"
+    let projects = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (Uuid, String)>(
+            r#"
         SELECT DISTINCT project.id, project.name
         FROM execution_profiles profile
         JOIN projects project ON project.id = profile.project_id
@@ -145,11 +146,13 @@ async fn places(
         ORDER BY project.name, project.id
         LIMIT $3
         "#,
-    )
-    .bind(account.id)
-    .bind(viewer)
-    .bind(MAX_PROJECTS)
-    .fetch_all(&state.pool)
+        )
+        .bind(account.id)
+        .bind(viewer)
+        .bind(MAX_PROJECTS)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     let mut result = Places {
         runnable: Vec::new(),
@@ -178,11 +181,12 @@ async fn places(
             continue;
         }
         let runs_off = runs_only && {
-            let mut connection = state.pool.acquire().await?;
-            !crate::modules::state::for_project(&mut connection, project_id, viewer)
-                .await?
-                .unwrap_or_default()
-                .contains("runs")
+            !crate::db::scoped_one(&state.pool, async |connection| {
+                crate::modules::state::for_project(connection, project_id, viewer).await
+            })
+            .await?
+            .unwrap_or_default()
+            .contains("runs")
         };
         if runs_off {
             result
@@ -210,10 +214,10 @@ async fn places(
             ));
             continue;
         }
-        let defaults = {
-            let mut connection = state.pool.acquire().await?;
-            launch::run_defaults(&mut connection, project_id, viewer).await?
-        };
+        let defaults = crate::db::scoped_one(&state.pool, async |connection| {
+            launch::run_defaults(connection, project_id, viewer).await
+        })
+        .await?;
         let Some(environment) = defaults.environment else {
             result.skipped.push(skip(
                 "It has no default environment. Choose one in its settings.".to_owned(),
@@ -364,14 +368,17 @@ pub(crate) async fn suggest_in(
         .map(|place| place.project_id)
         .collect::<Vec<_>>();
     // Tasks already waiting in a launch queue or running aren't suggested again.
-    let busy_tasks = sqlx::query_scalar::<_, Uuid>(
-        r#"
+    let busy_tasks = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
         SELECT work_item_id FROM launches
         WHERE project_id = ANY($1) AND state = 'queued' AND work_item_id IS NOT NULL
         "#,
-    )
-    .bind(&project_ids)
-    .fetch_all(&state.pool)
+        )
+        .bind(&project_ids)
+        .fetch_all(connection)
+        .await
+    })
     .await?
     .into_iter()
     .collect::<HashSet<_>>();

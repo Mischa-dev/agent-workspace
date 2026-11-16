@@ -2,7 +2,7 @@
 
 Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 
-471 slices; 468 in builds, 3 parked; 6 retired ids.
+481 slices; 478 in builds, 3 parked; 6 retired ids.
 
 ## P0 (39)
 
@@ -115,7 +115,7 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | K2.22 | Contract: delete hand-written edges (per batch) | M | 5X | none |  |
 | K2.23 | Alias sunset and public v1 retirement | S | 5X | none |  |
 
-## K3 (25)
+## K3 (26)
 
 | Id | Name | Size | Build | Needs | Soft needs (stopgap) |
 | --- | --- | --- | --- | --- | --- |
@@ -144,6 +144,7 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | K3.23 | Contract the old link stores | S | 5X | K3.16, A2.28 |  |
 | K3.24 | The direct scope and merged streams in the log | S | 2A | K3.3, K4.23 |  |
 | K3.25 | Cold log and history | M | 3E | K3.20, K5.11 |  |
+| K3.26 | Incoming webhooks as an automation trigger | M | 3E | K3.4, K2.18 |  |
 
 ## K4 (26)
 
@@ -202,7 +203,7 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | K5.20 | Direct upload and download, and a workspace's own bucket | M | 3E | K5.12 | K2.3 |
 | K5.21 | Live document rooms under the contract | S | 3E | K5.10, K5.19 |  |
 
-## T1 (45)
+## T1 (47)
 
 | Id | Name | Size | Build | Needs | Soft needs (stopgap) |
 | --- | --- | --- | --- | --- | --- |
@@ -251,8 +252,10 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | T1.39 | Contract: remove the second task engine (deletes W1.27a/b/d's old screens) | M | 5X | T1.9, T1.15, T1.16 |  |
 | T1.40 | Contract: drop `saved_views` | S | 5X | T1.39 |  |
 | T1.41 | Records and tasks proposable, with K3 history | M | 4T | K3.19, T1.11, C1.7, C1.9 |  |
+| T1.42 | Milestone order and roll-up | S | 4T | K2.14 |  |
+| T1.43 | Project status and update posts | M | 4T | T1.26, C1.2 |  |
 
-## A1 (23)
+## A1 (25)
 
 | Id | Name | Size | Build | Needs | Soft needs (stopgap) |
 | --- | --- | --- | --- | --- | --- |
@@ -272,13 +275,15 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | A1.14 | Built-in host, step (a) | L | 2G | A1.8, A1.9, A1.10, A1.12 |  |
 | A1.15 | Usage by window with confidence | M | 3G | A1.3 |  |
 | A1.16 | Built-in host, step (b) | L | 2G | A1.14 |  |
-| A1.17 | Built-in host, step (c) | L | 3G | A1.16, H1.13 | M1.14 |
+| A1.17 | Built-in host, step (c) | L | 3G | A1.16, H1.13, A1.24 | M1.14 |
 | A1.18 | Code-host seam, part 1 | M | 1G | none |  |
 | A1.19 | Code-host seam, part 2 | L | 3G | P0.11, T1.3, A1.3, A1.18 |  |
 | A1.20 | A2A binding | L | 3G | A1.8, A1.12 |  |
 | A1.21 | ACP in the built-in host | L | 3G | A1.16 |  |
 | A1.22 | Contract | M | 5X | A1.6, A1.8, A1.14, A1.17 |  |
 | A1.23 | Example host and conformance suite | M | 2G | A1.11, A1.12 | A2.19 |
+| A1.24 | Plan windows over the host protocol | M | 3G | A1.12, A1.15 |  |
+| A1.25 | Built-in host: a default assistant on the workspace's model key | M | 4G | A1.17, A2.17, K1.24 |  |
 
 ## A2 (27)
 
@@ -337,7 +342,7 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | M1.17 | Shapes | M | 2O | M1.9, M1.11 |  |
 | M1.18 | File sources: the contract | M | 3O | M1.12, M1.13 |  |
 
-## C1 (37)
+## C1 (38)
 
 | Id | Name | Size | Build | Needs | Soft needs (stopgap) |
 | --- | --- | --- | --- | --- | --- |
@@ -378,8 +383,9 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | C1.35 | Document-kind contract test | S | 4D | C1.11, C1.28, C1.34 |  |
 | C1.36 | Files from an outside source, by reference | M | 4D | M1.18, C1.33 | K5.14 |
 | C1.37 | Move a page between spaces | S/M | 4D | K4.9, C1.3, C1.33 |  |
+| C1.38 | Pages inside pages | M | 4D | K3.10, C1.37 |  |
 
-## C2 (41)
+## C2 (42)
 
 | Id | Name | Size | Build | Needs | Soft needs (stopgap) |
 | --- | --- | --- | --- | --- | --- |
@@ -424,8 +430,9 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | C2.38 | Shared channels (sketch) | L | parked: Shared channels: a sketch only, later. | K4.24, C2.37 |  |
 | C2.39 | DMs belong to their participants | L | 3C | P0.0, K1.33, K4.12, K4.23, K4.24, C2.3 |  |
 | C2.40 | Chat standing alone | M | 3C | K1.29, K4.10, K4.26, M1.17, C2.9, W1.13 | K4.25 |
+| C2.41 | Search by meaning | M | 4C | K3.17, K3.18, C2.25 |  |
 
-## W1 (47)
+## W1 (50)
 
 | Id | Name | Size | Build | Needs | Soft needs (stopgap) |
 | --- | --- | --- | --- | --- | --- |
@@ -476,6 +483,9 @@ Generated from `slices.json` by `tools/plan.py --write`. Do not edit by hand.
 | W1.37 | Role choices from the server, not account kind | S | 2W | K1.10 |  |
 | W1.38 | The web app as static files, config fetched at start | S | 2W | W1.10 | H1.41 |
 | W1.39 | Shape walk test | M | 3W | M1.17, W1.13, W1.35 | K4.25, C2.40 |
+| W1.40 | UI hill climb, round 1: visual directions the owner picks | M | 2W | W1.17 |  |
+| W1.41 | UI hill climb, later rounds on the shared pieces | M | 4W | W1.28 |  |
+| W1.42 | Automation builder on the pieces | M | 4W | W1.22, A2.13, K2.18 |  |
 
 ## H1 (63)
 

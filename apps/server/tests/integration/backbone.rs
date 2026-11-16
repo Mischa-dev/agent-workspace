@@ -20,6 +20,7 @@ use agent_workspace_server::{
     config::AppConfig,
     error::AppError,
     jobs::{self, Enqueued, JobError, JobRegistry, NewJob, WorkerOptions},
+    maintenance_lease,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
@@ -1047,14 +1048,22 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
         "sk-held-writer-value"
     );
 
-    // Two rotations at once take turns, and every secret still opens.
+    // Two rotations at once never interleave: one that finds the other
+    // holding the keyring lease is refused, and every secret still opens.
     tokio::time::sleep(Duration::from_millis(20)).await;
     let (first, second) = tokio::join!(
         secrets::rotate_master_key(&setup.pool, &setup.state.config),
         secrets::rotate_master_key(&setup.pool, &setup.state.config),
     );
-    first.expect("first rotation");
-    second.expect("second rotation");
+    assert!(first.is_ok() || second.is_ok(), "one rotation goes ahead");
+    for outcome in [&first, &second] {
+        if let Err(error) = outcome {
+            assert!(
+                matches!(error, AppError::Conflict("keyring", _)),
+                "{error:?}"
+            );
+        }
+    }
     let last = secrets::read_keyring(
         setup
             .state
@@ -1074,25 +1083,20 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
             .expect("opens after concurrent rotations");
     }
 
-    // The daily backup holds the one-rotation lock while it dumps, so a
-    // rotation waits and the dump never mixes old and new master keys.
-    let mut dump = setup.pool.acquire().await.expect("dump connection");
-    sqlx::query("SELECT pg_advisory_lock(470127786, 3)")
-        .execute(&mut *dump)
+    // A backup holds the keyring lease while it dumps, so a rotation is
+    // refused and the dump never mixes old and new master keys.
+    let dump = maintenance_lease::Lease::take(&setup.pool, maintenance_lease::KEYRING)
         .await
-        .expect("backup takes the rotation lock");
+        .expect("backup takes the keyring lease");
     let before_dump =
         sqlx::query_scalar::<_, String>("SELECT DISTINCT master_key_id FROM secrets ORDER BY 1")
             .fetch_all(&setup.pool)
             .await
             .expect("keys before");
-    let rotation = tokio::spawn({
-        let pool = setup.pool.clone();
-        let config = setup.state.config.clone();
-        async move { secrets::rotate_master_key(&pool, &config).await }
-    });
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(!rotation.is_finished(), "the rotation waits for the dump");
+    assert!(matches!(
+        secrets::rotate_master_key(&setup.pool, &setup.state.config).await,
+        Err(AppError::Conflict("keyring", _))
+    ));
     assert_eq!(
         secrets::read_keyring(
             setup
@@ -1115,14 +1119,9 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
         before_dump,
         "no secret is re-sealed while the dump runs"
     );
-    sqlx::query("SELECT pg_advisory_unlock(470127786, 3)")
-        .execute(&mut *dump)
+    dump.release(&setup.pool).await.expect("dump finishes");
+    secrets::rotate_master_key(&setup.pool, &setup.state.config)
         .await
-        .expect("dump finishes");
-    drop(dump);
-    rotation
-        .await
-        .expect("join")
         .expect("rotation after the dump");
 }
 

@@ -1075,6 +1075,16 @@ modules, the phone at 390 px.
   email digest for a chat-only workspace of people only contains none of the four words; an
   invite link opened on a phone lands in the conversation list.
 
+**C2.41 Search by meaning (M).** Added 2026-11-14 by the roadmap coverage check (END-STATE
+section 8, Search row; roadmap AI7). Embeddings for the search index's entries in K3's
+`search_embeddings` place (K3 3.5), made by a job through the AI gateway on the workspace's
+own model key, and blended into one ranking, so "theme colours" finds a page about the
+palette. Off, with search unchanged, when the workspace has no key. Rows hold vectors and
+ids, never text in logs or events. Depends on K3.17, K3.18, C2.25. Accept: with a key, a page
+about the palette ranks for "theme colours"; with no key, results equal plain search; a
+private message never ranks for a non-member (an isolation case); losing access drops the
+hit at once.
+
 ## 6. Guard rails
 
 - **Unread rules suite** `tests/integration/unread_rules.rs`: R1 to R10, each through the web
@@ -1249,6 +1259,7 @@ Owner questions, with recommendations:
 | C2.38 | Shared channels (sketch) | L | C2.37, K4 | — |
 | C2.39 | DMs belong to their participants | L | K4 direct scope, K4.12, C2.3, P0.0 | C2.40 |
 | C2.40 | Chat standing alone | M | M1.17, C2.9, W1.13, invitation links | C2.39 |
+| C2.41 | Search by meaning | M | K3.17, K3.18, C2.25 | C2.27 |
 
 ## Review changes
 
