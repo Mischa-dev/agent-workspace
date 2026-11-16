@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { RunStep } from './api'
-import { formatCost, formatTokens, logText, splitPatch } from './runModel'
+import { activityView, causeLabel, costText, formatCost, formatTokens, hostLabel, isLiveRun, livenessLabel, logText, planMark, runStatus, splitPatch } from './runModel'
 
 describe('formatCost', () => {
   it('says nothing when the cost is unknown, but shows a known zero', () => {
@@ -69,5 +69,59 @@ describe('logText', () => {
     expect(text).toContain('exit 1')
     expect(text).toContain('boom')
     expect(text).toContain('(output cut short)')
+  })
+})
+
+describe('run states', () => {
+  it('labels the run record\'s states and keeps the built-in ones', () => {
+    expect(runStatus('cancel_requested').label).toBe('Stopping…')
+    expect(runStatus('start_uncertain').tone).toBe('warning')
+    expect(runStatus('done').label).toBe('Done')
+    expect(runStatus('completed').label).toBe('Done')
+    expect(runStatus('blocked').label).toBe('Waiting on you')
+    expect(isLiveRun('waiting')).toBe(true)
+    expect(isLiveRun('refused')).toBe(false)
+  })
+})
+
+describe('livenessLabel', () => {
+  const now = new Date('2026-11-16T10:00:00Z').getTime()
+  it('says how long a run has been silent, only while it runs', () => {
+    expect(livenessLabel({ liveness: 'ok', state: 'working', lastReportAt: null }, now)).toBeNull()
+    expect(livenessLabel({ liveness: 'not_responding', state: 'working', lastReportAt: '2026-11-16T09:48:00Z' }, now)).toEqual({
+      label: 'Not responding for 12 min',
+      tone: 'danger',
+    })
+    expect(livenessLabel({ liveness: 'quiet', state: 'waiting', lastReportAt: '2026-11-16T09:55:00Z' }, now)?.label).toBe('Quiet for 5 min')
+    expect(livenessLabel({ liveness: 'not_responding', state: 'done', lastReportAt: null }, now)).toBeNull()
+  })
+})
+
+describe('costText', () => {
+  it('marks a cost estimated from usage windows', () => {
+    expect(costText(1.2, 'USD', 'estimated')).toEqual({ text: expect.stringMatching(/^≈ .*1\.20/), hint: 'Estimated from usage windows' })
+    expect(costText(1.2, 'USD', 'exact')?.hint).toBeNull()
+    expect(costText(null, 'USD', 'exact')).toBeNull()
+  })
+})
+
+describe('causeLabel and hostLabel', () => {
+  it('names why a run exists and where it runs', () => {
+    expect(causeLabel({ causeKind: 'task', causeRef: null, taskKey: 'AW-12' })).toBe('AW-12')
+    expect(causeLabel({ causeKind: 'schedule', causeRef: 'weekday 09:00', taskKey: null })).toBe('Scheduled: weekday 09:00')
+    expect(causeLabel({ causeKind: 'host_trigger', causeRef: null, taskKey: null })).toBe('Started by its host')
+    expect(hostLabel({ builtin: false, hostName: null, harnessName: null, backend: null })).toBe('Reports itself')
+    expect(hostLabel({ builtin: false, hostName: 'Build box', harnessName: null, backend: 'docker' })).toBe('Build box · docker')
+    expect(hostLabel({ builtin: true, hostName: null, harnessName: 'Demo', backend: null })).toBe('Demo')
+  })
+})
+
+describe('activityView and planMark', () => {
+  it('makes a gap stand out and reads plan marks', () => {
+    const activity = { seq: 3, kind: 'gap', stepRef: null, parentRef: null, summary: '', payload: {}, occurredAt: '2026-11-16T10:00:00Z' }
+    expect(activityView(activity)).toMatchObject({ icon: 'triangle-alert', tone: 'warning' })
+    expect(activityView({ ...activity, kind: 'run_finished', summary: 'Failed.', payload: { outcome: 'failed' } }).tone).toBe('danger')
+    expect(planMark('done').label).toBe('Done')
+    expect(planMark(undefined).label).toBe('To do')
   })
 })

@@ -118,7 +118,7 @@ const LINE_SELECT: &str = r#"
            detail.config->>'harness' AS harness, detail.config->>'model' AS model,
            run.requested_by_account_id AS requested_by_actor_id,
            requester.display_name AS requested_by_name,
-           run.waiting_on_request_id, waiting.title AS waiting_on_title,
+           waiting.id AS waiting_on_request_id, waiting.title AS waiting_on_title,
            run.status_line, run.outcome_summary, run.external_url, run.failure_reason,
            workspace.branch_name AS branch,
            pull_request.pull_request_number, pull_request.html_url AS pull_request_url,
@@ -138,7 +138,19 @@ const LINE_SELECT: &str = r#"
       ON agent.project_id = run.space_id AND agent.actor_id = run.account_id
     LEFT JOIN project_memberships requester
       ON requester.project_id = run.space_id AND requester.actor_id = run.requested_by_account_id
-    LEFT JOIN requests waiting ON waiting.id = run.waiting_on_request_id
+    -- What it waits on: the request it names, else its oldest open one, where
+    -- the viewer sees the request's conversation.
+    LEFT JOIN LATERAL (
+        SELECT request.id, request.title FROM requests request
+        WHERE request.run_id = run.id
+          AND (request.id = run.waiting_on_request_id
+               OR (run.waiting_on_request_id IS NULL AND request.status = 'open'
+                   AND run.state = 'waiting'))
+          AND (request.conversation_id IS NULL
+               OR conversation_visible_to(request.conversation_id, $1))
+        ORDER BY request.created_at, request.id
+        LIMIT 1
+    ) waiting ON true
     LEFT JOIN repository_workspaces workspace ON workspace.id = detail.repository_workspace_id
     LEFT JOIN github_pull_request_requests pull_request_request
       ON pull_request_request.agent_run_id = detail.id
