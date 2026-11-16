@@ -19,13 +19,6 @@ use super::{
 };
 use crate::error::AppError;
 
-/// The setting that switched a module before M1.2. It stays defined until
-/// M1.11's contract step, so an older server can still write it (a trigger
-/// mirrors that into `module_installs`); nothing reads it.
-pub fn setting_key(module: &str) -> String {
-    format!("modules.{module}")
-}
-
 /// Where a module switch is kept: the workspace's own, or a narrowing in
 /// one of its spaces.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -44,6 +44,8 @@ export type Direction = "asc" | "desc"
 
 export type EditOutcome = { changed: string[]; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
 
+export type EntryView = { description: string; entry: string; error?: string | null; id: string; kind: string; name: string; parts: number; shape: boolean; source: string; sourceId?: string | null; target?: string | null; version: string }
+
 export type FieldOp = "is" | "isNot" | "empty" | "notEmpty" | "contains" | "gt" | "gte" | "lt" | "lte" | "within" | "categoryIs" | "categoryIsNot"
 
 export type FieldWrite = { archived?: boolean | null; description?: string | null; field?: string | null; name?: string | null; options?: OptionInput[] | null; position?: number | null; target?: string | null; type?: string | null }
@@ -67,6 +69,8 @@ export type InlineFormField = { field: string; required?: boolean }
 export type InstallTarget = { newSpace?: NewSpace | null; spaceId?: string | null }
 
 export type InstallView = { id: string; installedAt: string; name: string; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
+
+export type Installed = { changes: string[]; installId: string; objects: InstalledObject[]; packageId: string; skipped: string[]; spaceId?: string | null; version: string }
 
 export type InstalledObject = { action: string; id: string; key: string; kind: string }
 
@@ -126,6 +130,8 @@ export type ScheduledLine = { conversationId: string; failure?: string | null; i
 
 export type SortWrite = { direction?: Direction; field: string }
 
+export type SourceView = { error?: string | null; fetchedAt?: string | null; id: string; name: string; url: string }
+
 export type ThreadRef = { id: string; name: string; status: string }
 
 export type ViewWrite = { columns?: ColumnWrite[] | null; dateField?: string | null; filters?: FilterWrite[] | null; groupBucket?: DateBucket | null; groupBy?: string | null; name?: string | null; position?: number | null; remove?: boolean | null; sort?: SortWrite[] | null; titleWidth?: number | null; type?: string | null; view?: string | null }
@@ -151,6 +157,18 @@ export type DecisionListOutput = { decisions: DecisionView[] }
 export type DecisionRecordInput = { detail?: string | null; pin?: boolean; sourceConversationId?: string | null; sourceMessageId?: string | null; spaceId?: string | null; supersedes?: string | null; title: string }
 
 export type DecisionRecordOutput = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
+
+export type DirectoryListInput = { query?: string | null; shapes?: boolean | null }
+
+export type DirectoryListOutput = { entries: EntryView[]; ownSourcesAllowed: boolean; shape?: string | null; sources: SourceView[] }
+
+export type DirectorySourceCreateInput = { name?: string | null; url: string }
+
+export type DirectorySourceCreateOutput = { error?: string | null; fetchedAt?: string | null; id: string; name: string; url: string }
+
+export type DirectorySourceRemoveInput = { sourceId: string }
+
+export type DirectorySourceRemoveOutput = { id: string }
 
 export type HostAgentBindInput = { accountId: string; hostAgentRef: string; hostId: string }
 
@@ -240,7 +258,7 @@ export type PackageExportInput = { includePages?: boolean; includeSkills?: boole
 
 export type PackageExportOutput = { digest: string; package: Package }
 
-export type PackageInstallInput = { package: Record<string, unknown>; planHash: string; target?: InstallTarget }
+export type PackageInstallInput = { entry?: string | null; fileId?: string | null; package?: Record<string, unknown> | null; planHash: string; target?: InstallTarget }
 
 export type PackageInstallOutput = { changes: string[]; installId: string; objects: InstalledObject[]; packageId: string; skipped: string[]; spaceId?: string | null; version: string }
 
@@ -248,7 +266,7 @@ export type PackageListInput = { spaceId?: string | null }
 
 export type PackageListOutput = { installs: InstallView[] }
 
-export type PackagePreviewInput = { package: Record<string, unknown>; target?: InstallTarget }
+export type PackagePreviewInput = { entry?: string | null; fileId?: string | null; package?: Record<string, unknown> | null; target?: InstallTarget }
 
 export type PackagePreviewOutput = { digest: string; items: PlanItem[]; leaves: string[]; name: string; packageId: string; planHash: string; roles: unknown; target: unknown; turnsOff: string[]; turnsOn: string[]; version: string }
 
@@ -340,12 +358,19 @@ export type WhiteboardUpdateElementsInput = { confirmDelete?: boolean | null; ex
 
 export type WhiteboardUpdateElementsOutput = { changed: string[]; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
 
+export type WorkspaceShapeSetInput = { planHash?: string | null; shape: string }
+
+export type WorkspaceShapeSetOutput = { installed: Installed; name: string; shape: string }
+
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
+  directory_list: { input: DirectoryListInput; output: DirectoryListOutput }
+  directory_source_create: { input: DirectorySourceCreateInput; output: DirectorySourceCreateOutput }
+  directory_source_remove: { input: DirectorySourceRemoveInput; output: DirectorySourceRemoveOutput }
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
   host_agent_unbind: { input: HostAgentUnbindInput; output: HostAgentUnbindOutput }
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
@@ -393,6 +418,7 @@ export type Operations = {
   whiteboard_link: { input: WhiteboardLinkInput; output: WhiteboardLinkOutput }
   whiteboard_update: { input: WhiteboardUpdateInput; output: WhiteboardUpdateOutput }
   whiteboard_update_elements: { input: WhiteboardUpdateElementsInput; output: WhiteboardUpdateElementsOutput }
+  workspace_shape_set: { input: WorkspaceShapeSetInput; output: WorkspaceShapeSetOutput }
 }
 
 export type OpName = keyof Operations

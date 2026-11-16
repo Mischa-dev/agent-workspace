@@ -115,6 +115,14 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
     ),
     (
+        "directory_entries",
+        "what the package directory offers, read from its sources: a server-wide source's entries belong to no workspace; a workspace's own list's entries carry its workspace_id",
+    ),
+    (
+        "directory_sources",
+        "where the package directory reads from: the operator's folder and lists are server-wide; a workspace's own URL list carries its workspace_id",
+    ),
+    (
         "host_agents",
         "which accounts a host runs: hosts are server-wide (A1 3.9)",
     ),

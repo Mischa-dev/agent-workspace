@@ -62,6 +62,9 @@ variable that is set still wins.
 | `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES` | `false` | Lets workspaces point their model provider and mail server at private, loopback and tailnet addresses, and mail at any port. Turn it on only for a local model or mail relay. |
 | `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS` | none | Comma-separated exact origins (such as `http://wake.internal:8732` for a listener on a private network) that agent wakeups and webhooks may reach over http or on a private address. Every other webhook must be public https. |
 | `AGENT_WORKSPACE_PUSH_CONTACT` | the public origin when https, else a mailto at its host | Who push services contact about this server's web push: a `mailto:` or `https:` URL. |
+| `AGENT_WORKSPACE_DIRECTORY_DIR` | none | An absolute path to a folder of packages (`.json`, `.zip`, or folders holding a `package.json`) every workspace on this server can install from Settings › Modules › Available. Read again every hour. |
+| `AGENT_WORKSPACE_DIRECTORY_URLS` | none | Package lists (`agent-workspace-directory/1` JSON over https), comma or space separated, every workspace can install from. Read again every hour. |
+| `AGENT_WORKSPACE_DIRECTORY_WORKSPACE_SOURCES` | `true` (`false` in the hosted profile) | Whether a workspace may add its own package lists. |
 | `AGENT_WORKSPACE_METRICS_TOKEN_PATH` | none (no `/metrics`) | An owner-only file holding the bearer token `/metrics` requires. |
 
 ## Sign-in through WorkOS (optional)

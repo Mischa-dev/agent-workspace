@@ -1,0 +1,81 @@
+{
+  "format": "agent-workspace-package/1",
+  "id": "small_team",
+  "version": "1.0.0",
+  "name": "Small team",
+  "description": "A few people and their agents: channels, tasks, pages and whiteboards, without code and runs. Everyone joins as a member.",
+  "target": "workspace",
+  "contents": [
+    {
+      "kind": "switches",
+      "key": "switches",
+      "body": {
+        "off": [
+          "code",
+          "runs"
+        ]
+      }
+    },
+    {
+      "kind": "layout",
+      "key": "layout",
+      "body": {
+        "preset": "minimal",
+        "changes": {},
+        "words": {}
+      }
+    },
+    {
+      "kind": "role",
+      "key": "read_only",
+      "body": {
+        "name": "Read only",
+        "description": "Reads everything they're given and changes nothing, across the whole workspace.",
+        "baseRole": "viewer",
+        "permissions": [
+          "projects.view",
+          "tasks.view",
+          "code.view",
+          "directory.view"
+        ]
+      }
+    },
+    {
+      "kind": "role",
+      "key": "member",
+      "body": {
+        "name": "Member",
+        "default": true
+      }
+    },
+    {
+      "kind": "space",
+      "key": "team",
+      "body": {
+        "name": "Team",
+        "key": "TEAM"
+      }
+    },
+    {
+      "kind": "channels",
+      "key": "channels",
+      "body": {
+        "channels": [
+          {
+            "name": "general"
+          },
+          {
+            "name": "random"
+          },
+          {
+            "name": "announcements"
+          }
+        ]
+      }
+    }
+  ],
+  "needsAdmin": [
+    "role:read_only",
+    "role:member"
+  ]
+}

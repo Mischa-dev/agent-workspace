@@ -43,6 +43,10 @@
     "package_install": "create",
     "package_list": "query",
     "package_remove": "change",
+    "directory_list": "query",
+    "directory_source_create": "create",
+    "directory_source_remove": "change",
+    "workspace_shape_set": "change",
     "agent_template_list": "query",
     "role_assign": "change",
     "thing_open": "describe"
@@ -145,6 +149,6 @@
     "slash": [],
     "setup": ["template", "workspace", "roles"]
   },
-  "settings": ["notifications.*", "files.*", "layout.*", "modules.*"],
+  "settings": ["notifications.*", "files.*", "layout.*"],
   "nouns": []
 }

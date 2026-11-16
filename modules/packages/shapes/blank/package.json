@@ -1,0 +1,43 @@
+{
+  "format": "agent-workspace-package/1",
+  "id": "shapes.blank",
+  "version": "1.0.0",
+  "name": "Blank",
+  "description": "Only chat on and nothing made. For building your own setup from modules and packages.",
+  "publisher": {
+    "name": "Agent Workspace"
+  },
+  "target": "workspace",
+  "contents": [
+    {
+      "kind": "switches",
+      "key": "switches",
+      "body": {
+        "off": [
+          "projects",
+          "channels",
+          "tasks",
+          "pages",
+          "whiteboards",
+          "collections",
+          "sheets",
+          "code",
+          "runs",
+          "agents",
+          "inbox",
+          "automations",
+          "suggestions"
+        ]
+      }
+    },
+    {
+      "kind": "layout",
+      "key": "layout",
+      "body": {
+        "preset": "minimal",
+        "changes": {},
+        "words": {}
+      }
+    }
+  ]
+}

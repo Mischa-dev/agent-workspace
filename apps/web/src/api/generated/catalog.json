@@ -76,6 +76,52 @@
     "title": "Record decision"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "directory_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List what can be installed"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "directory.source_added"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "directory_source_create",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Add a package list"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "directory.source_removed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "directory_source_remove",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a package list"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -814,5 +860,21 @@
     "preview": false,
     "proposable": false,
     "title": "Draw on whiteboard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "package.installed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_shape_set",
+    "permission": "modules.manage",
+    "preview": true,
+    "proposable": false,
+    "title": "Change what the workspace is for"
   }
 ]
