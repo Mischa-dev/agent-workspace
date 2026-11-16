@@ -18,6 +18,8 @@ export type Envelope<T> =
   | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }
   | OpError
 
+export type AgentTemplateView = { definition: unknown; id: string; installId?: string | null; key: string; name: string; purpose: string; spaceId?: string | null }
+
 export type ArchiveParts = "archive" | "keep"
 
 export type ColumnWrite = { field: string; hidden?: boolean; width?: number | null }
@@ -52,6 +54,12 @@ export type InlineForm = { collection: string; fields?: InlineFormField[]; intro
 
 export type InlineFormField = { field: string; required?: boolean }
 
+export type InstallTarget = { newSpace?: NewSpace | null; spaceId?: string | null }
+
+export type InstallView = { id: string; installedAt: string; name: string; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
+
+export type InstalledObject = { action: string; id: string; key: string; kind: string }
+
 export type MessageContent = { nodes: MessageNode[]; version: number }
 
 export type MessageNode = { text: string; type: "text" } | { actorId: string; type: "mention" } | { type: "work_item_ref"; workItemId: string }
@@ -59,6 +67,8 @@ export type MessageNode = { text: string; type: "text" } | { actorId: string; ty
 export type NavEntry = { icon?: string | null; label: string; target: unknown }
 
 export type NavView = { icon?: string | null; id: string; label: string; target: unknown }
+
+export type NewSpace = { key: string; name: string }
 
 export type OptionInput = { category?: string | null; color?: string | null; id?: string | null; name: string }
 
@@ -72,11 +82,15 @@ export type PartRef = { id: string; kind: string }
 
 export type PartView = { id: string; kind: string; name?: string | null }
 
+export type PlanItem = { action: string; existingId?: string | null; key: string; kind: string; name: string; needsAdmin: boolean; reason?: string | null }
+
 export type Publisher = { name: string; url?: string | null }
 
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
 export type ReactionSummary = { byYou: boolean; count: number; emoji: string; name: string; people: string[] }
+
+export type RemoveParts = "archive" | "keep"
 
 export type Requires = { contract?: string | null; modules?: string[] }
 
@@ -101,6 +115,10 @@ export type ViewWrite = { columns?: ColumnWrite[] | null; dateField?: string | n
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type AgentTemplateListInput = { spaceId?: string | null }
+
+export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
 
 export type ConversationMarkReadInput = { conversationId: string; fromMessageId?: string | null; unread?: boolean | null; upToSequence?: number | null }
 
@@ -202,6 +220,22 @@ export type PackageExportInput = { includePages?: boolean; includeSkills?: boole
 
 export type PackageExportOutput = { digest: string; package: Package }
 
+export type PackageInstallInput = { package: Record<string, unknown>; planHash: string; target?: InstallTarget }
+
+export type PackageInstallOutput = { changes: string[]; installId: string; objects: InstalledObject[]; packageId: string; skipped: string[]; spaceId?: string | null; version: string }
+
+export type PackageListInput = { spaceId?: string | null }
+
+export type PackageListOutput = { installs: InstallView[] }
+
+export type PackagePreviewInput = { package: Record<string, unknown>; target?: InstallTarget }
+
+export type PackagePreviewOutput = { digest: string; items: PlanItem[]; leaves: string[]; name: string; packageId: string; planHash: string; roles: unknown; target: unknown; turnsOff: string[]; turnsOn: string[]; version: string }
+
+export type PackageRemoveInput = { installId: string; parts: RemoveParts }
+
+export type PackageRemoveOutput = { id: string; installedAt: string; name: string; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
+
 export type RunActivityReportInput = { activities: RunActivityInput[]; runId: string }
 
 export type RunActivityReportOutput = { accepted: number; duplicates: number; lastSeq: number; overLimit?: number; requests?: RaisedRequestOutput[]; state: string; version: number }
@@ -236,6 +270,7 @@ export type ScheduledMessageUpdateOutput = { canceled: boolean; scheduled?: Sche
 
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
@@ -261,6 +296,10 @@ export type Operations = {
   module_set: { input: ModuleSetInput; output: ModuleSetOutput }
   module_update: { input: ModuleUpdateInput; output: ModuleUpdateOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
+  package_install: { input: PackageInstallInput; output: PackageInstallOutput }
+  package_list: { input: PackageListInput; output: PackageListOutput }
+  package_preview: { input: PackagePreviewInput; output: PackagePreviewOutput }
+  package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }
   run_create: { input: RunCreateInput; output: RunCreateOutput }

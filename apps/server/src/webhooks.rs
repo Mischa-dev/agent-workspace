@@ -1190,13 +1190,12 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
         let (modules, direct) = crate::db::scoped_one(pool, async |connection| {
             let modules =
                 crate::modules::state::in_space(connection, organization_id, project_id).await?;
-            let direct = sqlx::query_scalar::<_, bool>(
-                "SELECT kind = 'direct' FROM projects WHERE id = $1",
-            )
-            .bind(project_id)
-            .fetch_optional(&mut *connection)
-            .await?
-            .unwrap_or(false);
+            let direct =
+                sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
+                    .bind(project_id)
+                    .fetch_optional(&mut *connection)
+                    .await?
+                    .unwrap_or(false);
             Ok::<_, AppError>((modules, direct))
         })
         .await?;

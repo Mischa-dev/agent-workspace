@@ -64,7 +64,13 @@ async fn a_package_installs_once_and_exports_back() {
         return;
     };
     let pool = world.pool().clone();
-    let preview = tool(&world, "desk", "package_preview", json!({"package": studio()})).await;
+    let preview = tool(
+        &world,
+        "desk",
+        "package_preview",
+        json!({"package": studio()}),
+    )
+    .await;
     assert_eq!(preview["outcome"], "ok", "{preview}");
     let plan = &preview["value"];
     assert!(
@@ -77,16 +83,20 @@ async fn a_package_installs_once_and_exports_back() {
     );
     let hash = plan["planHash"].as_str().expect("hash").to_owned();
     // The preview changed nothing.
-    let none = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM collections WHERE name = 'Feedback'")
-        .fetch_one(&pool)
-        .await
-        .expect("collections");
+    let none =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM collections WHERE name = 'Feedback'")
+            .fetch_one(&pool)
+            .await
+            .expect("collections");
     assert_eq!(none, 0);
 
     let install = json!({"package": studio(), "planHash": hash, "clientRequestId": "studio-1"});
     let first = tool(&world, "desk", "package_install", install.clone()).await;
     assert_eq!(first["outcome"], "ok", "{first}");
-    let space = first["value"]["spaceId"].as_str().expect("space").to_owned();
+    let space = first["value"]["spaceId"]
+        .as_str()
+        .expect("space")
+        .to_owned();
     let again = tool(&world, "desk", "package_install", install).await;
     assert_eq!(again["outcome"], "ok", "{again}");
     assert_eq!(again["replayed"], true, "{again}");
@@ -109,14 +119,23 @@ async fn a_package_installs_once_and_exports_back() {
         assert_eq!(count, 1, "{table} {value}");
     }
     let listed = tool(&world, "desk", "package_list", json!({})).await;
-    assert_eq!(listed["value"]["installs"][0]["packageId"], "studio.game_studio", "{listed}");
+    assert_eq!(
+        listed["value"]["installs"][0]["packageId"], "studio.game_studio",
+        "{listed}"
+    );
     let templates = tool(&world, "desk", "agent_template_list", json!({})).await;
-    assert_eq!(templates["value"]["templates"][0]["key"], "triage_agent", "{templates}");
+    assert_eq!(
+        templates["value"]["templates"][0]["key"], "triage_agent",
+        "{templates}"
+    );
 
     // Exported again, the space gives back the parts it was given.
     let exported = tool(&world, "desk", "package_export", json!({"spaceId": space})).await;
     assert_eq!(exported["outcome"], "ok", "{exported}");
-    let parts = exported["value"]["package"]["contents"].as_array().expect("contents").clone();
+    let parts = exported["value"]["package"]["contents"]
+        .as_array()
+        .expect("contents")
+        .clone();
     let body_of = |kind: &str, key: &str| {
         parts
             .iter()
@@ -142,7 +161,10 @@ async fn a_package_installs_once_and_exports_back() {
     assert_eq!(rule["trigger"]["collectionId"], "@feedback", "{rule}");
 
     // Removing it archives what it made and deletes nothing.
-    let install_id = first["value"]["installId"].as_str().expect("install").to_owned();
+    let install_id = first["value"]["installId"]
+        .as_str()
+        .expect("install")
+        .to_owned();
     let removed = tool(
         &world,
         "desk",
@@ -185,7 +207,11 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
         .project("WORK")
         .agent("rook", "member")
         .connected_app("desk")
-        .custom_role("Builder", &["modules.manage", "collections.build", "tasks.view"])
+        .custom_role_on(
+            "Builder",
+            "admin",
+            &["modules.manage", "collections.build", "tasks.view"],
+        )
         .build("m19_install_rules")
         .await
     else {
@@ -197,12 +223,14 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
     let builder = Uuid::parse_str(&world.roles["Builder"]).expect("role");
     let rook = world.agents["rook"].actor;
     for table in ["project_memberships", "organization_memberships"] {
-        sqlx::query(&format!("UPDATE {table} SET role_id = $1 WHERE actor_id = $2"))
-            .bind(builder)
-            .bind(rook)
-            .execute(&pool)
-            .await
-            .expect("give rook Builder");
+        sqlx::query(&format!(
+            "UPDATE {table} SET role_id = $1 WHERE actor_id = $2"
+        ))
+        .bind(builder)
+        .bind(rook)
+        .execute(&pool)
+        .await
+        .expect("give rook Builder");
     }
     let target = json!({"spaceId": space});
 
@@ -224,10 +252,11 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
-    let triager = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM workspace_roles WHERE name = 'Triager'")
-        .fetch_one(&pool)
-        .await
-        .expect("roles");
+    let triager =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM workspace_roles WHERE name = 'Triager'")
+            .fetch_one(&pool)
+            .await
+            .expect("roles");
     assert_eq!(triager, 0);
 
     // The same agent drafts one without the role, previews and installs it.
@@ -277,11 +306,15 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
     )
     .await;
     assert_eq!(installed["outcome"], "ok", "{installed}");
-    assert_eq!(installed["value"]["objects"][0]["action"], "reused", "{installed}");
-    let collections = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM collections WHERE name = 'Bugs'")
-        .fetch_one(&pool)
-        .await
-        .expect("collections");
+    assert_eq!(
+        installed["value"]["objects"][0]["action"], "reused",
+        "{installed}"
+    );
+    let collections =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM collections WHERE name = 'Bugs'")
+            .fetch_one(&pool)
+            .await
+            .expect("collections");
     assert_eq!(collections, 1);
     world.finish().await;
 }

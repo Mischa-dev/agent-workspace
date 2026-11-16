@@ -93,7 +93,10 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
         .map(|part| part["kind"].as_str().unwrap_or_default().to_owned())
         .collect::<Vec<_>>();
     for kind in ["collection", "form", "automation", "nav"] {
-        assert!(kinds.iter().any(|found| found == kind), "{kind} in {module}");
+        assert!(
+            kinds.iter().any(|found| found == kind),
+            "{kind} in {module}"
+        );
     }
     let module_id = module["id"].as_str().expect("module").to_owned();
     // The same call again changes nothing.
@@ -101,12 +104,11 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     assert_eq!(again["outcome"], "ok", "{again}");
     assert_eq!(again["replayed"], true, "{again}");
     assert_eq!(again["value"]["id"], module_id.as_str());
-    let collections = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM collections WHERE name = 'Playtests'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("collections");
+    let collections =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM collections WHERE name = 'Playtests'")
+            .fetch_one(&pool)
+            .await
+            .expect("collections");
     assert_eq!(collections, 1);
     let form_id = module["parts"]
         .as_array()
@@ -336,13 +338,12 @@ async fn a_part_from_another_workspace_never_joins() {
     )
     .await;
     assert_ne!(linked["outcome"], "ok", "{linked}");
-    let parts = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM module_parts WHERE object_id = $1",
-    )
-    .bind(foreign)
-    .fetch_one(&pool)
-    .await
-    .expect("parts");
+    let parts =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM module_parts WHERE object_id = $1")
+            .bind(foreign)
+            .fetch_one(&pool)
+            .await
+            .expect("parts");
     assert_eq!(parts, 0);
     world.finish().await;
 }

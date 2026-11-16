@@ -123,7 +123,7 @@ pub(crate) struct WorldBuilder {
     people: Vec<(String, String)>,
     agents: Vec<(String, String)>,
     apps: Vec<String>,
-    custom_roles: Vec<(String, Vec<String>)>,
+    custom_roles: Vec<(String, &'static str, Vec<String>)>,
     dms: Vec<(String, String)>,
     groups: Vec<(String, Vec<String>)>,
 }
@@ -149,9 +149,21 @@ impl WorldBuilder {
         self
     }
 
-    pub(crate) fn custom_role(mut self, name: &str, permissions: &[&str]) -> Self {
+    pub(crate) fn custom_role(self, name: &str, permissions: &[&str]) -> Self {
+        self.custom_role_on(name, "member", permissions)
+    }
+
+    /// A custom role on another base role, for permissions a member's base
+    /// doesn't hold (`"admin"`).
+    pub(crate) fn custom_role_on(
+        mut self,
+        name: &str,
+        base: &'static str,
+        permissions: &[&str],
+    ) -> Self {
         self.custom_roles.push((
             name.to_owned(),
+            base,
             permissions.iter().map(|&value| value.to_owned()).collect(),
         ));
         self
@@ -250,14 +262,14 @@ impl WorldBuilder {
             );
         }
         let mut roles = BTreeMap::new();
-        for (name, permissions) in &self.custom_roles {
+        for (name, base, permissions) in &self.custom_roles {
             let (status, role) = send(
                 &app,
                 setup.browser.request(
                     "POST",
                     &format!("/api/v1/organizations/{}/roles", owner.organization_id),
                     None,
-                    json!({"name": name, "baseRole": "member", "permissions": permissions}),
+                    json!({"name": name, "baseRole": base, "permissions": permissions}),
                 ),
             )
             .await;

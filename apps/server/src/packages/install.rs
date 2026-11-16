@@ -32,16 +32,15 @@ pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 
 /// Reads an inline package and checks its format.
 pub fn read(document: &Value) -> Result<Package, OpError> {
-    let package = serde_json::from_value::<Package>(document.clone()).map_err(|error| {
-        OpError::Invalid {
+    let package =
+        serde_json::from_value::<Package>(document.clone()).map_err(|error| OpError::Invalid {
             field: "package".into(),
             message: format!(
                 "This isn't a package (agent-workspace-package/1): {}",
                 error.to_string().split(" at line ").next().unwrap_or("")
             )
             .into(),
-        }
-    })?;
+        })?;
     if let Err(problems) = package.validate() {
         return Err(OpError::Invalid {
             field: "package".into(),
@@ -181,7 +180,11 @@ fn item(action: &str, kind: &str, key: &str, name: &str) -> PlanItem {
 
 fn found(kind: &str, key: &str, name: &str, existing: Option<Uuid>) -> PlanItem {
     let mut line = item(
-        if existing.is_some() { "reuse" } else { "create" },
+        if existing.is_some() {
+            "reuse"
+        } else {
+            "create"
+        },
         kind,
         key,
         name,
@@ -240,7 +243,8 @@ async fn existing(
 const ROLE_BY_NAME: &str =
     "SELECT id FROM workspace_roles WHERE organization_id = $1 AND lower(name) = lower($2)";
 const CHANNEL_BY_NAME: &str = "SELECT id FROM conversations WHERE project_id = $1 \
-     AND kind = 'channel' AND archived_at IS NULL AND lower(name) = lower($2) LIMIT 1";
+     AND kind = 'channel' AND archived_at IS NULL AND lower(name) = lower($2) LIMIT 1 \
+     -- visibility: a name check before the install makes a channel; only an id, never content";
 const COLLECTION_BY_NAME: &str = "SELECT id FROM collections WHERE project_id = $1 \
      AND archived_at IS NULL AND lower(name) = lower($2) LIMIT 1";
 const FORM_BY_NAME: &str = "SELECT id FROM bug_report_links WHERE project_id = $1 \
@@ -350,7 +354,9 @@ pub async fn plan(
                             name,
                             existing(connection, CHANNEL_BY_NAME, space, name).await?,
                         ),
-                        None if matches!(place, Place::New(_)) => found("channel", name, name, None),
+                        None if matches!(place, Place::New(_)) => {
+                            found("channel", name, name, None)
+                        }
                         None => skipped("channel", name, name, needs_space),
                     });
                 }
@@ -358,7 +364,9 @@ pub async fn plan(
             }
             kind => {
                 let (kind_key, name, sql) = match kind {
-                    ContentKind::Collection => ("collection", text(&body, "name"), COLLECTION_BY_NAME),
+                    ContentKind::Collection => {
+                        ("collection", text(&body, "name"), COLLECTION_BY_NAME)
+                    }
                     ContentKind::Form => ("form", text(&body, "name"), FORM_BY_NAME),
                     ContentKind::Automation => ("automation", text(&body, "name"), RULE_BY_NAME),
                     ContentKind::Page => ("page", text(&body, "title"), PAGE_BY_TITLE),
@@ -411,9 +419,7 @@ pub async fn plan(
                             name,
                             existing(connection, sql, space, name).await?,
                         ),
-                        None if matches!(place, Place::New(_)) => {
-                            found(kind_key, key, name, None)
-                        }
+                        None if matches!(place, Place::New(_)) => found(kind_key, key, name, None),
                         None => skipped(kind_key, key, name, needs_space),
                     },
                 }
@@ -657,7 +663,10 @@ mod tests {
         )
         .expect("resolved");
         assert_eq!(resolved["trigger"]["collectionId"], feedback.to_string());
-        assert_eq!(resolved["actions"][0]["conversationId"], general.to_string());
+        assert_eq!(
+            resolved["actions"][0]["conversationId"],
+            general.to_string()
+        );
         assert_eq!(resolved["actions"][0]["text"], "plain");
         assert!(resolve_refs(json!("@missing"), &collections, &channels).is_err());
     }

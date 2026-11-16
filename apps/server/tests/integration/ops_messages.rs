@@ -39,13 +39,11 @@ async fn agent_tool(world: &Workspace, name: &'static str, arguments: Value) -> 
 }
 
 async fn messages_in(world: &Workspace, conversation: &str) -> i64 {
-    sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM messages WHERE conversation_id = $1::uuid",
-    )
-    .bind(conversation)
-    .fetch_one(world.pool())
-    .await
-    .expect("messages")
+    sqlx::query_scalar::<_, i64>("SELECT count(*) FROM messages WHERE conversation_id = $1::uuid")
+        .bind(conversation)
+        .fetch_one(world.pool())
+        .await
+        .expect("messages")
 }
 
 #[tokio::test]
@@ -113,10 +111,10 @@ async fn marking_read_through_an_app_reads_the_mentions() {
         &world,
         "message_send",
         json!({"conversationId": general, "clientRequestId": "mention-1",
-               "content": {"version": 1, "nodes": [
-                   {"type": "text", "text": "Have a look "},
-                   {"type": "mention", "actorId": owner}
-               ]}}),
+        "content": {"version": 1, "nodes": [
+            {"type": "text", "text": "Have a look "},
+            {"type": "mention", "actorId": owner}
+        ]}}),
     )
     .await;
     assert_eq!(sent["outcome"], "ok", "{sent}");

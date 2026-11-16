@@ -18,6 +18,20 @@
   {
     "automation": false,
     "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "agent_template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List agent templates"
+  },
+  {
+    "automation": false,
+    "destructive": false,
     "emits": [
       "conversation.read"
     ],
@@ -212,7 +226,7 @@
     "long": false,
     "module": "messages",
     "name": "message_react",
-    "permission": "channels.post",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "React to message"
@@ -404,6 +418,66 @@
     "preview": false,
     "proposable": false,
     "title": "Export package"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "package.installed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "package_install",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Install a package"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "package_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List installed packages"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "package_preview",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Preview a package"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "package.removed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "package_remove",
+    "permission": "modules.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a package"
   },
   {
     "automation": true,

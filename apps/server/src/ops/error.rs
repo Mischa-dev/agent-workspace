@@ -47,9 +47,13 @@ pub enum OpError {
 
 #[derive(Clone, Debug)]
 pub enum DenyReason {
-    Role { permission: Perm },
+    Role {
+        permission: Perm,
+    },
     ReadOnlyCredential,
-    ModuleOff { module: String },
+    ModuleOff {
+        module: String,
+    },
     Delegation,
     AccountPaused,
     HostRevoked,

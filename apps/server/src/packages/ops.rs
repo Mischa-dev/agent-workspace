@@ -18,8 +18,8 @@ use super::{
     secrets_check,
 };
 use crate::ops::{
-    Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
-    access_shim, error::ConflictReason, refs::IdRef,
+    Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted, access_shim,
+    error::ConflictReason, refs::IdRef,
 };
 
 pub fn register_ops(registry: &mut Registry) {
@@ -365,7 +365,12 @@ impl Operation for PackageInstall {
             workspace_id: workspace,
             space_id: ctx.space_id,
         };
-        if plan.items.iter().filter(live).any(|line| line.kind == "role") {
+        if plan
+            .items
+            .iter()
+            .filter(live)
+            .any(|line| line.kind == "role")
+        {
             access_shim::check(
                 &mut **tx,
                 &ctx.caller,
@@ -632,7 +637,10 @@ impl Operation for PackageInstall {
                     for channel in body["channels"].as_array().cloned().unwrap_or_default() {
                         let name = channel["name"].as_str().unwrap_or("").trim().to_owned();
                         if let Some(id) = channels.get(&name.to_lowercase()) {
-                            hashes.insert(("channel".to_owned(), name.clone()), install::part_hash(part));
+                            hashes.insert(
+                                ("channel".to_owned(), name.clone()),
+                                install::part_hash(part),
+                            );
                             record(&mut objects, "channel", &name, *id);
                         }
                     }
@@ -705,10 +713,9 @@ impl Operation for PackageInstall {
             let made = match part.kind {
                 ContentKind::Form => {
                     let space = space.ok_or(OpError::Unavailable)?;
-                    let name = crate::bug_reports::normalize_name(
-                        body["name"].as_str().unwrap_or(""),
-                    )
-                    .map_err(|_| invalid_at(field(".name"), "Name the form.".to_owned()))?;
+                    let name =
+                        crate::bug_reports::normalize_name(body["name"].as_str().unwrap_or(""))
+                            .map_err(|_| invalid_at(field(".name"), "Name the form.".to_owned()))?;
                     let collection_id = body["collection"]
                         .as_str()
                         .and_then(|id| Uuid::parse_str(id).ok())
@@ -838,8 +845,7 @@ impl Operation for PackageInstall {
                     .map_err(|_| {
                         invalid_at(
                             field(""),
-                            "This agent template can't be stored: keep it under 64 KB."
-                                .to_owned(),
+                            "This agent template can't be stored: keep it under 64 KB.".to_owned(),
                         )
                     })?;
                     id
@@ -880,9 +886,9 @@ impl Operation for PackageInstall {
                     for wanted in body["parts"].as_array().cloned().unwrap_or_default() {
                         let part_kind = wanted["kind"].as_str().and_then(part_kind_static);
                         let part_key = wanted["key"].as_str().unwrap_or("");
-                        let object = objects
-                            .iter()
-                            .find(|object| Some(object.kind.as_str()) == part_kind && object.key == part_key);
+                        let object = objects.iter().find(|object| {
+                            Some(object.kind.as_str()) == part_kind && object.key == part_key
+                        });
                         let (Some(part_kind), Some(object)) = (part_kind, object) else {
                             return Err(invalid_at(
                                 field(".parts"),
@@ -892,8 +898,7 @@ impl Operation for PackageInstall {
                                 ),
                             ));
                         };
-                        crate::modules::built::link_part(tx, &module, part_kind, object.id)
-                            .await?;
+                        crate::modules::built::link_part(tx, &module, part_kind, object.id).await?;
                     }
                     for entry in body["nav"].as_array().cloned().unwrap_or_default() {
                         let label = entry["label"].as_str().unwrap_or("").trim();
@@ -952,7 +957,10 @@ impl Operation for PackageInstall {
             .filter(|object| object.action == "created")
             .count();
         if made > 0 {
-            changes.push(format!("Installed {} ({made} new parts).", package.name.trim()));
+            changes.push(format!(
+                "Installed {} ({made} new parts).",
+                package.name.trim()
+            ));
         }
         sqlx::query(
             "UPDATE package_installs SET state = 'installed', space_id = $2, summary = $3, \
@@ -1111,6 +1119,7 @@ impl Operation for PackageRemove {
 
     async fn run(call: &mut OpCall<'_>, input: PackageRemoveInput) -> Result<InstallView, OpError> {
         let workspace = call.ctx.workspace_id;
+        let actor = call.account_id();
         let install_id = input.install_id.id();
         let tx = call.tx().await?;
         let state = sqlx::query_scalar::<_, String>(
@@ -1137,7 +1146,8 @@ impl Operation for PackageRemove {
             for (kind, ids) in &made {
                 let sql = match kind.as_str() {
                     "collection" => {
-                        "UPDATE collections SET archived_at = now() \
+                        "UPDATE collections SET archived_at = now(), \
+                         archived_by_actor_id = $2, version = version + 1 \
                          WHERE id = ANY($1) AND archived_at IS NULL"
                     }
                     "page" | "skill" => {
@@ -1158,8 +1168,11 @@ impl Operation for PackageRemove {
                     }
                     _ => continue,
                 };
-                archived += sqlx::query(sql)
-                    .bind(ids)
+                let mut query = sqlx::query(sql).bind(ids);
+                if kind == "collection" {
+                    query = query.bind(actor);
+                }
+                archived += query
                     .execute(&mut **tx)
                     .await
                     .map_err(|error| OpError::logged(Self::NAME, &error.into()))?

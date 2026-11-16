@@ -29,6 +29,7 @@
 //! doesn't name its module; the web app's own guard covers its routes,
 //! navigation, palette, shortcuts, slash commands and settings pages.
 
+pub mod built;
 pub mod contract;
 pub mod core;
 pub mod gate;
@@ -39,7 +40,6 @@ pub mod manifest;
 pub mod registry;
 pub mod state;
 pub mod things;
-pub mod built;
 
 pub use http::router;
 pub use manifest::{Manifest, core};

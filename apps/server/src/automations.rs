@@ -1032,7 +1032,14 @@ pub(crate) async fn create(
             .fetch_one(&state.pool)
             .await?;
     let mut transaction = state.pool.begin().await?;
-    let id = insert(&mut transaction, caller, organization_id, project_id, &prepared).await?;
+    let id = insert(
+        &mut transaction,
+        caller,
+        organization_id,
+        project_id,
+        &prepared,
+    )
+    .await?;
     transaction.commit().await?;
     Ok(view(
         fetch(&state.pool, project_id, id).await?,

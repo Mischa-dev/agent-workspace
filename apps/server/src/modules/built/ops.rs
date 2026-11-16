@@ -366,19 +366,17 @@ impl Operation for ModuleCreate {
         // Collections, then their fields and views.
         if let Some(space) = space {
             for (index, inline) in input.collections.iter().enumerate() {
-                let collection_name = collections::normalize_name(&inline.name).ok_or_else(|| {
-                    OpError::Invalid {
+                let collection_name =
+                    collections::normalize_name(&inline.name).ok_or_else(|| OpError::Invalid {
                         field: format!("collections[{index}].name").into(),
                         message: "Name a collection in 1 to 60 characters, on one line.".into(),
-                    }
-                })?;
-                let description = collections::normalize_description(
-                    inline.description.as_deref().unwrap_or(""),
-                )
-                .ok_or_else(|| OpError::Invalid {
-                    field: format!("collections[{index}].description").into(),
-                    message: "A collection's description is one short line.".into(),
-                })?;
+                    })?;
+                let description =
+                    collections::normalize_description(inline.description.as_deref().unwrap_or(""))
+                        .ok_or_else(|| OpError::Invalid {
+                            field: format!("collections[{index}].description").into(),
+                            message: "A collection's description is one short line.".into(),
+                        })?;
                 let title_name = match inline.title_name.as_deref() {
                     Some(value) => collections::normalize_title_name(value).ok_or_else(|| {
                         OpError::Invalid {
@@ -461,9 +459,8 @@ impl Operation for ModuleCreate {
 
             // Forms, over a collection from this call or an existing one.
             for (index, inline) in input.forms.iter().enumerate() {
-                let field = |name: &str| -> Cow<'static, str> {
-                    format!("forms[{index}].{name}").into()
-                };
+                let field =
+                    |name: &str| -> Cow<'static, str> { format!("forms[{index}].{name}").into() };
                 let form_name = crate::bug_reports::normalize_name(&inline.name).map_err(|_| {
                     OpError::Invalid {
                         field: field("name"),
@@ -493,8 +490,7 @@ impl Operation for ModuleCreate {
                     let Some(found) = found else {
                         return Err(OpError::Invalid {
                             field: field("fields"),
-                            message: format!("The collection has no field \"{reference}\".")
-                                .into(),
+                            message: format!("The collection has no field \"{reference}\".").into(),
                         });
                     };
                     questions.push(crate::collection_forms::FormField {
@@ -552,8 +548,8 @@ impl Operation for ModuleCreate {
                         trigger.insert("collectionId".into(), id.to_string().into());
                     }
                 }
-                let rule = serde_json::from_value::<crate::automations::CreateRule>(rule)
-                    .map_err(|error| OpError::Invalid {
+                let rule = serde_json::from_value::<crate::automations::CreateRule>(rule).map_err(
+                    |error| OpError::Invalid {
                         field: format!("automations[{index}].rule").into(),
                         message: error
                             .to_string()
@@ -562,7 +558,8 @@ impl Operation for ModuleCreate {
                             .unwrap_or("This rule can't be read.")
                             .to_owned()
                             .into(),
-                    })?;
+                    },
+                )?;
                 let prepared =
                     crate::automations::prepare(state, &maker, space, rule, &fresh).await?;
                 let tx = call.tx().await?;
@@ -748,7 +745,14 @@ impl Operation for ModuleUpdate {
             super::unlink_part(tx, &module, "nav", entry.id()).await?;
         }
         for entry in &input.nav {
-            super::add_nav(tx, &module, &entry.label, entry.icon.as_deref(), &entry.target).await?;
+            super::add_nav(
+                tx,
+                &module,
+                &entry.label,
+                entry.icon.as_deref(),
+                &entry.target,
+            )
+            .await?;
         }
         super::touch(tx, module.id).await?;
         call.audit_target("module", module.id, json!({ "key": module.module_key }));

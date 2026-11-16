@@ -109,7 +109,10 @@ async fn automations_off_in_one_space_stops_its_webhooks_only() {
             .expect("deliveries")
         }
     };
-    assert!(delivered(hooks[0]).await > 0, "WORK's webhook still hears WORK");
+    assert!(
+        delivered(hooks[0]).await > 0,
+        "WORK's webhook still hears WORK"
+    );
     assert_eq!(
         delivered(hooks[1]).await,
         0,

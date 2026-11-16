@@ -254,8 +254,7 @@ pub async fn link_part(
     else {
         return Err(AppError::NotFound("part"));
     };
-    if workspace_id != module.workspace_id
-        || module.space_id.is_some_and(|space| space != space_id)
+    if workspace_id != module.workspace_id || module.space_id.is_some_and(|space| space != space_id)
     {
         // Another workspace's object is not found here, the same as a
         // missing one.
@@ -361,10 +360,11 @@ pub async fn add_nav(
     if icon.is_some_and(|icon| !valid_icon(icon)) {
         return Err(AppError::Validation("nav.icon"));
     }
-    let count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM module_nav WHERE module_id = $1")
-        .bind(module.id)
-        .fetch_one(&mut *connection)
-        .await?;
+    let count =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM module_nav WHERE module_id = $1")
+            .bind(module.id)
+            .fetch_one(&mut *connection)
+            .await?;
     if count >= MAX_NAV as i64 {
         return Err(AppError::Validation("nav"));
     }
