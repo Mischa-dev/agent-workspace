@@ -219,3 +219,77 @@ async fn each_scope_reaches_the_database_and_ends_with_its_transaction() {
         .expect("drop the test schema");
     pool.close().await;
 }
+
+/// `db::scoped` stands in for the pool at a query's call site: each
+/// statement runs in a scoped transaction of its own, a write through it is
+/// committed, a failed one isn't, and nothing is left on the connection.
+#[tokio::test]
+async fn a_statement_through_the_scoped_pool_carries_the_scope_and_commits() {
+    let Some((pool, schema)) = migrated_schema("tenancy_scoped_pool").await else {
+        return;
+    };
+    let a = workspace(&pool).await;
+    let scope = Tenancy::Workspace {
+        account: None,
+        workspace: a,
+    };
+    let read = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, String>("SELECT coalesce(current_setting('app.tenancy', true), '')")
+            .fetch_one(db::scoped(&pool))
+            .await
+            .expect("read through the scoped pool")
+    };
+    assert_eq!(
+        tenancy::scoped(scope.clone(), read(pool.clone())).await,
+        format!("w:|{a}")
+    );
+    assert_eq!(read(pool.clone()).await, "", "no scope, none set");
+    // Several rows, and a write that sticks.
+    let rows = tenancy::scoped(scope.clone(), async {
+        sqlx::query("UPDATE organizations SET name = 'Scoped' WHERE id = $1")
+            .bind(a)
+            .execute(db::scoped(&pool))
+            .await
+            .expect("write");
+        sqlx::query_scalar::<_, String>(
+            "SELECT current_setting('app.tenancy', true) FROM generate_series(1, 3)",
+        )
+        .fetch_all(db::scoped(&pool))
+        .await
+        .expect("rows")
+    })
+    .await;
+    assert_eq!(rows, vec![format!("w:|{a}"); 3]);
+    let name = sqlx::query_scalar::<_, String>("SELECT name FROM organizations WHERE id = $1")
+        .bind(a)
+        .fetch_one(&pool)
+        .await
+        .expect("name");
+    assert_eq!(name, "Scoped");
+    // A failed statement commits nothing and leaves the pool usable.
+    let failed = sqlx::query("UPDATE organizations SET name = 'Lost' WHERE id = $1 AND 1 / 0 = 1")
+        .bind(a)
+        .execute(db::scoped(&pool))
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(read(pool.clone()).await, "");
+    // A snapshot is read-only and still scoped.
+    let refused = tenancy::scoped(scope, async {
+        let mut snapshot = db::scoped_snapshot(&pool).await.expect("snapshot");
+        let setting = sqlx::query_scalar::<_, String>("SELECT current_setting('app.tenancy', true)")
+            .fetch_one(&mut *snapshot)
+            .await
+            .expect("scope in the snapshot");
+        assert_eq!(setting, format!("w:|{a}"));
+        sqlx::query("UPDATE organizations SET name = 'No' WHERE id = $1")
+            .bind(a)
+            .execute(&mut *snapshot)
+            .await
+    })
+    .await;
+    assert!(refused.is_err(), "a snapshot is read only");
+    agent_workspace_server::test_support::drop_schema(&pool, &schema)
+        .await
+        .expect("drop the test schema");
+    pool.close().await;
+}
