@@ -245,7 +245,7 @@ pub async fn list_runs(
     .bind(cursor.map(|(time, _)| time))
     .bind(cursor.map(|(_, id)| id))
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let more = rows.len() > usize::try_from(limit).unwrap_or(0);
     let mut runs = rows
@@ -330,7 +330,7 @@ async fn visible_run(
     ))
     .bind(run_id)
     .bind(viewer)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .map(|run| named(state, run))
     .ok_or(AppError::NotFound("agent_run"))?;
@@ -387,13 +387,13 @@ pub async fn run_detail(
     let (run, code) = visible_run(state, viewer, run_id).await?;
     let prompt = sqlx::query_scalar::<_, String>("SELECT prompt FROM agent_runs WHERE id = $1")
         .bind(run_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
     let total = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM agent_run_events WHERE agent_run_id = $1",
     )
     .bind(run_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let mut steps = sqlx::query_as::<_, RunStep>(
         r#"
@@ -405,7 +405,7 @@ pub async fn run_detail(
     )
     .bind(run_id)
     .bind(MAX_STEPS)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     steps.reverse();
     let tests = sqlx::query_as::<_, (i64, i64, i64, i64)>(
@@ -419,7 +419,7 @@ pub async fn run_detail(
         "#,
     )
     .bind(run_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let last_failed = sqlx::query_scalar::<_, Option<i64>>(
         r#"
@@ -429,7 +429,7 @@ pub async fn run_detail(
         "#,
     )
     .bind(run_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .flatten();
     let usage_by_model = sqlx::query_as::<_, ModelUsage>(
@@ -443,7 +443,7 @@ pub async fn run_detail(
         "#,
     )
     .bind(run_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     // Changed files are code: only for a viewer who sees it.
     let files = if !code {
@@ -518,7 +518,7 @@ async fn read_diff(
         "#,
     )
     .bind(run.id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some((worktree, mirror)) = location else {
         return Ok(None);
@@ -671,7 +671,7 @@ pub async fn usage_report(
     .bind(query.organization_id)
     .bind(query.project_id)
     .bind(&query.without_projects)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let (runs, totals) = {
         #[derive(FromRow)]
@@ -688,7 +688,7 @@ pub async fn usage_report(
         .bind(query.organization_id)
         .bind(query.project_id)
         .bind(&query.without_projects)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         (total.runs, total.usage)
     };

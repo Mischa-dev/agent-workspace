@@ -629,7 +629,7 @@ async fn module_off(
     rule: &RuleRow,
 ) -> Result<Option<&'static crate::modules::Manifest>, AppError> {
     use crate::modules::manifest;
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let Some(modules) =
         crate::modules::state::for_project(&mut connection, rule.project_id, rule.owner_actor_id)
             .await?
@@ -804,7 +804,7 @@ async fn reader_access(
         .bind(caller.actor_id)
         .bind(caller.external_agent_connection_id)
         .bind(project_id)
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?
     {
         return Err(AppError::NotFound("project"));
@@ -855,7 +855,7 @@ async fn check_references(
         .bind(project_id)
         .bind(view_id)
         .bind(maker)
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?;
         if !found {
             return Err(AppError::NotFound("view"));
@@ -879,7 +879,7 @@ async fn check_references(
         )
         .bind(project_id)
         .bind(id)
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?;
         if !found {
             return Err(AppError::NotFound("collection"));
@@ -914,7 +914,7 @@ async fn check_references(
                     )
                     .bind(id)
                     .bind(project_id)
-                    .fetch_one(pool)
+                    .fetch_one(crate::db::scoped(pool))
                     .await?;
                     if !enabled {
                         return Err(AppError::NotFound("agent profile"));
@@ -937,7 +937,7 @@ async fn check_references(
         .bind(conversation_id)
         .bind(project_id)
         .bind(maker)
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?;
         if !visible {
             return Err(AppError::NotFound("conversation"));
@@ -1005,7 +1005,7 @@ pub(crate) async fn list(
         "{RULE_SELECT} WHERE rule.project_id = $1 ORDER BY rule.created_at, rule.id LIMIT 200"
     ))
     .bind(project_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(RuleList {
         rules: rows
@@ -1044,13 +1044,13 @@ pub(crate) async fn create(
     let organization_id =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(project_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
     let enabled = request.enabled.unwrap_or(true);
     let next_run_at = enabled
         .then(|| next_run_after(&request.trigger, Utc::now()))
         .flatten();
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("automations:{project_id}"))
         .execute(&mut *transaction)
@@ -1175,7 +1175,7 @@ pub(crate) async fn update(
     let next_run_at = enabled
         .then(|| next_run_after(&trigger, Utc::now()))
         .flatten();
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE automation_rules
@@ -1242,7 +1242,7 @@ pub(crate) async fn delete(
     if !caller.can_write || !(current.owner_actor_id == caller.actor_id || admin) {
         return Err(AppError::Forbidden);
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("DELETE FROM automation_rules WHERE project_id = $1 AND id = $2")
         .bind(project_id)
         .bind(rule_id)
@@ -1295,7 +1295,7 @@ pub(crate) async fn run_now(
         )
         .bind(project_id)
         .bind(work_item_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         if !found {
             return Err(AppError::NotFound("work item"));
@@ -1305,7 +1305,7 @@ pub(crate) async fn run_now(
         work_item_id: request.work_item_id,
         ..Subject::default()
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let run_id = queue_fire(
         &mut transaction,
         &rule,
@@ -1345,7 +1345,7 @@ pub(crate) async fn runs(
         "#,
     )
     .bind(rule_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(RunPage { runs })
 }
@@ -1358,7 +1358,7 @@ async fn run_view(pool: &PgPool, run_id: Uuid) -> Result<RunView, AppError> {
         "#,
     )
     .bind(run_id)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?)
 }
 
@@ -1494,7 +1494,7 @@ async fn condition_params(
         .bind(rule.project_id)
         .bind(view_id)
         .bind(rule.owner_actor_id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         else {
             return Ok(None);
@@ -1517,7 +1517,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
     ))
     .bind(event.project_id)
     .bind(kinds.iter().map(|kind| (*kind).to_owned()).collect::<Vec<_>>())
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let mut fired = 0;
     for rule in rules {
@@ -1602,7 +1602,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
                 )
                 .bind(rule.id)
                 .bind(work_item_id)
-                .execute(pool)
+                .execute(crate::db::scoped(pool))
                 .await?;
                 continue;
             }
@@ -1614,7 +1614,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             )
             .bind(rule.id)
             .bind(work_item_id)
-            .execute(pool)
+            .execute(crate::db::scoped(pool))
             .await?
             .rows_affected()
                 == 1;
@@ -1625,7 +1625,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
         } else if !matched {
             continue;
         }
-        let mut transaction = pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(pool).await?;
         if queue_fire(
             &mut transaction,
             &rule,
@@ -1659,13 +1659,13 @@ async fn message_contains(pool: &PgPool, subject: &Subject, text: &str) -> Resul
     )
     .bind(message_id)
     .bind(text)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?)
 }
 
 /// Queues the scheduled rules that are due.
 async fn sweep_schedules(state: &AppState) -> Result<usize, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let due = sqlx::query_as::<_, RuleRow>(&format!(
         r#"{RULE_SELECT}
         WHERE rule.id IN (
@@ -1725,7 +1725,7 @@ pub async fn on_capacity_window(
     provider_account_id: Uuid,
     cycle: &str,
 ) -> Result<usize, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let rules = sqlx::query_as::<_, RuleRow>(&format!(
         r#"{RULE_SELECT}
         WHERE rule.owner_actor_id = $1 AND rule.enabled AND rule.trigger_kind = 'capacity_window'
@@ -1830,7 +1830,7 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
     .bind(rule.project_id)
     .bind(rule.external_agent_connection_id)
     .bind(rule.via_oauth_grant_id)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?;
     let who = rule.who();
     let actor_kind = match row.kind.as_str() {
@@ -1891,7 +1891,7 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
 /// Turns a rule off and tells its maker, or the project's admins when the
 /// maker can't be told in the project.
 async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let turned_off = sqlx::query(
         r#"
         UPDATE automation_rules
@@ -2032,7 +2032,7 @@ async fn finish(
     .bind(state)
     .bind(detail.map(|text| text.chars().take(500).collect::<String>()))
     .bind(Value::Array(results.to_vec()))
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?;
     Ok(())
 }
@@ -2045,7 +2045,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
         "SELECT rule_id, project_id, state, subject, trigger_summary, made_through_app FROM automation_runs WHERE id = $1",
     )
     .bind(run_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     else {
         return Ok(());
@@ -2072,7 +2072,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
     )
     .bind(rule.id)
     .bind(run_id)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?;
     if recent >= MAX_FIRINGS_PER_HOUR {
         let reason = "Turned off because it fired more than 30 times in an hour, which usually means it sets itself off. Check its trigger and actions, then turn it back on.";
@@ -2183,7 +2183,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
         "UPDATE automation_rules SET last_fired_at = now(), fire_count = fire_count + 1 WHERE id = $1",
     )
     .bind(rule.id)
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?;
     finish(pool, run_id, state_name, None, &results).await
 }
@@ -2251,7 +2251,7 @@ impl Context {
             )
             .bind(run_id)
             .bind(rule.project_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?;
             // A run's task only while the maker may see tasks here; without
             // it the run still fires the rule, without the task.
@@ -2334,7 +2334,7 @@ impl Context {
                 )
                 .bind(rule.project_id)
                 .bind(id)
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await?
             }
             None => None,
@@ -2590,7 +2590,7 @@ async fn run_action(
                         "SELECT conversation_id, repository_id FROM agent_runs WHERE id = $1",
                     )
                     .bind(run_id)
-                    .fetch_one(&state.pool)
+                    .fetch_one(crate::db::scoped(&state.pool))
                     .await
                     .map_err(|error| database(error.into()))?;
                     let (_, started) = crate::api::start_run_in(
@@ -2646,7 +2646,7 @@ async fn run_action(
                     .collect::<Vec<_>>();
                 sqlx::query("UPDATE launches SET made_through_app = true WHERE id = ANY($1)")
                     .bind(&ids)
-                    .execute(&state.pool)
+                    .execute(crate::db::scoped(&state.pool))
                     .await
                     .map_err(|error| database(error.into()))?;
             }
@@ -2671,7 +2671,7 @@ async fn run_action(
                 )
                 .bind(rule.project_id)
                 .bind(task)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await
                 .map_err(|error| database(error.into()))?;
                 let mut arguments = json!({
@@ -2774,11 +2774,11 @@ async fn notify(
                 "#,
             )
             .bind(rule.project_id)
-            .fetch_all(&state.pool)
+            .fetch_all(crate::db::scoped(&state.pool))
             .await?
         }
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let mut told = Vec::new();
     for recipient in candidates {
         // Only people who can see the project hear about it.
@@ -2928,7 +2928,7 @@ async fn app_limits(
     if !rule.made_through_app && !invoked_through_app {
         return Ok(None);
     }
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let is_human = sqlx::query_scalar::<_, bool>("SELECT kind = 'human' FROM actors WHERE id = $1")
         .bind(rule.owner_actor_id)
         .fetch_optional(&mut *connection)

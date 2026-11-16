@@ -67,7 +67,7 @@ async fn automations_on(
     organization_id: uuid::Uuid,
     project_id: Option<uuid::Uuid>,
 ) -> Result<bool, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     Ok(match project_id {
         Some(project_id) => {
             crate::modules::state::for_project(&mut connection, project_id, actor_id)
@@ -104,7 +104,7 @@ async fn automations_off(
     state: &AppState,
     actor_id: uuid::Uuid,
 ) -> Result<(Vec<uuid::Uuid>, Vec<uuid::Uuid>), AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let workspaces = crate::modules::state::by_workspace(&mut connection, actor_id)
         .await?
         .into_iter()

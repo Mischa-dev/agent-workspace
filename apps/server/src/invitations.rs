@@ -251,7 +251,7 @@ pub(crate) async fn invitations_for(
         "#,
     )
     .bind(project_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(rows.into_iter().map(InvitationView::from).collect())
 }
@@ -274,7 +274,7 @@ async fn issue_invitation(
     ApiJson(request): ApiJson<IssueInvitationRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let issued = issue_invitation_in(
         &mut transaction,
         principal.actor_id,
@@ -383,7 +383,7 @@ async fn revoke_invitation(
     ApiJson(request): ApiJson<RevokeInvitationRequest>,
 ) -> Result<Json<InvitationView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let revoked = revoke_invitation_in(
         &mut transaction,
         principal.actor_id,
@@ -483,7 +483,7 @@ async fn replace_invitation(
     ApiJson(request): ApiJson<ReplaceInvitationRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let issued = replace_invitation_in(
         &mut transaction,
         principal.actor_id,
@@ -656,7 +656,7 @@ async fn resolve_invitation(
             .filter(|row| digest_matches(&row.token_digest, &digest))
             .ok_or(AppError::NotFound("project_invitation")),
     )?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     require_issuer_still_grants(&mut connection, &row).await?;
     Ok(Json(ResolvedInvitation {
         organization_name: row.organization_name,
@@ -691,7 +691,7 @@ async fn accept_new_user(
     let _password_kdf_permit = state.rate_limits.try_acquire_password_kdf()?;
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let invitation = state.rate_limits.charge_link_miss(
         lock_valid_invitation(&mut transaction, &prefix)
             .await?
@@ -831,7 +831,7 @@ async fn accept_existing_user(
     require_authenticated_write(&state, &headers, &principal)?;
     let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
     let handle = normalize_handle(&request.handle)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let invitation = state.rate_limits.charge_link_miss(
         lock_valid_invitation(&mut transaction, &prefix)
             .await?
@@ -971,7 +971,7 @@ async fn fetch_valid_invitation(
     Ok(
         sqlx::query_as::<_, InvitationAcceptanceRow>(valid_invitation_sql(false))
             .bind(prefix)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?,
     )
 }
@@ -1195,7 +1195,7 @@ async fn invitation_access(
     )
     .bind(project_id)
     .bind(actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("project"))
 }
@@ -1315,7 +1315,7 @@ pub(crate) async fn fetch_invitation(
     )
     .bind(project_id)
     .bind(invitation_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("project_invitation"))?;
     Ok(row.into())

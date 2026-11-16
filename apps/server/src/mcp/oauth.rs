@@ -188,7 +188,9 @@ async fn register_client(
     }
 
     let client_id = Uuid::now_v7();
-    let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     sqlx::query("SELECT pg_advisory_xact_lock(68458762026001)")
         .execute(&mut *transaction)
         .await
@@ -515,7 +517,9 @@ async fn consent(
         // The app acts as this person across their whole account. The grant is
         // anchored to their Messages space, which every person belongs to;
         // each call is checked against their current memberships.
-        let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
+        let mut transaction = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(AppError::from)?;
         let (home, _) =
             crate::direct::space_for_actor(&mut transaction, principal.actor_id, None).await?;
         transaction.commit().await.map_err(AppError::from)?;
@@ -542,7 +546,7 @@ async fn consent(
     .bind(&request.code_challenge)
     .bind(connection_id)
     .bind(show_via)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await
     .map_err(AppError::from)?;
 
@@ -580,7 +584,7 @@ async fn validate_authorize_request(
         .map_err(|_| OAuthError::invalid_client("unknown public client"))?;
     let client = sqlx::query_as::<_, ClientRow>("SELECT id, client_name, redirect_uris FROM mcp_oauth_clients WHERE id = $1 AND status = 'active'")
         .bind(client_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await
         .map_err(AppError::from)?
         .ok_or_else(|| OAuthError::invalid_client("unknown public client"))?;
@@ -735,7 +739,9 @@ async fn exchange_code(
         .ok_or_else(|| OAuthError::invalid_grant("PKCE verifier is required"))?;
     validate_verifier(verifier)?;
     let (prefix, digest) = secret_lookup(code, "aw_code_")?;
-    let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     let row = sqlx::query_as::<_, CodeRow>(
         r#"
         SELECT code.id, code.client_id, code.project_id, code.actor_id,
@@ -891,7 +897,9 @@ async fn refresh(state: &AppState, request: &TokenRequest) -> Result<TokenRespon
         .as_deref()
         .ok_or_else(|| OAuthError::invalid_grant("refresh token is required"))?;
     let (prefix, digest) = secret_lookup(refresh_token, "aw_refresh_")?;
-    let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     let row = sqlx::query_as::<_, RefreshRow>(
         r#"
         SELECT token.id, token.grant_id, grant_row.client_id, grant_row.scopes,
@@ -1087,11 +1095,13 @@ async fn revoke(
     )
     .bind(client_id)
     .bind(digest)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await
     .map_err(AppError::from)?;
     if let Some(grant_id) = grant_id {
-        let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
+        let mut transaction = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(AppError::from)?;
         revoke_grant_family(&mut transaction, grant_id, false).await?;
         transaction.commit().await.map_err(AppError::from)?;
     }
@@ -1150,7 +1160,7 @@ pub(crate) async fn rejected_access_token_reason(
         "#,
     )
     .bind(prefix)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let Some(row) = rows
         .into_iter()
@@ -1229,7 +1239,7 @@ pub async fn resolve_access_token(
     "#,
     )
     .bind(prefix)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let Some(row) = rows
         .into_iter()
@@ -1238,7 +1248,7 @@ pub async fn resolve_access_token(
         return Ok(None);
     };
     sqlx::query("UPDATE mcp_oauth_access_tokens SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')")
-        .bind(row.token_id).execute(&state.pool).await?;
+        .bind(row.token_id).execute(crate::db::scoped(&state.pool)).await?;
     if let (Some(connection_id), Some(backing_credential_id), Some(connection_scopes)) = (
         row.external_agent_connection_id,
         row.backing_credential_id,
@@ -1248,7 +1258,7 @@ pub async fn resolve_access_token(
         // limited to what the person consented to for this app.
         let scopes = agent_grant_scopes(connection_scopes, &row.scopes);
         sqlx::query("UPDATE external_agent_connections SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')")
-            .bind(connection_id).execute(&state.pool).await?;
+            .bind(connection_id).execute(crate::db::scoped(&state.pool)).await?;
         return Ok(Some(McpPrincipal {
             credential_id: backing_credential_id,
             mcp_credential_id: Some(backing_credential_id),
@@ -1320,10 +1330,12 @@ async fn agent_choices(state: &AppState, actor_id: Uuid) -> Result<Vec<AgentChoi
         "#,
     )
     .bind(actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await
     .map_err(AppError::from)?;
-    let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
+    let mut connection = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     let mut choices = Vec::new();
     for candidate in candidates {
         if crate::external_agents::may_manage(&mut connection, actor_id, candidate.connection_id)
@@ -1342,7 +1354,9 @@ async fn managed_agent(
     manager_actor_id: Uuid,
     connection_id: Uuid,
 ) -> Result<Option<(Uuid, Uuid)>, OAuthError> {
-    let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
+    let mut connection = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     let Some(managed) =
         crate::external_agents::may_manage(&mut connection, manager_actor_id, connection_id)
             .await?

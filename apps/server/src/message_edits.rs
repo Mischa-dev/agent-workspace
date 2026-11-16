@@ -1049,7 +1049,7 @@ pub(crate) async fn message_revisions_in(
     .bind(message_id)
     .bind(conversation.id)
     .bind(conversation.project_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     else {
         return Ok(None);
@@ -1076,7 +1076,7 @@ pub(crate) async fn message_revisions_in(
     )
     .bind(message_id)
     .bind(conversation.project_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     if rows.is_empty() {
         rows = sqlx::query_as::<_, RevisionRow>(
@@ -1102,7 +1102,7 @@ pub(crate) async fn message_revisions_in(
         )
         .bind(message_id)
         .bind(conversation.id)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?;
     }
     let revisions = rows
@@ -1231,7 +1231,7 @@ async fn edit_message(
     let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
     let request_hash = edit_request_hash(&content, request.expected_revision)?;
     let actor = browser_actor(&principal);
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let locked = lock_message_for_change(
         &mut transaction,
         &actor,
@@ -1319,7 +1319,7 @@ async fn remove_message(
 ) -> Result<Json<MessageRemoveResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let actor = browser_actor(&principal);
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let locked = lock_message_for_change(
         &mut transaction,
         &actor,

@@ -141,7 +141,7 @@ async fn account(
     let organization_id =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(principal.project_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
     match usage::owned_account(&state.pool, principal.actor_id, account_id).await {
         Ok(account) if account.organization_id == organization_id => Ok(Some(account)),
@@ -246,7 +246,7 @@ pub(super) async fn usage_batch_launch(
                     .bind(work_item_id)
                     .bind(principal.actor_id)
                     .bind(principal.external_agent_connection_id)
-                    .fetch_optional(&state.pool)
+                    .fetch_optional(crate::db::scoped(&state.pool))
                     .await?
                     else {
                         return Ok(ToolResult::not_found(&format!("Task {id}")));

@@ -436,7 +436,7 @@ pub async fn label_changes(
         let rows = sqlx::query_as::<_, (Uuid, String)>(query)
             .bind(project_id)
             .bind(&ids)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?;
         names.extend(rows);
     }
@@ -487,7 +487,7 @@ async fn name_custom_fields(
     )
     .bind(project_id)
     .bind(&ids)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
     .collect();

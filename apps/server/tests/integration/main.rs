@@ -111,6 +111,8 @@ mod support;
 mod t1_task_record_owner;
 mod t1_task_records_migration;
 mod t1_views_at_scale;
+mod tenancy_backfill;
+mod tenancy_row_rules;
 mod tenancy_scope;
 mod tenancy_tables;
 mod w10_ai_planning;

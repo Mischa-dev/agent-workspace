@@ -197,7 +197,7 @@ async fn require_reader(
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     if caller_role(&mut connection, principal, organization_id, false)
         .await?
         .manages()
@@ -288,7 +288,7 @@ async fn list_events(
     .bind(before.map(|(time, _)| time))
     .bind(before.map(|(_, id)| id))
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let has_more = rows.len() as i64 > limit;
     let events = rows
@@ -423,7 +423,7 @@ async fn facets(
         "#,
     )
     .bind(organization_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut actors = actors;
     actors.sort_by(|left, right| {
@@ -439,7 +439,7 @@ async fn facets(
         "#,
     )
     .bind(organization_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let clients = sqlx::query_scalar::<_, String>(
         r#"
@@ -449,7 +449,7 @@ async fn facets(
         "#,
     )
     .bind(organization_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let kinds = sqlx::query_scalar::<_, String>(
         r#"
@@ -459,7 +459,7 @@ async fn facets(
         "#,
     )
     .bind(organization_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let projects = sqlx::query_as::<_, FacetProject>(
         r#"
@@ -470,7 +470,7 @@ async fn facets(
         "#,
     )
     .bind(organization_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut apps = channels
         .iter()

@@ -131,6 +131,16 @@ fn pg_command(program: &str, database_url: &str) -> anyhow::Result<Command> {
     for (name, value) in libpq_environment(database_url)? {
         command.env(name, value);
     }
+    // Row rules (H1.21, H1.22) apply to the tables' owner too, so a dump or
+    // restore by a role that isn't a superuser reads and writes through
+    // them, in the server-wide scope a backup needs: every workspace's rows.
+    command.env(
+        "PGOPTIONS",
+        format!(
+            "-c app.tenancy={}",
+            crate::tenancy::Tenancy::System("backup").setting()
+        ),
+    );
     Ok(command)
 }
 
@@ -289,7 +299,7 @@ async fn connect(database_url: &str) -> anyhow::Result<PgPool> {
 /// status file the Server page and `preflight` read.
 pub async fn create(config: &AppConfig, options: &CreateOptions) -> anyhow::Result<CreatedSet> {
     let started_at = Utc::now();
-    let result = create_set(config, options, started_at).await;
+    let result = crate::tenancy::system("backup", create_set(config, options, started_at)).await;
     let mut steps = BTreeMap::new();
     steps.insert(
         "database".to_owned(),
@@ -338,7 +348,7 @@ async fn create_set(
         let migration_version = sqlx::query_scalar::<_, i64>(
             "SELECT coalesce(max(version), 0) FROM _sqlx_migrations",
         )
-        .fetch_one(&pool)
+        .fetch_one(crate::db::scoped(&pool))
         .await
         .context("read the migration version")?;
         // Hold the keyring lease for the length of the dump, so it sees
@@ -350,7 +360,10 @@ async fn create_set(
         let suffix = if options.recipients.is_some() { ".age" } else { "" };
         let dump = work.join(format!("database.dump{suffix}"));
         let mut pg_dump = pg_command("pg_dump", database_url)?;
-        pg_dump.arg("--format=custom").arg("--no-password");
+        pg_dump
+            .arg("--format=custom")
+            .arg("--no-password")
+            .arg("--enable-row-security");
         let recipients = options.recipients.clone();
         let dumping = {
             let dump = dump.clone();
@@ -664,7 +677,7 @@ async fn database_is_empty(pool: &PgPool) -> anyhow::Result<bool> {
     Ok(sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')",
     )
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?
         == 0)
 }
@@ -689,6 +702,19 @@ pub struct RestoreReport {
 /// `restore`: the set's database into an empty database and its folders
 /// into an empty data root. Refuses a target that holds anything.
 pub async fn restore(
+    from: &Path,
+    database_url: &str,
+    data_root: &Path,
+    identity: Option<&Path>,
+) -> anyhow::Result<RestoreReport> {
+    crate::tenancy::system(
+        "backup",
+        restore_set(from, database_url, data_root, identity),
+    )
+    .await
+}
+
+async fn restore_set(
     from: &Path,
     database_url: &str,
     data_root: &Path,
@@ -729,6 +755,15 @@ pub async fn drill(
     identity: Option<&Path>,
     keyring: Option<&crate::secrets::FileKeyring>,
 ) -> anyhow::Result<RestoreReport> {
+    crate::tenancy::system("backup", drill_set(from, database_url, identity, keyring)).await
+}
+
+async fn drill_set(
+    from: &Path,
+    database_url: &str,
+    identity: Option<&Path>,
+    keyring: Option<&crate::secrets::FileKeyring>,
+) -> anyhow::Result<RestoreReport> {
     let set = check_set(from)?;
     let pool = connect(database_url).await?;
     if !database_is_empty(&pool).await? {
@@ -737,8 +772,8 @@ pub async fn drill(
     restore_database(&set, database_url, identity).await?;
     let mut report = report(&pool, &set).await?;
     report.data_entries = list_archive(&set, identity).await?;
-    // The spare database belongs to no workspace: one plain connection.
-    let mut connection = pool.acquire().await?;
+    // Every workspace's secrets: read under the backup's system scope.
+    let mut connection = crate::db::scoped_tx(&pool).await?;
     let rows = sqlx::query_as::<_, (String, String, String, String, String, String, String)>(
         "SELECT id::text, organization_id::text, master_key_id, encode(ciphertext, 'hex'), \
          encode(nonce, 'hex'), encode(wrapped_key, 'hex'), coalesce(encode(wrap_nonce, 'hex'), '') \
@@ -875,6 +910,7 @@ async fn restore_database(
         .arg("--no-privileges")
         .arg("--exit-on-error")
         .arg("--no-password")
+        .arg("--enable-row-security")
         .arg(format!(
             "--dbname={}",
             libpq_environment(database_url)?
@@ -926,7 +962,7 @@ async fn list_archive(set: &CheckedSet, identity: Option<&Path>) -> anyhow::Resu
 async fn report(pool: &PgPool, set: &CheckedSet) -> anyhow::Result<RestoreReport> {
     let count = |table: &'static str| async move {
         sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
-            .fetch_one(pool)
+            .fetch_one(crate::db::scoped(pool))
             .await
             .with_context(|| format!("count {table}"))
     };
@@ -938,13 +974,13 @@ async fn report(pool: &PgPool, set: &CheckedSet) -> anyhow::Result<RestoreReport
         migration_version: sqlx::query_scalar::<_, i64>(
             "SELECT coalesce(max(version), 0) FROM _sqlx_migrations",
         )
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?,
         recorded_migration_version: set.migration_version,
         failed_migrations: sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM _sqlx_migrations WHERE NOT success",
         )
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?,
         data_entries: 0,
         secrets: None,

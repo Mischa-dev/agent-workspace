@@ -272,7 +272,7 @@ pub(crate) async fn checked_form(
         )));
     }
     let definitions = crate::collections::field_definitions(
-        &mut *pool.acquire().await?,
+        &mut *crate::db::scoped_tx(pool).await?,
         project_id,
         collection_id,
         false,
@@ -361,7 +361,7 @@ pub(crate) async fn link_project(pool: &PgPool, link_id: Uuid) -> Result<Option<
     Ok(
         sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM bug_report_links WHERE id = $1")
             .bind(link_id)
-            .fetch_optional(pool)
+            .fetch_optional(crate::db::scoped(pool))
             .await?,
     )
 }
@@ -375,7 +375,7 @@ pub(crate) async fn link_collection(
         "SELECT collection_id FROM bug_report_links WHERE id = $1",
     )
     .bind(link_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     .flatten())
 }
@@ -410,7 +410,7 @@ pub(crate) async fn list(
         "{LINK_SELECT} WHERE link.project_id = $1 ORDER BY link.created_at DESC, link.id DESC LIMIT 100"
     ))
     .bind(project_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let human = caller.actor_kind == ActorKind::Human;
     Ok(LinkList {
@@ -457,7 +457,7 @@ pub(crate) async fn create(
         }
         (None, Some(_)) => return Err(AppError::Validation("collectionId")),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let organization_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT organization_id FROM projects WHERE id = $1 FOR UPDATE",
     )
@@ -570,7 +570,7 @@ pub(crate) async fn update(
     } else {
         row.owner_actor_id
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
         UPDATE bug_report_links
@@ -612,7 +612,7 @@ pub(crate) async fn replace(
 ) -> Result<LinkWithUrl, AppError> {
     let row = manageable(&state.pool, caller, link_id).await?;
     let token = new_token();
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
         UPDATE bug_report_links
@@ -652,7 +652,7 @@ pub(crate) async fn delete(
     link_id: Uuid,
 ) -> Result<(), AppError> {
     let row = manageable(&state.pool, caller, link_id).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("DELETE FROM bug_report_links WHERE id = $1")
         .bind(link_id)
         .execute(&mut *transaction)
@@ -887,7 +887,7 @@ async fn maker_refusal(pool: &PgPool, link: &ReportLink) -> Result<Option<String
     )
     .bind(link.owner_actor_id)
     .bind(link.project_id)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?;
     let allowed = reachable
         && matches!(
@@ -941,7 +941,7 @@ async fn receive(
         "#,
     )
     .bind(&token_digest)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("bug_report_link"))?;
     if link.state != "active" {
@@ -1019,7 +1019,7 @@ async fn receive(
             "#,
         )
         .bind(link.id)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?;
     }
     let status = if duplicate {
@@ -1070,7 +1070,7 @@ async fn turned_off_for_maker(pool: &PgPool, link: &ReportLink) -> Result<bool, 
     )
     .bind(link.id)
     .bind(&reason)
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?;
     Ok(true)
 }
@@ -1110,7 +1110,7 @@ async fn receive_answer(
         Err(message) => return Ok(refused(StatusCode::UNPROCESSABLE_ENTITY, &message)),
     };
     let definitions = crate::collections::field_definitions(
-        &mut *state.pool.acquire().await?,
+        &mut *crate::db::scoped_tx(&state.pool).await?,
         link.project_id,
         collection_id,
         false,
@@ -1169,7 +1169,7 @@ async fn receive_answer(
             "UPDATE bug_report_links SET report_count = report_count + 1, last_report_at = now() WHERE id = $1",
         )
         .bind(link.id)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?;
     }
     Ok((
@@ -1197,7 +1197,7 @@ async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> 
         "SELECT project_id, name, state, collection_id, form FROM bug_report_links WHERE token_digest = $1",
     )
     .bind(&token_digest)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some((project_id, name, link_state, Some(collection_id), Some(form))) = row else {
         return Ok(refused(StatusCode::NOT_FOUND, "There's no form here."));
@@ -1217,7 +1217,7 @@ async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> 
         ));
     }
     let definitions = crate::collections::field_definitions(
-        &mut *state.pool.acquire().await?,
+        &mut *crate::db::scoped_tx(&state.pool).await?,
         project_id,
         collection_id,
         false,

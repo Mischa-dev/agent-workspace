@@ -400,7 +400,7 @@ pub async fn home_workspace(
     )
     .bind(actor_id)
     .bind(wanted)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     .ok_or(AppError::NotFound("organization"))
 }
@@ -419,7 +419,7 @@ pub async fn read(
     )
     .bind(organization_id)
     .bind(actor_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let enabled = |group: Group, channel: Channel| {
         rows.iter()
@@ -454,7 +454,7 @@ pub async fn read(
     )
     .bind(actor_id)
     .bind(organization_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let conversation_levels = sqlx::query_as::<_, ConversationLevelRow>(&format!(
         "{LEVEL_SQL} AND project.organization_id = $2 AND level.level <> 'mentions'
@@ -462,12 +462,12 @@ pub async fn read(
     ))
     .bind(actor_id)
     .bind(organization_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
     .map(ConversationLevelView::from)
     .collect();
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let (quiet_hours, digest) = quiet_hours(&mut connection, organization_id, actor_id).await?;
     let mail_configured =
         crate::mail::notification_mail_configured(state, &mut *connection, organization_id).await?;
@@ -507,7 +507,7 @@ pub async fn set_channel(
     .bind(group.as_str())
     .bind(channel.as_str())
     .bind(enabled)
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?;
     Ok(())
 }
@@ -524,7 +524,7 @@ pub async fn set_mute(
     let visible = sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, NULL, $2)")
         .bind(actor_id)
         .bind(project_id)
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?;
     if !visible {
         return Err(AppError::NotFound("project"));
@@ -540,7 +540,7 @@ pub async fn set_mute(
         .bind(project_id)
         .bind(actor_id)
         .bind(group)
-        .execute(pool)
+        .execute(crate::db::scoped(pool))
         .await?;
     } else {
         sqlx::query(
@@ -549,7 +549,7 @@ pub async fn set_mute(
         .bind(project_id)
         .bind(actor_id)
         .bind(group)
-        .execute(pool)
+        .execute(crate::db::scoped(pool))
         .await?;
     }
     Ok(())
@@ -650,7 +650,7 @@ pub async fn conversation_level(
     sqlx::query_as::<_, ConversationLevelRow>(&format!("{LEVEL_SQL} AND conversation.id = $2"))
         .bind(actor_id)
         .bind(conversation_id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         .map(ConversationLevelView::from)
         .ok_or(AppError::NotFound("conversation"))
@@ -679,7 +679,7 @@ pub async fn set_conversation_level(
             .bind(conversation_id)
             .bind(current.project_id)
             .bind(level.as_str())
-            .execute(pool)
+            .execute(crate::db::scoped(pool))
             .await?;
         }
         None => {
@@ -688,7 +688,7 @@ pub async fn set_conversation_level(
             )
             .bind(actor_id)
             .bind(conversation_id)
-            .execute(pool)
+            .execute(crate::db::scoped(pool))
             .await?;
         }
     }
@@ -795,7 +795,7 @@ async fn set_mute_http(
     let organization_id =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(change.project_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
     Ok(Json(
         read(&state, principal.actor_id, organization_id).await?,

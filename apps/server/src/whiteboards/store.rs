@@ -346,7 +346,7 @@ pub async fn revisions(
     )
     .bind(whiteboard_id)
     .bind(limit.clamp(1, 100))
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -483,11 +483,8 @@ pub async fn scene(
     whiteboard_id: Uuid,
     since: Option<i64>,
 ) -> Result<SceneView, AppError> {
-    let mut transaction = pool.begin().await?;
     // One snapshot, so the counter and the elements agree.
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        .execute(&mut *transaction)
-        .await?;
+    let mut transaction = crate::db::scoped_snapshot(pool).await?;
     let scene_seq = sqlx::query_scalar::<_, i64>("SELECT scene_seq FROM whiteboards WHERE id = $1")
         .bind(whiteboard_id)
         .fetch_optional(&mut *transaction)
@@ -725,7 +722,7 @@ pub async fn get_file(
     )
     .bind(whiteboard_id)
     .bind(file_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     .ok_or(AppError::NotFound("whiteboard file"))?;
     Ok(FileView {
@@ -759,7 +756,7 @@ pub async fn files_for(
     )
     .bind(whiteboard_id)
     .bind(&wanted)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
     .map(|(id, mime_type, data)| (id, super::render::File { mime_type, data }))
@@ -775,7 +772,7 @@ pub async fn live_elements(pool: &PgPool, whiteboard_id: Uuid) -> Result<Vec<Obj
         "#,
     )
     .bind(whiteboard_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
     .filter_map(|value| match value {
