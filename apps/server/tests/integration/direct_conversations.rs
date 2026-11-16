@@ -1065,7 +1065,13 @@ async fn conversation_visible_to_is_whole_on_its_own() {
     for (what, conversation, viewer, alone, paired) in [
         ("a stranger, the channel", channel, stranger, false, false),
         ("a member, the channel", channel, member, true, true),
-        ("outside the channel's space", channel, outsider, false, false),
+        (
+            "outside the channel's space",
+            channel,
+            outsider,
+            false,
+            false,
+        ),
         ("the owner, the channel", channel, owner, true, true),
         ("a member outside the DM", dm, bystander, false, false),
         ("a member in the DM", dm, member, true, true),
@@ -1179,15 +1185,28 @@ async fn a_kept_dm_ends_with_workspace_membership_and_no_role_reads_a_dm() {
     for (who, viewer) in [("the owner", owner), ("an admin", ben.actor)] {
         assert!(!visible(pool, dm_id, viewer).await, "{who}, kept");
     }
-    for (who, browser) in [("the owner", &world.owner.browser), ("an admin", &ben.browser)] {
+    for (who, browser) in [
+        ("the owner", &world.owner.browser),
+        ("an admin", &ben.browser),
+    ] {
         let (status, _) = send(
             &world.app,
             browser.request("GET", &timeline, None, Value::Null),
         )
         .await;
-        assert!(!status.is_success(), "{who} read the DM's timeline: {status}");
-        let (_, hits) = send(&world.app, browser.request("GET", &search, None, Value::Null)).await;
-        assert!(!hits.to_string().contains(&word), "{who} found the DM: {hits}");
+        assert!(
+            !status.is_success(),
+            "{who} read the DM's timeline: {status}"
+        );
+        let (_, hits) = send(
+            &world.app,
+            browser.request("GET", &search, None, Value::Null),
+        )
+        .await;
+        assert!(
+            !hits.to_string().contains(&word),
+            "{who} found the DM: {hits}"
+        );
     }
 
     // Each participant's workspace membership ends: the kept DM ends with it.
@@ -1207,8 +1226,15 @@ async fn a_kept_dm_ends_with_workspace_membership_and_no_role_reads_a_dm() {
     )
     .await;
     assert!(!status.is_success(), "ana read the kept DM: {status}");
-    let (_, hits) = send(&world.app, ana.browser.request("GET", &search, None, Value::Null)).await;
-    assert!(!hits.to_string().contains(&word), "ana found the kept DM: {hits}");
+    let (_, hits) = send(
+        &world.app,
+        ana.browser.request("GET", &search, None, Value::Null),
+    )
+    .await;
+    assert!(
+        !hits.to_string().contains(&word),
+        "ana found the kept DM: {hits}"
+    );
     // Mara's token may be refused outright; either way the answer holds
     // nothing of the DM.
     let response = mcp(
@@ -1363,14 +1389,13 @@ async fn conversation_visibility_timings() {
     let time = |sql: String| async move {
         let mut runs = Vec::new();
         for _ in 0..7 {
-            let plan = sqlx::query_scalar::<_, Value>(&format!(
-                "EXPLAIN (ANALYZE, FORMAT JSON) {sql}"
-            ))
-            .bind(ana)
-            .bind(vec![work, space])
-            .fetch_one(pool)
-            .await
-            .expect("explain");
+            let plan =
+                sqlx::query_scalar::<_, Value>(&format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}"))
+                    .bind(ana)
+                    .bind(vec![work, space])
+                    .fetch_one(pool)
+                    .await
+                    .expect("explain");
             runs.push(plan[0]["Execution Time"].as_f64().expect("time"));
         }
         runs.sort_by(f64::total_cmp);

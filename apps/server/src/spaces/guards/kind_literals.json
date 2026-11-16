@@ -1,6 +1,5 @@
 {
   "account_security.rs": 1,
-  "accounts/ops.rs": 1,
   "ai/detect.rs": 4,
   "ai/http.rs": 1,
   "audit_log.rs": 1,
@@ -38,7 +37,6 @@
   "scheduled_messages.rs": 2,
   "search.rs": 7,
   "sheets/http.rs": 1,
-  "spaces/mod.rs": 1,
   "usage/batch.rs": 1,
   "usage/ready.rs": 3,
   "webhooks.rs": 1,

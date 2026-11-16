@@ -1571,7 +1571,7 @@ struct AcceptExistingRequest {
     handle: String,
 }
 
-fn normalize_display_name(value: &str) -> Result<String, AppError> {
+pub(crate) fn normalize_display_name(value: &str) -> Result<String, AppError> {
     let normalized = value.trim();
     if normalized.is_empty()
         || normalized.chars().count() > 120
@@ -1599,7 +1599,7 @@ pub(crate) fn normalize_handle(value: &str) -> Result<String, AppError> {
     Ok(normalized)
 }
 
-fn map_join_error(error: sqlx::Error) -> AppError {
+pub(crate) fn map_join_error(error: sqlx::Error) -> AppError {
     let constraint = match &error {
         sqlx::Error::Database(database) => database.constraint(),
         _ => None,

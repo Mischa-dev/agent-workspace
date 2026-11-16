@@ -48,6 +48,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("github_installation_claims", ORGANIZATION_ID),
     ("harness_catalog_refreshes", ORGANIZATION_ID),
     ("harness_models", ORGANIZATION_ID),
+    ("invite_tokens", WORKSPACE_ID),
     ("launches", ORGANIZATION_ID),
     ("layout_presets", ORGANIZATION_ID),
     ("link_previews", ORGANIZATION_ID),

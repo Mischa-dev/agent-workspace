@@ -203,7 +203,7 @@ pub async fn join_workspace_space(
     workspace_id: Uuid,
     account_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    let space = crate::workspace_space::join(transaction, workspace_id, account_id)
+    let space = crate::spaces::workspace::join(transaction, workspace_id, account_id)
         .await?
         .ok_or(AppError::Internal(
             "admitted account is not a workspace member",

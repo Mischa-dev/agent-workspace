@@ -1939,6 +1939,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "external_event_poll",
     "file_list",
     "file_read",
+    "invite_link_list",
     "collection_list",
     "collection_describe",
     "record_query",
@@ -2189,6 +2190,16 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case("webhook_list", vec![json!({})], vec![], vec![]),
+        // K4.26: another workspace's invitation links are out of reach.
+        case(
+            "invite_link_list",
+            vec![
+                json!({}),
+                json!({"workspace": a.organization, "includeInactive": true}),
+            ],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         // A1.11: another workspace's hosts are out of reach.
         case(
             "host_list",

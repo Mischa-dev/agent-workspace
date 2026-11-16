@@ -30,6 +30,8 @@ export type HostOwnerChoice = "person" | "workspace"
 
 export type HostView = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
+export type InviteLinkView = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
+
 export type OwnerView = { id: string; kind: string; name: string }
 
 export type Package = { contents: Content[]; description?: string; digest?: string | null; format: string; id: string; name: string; needsAdmin?: string[]; publisher?: Publisher | null; requires?: Requires; target: PackageTarget; version: string }
@@ -86,6 +88,18 @@ export type HostUnlinkInput = { hostId: string }
 
 export type HostUnlinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
+export type InviteLinkCreateInput = { expiresInDays?: number | null; maxUses?: number | null; roleId?: string | null; space?: string | null }
+
+export type InviteLinkCreateOutput = { link: InviteLinkView; token?: string | null; url?: string | null }
+
+export type InviteLinkListInput = { includeInactive?: boolean }
+
+export type InviteLinkListOutput = { links: InviteLinkView[] }
+
+export type InviteLinkRevokeInput = { link: string }
+
+export type InviteLinkRevokeOutput = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
+
 export type PackageExportInput = { includePages?: boolean; includeSkills?: boolean; module?: string | null; spaceId?: string | null; wholeWorkspace?: boolean }
 
 export type PackageExportOutput = { digest: string; package: Package }
@@ -132,6 +146,9 @@ export type Operations = {
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
+  invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
+  invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
+  invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }

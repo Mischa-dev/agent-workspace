@@ -5769,7 +5769,8 @@ async fn workspace_space_of(
         return Ok(None);
     };
     let project_id =
-        crate::workspace_space::join(&mut transaction, organization_id, principal.actor_id).await?;
+        crate::spaces::workspace::join(&mut transaction, organization_id, principal.actor_id)
+            .await?;
     transaction.commit().await?;
     Ok(project_id)
 }

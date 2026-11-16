@@ -32,6 +32,18 @@ impl SpaceKind {
         }
     }
 
+    /// The modules a space of this kind holds when it starts (K4.10), beyond
+    /// the ones always on; `None` when it may hold any. The workspace's own
+    /// space holds the workspace's pages, boards and channels, never tasks
+    /// or the rest of a project. This is data, ready for M1's per-space
+    /// switches: a space's own switches only narrow it further.
+    pub const fn starting_modules(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Workspace => Some(&["pages", "whiteboards", "channels"]),
+            Self::Project | Self::Team | Self::Personal => None,
+        }
+    }
+
     /// The value stored in `projects.kind` today.
     pub const fn stored(self) -> &'static str {
         match self {

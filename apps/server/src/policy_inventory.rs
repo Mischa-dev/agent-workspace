@@ -392,6 +392,25 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/account-claims/accept",
         InvitationCapability
     ),
+    // K4.26: invitation links.
+    boundary_route!(
+        "spaces/invite_links",
+        Post,
+        "/api/v1/invite-links/resolve",
+        InvitationCapability
+    ),
+    boundary_route!(
+        "spaces/invite_links",
+        Post,
+        "/api/v1/invite-links/accept-new",
+        InvitationCapability
+    ),
+    boundary_route!(
+        "spaces/invite_links",
+        Post,
+        "/api/v1/invite-links/accept-existing",
+        InvitationCapability
+    ),
     boundary_route!(
         "workspace",
         Put,

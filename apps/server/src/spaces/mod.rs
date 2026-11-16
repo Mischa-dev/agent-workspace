@@ -7,30 +7,14 @@
 //!   place.
 //! - `access`: who is in a space and who may read it (`get`, `readable`,
 //!   `membership`, `readable_sql`), over the SQL helpers of K4.2.
-//! - The workspace's own space: `workspace_space` (find, or make).
+//! - `workspace`: the workspace's own space (find, make, join).
 
 pub mod access;
 #[cfg(test)]
 mod guards;
+pub mod invite_links;
 pub mod kind;
+pub mod workspace;
 
 pub use access::{Space, SpaceMembership, get, membership, readable, readable_by, readable_sql};
 pub use kind::{SpaceKind, SpaceVisibility};
-
-use sqlx::PgConnection;
-use uuid::Uuid;
-
-use crate::error::AppError;
-
-/// The workspace's own space, if it has been made.
-pub async fn workspace_space_id(
-    connection: &mut PgConnection,
-    workspace: Uuid,
-) -> Result<Option<Uuid>, AppError> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM spaces WHERE workspace_id = $1 AND kind = 'workspace'",
-    )
-    .bind(workspace)
-    .fetch_optional(&mut *connection)
-    .await?)
-}

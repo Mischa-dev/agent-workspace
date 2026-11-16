@@ -422,6 +422,9 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ),
     ("POST /api/v1/notification-actions", CAPABILITY),
     ("POST /api/v1/account-claims/accept", CAPABILITY),
+    ("POST /api/v1/invite-links/accept-existing", CAPABILITY),
+    ("POST /api/v1/invite-links/accept-new", CAPABILITY),
+    ("POST /api/v1/invite-links/resolve", CAPABILITY),
     (
         "POST /api/v1/project-invitations/accept-existing",
         CAPABILITY,
@@ -474,6 +477,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "host_enrolment_create",
     "host_unlink",
     "invitation_write",
+    "invite_link_create",
+    "invite_link_revoke",
     "label_write",
     "layout_preset_write",
     "field_write",
@@ -1234,6 +1239,8 @@ struct Targets {
     /// A custom role with everything a member has (AWD-74), so whoever is
     /// given it can still do what other cases need.
     custom_role: Uuid,
+    /// An invitation link with the custom role (K4.26).
+    invite_link: Uuid,
     /// A template the workspace saved (AWD-76).
     workspace_template: Uuid,
     task_type: Uuid,
@@ -1629,6 +1636,22 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .fetch_one(pool)
     .await
     .expect("custom role");
+    let invite_link = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO invite_tokens (
+            id, workspace_id, role_id, token_prefix, token_digest, created_by_actor_id, expires_at
+        )
+        VALUES (gen_random_uuid(), $1, $2, 'aw_lnk_' || left(md5(random()::text), 9),
+                sha256(gen_random_uuid()::text::bytea), $3, now() + interval '1 day')
+        RETURNING id
+        "#,
+    )
+    .bind(organization)
+    .bind(custom_role)
+    .bind(owner)
+    .fetch_one(pool)
+    .await
+    .expect("invite link");
     let workspace_template = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO workspace_templates (id, organization_id, name, definition, created_by_actor_id)
@@ -1711,6 +1734,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         questions,
         reported_runs,
         custom_role,
+        invite_link,
         workspace_template,
         sessions,
         owner,
@@ -5986,6 +6010,20 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "person_create",
             json!({"displayName": "Net person", "handle": "net-person"}),
             vec![json!({"displayName": "Net person b", "handle": "net-person-b", "roleId": b.organization})],
+        ),
+        // K4.26: invitation links. B's roles, spaces and links aren't A's.
+        mcp_case(
+            "invite_link_create",
+            json!({"maxUses": 1}),
+            vec![
+                json!({"roleId": bx.custom_role}),
+                json!({"space": b.project}),
+            ],
+        ),
+        mcp_case(
+            "invite_link_revoke",
+            json!({"link": ax.invite_link}),
+            vec![json!({"link": bx.invite_link})],
         ),
         // K1.6: making an agent at workspace level. B's roles and B's
         // people aren't A's.

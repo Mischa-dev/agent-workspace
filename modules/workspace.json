@@ -33,6 +33,9 @@
     "package_export": "query",
     "role_assign": "change",
     "person_create": "create",
+    "invite_link_create": "create",
+    "invite_link_list": "query",
+    "invite_link_revoke": "change",
     "thing_open": "describe"
   },
   "routes": [
@@ -54,6 +57,7 @@
     "/api/v2/*",
     "/api/v1/account/*",
     "/api/v1/account-claims/*",
+    "/api/v1/invite-links/*",
     "/api/v1/auth/*",
     "/api/v1/client-errors",
     "/api/v1/dev/bootstrap",

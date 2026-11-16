@@ -774,6 +774,9 @@ async fn sync_organization_role(
                 SELECT 1 FROM project_memberships membership
                 JOIN projects project ON project.id = membership.project_id
                 WHERE project.organization_id = $1 AND project.archived_at IS NULL
+                  -- The workspace's own space follows the workspace role,
+                  -- never the other way round.
+                  AND project.kind <> $3
                   AND membership.actor_id = $2 AND membership.enabled
                   AND membership.role IN ('owner', 'admin')
                   -- Only the starting roles as they come: a custom or edited
@@ -801,6 +804,7 @@ async fn sync_organization_role(
     )
     .bind(organization_id)
     .bind(actor_id)
+    .bind(crate::spaces::SpaceKind::Workspace.stored())
     .execute(&mut **transaction)
     .await?;
     Ok(())

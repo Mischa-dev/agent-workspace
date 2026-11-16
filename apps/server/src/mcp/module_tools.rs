@@ -216,9 +216,6 @@ pub(super) async fn thing_open(
             task_projects: &task_projects,
             modules: anywhere,
             workspaces: &workspaces,
-            // An older credential confined to one project reaches no board
-            // across a workspace, as whiteboards::access has it.
-            workspace_boards: super::common::confined_project(principal).is_none(),
         };
         let Some(thing) = modules::things::get(&mut connection, &viewer, &kind, id).await? else {
             return Ok(ToolResult::not_found("That thing"));

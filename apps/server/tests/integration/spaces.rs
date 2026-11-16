@@ -444,11 +444,14 @@ async fn membership_matrix() {
     let mut transaction = sqlx::Connection::begin(&mut *connection)
         .await
         .expect("transaction");
-    let workspace_space =
-        agent_workspace_server::workspace_space::join(&mut transaction, workspace, workspace_only)
-            .await
-            .expect("the workspace space")
-            .expect("a workspace member joins it");
+    let workspace_space = agent_workspace_server::spaces::workspace::join(
+        &mut transaction,
+        workspace,
+        workspace_only,
+    )
+    .await
+    .expect("the workspace space")
+    .expect("a workspace member joins it");
     transaction.commit().await.expect("commit");
     let (membership, readable) = ask(workspace_space, workspace_only).await;
     assert!(readable);

@@ -156,7 +156,7 @@ function WorkspacePagesPage() {
 export function PagesPage() {
   // `/pages`: the workspace's own pages, not a project's.
   if (!useParams().projectId) return <WorkspacePagesPage />
-  return <ProjectFrame place={{ kind: 'pages' }}>{(project) => <PagesList projectId={project.id} space={project.workspaceSpace} />}</ProjectFrame>
+  return <ProjectFrame place={{ kind: 'pages' }}>{(project) => <PagesList projectId={project.id} space={project.kind === 'workspace'} />}</ProjectFrame>
 }
 
 /** A page as the pieces see it: its tags, when and by whom it was last edited, and how it starts. */
@@ -463,7 +463,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
           }}
           page={current}
           projectId={projectId}
-          space={project.workspaceSpace}
+          space={project.kind === 'workspace'}
         />
       ) : viewing ? (
         <div className="aw-memory__viewing" ref={viewer} tabIndex={-1}>
