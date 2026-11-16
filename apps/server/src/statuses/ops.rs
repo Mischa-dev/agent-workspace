@@ -258,13 +258,9 @@ impl Operation for StatusList {
             .iter()
             .map(|account| account.id())
             .collect::<Vec<_>>();
-        let mut connection = call
-            .state
-            .pool
-            .acquire()
-            .await
-            .map_err(crate::error::AppError::from)?;
-        let shown = super::shown_in(&mut connection, call.ctx.workspace_id, &accounts).await?;
+        let workspace_id = call.ctx.workspace_id;
+        let connection = &mut **call.tx().await?;
+        let shown = super::shown_in(connection, workspace_id, &accounts).await?;
         let mut statuses = shown.into_values().flatten().collect::<Vec<_>>();
         statuses.sort_by_key(|status| (status.account_id, status.workspace_only));
         Ok(StatusListOutput { statuses })

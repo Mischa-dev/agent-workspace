@@ -169,14 +169,9 @@ impl Operation for MessageDraftList {
     ) -> Result<MessageDraftListOutput, OpError> {
         let account = call.account_id();
         let workspace_id: Uuid = call.ctx.workspace_id;
-        let mut connection = call
-            .state
-            .pool
-            .acquire()
-            .await
-            .map_err(crate::error::AppError::from)?;
+        let connection = &mut **call.tx().await?;
         let drafts = super::listed(
-            &mut connection,
+            connection,
             account,
             Some(workspace_id),
             input.conversation_id.map(IdRef::id),

@@ -431,7 +431,7 @@ async fn board_picture(
     board_id: Uuid,
 ) -> Result<Option<pdf::EmbedPicture>, AppError> {
     let caller = crate::whiteboards::Caller::browser(principal)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     match crate::whiteboards::access(&mut connection, &caller, board_id, false).await {
         Ok(board) if !board.deleted => {}
         Ok(_) | Err(AppError::NotFound(_)) => return Ok(None),

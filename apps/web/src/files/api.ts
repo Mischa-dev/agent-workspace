@@ -1,4 +1,4 @@
-import { readCsrfToken, requestJson } from '../api/client'
+import { apiUrl, origins, readCsrfToken, requestJson } from '../api/client'
 import { ApiError } from '../api/errors'
 import { normalizeFile, normalizeFiles, type FileAttachment } from './model'
 
@@ -52,14 +52,16 @@ export function uploadName(file: File) {
  * report yet.
  */
 export function uploadFile(target: UploadTarget): Uploader {
-  return (file, onProgress, signal) =>
-    new Promise<FileAttachment>((resolve, reject) => {
+  return async (file, onProgress, signal) => {
+    // On a static host the API is on another origin, and its request token
+    // is read from there (H1.41), as requestJson does.
+    const csrf = await (origins.csrf ?? readCsrfToken)()
+    return new Promise<FileAttachment>((resolve, reject) => {
       const request = new XMLHttpRequest()
-      request.open('POST', uploadPath(target, uploadName(file)))
+      request.open('POST', apiUrl(uploadPath(target, uploadName(file))))
       request.withCredentials = true
       request.setRequestHeader('accept', 'application/json')
       request.setRequestHeader('content-type', file.type || 'application/octet-stream')
-      const csrf = readCsrfToken()
       if (csrf) request.setRequestHeader('x-csrf-token', csrf)
       request.upload.onprogress = (event) => {
         if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total)
@@ -94,9 +96,14 @@ export function uploadFile(target: UploadTarget): Uploader {
       }
       request.onerror = () => reject(new TypeError('Failed to fetch'))
       request.onabort = () => reject(new DOMException('The upload was canceled.', 'AbortError'))
+      if (signal.aborted) {
+        reject(new DOMException('The upload was canceled.', 'AbortError'))
+        return
+      }
       signal.addEventListener('abort', () => request.abort(), { once: true })
       request.send(file)
     })
+  }
 }
 
 export async function removeFile(id: string) {

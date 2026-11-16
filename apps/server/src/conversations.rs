@@ -3597,13 +3597,14 @@ fn thread_attention(row: &SidebarThreadRow) -> ThreadAttention {
 /// Whether a project is the hidden one that holds a workspace's DMs and
 /// groups (until K4 moves them to the direct scope).
 async fn is_direct_project(pool: &sqlx::PgPool, project_id: Uuid) -> Result<bool, AppError> {
-    Ok(
+    let direct = crate::db::scoped_one(pool, async |connection| {
         sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
             .bind(project_id)
-            .fetch_optional(pool)
-            .await?
-            .unwrap_or(false),
-    )
+            .fetch_optional(&mut *connection)
+            .await
+    })
+    .await?;
+    Ok(direct.unwrap_or(false))
 }
 
 async fn authorized_project(

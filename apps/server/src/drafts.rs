@@ -198,20 +198,21 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
 /// Forgets drafts nobody touched for 30 days, and recoverable copies older
 /// than a day. Returns how many drafts went.
 pub async fn prune(pool: &sqlx::PgPool) -> Result<u64, AppError> {
-    sqlx::query(
-        r#"
-        UPDATE message_drafts SET previous_content = NULL, previous_updated_at = NULL
-        WHERE previous_updated_at < now() - interval '1 day'
-        "#,
-    )
-    .execute(pool)
-    .await?;
-    Ok(
+    let pruned = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(
+            r#"
+            UPDATE message_drafts SET previous_content = NULL, previous_updated_at = NULL
+            WHERE previous_updated_at < now() - interval '1 day'
+            "#,
+        )
+        .execute(&mut *connection)
+        .await?;
         sqlx::query("DELETE FROM message_drafts WHERE updated_at < now() - interval '30 days'")
-            .execute(pool)
-            .await?
-            .rows_affected(),
-    )
+            .execute(&mut *connection)
+            .await
+    })
+    .await?;
+    Ok(pruned.rows_affected())
 }
 
 #[cfg(test)]

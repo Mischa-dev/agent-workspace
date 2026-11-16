@@ -703,7 +703,7 @@ async fn templates_http(
     ApiQuery(query): ApiQuery<TemplatesQuery>,
 ) -> Result<Json<TemplatesResponse>, AppError> {
     let caller = Caller::browser(&principal)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let organization_id = match (query.organization_id, query.project_id) {
         (Some(organization_id), _) => organization_id,
         (None, Some(project_id)) => {

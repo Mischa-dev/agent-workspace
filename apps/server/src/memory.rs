@@ -1472,7 +1472,7 @@ async fn list_page_templates_http(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<PageTemplatesResponse>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     project_access(
         &mut *transaction,
         principal.actor_id,

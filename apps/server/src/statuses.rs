@@ -253,8 +253,9 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
 /// Removes statuses whose time to clear has come (the `status.clear_due`
 /// job). Returns how many went.
 pub async fn clear_due(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError> {
-    Ok(sqlx::query(
-        r#"
+    let cleared = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(
+            r#"
         DELETE FROM account_statuses
         WHERE id IN (
             SELECT id FROM account_statuses
@@ -263,11 +264,13 @@ pub async fn clear_due(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError>
             LIMIT $1
         )
         "#,
-    )
-    .bind(limit)
-    .execute(pool)
-    .await?
-    .rows_affected())
+        )
+        .bind(limit)
+        .execute(&mut *connection)
+        .await
+    })
+    .await?;
+    Ok(cleared.rows_affected())
 }
 
 #[cfg(test)]

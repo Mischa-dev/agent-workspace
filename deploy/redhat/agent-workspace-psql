@@ -8,8 +8,7 @@ fi
 
 readonly podman_command=(
   /usr/bin/podman exec
-  # Keep stdin attached: the backup feeds a long-lived session (its key
-  # rotation lock) through it.
+  # Keep stdin attached, so a caller can feed psql a script.
   --interactive
   --user postgres
   --env PGDATABASE

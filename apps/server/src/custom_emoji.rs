@@ -79,8 +79,9 @@ async fn image(
     principal: AuthenticatedActor,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<Response, AppError> {
-    let (content_type, bytes) = sqlx::query_as::<_, (String, Vec<u8>)>(
-        r#"
+    let (content_type, bytes) = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (String, Vec<u8>)>(
+            r#"
         SELECT emoji.content_type, emoji.image
         FROM custom_emojis emoji
         JOIN organization_memberships membership
@@ -89,10 +90,12 @@ async fn image(
          AND membership.enabled
         WHERE emoji.id = $1
         "#,
-    )
-    .bind(id)
-    .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+        )
+        .bind(id)
+        .bind(principal.actor_id)
+        .fetch_optional(&mut *connection)
+        .await
+    })
     .await?
     .ok_or(AppError::NotFound("custom_emoji"))?;
     let content_type = match image_type(&bytes) {

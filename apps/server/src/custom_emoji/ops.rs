@@ -166,7 +166,8 @@ impl Operation for CustomEmojiList {
         call: &mut OpCall<'_>,
         input: CustomEmojiListInput,
     ) -> Result<CustomEmojiListOutput, OpError> {
-        let mut connection = call.state.pool.acquire().await.map_err(AppError::from)?;
+        let workspace_id = call.ctx.workspace_id;
+        let connection = &mut **call.tx().await?;
         let emoji = sqlx::query_as::<_, CustomEmojiView>(&format!(
             r#"
             SELECT {VIEW_COLUMNS}
@@ -176,7 +177,7 @@ impl Operation for CustomEmojiList {
             LIMIT $3
             "#
         ))
-        .bind(call.ctx.workspace_id)
+        .bind(workspace_id)
         .bind(input.include_retired)
         .bind(MAX_LISTED)
         .fetch_all(&mut *connection)
