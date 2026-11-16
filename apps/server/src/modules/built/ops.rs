@@ -805,6 +805,8 @@ impl Operation for ModulePartLink {
         let tx = call.tx().await?;
         if super::link_part(tx, &module, kind, input.part.id.id(), actor).await? {
             super::touch(tx, module.id).await?;
+            // Joining a switched-off module hides it: its readers refetch.
+            announce_part(tx, kind, input.part.id.id()).await?;
         }
         call.audit_target(
             "module",
@@ -838,6 +840,8 @@ impl Operation for ModulePartUnlink {
         let tx = call.tx().await?;
         if super::unlink_part(tx, &module, kind, input.part.id.id()).await? {
             super::touch(tx, module.id).await?;
+            // Leaving a switched-off module shows it again: readers refetch.
+            announce_part(tx, kind, input.part.id.id()).await?;
         }
         call.audit_target(
             "module",
@@ -874,6 +878,26 @@ async fn announce(
 ) -> Result<(), OpError> {
     for (space, collection) in super::collection_parts(tx, module_id).await? {
         crate::outbox::enqueue_collection_updated(tx, space, collection, &[]).await?;
+    }
+    Ok(())
+}
+
+/// A collection that joined or left a module changed for its readers.
+async fn announce_part(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    kind: &str,
+    object_id: Uuid,
+) -> Result<(), OpError> {
+    if kind != "collection" {
+        return Ok(());
+    }
+    let space = sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM collections WHERE id = $1")
+        .bind(object_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|error| OpError::logged("module_part_link", &error.into()))?;
+    if let Some(space) = space {
+        crate::outbox::enqueue_collection_updated(tx, space, object_id, &[]).await?;
     }
     Ok(())
 }

@@ -257,7 +257,13 @@ pub(crate) async fn checked_form(
     collection_id: Uuid,
     form: &FormConfig,
 ) -> Result<Result<FormConfig, String>, AppError> {
-    checked_form_in(&mut *crate::db::scoped_tx(pool).await?, project_id, collection_id, form).await
+    checked_form_in(
+        &mut *crate::db::scoped_tx(pool).await?,
+        project_id,
+        collection_id,
+        form,
+    )
+    .await
 }
 
 /// `checked_form` on the caller's connection or transaction, which sees a

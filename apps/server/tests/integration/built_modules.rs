@@ -227,6 +227,39 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     assert_eq!(back["value"]["total"], 1, "{back}");
     assert_eq!(form(token).await.0, StatusCode::OK);
 
+    // Taking the collection out and putting it back tells its readers each
+    // time (open tabs refetch what a module's switch hides or shows).
+    let collection_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT object_id FROM module_parts WHERE module_id = $1::uuid AND part_kind = 'collection'",
+    )
+    .bind(&module_id)
+    .fetch_one(&pool)
+    .await
+    .expect("collection part");
+    let announced = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM outbox_events WHERE event_type = 'collection.updated' \
+             AND payload->>'collectionId' = $1",
+        )
+        .bind(collection_id.to_string())
+        .fetch_one(&pool)
+        .await
+        .expect("events")
+    };
+    let before = announced().await;
+    for (name, request) in [("module_part_unlink", "out"), ("module_part_link", "in")] {
+        let changed = tool(
+            &world,
+            "builder",
+            name,
+            json!({"moduleId": module_id, "part": {"kind": "collection", "id": collection_id},
+                   "clientRequestId": request}),
+        )
+        .await;
+        assert_eq!(changed["outcome"], "ok", "{changed}");
+    }
+    assert_eq!(announced().await, before + 2);
+
     // Archived keeping its parts: the collection lives on, plain.
     let archived = tool(
         &world,
