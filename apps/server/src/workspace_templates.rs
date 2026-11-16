@@ -846,16 +846,12 @@ pub(crate) async fn apply(
                 };
                 let same = (role.description.is_empty() || role.description == before.description)
                     && permissions.as_ref().is_none_or(|keys| {
-                        let mut wanted = keys.clone();
-                        wanted.sort();
-                        wanted.dedup();
-                        let mut held = before
-                            .permissions
-                            .iter()
-                            .map(|key| (*key).to_owned())
-                            .collect::<Vec<_>>();
-                        held.sort();
-                        wanted == held
+                        // A role holds its keys closed under levels with the
+                        // required ones (K1.9), so compare what it would hold.
+                        let wanted = crate::policy::PermissionSet::from_keys(keys)
+                            .union(crate::policy::PermissionSet::required())
+                            .implied();
+                        wanted == crate::policy::PermissionSet::from_keys(&before.permissions)
                     })
                     && limit_matches(role.agent_limit.as_deref(), before.agent_limit.as_deref())
                     && sorted(&role.modules_off) == sorted(&before.modules_off)

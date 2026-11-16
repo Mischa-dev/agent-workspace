@@ -949,7 +949,10 @@ impl Permission {
     /// capability that only reads.
     pub fn only_sees(self) -> bool {
         matches!(self.info().level, Some((_, Level::See)))
-            || matches!(self, Self::MembersView | Self::DirectoryView)
+            || matches!(
+                self,
+                Self::MembersView | Self::DirectoryView | Self::SpacesBrowse
+            )
     }
 
     pub fn from_key(key: &str) -> Option<Self> {
