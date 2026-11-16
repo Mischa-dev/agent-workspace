@@ -1970,6 +1970,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_permissions",
     "my_work",
     "notification_list",
+    "notification_keyword_list",
     "package_export",
     "page_blocks",
     "page_comments",
@@ -2003,6 +2004,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "task_ready_list",
     "template_list",
     "thing_open",
+    "thread_followed_list",
     "usage_batch",
     "usage_windows",
     "view_list",
@@ -2452,6 +2454,20 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![],
             vec![json!({"projectId": b.project})],
+        ),
+        // C2.13: keywords are kept per workspace; B's never list in A.
+        case(
+            "notification_keyword_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.36: threads followed in B never list in A.
+        case(
+            "thread_followed_list",
+            vec![json!({}), json!({"openOnly": true})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
         ),
         case(
             "task_list",
