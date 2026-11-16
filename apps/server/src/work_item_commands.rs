@@ -2988,6 +2988,134 @@ async fn finalize_created(
     })
 }
 
+/// A new comment on a locked, open task (C1.1).
+pub(crate) struct NewTaskComment<'a> {
+    pub work_item_id: Uuid,
+    /// The locked task's version, which the comment's update event carries.
+    pub version: i64,
+    pub content: crate::message_content::MessageContent,
+    pub reply_to: Option<Uuid>,
+    pub attachments: &'a [Uuid],
+    pub audit_action: &'a str,
+}
+
+pub(crate) struct InsertedTaskComment {
+    pub comment_id: Uuid,
+    pub created_at: String,
+    pub sequence: i64,
+    pub audit_id: Uuid,
+    pub content_json: serde_json::Value,
+    pub plain_text: String,
+    pub mentioned_actor_ids: Vec<Uuid>,
+    pub referenced_work_item_ids: Vec<Uuid>,
+}
+
+/// The one way a task comment is written (C1.1), for the web and agent
+/// tools alike: its mentions and task references are checked against the
+/// project, the comment and the rows notifications and "Referenced in" read
+/// are inserted, the timeline, events and audit follow, its files are
+/// attached, and each mentioned agent with a connection gets a
+/// `comment.mentioned` event.
+///
+/// The caller has locked the task and checked it's open and that
+/// `reply_to` can be answered. Content that doesn't check out is
+/// `Validation("comment content")` (or `"Message content"`), files that
+/// aren't the author's unsent uploads `Validation("attachments")`.
+pub(crate) async fn insert_task_comment(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    comment: NewTaskComment<'_>,
+) -> Result<InsertedTaskComment, AppError> {
+    let resolved = crate::work_items::comments::resolve_comment_content(
+        transaction,
+        actor.project_id,
+        comment.content,
+    )
+    .await?;
+    let comment_id = Uuid::now_v7();
+    let created_at = sqlx::query_scalar::<_, String>(
+        r#"
+        INSERT INTO work_item_comments (
+            id, project_id, work_item_id, author_actor_id, content_version,
+            content, plain_text, reply_to_comment_id
+        ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
+        RETURNING created_at::text
+        "#,
+    )
+    .bind(comment_id)
+    .bind(actor.project_id)
+    .bind(comment.work_item_id)
+    .bind(actor.actor_id)
+    .bind(&resolved.content_json)
+    .bind(&resolved.plain_text)
+    .bind(comment.reply_to)
+    .fetch_one(&mut **transaction)
+    .await?;
+    crate::work_items::comments::insert_comment_projections(
+        transaction,
+        actor.project_id,
+        comment.work_item_id,
+        comment_id,
+        &resolved,
+    )
+    .await?;
+    let (sequence, audit_id) = finalize_comment(
+        transaction,
+        actor,
+        comment.work_item_id,
+        comment_id,
+        comment.version,
+        comment.audit_action,
+    )
+    .await?;
+    crate::files::attach_to_comment(
+        transaction,
+        actor.project_id,
+        comment.work_item_id,
+        comment_id,
+        actor.actor_id,
+        comment.attachments,
+    )
+    .await?;
+    let mut mentioned_actor_ids = resolved
+        .mention_nodes
+        .iter()
+        .map(|(_, actor_id)| *actor_id)
+        .collect::<Vec<_>>();
+    mentioned_actor_ids.sort();
+    mentioned_actor_ids.dedup();
+    crate::external_events::enqueue_comment_mentioned(
+        transaction,
+        crate::external_events::MentioningComment {
+            project_id: actor.project_id,
+            thing_kind: "task",
+            thing_id: comment.work_item_id,
+            comment_kind: "work_item_comment",
+            comment_id,
+            anchor: comment_id,
+            author_actor_id: actor.actor_id,
+        },
+        &mentioned_actor_ids,
+    )
+    .await?;
+    let mut referenced_work_item_ids = Vec::new();
+    for (_, referenced) in &resolved.references {
+        if !referenced_work_item_ids.contains(referenced) {
+            referenced_work_item_ids.push(*referenced);
+        }
+    }
+    Ok(InsertedTaskComment {
+        comment_id,
+        created_at,
+        sequence,
+        audit_id,
+        content_json: resolved.content_json,
+        plain_text: resolved.plain_text,
+        mentioned_actor_ids,
+        referenced_work_item_ids,
+    })
+}
+
 pub async fn finalize_comment(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,

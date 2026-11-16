@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use axum::{
     Json, Router,
     extract::State,
@@ -21,20 +19,20 @@ use crate::{
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
-    message_content::{MessageContent, MessageContentError, MessageNode},
+    message_content::{MessageContent, MessageContentError},
     policy::{Action, Decision, Permission, RoleGrant},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor, ConflictKind,
         CreateWorkItemCommand, CreateWorkItemOutcome, CriteriaCommand, CriteriaOperation,
         CriteriaOutcome, CriteriaPlanError, CriterionTarget, LinkWording,
-        MAX_BLOCKED_REASON_CHARACTERS, NewTaskFields, PlacementProblem, ProjectMembership,
-        PullRequestLinkChange, RepositoryLinkOutcome, TaskFieldChanges, ThreadLinkOutcome,
-        UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation, change_criteria,
-        change_pull_request_link, change_repository_link, change_thread_link, conflict_kind,
-        create_work_item as execute_create_work_item, finalize_change, finalize_comment,
-        lock_membership, lock_work_item, set_archived, update_locked_work_item,
-        update_work_item_by_id, valid_estimate,
+        MAX_BLOCKED_REASON_CHARACTERS, NewTaskComment, NewTaskFields, PlacementProblem,
+        ProjectMembership, PullRequestLinkChange, RepositoryLinkOutcome, TaskFieldChanges,
+        ThreadLinkOutcome, UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation,
+        change_criteria, change_pull_request_link, change_repository_link, change_thread_link,
+        conflict_kind, create_work_item as execute_create_work_item, finalize_change,
+        insert_task_comment, lock_membership, lock_work_item, set_archived,
+        update_locked_work_item, update_work_item_by_id, valid_estimate,
     },
     work_item_labels::LabelDelta,
 };
@@ -3074,102 +3072,36 @@ async fn create_work_item_comment(
     {
         return Err(AppError::Validation("replyToCommentId"));
     }
-    let mention_ids = content.mentioned_actor_ids();
-    let mention_rows = fetch_comment_actor_rows(&mut transaction, project_id, &mention_ids).await?;
-    let handles = mention_rows
-        .iter()
-        .map(|actor| (actor.id, actor.handle.clone()))
-        .collect::<HashMap<_, _>>();
-    let references = content.work_item_references();
-    let reference_ids = references
-        .iter()
-        .map(|(_, work_item_id)| *work_item_id)
-        .collect::<Vec<_>>();
-    let reference_rows =
-        fetch_work_item_reference_rows(&mut transaction, project_id, &reference_ids).await?;
-    let labels = reference_rows
-        .iter()
-        .map(|item| (item.id, item.key.clone()))
-        .collect::<HashMap<_, _>>();
-    let mention_nodes = content
-        .nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(index, node)| match node {
-            MessageNode::Mention { actor_id } => Some((index, *actor_id)),
-            MessageNode::Text { .. } | MessageNode::WorkItemRef { .. } => None,
-        })
-        .collect::<Vec<_>>();
-    let (content, plain_text, _) = content
-        .validate_with_resources(
-            |actor_id| handles.get(&actor_id).cloned(),
-            |referenced_id| labels.get(&referenced_id).cloned(),
-        )
-        .map_err(message_content_error)?
-        .into_parts();
-    let content_json = serde_json::to_value(content)
-        .map_err(|_| AppError::Internal("serialize Work Item comment"))?;
-    let comment_id = Uuid::now_v7();
-    let created_at = sqlx::query_scalar::<_, String>(
-        r#"
-        INSERT INTO work_item_comments (
-            id, project_id, work_item_id, author_actor_id,
-            content_version, content, plain_text, reply_to_comment_id
-        ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
-        RETURNING created_at::text
-        "#,
-    )
-    .bind(comment_id)
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(principal.actor_id)
-    .bind(&content_json)
-    .bind(&plain_text)
-    .bind(request.reply_to_comment_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    for (node_index, actor_id) in mention_nodes {
-        sqlx::query(
-            "INSERT INTO work_item_comment_mentions (project_id, work_item_id, comment_id, actor_id, node_index) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(comment_id)
-        .bind(actor_id)
-        .bind(i32::try_from(node_index).map_err(|_| AppError::Validation("comment content"))?)
-        .execute(&mut *transaction)
-        .await?;
-    }
-    for (node_index, referenced_id) in &references {
-        sqlx::query(
-            "INSERT INTO work_item_comment_references (project_id, source_work_item_id, comment_id, referenced_work_item_id, node_index) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(comment_id)
-        .bind(referenced_id)
-        .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("comment content"))?)
-        .execute(&mut *transaction)
-        .await?;
-    }
-    let (sequence, _) = finalize_comment(
+    // One path with the agent tool (C1.1).
+    let inserted = insert_task_comment(
         &mut transaction,
         &browser_actor(&headers, &principal, project_id)?,
-        work_item_id,
-        comment_id,
-        current.version,
-        "work_item.comment_created",
+        NewTaskComment {
+            work_item_id,
+            version: current.version,
+            content,
+            reply_to: request.reply_to_comment_id,
+            attachments: &request.attachments,
+            audit_action: "work_item.comment_created",
+        },
     )
     .await?;
-    crate::files::attach_to_comment(
+    let comment_id = inserted.comment_id;
+    let sequence = inserted.sequence;
+    let mention_rows =
+        fetch_comment_actor_rows(&mut transaction, project_id, &inserted.mentioned_actor_ids)
+            .await?;
+    let reference_rows = fetch_work_item_reference_rows(
         &mut transaction,
         project_id,
-        work_item_id,
-        comment_id,
-        principal.actor_id,
-        &request.attachments,
+        &inserted.referenced_work_item_ids,
     )
     .await?;
+    let (content_json, plain_text, created_at) = (
+        inserted.content_json,
+        inserted.plain_text,
+        inserted.created_at,
+    );
     let author = fetch_comment_actor_rows(&mut transaction, project_id, &[principal.actor_id])
         .await?
         .into_iter()
