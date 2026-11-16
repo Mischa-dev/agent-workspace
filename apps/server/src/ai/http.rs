@@ -132,8 +132,9 @@ async fn member(
     action: Action,
 ) -> Result<Member, AppError> {
     let Some((organization_id, archived_at, role, role_permissions, enabled)) =
-        sqlx::query_as::<_, (Uuid, Option<String>, String, Option<Vec<String>>, bool)>(
-            r#"
+        crate::db::scoped_one(&state.pool, async |connection| {
+            sqlx::query_as::<_, (Uuid, Option<String>, String, Option<Vec<String>>, bool)>(
+                r#"
             SELECT project.organization_id, project.archived_at::text, membership.role,
                    workspace_role_permissions(membership.role_id), membership.enabled
             FROM projects project
@@ -145,10 +146,12 @@ async fn member(
             JOIN actors actor ON actor.id = $2 AND actor.status = 'active'
             WHERE project.id = $1 AND project.kind = 'standard'
             "#,
-        )
-        .bind(project_id)
-        .bind(principal.actor_id)
-        .fetch_optional(&state.pool)
+            )
+            .bind(project_id)
+            .bind(principal.actor_id)
+            .fetch_optional(connection)
+            .await
+        })
         .await?
     else {
         return Err(AppError::NotFound("project"));
@@ -261,7 +264,7 @@ async fn workspace_status(
     .await;
     let budget = gateway::budget_usd(&state.pool, organization_id).await?;
     let spent = gateway::spent_this_month_micros(&state.pool, organization_id).await?;
-    let by_model = sqlx::query_as::<_, (String, String, i64, i64, i64, i64)>(
+    let by_model = crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_as::<_, (String, String, i64, i64, i64, i64)>(
         r#"
         SELECT model, provider, count(*), COALESCE(sum(input_tokens), 0)::bigint,
                COALESCE(sum(output_tokens), 0)::bigint, COALESCE(sum(cost_micros), 0)::bigint
@@ -273,8 +276,7 @@ async fn workspace_status(
         "#,
     )
     .bind(organization_id)
-    .fetch_all(&state.pool)
-    .await?
+    .fetch_all(connection).await }).await?
     .into_iter()
     .map(
         |(model, provider, calls, input_tokens, output_tokens, cost_micros)| UsageRow {
@@ -287,17 +289,20 @@ async fn workspace_status(
         },
     )
     .collect::<Vec<_>>();
-    let by_day = sqlx::query_as::<_, (String, i64, i64)>(
-        r#"
+    let by_day = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (String, i64, i64)>(
+            r#"
         SELECT to_char(date_trunc('day', created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'), count(*),
                COALESCE(sum(cost_micros), 0)::bigint
         FROM ai_usage
         WHERE organization_id = $1 AND created_at > now() - interval '30 days'
         GROUP BY 1 ORDER BY 1
         "#,
-    )
-    .bind(organization_id)
-    .fetch_all(&state.pool)
+        )
+        .bind(organization_id)
+        .fetch_all(connection)
+        .await
+    })
     .await?
     .into_iter()
     .map(|(day, calls, cost_micros)| DayRow {
@@ -333,7 +338,7 @@ async fn project_status(
     };
     let quick = gateway::resolve(&state, scope, Tier::Quick).await;
     let deep = gateway::resolve(&state, scope, Tier::Deep).await;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let effective = settings::resolve(
         &mut connection,
         SettingsContext {
@@ -488,7 +493,7 @@ async fn list_suggestions(
     ApiQuery(query): ApiQuery<SuggestionQuery>,
 ) -> Result<Json<Value>, AppError> {
     let member = member(&state, &principal, project_id, Action::WorkItemView).await?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let page = suggestions::list(
         &mut connection,
         member.reader(),
@@ -544,7 +549,7 @@ async fn decide(
             .filter(|value| value.len() <= 128)
             .map(str::to_owned),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let outcome = if accept {
         suggestions::accept(
             &mut transaction,
@@ -562,7 +567,7 @@ async fn decide(
         return Ok(decision_refusal(refusal));
     }
     transaction.commit().await?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let view =
         suggestions::get(&mut connection, member.reader(), project_id, suggestion_id).await?;
     Ok(Json(json!({"suggestion": view})).into_response())
@@ -607,13 +612,12 @@ async fn task_in_project(
     project_id: Uuid,
     task_id: Uuid,
 ) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
+    Ok(crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM task_rows WHERE project_id = $1 AND id = $2 AND archived_at IS NULL)",
     )
     .bind(project_id)
     .bind(task_id)
-    .fetch_one(&state.pool)
-    .await?)
+    .fetch_one(connection).await }).await?)
 }
 
 async fn triage(
@@ -662,7 +666,7 @@ pub(crate) async fn draft_criteria(
     task_id: Uuid,
 ) -> Result<Result<Uuid, Response>, AppError> {
     let Some((key, title, description, type_name)) =
-        sqlx::query_as::<_, (String, String, String, String)>(
+        crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_as::<_, (String, String, String, String)>(
             r#"
             SELECT project.project_key || '-' || item.number, item.title,
                    left(item.description, 6000), kind.name
@@ -674,18 +678,16 @@ pub(crate) async fn draft_criteria(
         )
         .bind(project_id)
         .bind(task_id)
-        .fetch_optional(&state.pool)
-        .await?
+        .fetch_optional(connection).await }).await?
     else {
         return Err(AppError::NotFound("work_item"));
     };
-    let existing = sqlx::query_scalar::<_, String>(
+    let existing = crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_scalar::<_, String>(
         "SELECT text FROM work_item_acceptance_criteria WHERE project_id = $1 AND work_item_id = $2 ORDER BY position",
     )
     .bind(project_id)
     .bind(task_id)
-    .fetch_all(&state.pool)
-    .await?;
+    .fetch_all(connection).await }).await?;
     let scope = Scope {
         organization_id,
         project_id: Some(project_id),
@@ -707,15 +709,18 @@ pub(crate) async fn draft_criteria(
         Err(error) => return Ok(Err(error.into_response())),
     };
     // A new draft replaces an open one for the same task.
-    sqlx::query(
-        r#"
+    crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query(
+            r#"
         UPDATE ai_suggestions SET status = 'stale', updated_at = now()
         WHERE project_id = $1 AND work_item_id = $2 AND kind = 'criteria' AND status = 'pending'
         "#,
-    )
-    .bind(project_id)
-    .bind(task_id)
-    .execute(&state.pool)
+        )
+        .bind(project_id)
+        .bind(task_id)
+        .execute(connection)
+        .await
+    })
     .await?;
     let criteria = answer
         .value
@@ -785,7 +790,7 @@ async fn criteria(
         Ok(id) => id,
         Err(response) => return Ok(response),
     };
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let view = suggestions::get(&mut connection, member.reader(), project_id, id).await?;
     Ok((StatusCode::CREATED, Json(json!({"suggestion": view}))).into_response())
 }
@@ -1098,12 +1103,14 @@ async fn thread_summary(
     ApiJson(request): ApiJson<ThreadSummaryRequest>,
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let Some(project_id) = sqlx::query_scalar::<_, Uuid>(
+    let Some(project_id) = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, Uuid>(
         "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
     )
     .bind(conversation_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(connection).await
+    })
     .await?
     else {
         return Err(AppError::NotFound("conversation"));
