@@ -286,6 +286,32 @@ pub(crate) async fn tool(
     content
 }
 
+/// The tools this caller's `tools/list` offers, as the server describes them.
+pub(crate) async fn tools_list(app: &axum::Router, token: &str, session: &str) -> Vec<Value> {
+    let response = mcp(
+        app,
+        token,
+        Some(session),
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list" }),
+    )
+    .await;
+    let bytes = to_bytes(response.into_body(), 4_000_000)
+        .await
+        .expect("body");
+    let text = String::from_utf8(bytes.to_vec()).expect("utf-8");
+    let json = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(&text);
+    let value: Value = serde_json::from_str(json).expect("tools/list JSON");
+    value
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// A create that takes a `clientRequestId` makes one thing however often
 /// it's retried: the same call twice answers the first call's thing again,
 /// marked `idempotentReplay`, and another call with the same id is refused.
@@ -329,27 +355,10 @@ pub(crate) async fn creates_once(
 }
 
 async fn output_schema(app: &axum::Router, token: &str, session: &str, name: &str) -> Value {
-    let response = mcp(
-        app,
-        token,
-        Some(session),
-        json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list" }),
-    )
-    .await;
-    let bytes = to_bytes(response.into_body(), 4_000_000)
+    tools_list(app, token, session)
         .await
-        .expect("body");
-    let text = String::from_utf8(bytes.to_vec()).expect("utf-8");
-    let json = text
-        .lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or(&text);
-    let value: Value = serde_json::from_str(json).expect("tools/list JSON");
-    value
-        .pointer("/result/tools")
-        .and_then(Value::as_array)
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == name))
+        .into_iter()
+        .find(|tool| tool["name"] == name)
         .map(|tool| {
             tool.get("outputSchema")
                 .cloned()

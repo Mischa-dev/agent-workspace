@@ -197,6 +197,12 @@ impl ModuleSet {
         manifest::of_part(part).is_none_or(|module| self.contains(&module.id))
     }
 
+    /// Whether a setting shows: one that belongs to a module that's off
+    /// doesn't (a Friends workspace names no run settings).
+    pub fn allows_setting(self, key: &str) -> bool {
+        manifest::of_setting(key).is_none_or(|module| self.contains(&module.id))
+    }
+
     pub fn allows_setup_step(self, step: &str) -> bool {
         manifest::of_setup_step(step).is_none_or(|module| self.contains(&module.id))
     }

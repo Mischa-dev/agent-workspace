@@ -108,9 +108,17 @@ pub(super) async fn settings_get(
             &BTreeMap::new(),
         )
         .await?;
+        let modules = crate::modules::state::for_project(
+            &mut connection,
+            principal.project_id,
+            principal.actor_id,
+        )
+        .await?
+        .unwrap_or_default();
         let settings = effective
             .settings
             .into_iter()
+            .filter(|resolved| modules.allows_setting(resolved.key))
             .filter(|resolved| {
                 arguments
                     .keys

@@ -30,6 +30,11 @@ pub fn register_ops(registry: &mut Registry) {
     registry.add::<PackageInstall>();
     registry.add::<PackageList>();
     registry.add::<PackageRemove>();
+}
+
+/// The Agents module's share: the agent templates packages brought, which
+/// show only where Agents is on.
+pub fn register_agent_ops(registry: &mut Registry) {
     registry.add::<AgentTemplateList>();
 }
 
@@ -675,7 +680,7 @@ pub struct AgentTemplateListOutput {
 impl Operation for AgentTemplateList {
     const NAME: &'static str = "agent_template_list";
     const KIND: OpKind = OpKind::Query;
-    const MODULE: &'static str = "workspace";
+    const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List agent templates";

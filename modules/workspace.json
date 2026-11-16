@@ -47,7 +47,6 @@
     "directory_source_create": "create",
     "directory_source_remove": "change",
     "workspace_shape_set": "change",
-    "agent_template_list": "query",
     "role_assign": "change",
     "thing_open": "describe"
   },
@@ -61,6 +60,8 @@
     "/agent-runner.md",
     "/mcp-tools.md",
     "/connect/confirm",
+    "/connect/agent/{code}",
+    "/api/v1/projects/{project_id}/external-agents*",
     "/auth/workos/callback",
     "/oauth/*",
     "/.well-known/*",

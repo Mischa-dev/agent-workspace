@@ -103,6 +103,8 @@ pub(crate) struct World {
     pub(crate) module: Uuid,
     /// A package install (M1.9) in the project, that made nothing.
     pub(crate) package_install: Uuid,
+    /// The workspace's own package list (M1.11), never read.
+    pub(crate) directory_source: Uuid,
 }
 
 /// The app on a fresh schema with workspaces A and B built, signed in as
@@ -1639,6 +1641,18 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("package install");
+    let directory_source = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO directory_sources (id, workspace_id, kind, location, name) \
+         VALUES ($1, $2, 'url_list', $3, $4)",
+    )
+    .bind(directory_source)
+    .bind(organization)
+    .bind(format!("https://lists.example/{tag}.json"))
+    .bind(format!("Lists{m}"))
+    .execute(pool)
+    .await
+    .expect("directory source");
 
     World {
         marker,
@@ -1689,6 +1703,7 @@ async fn build_workspace(
         link_preview,
         module,
         package_install,
+        directory_source,
     }
 }
 
