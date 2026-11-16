@@ -380,6 +380,7 @@ mod tests {
             kind::THING_COMMENT,
             kind::DIRECT_MESSAGE,
             kind::THREAD_REPLY,
+            kind::KEYWORD,
             kind::CONNECTION_PROBLEM,
             kind::AGENT_UNRESPONSIVE,
             kind::BUDGET_WARNING,

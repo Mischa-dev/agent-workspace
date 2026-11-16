@@ -87,6 +87,9 @@ pub mod kind {
     pub const DIRECT_MESSAGE: &str = "direct_message";
     /// A reply in a thread you follow, by someone else (C2.5).
     pub const THREAD_REPLY: &str = "thread_reply";
+    /// A message with one of your keywords, in a conversation you can read
+    /// and haven't muted (C2.13).
+    pub const KEYWORD: &str = "keyword";
     /// A2: an agent or app you manage lost its connection or credential.
     pub const CONNECTION_PROBLEM: &str = "connection_problem";
     /// A2: an agent you manage or asked is marked "not responding".
@@ -117,7 +120,7 @@ impl Category {
     fn kinds(self) -> Option<&'static [&'static str]> {
         match self {
             Self::All => None,
-            Self::Mentions => Some(&[kind::MENTION, kind::COMMENT_MENTION]),
+            Self::Mentions => Some(&[kind::MENTION, kind::COMMENT_MENTION, kind::KEYWORD]),
             Self::Threads => Some(&[kind::THREAD_REPLY]),
             Self::Tasks => Some(&[kind::ASSIGNED, kind::COMMENT_MENTION, kind::TASK_CHANGED]),
             Self::Runs => Some(&[
@@ -428,6 +431,7 @@ pub async fn fan_out(
             found.extend(followed_messages(transaction, created.message_id).await?);
             found.extend(direct_messages(transaction, created.message_id).await?);
             found.extend(thing_comments(transaction, created.message_id).await?);
+            found.extend(keyword_messages(transaction, created.message_id).await?);
             found
         }
         OutboxEventPayload::MessageUpdated(updated) if updated.removed => {
@@ -769,6 +773,77 @@ async fn direct_messages(
                 "conversation",
                 row.conversation_id,
                 format!("dm:{}", row.conversation_id),
+                format!("message:{message_id}"),
+            );
+            notification.actor_id = Some(row.author_actor_id);
+            notification.conversation_id = Some(row.conversation_id);
+            notification.message_id = Some(message_id);
+            notification
+        })
+        .collect())
+}
+
+/// A message naming someone's keyword tells them (C2.13): only in a channel,
+/// thread or thing's comments (a DM or group already tells its members),
+/// only while they may read it and haven't muted it, never of their own
+/// message, and not when it mentions them (they get the mention). A keyword
+/// matches as a whole word or phrase, in any case. It's one row per
+/// message, and one told of the message another way (a followed channel or
+/// thread) isn't told twice: the occurrence is the message.
+async fn keyword_messages(
+    transaction: &mut Transaction<'_, Postgres>,
+    message_id: Uuid,
+) -> Result<Vec<NewNotification>, AppError> {
+    let rows = sqlx::query_as::<_, MentionRow>(
+        r#"
+        WITH message AS (
+            SELECT message.id, message.project_id, message.conversation_id,
+                   message.author_actor_id, message.plain_text,
+                   project.organization_id AS workspace_id
+            FROM messages message
+            JOIN conversations conversation ON conversation.id = message.conversation_id
+            JOIN projects project ON project.id = message.project_id
+            WHERE message.id = $1 AND message.removed_at IS NULL
+              AND conversation.kind NOT IN ('dm', 'group')
+              AND message.plain_text IS NOT NULL
+        ),
+        matched AS (
+            SELECT DISTINCT keyword.account_id
+            FROM message
+            JOIN notification_keywords keyword ON keyword.workspace_id = message.workspace_id
+            WHERE keyword.account_id <> message.author_actor_id
+              AND message.plain_text ~* ('(^|[^[:alnum:]_])'
+                  || regexp_replace(keyword.keyword, '([^[:alnum:][:space:]])', '\\\1', 'g')
+                  || '($|[^[:alnum:]_])')
+        )
+        SELECT message.project_id, message.conversation_id, message.author_actor_id,
+               matched.account_id AS recipient_actor_id
+        FROM message
+        JOIN matched ON true
+        WHERE actor_can_access_project(matched.account_id, NULL, message.project_id)
+          AND conversation_visible_to(message.conversation_id, matched.account_id)
+          AND conversation_notification_level(matched.account_id, message.conversation_id)
+              <> 'nothing'
+          AND NOT EXISTS (
+              SELECT 1 FROM message_mentions mention
+              WHERE mention.message_id = message.id AND mention.actor_id = matched.account_id
+          )
+        ORDER BY recipient_actor_id
+        "#,
+    )
+    .bind(message_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let mut notification = NewNotification::new(
+                row.project_id,
+                row.recipient_actor_id,
+                kind::KEYWORD,
+                "conversation",
+                row.conversation_id,
+                format!("keyword:{message_id}"),
                 format!("message:{message_id}"),
             );
             notification.actor_id = Some(row.author_actor_id);

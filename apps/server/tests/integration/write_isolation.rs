@@ -499,6 +499,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_send",
     "milestone_write",
     "model_catalog_write",
+    "notification_keyword_set",
     "notification_update",
     "page_comment",
     "page_comment_update",
@@ -6068,6 +6069,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "custom_emoji_update",
             json!({"id": ax.custom_emoji, "retired": true}),
             vec![json!({"id": bx.custom_emoji, "retired": true})],
+        ),
+        // C2.13: keywords are the caller's own, in the workspace called; a
+        // workspace the caller isn't in takes none.
+        mcp_case(
+            "notification_keyword_set",
+            json!({"keywords": ["net launch"]}),
+            vec![json!({"workspace": b.organization, "keywords": ["net launch"]})],
         ),
         mcp_case(
             "agent_profile_write",

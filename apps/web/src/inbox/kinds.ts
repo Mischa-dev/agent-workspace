@@ -7,6 +7,7 @@ export const KIND_ICON: Record<string, IconName> = {
   conversation_message: 'message',
   direct_message: 'message',
   thread_reply: 'message',
+  keyword: 'search',
   connection_problem: 'circle-alert',
   agent_unresponsive: 'bot',
   budget_warning: 'activity',

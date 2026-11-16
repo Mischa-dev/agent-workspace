@@ -52,6 +52,7 @@ pub mod hosts;
 pub mod idempotency;
 pub mod invitations;
 pub mod jobs;
+pub mod keywords;
 pub mod later;
 pub mod launch;
 pub mod layouts;

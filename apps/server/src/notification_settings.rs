@@ -98,7 +98,9 @@ impl Group {
 
     pub fn of(kind: &str) -> Self {
         match kind {
-            kind::MENTION | kind::COMMENT_MENTION | kind::CONVERSATION_MESSAGE => Self::Mentions,
+            kind::MENTION | kind::COMMENT_MENTION | kind::CONVERSATION_MESSAGE | kind::KEYWORD => {
+                Self::Mentions
+            }
             kind::DIRECT_MESSAGE => Self::DirectMessages,
             kind::THREAD_REPLY => Self::Threads,
             kind::CONNECTION_PROBLEM | kind::AGENT_UNRESPONSIVE | kind::BUDGET_WARNING => {

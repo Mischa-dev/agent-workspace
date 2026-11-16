@@ -649,6 +649,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a person's unsent words, theirs and not the workspace's record",
             ),
             (
+                "notification_keywords",
+                "a person's own alert settings, theirs and not the workspace's record",
+            ),
+            (
                 "message_link_previews",
                 "a cache or index derived from other rows, rebuilt on import",
             ),

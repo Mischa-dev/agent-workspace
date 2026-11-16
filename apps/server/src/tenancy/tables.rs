@@ -52,6 +52,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("message_drafts", WORKSPACE_ID),
     ("module_installs", WORKSPACE_ID),
     ("notification_action_tokens", ORGANIZATION_ID),
+    ("notification_keywords", WORKSPACE_ID),
     ("notification_channel_preferences", ORGANIZATION_ID),
     ("notification_email_digests", ORGANIZATION_ID),
     ("onboarding_progress", ORGANIZATION_ID),
