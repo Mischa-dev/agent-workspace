@@ -673,61 +673,6 @@ button.aw-collection__chiptext:hover,
   margin-top: var(--space-3);
 }
 
-.aw-cboard-wrap {
-  min-width: 0;
-}
-
-.aw-cboard {
-  display: grid;
-  grid-template-columns: repeat(var(--aw-board-columns), minmax(260px, 1fr));
-  align-items: start;
-  gap: var(--space-3);
-  max-width: 100%;
-  overflow-x: auto;
-  padding-bottom: var(--space-3);
-  overscroll-behavior-x: contain;
-}
-
-.aw-cboard__column {
-  display: grid;
-  align-content: start;
-  gap: var(--space-2);
-  min-height: 120px;
-  padding: var(--space-2);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-}
-
-.aw-cboard__column.is-target {
-  border-color: var(--accent);
-}
-
-.aw-cboard__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  min-width: 0;
-  padding: var(--space-1) var(--space-1) 0;
-  font: var(--t-label);
-  color: var(--content-fg);
-}
-
-.aw-cboard__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-cboard__cards {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
 .aw-cboard__card,
 .aw-gallery__card {
   display: grid;
@@ -740,13 +685,6 @@ button.aw-collection__chiptext:hover,
   box-shadow: var(--shadow-card);
   color: var(--content-fg);
   font: var(--t-ui);
-}
-
-.aw-cboard__card.is-movable {
-  cursor: grab;
-  touch-action: manipulation;
-  user-select: none;
-  -webkit-user-select: none;
 }
 
 .aw-cboard__card[aria-current='true'],
@@ -782,12 +720,6 @@ button.aw-collection__chiptext:hover,
 .aw-cboard__title:hover,
 .aw-gallery__title:hover {
   text-decoration: underline;
-}
-
-.aw-cboard__menu {
-  align-self: center;
-  margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-1-5)) calc(-1 * var(--space-1)) 0;
-  color: var(--content-fg-muted);
 }
 
 .aw-cboard__value,
@@ -1026,17 +958,6 @@ button.aw-collection__chiptext:hover,
   font: var(--t-ui);
   color: var(--content-fg-muted);
   text-align: center;
-}
-
-@media (max-width: 640px) {
-  .aw-cboard {
-    grid-template-columns: repeat(var(--aw-board-columns), 84vw);
-    scroll-snap-type: x mandatory;
-  }
-
-  .aw-cboard__column {
-    scroll-snap-align: start;
-  }
 }
 
 /* Forms (AWD-110): the list, the question picker and a delete check. */

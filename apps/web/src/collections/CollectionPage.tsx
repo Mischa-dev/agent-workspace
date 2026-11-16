@@ -37,7 +37,7 @@ import { activeConfig, boardFields, dateFields, sameConfig, withColumnHidden } f
 import { CollectionDetailsDialog, ViewNameDialog } from './CollectionDialogs'
 import { CollectionToolbar } from './CollectionToolbar'
 import type { ColumnActions } from './ColumnMenus'
-import { RecordBoard } from './RecordBoard'
+import { CollectionBoardView } from './CollectionBoardView'
 import { RecordCalendar } from './RecordCalendar'
 import { RecordCards } from './RecordCards'
 import { RecordGallery } from './RecordGallery'
@@ -392,7 +392,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           </Banner>
         ) : null}
         {layout === 'board' ? (
-          <RecordBoard
+          <CollectionBoardView
             {...shared}
             groupable={boardFields(body.fields)}
             onGroupBy={(fieldId) => setConfig({ ...config, groupBy: fieldId })}
