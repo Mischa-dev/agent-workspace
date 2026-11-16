@@ -3,6 +3,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "project.membership.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "agent_create",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Make an agent in this workspace"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "account.managers.changed"
     ],
     "idempotent": true,
@@ -136,6 +152,22 @@
     "preview": false,
     "proposable": false,
     "title": "Export package"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "project.membership.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "person_create",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "Add a person who hasn't signed in yet"
   },
   {
     "automation": true,

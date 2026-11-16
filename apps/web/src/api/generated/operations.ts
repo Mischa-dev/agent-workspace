@@ -50,6 +50,10 @@ export type RunRecord = { activityCount: number; cancelRequestedAt?: string | nu
 
 export type RunResultInput = { branch?: string | null; id?: string | null; kind: string; number?: number | null; thingKind?: string | null; title?: string | null; url?: string | null }
 
+export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
+
+export type AgentCreateOutput = { accountId: string; connectionId: string; credential: string; credentialExpiresAt: string; spaceId: string }
+
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
@@ -86,6 +90,10 @@ export type PackageExportInput = { includePages?: boolean; includeSkills?: boole
 
 export type PackageExportOutput = { digest: string; package: Package }
 
+export type PersonCreateInput = { displayName: string; handle: string; roleId?: string | null }
+
+export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken: string }
+
 export type RunActivityReportInput = { activities: RunActivityInput[]; runId: string }
 
 export type RunActivityReportOutput = { accepted: number; duplicates: number; lastSeq: number; overLimit?: number; requests?: RaisedRequestOutput[]; state: string; version: number }
@@ -115,6 +123,7 @@ export type RunUsageReportInput = { cachedInputTokens?: number | null; cost?: nu
 export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId?: string | null }
 
 export type Operations = {
+  agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
@@ -124,6 +133,7 @@ export type Operations = {
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
+  person_create: { input: PersonCreateInput; output: PersonCreateOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }
   run_create: { input: RunCreateInput; output: RunCreateOutput }

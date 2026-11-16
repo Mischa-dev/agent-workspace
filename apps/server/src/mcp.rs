@@ -4947,7 +4947,7 @@ pub(crate) async fn resolve_bearer_principal(
         LEFT JOIN external_agent_connections connection
           ON connection.id = c.external_agent_connection_id
         JOIN projects p ON p.id = c.project_id
-        JOIN project_memberships pm
+        LEFT JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
         JOIN organization_memberships om
           ON om.organization_id = p.organization_id
@@ -4958,16 +4958,17 @@ pub(crate) async fn resolve_bearer_principal(
           AND c.revoked_at IS NULL
           AND c.expires_at > now()
           AND a.status = 'active'
-          AND p.archived_at IS NULL
-          AND pm.enabled
           AND (
-              (a.kind = 'human'
-               AND u.status = 'active'
-               AND c.external_agent_connection_id IS NULL)
+              (u.status = 'active'
+               AND c.external_agent_connection_id IS NULL
+               AND p.archived_at IS NULL
+               AND pm.enabled)
               OR
-              (a.kind = 'external_agent'
-               AND connection.status = 'active'
-               AND connection.project_id = c.project_id
+              -- K1.6: a connection belongs to the workspace, not to the
+              -- project it was first added to; each call is checked against
+              -- the target space (`agent_connection_can_access`).
+              (connection.status = 'active'
+               AND connection.workspace_id = p.organization_id
                AND connection.actor_id = c.actor_id
                AND connection.scopes = c.scopes)
           )

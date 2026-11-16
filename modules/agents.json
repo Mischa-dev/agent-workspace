@@ -11,6 +11,7 @@
   "permissions": ["agents.manage", "agents.manage_any", "hosts.manage", "agents.create"],
   "tools": {
     "agent_list": "query",
+    "agent_create": "create",
     "agent_managers_set": "change",
     "agent_profile_list": "query",
     "agent_profile_write": "change",

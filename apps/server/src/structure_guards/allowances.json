@@ -62,7 +62,7 @@
     "later.rs": 2,
     "launch.rs": 4,
     "layouts.rs": 2,
-    "mcp.rs": 10,
+    "mcp.rs": 8,
     "mcp/admin.rs": 14,
     "mcp/agent_profile_tools.rs": 2,
     "mcp/agents.rs": 3,

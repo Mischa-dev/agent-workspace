@@ -11,7 +11,10 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::support::{app::send, world::WorldBuilder};
+use super::support::{
+    app::{create_agent, initialize, send, tool},
+    world::WorldBuilder,
+};
 
 #[tokio::test]
 async fn accounts_have_one_kind_and_agents_one_owner() {
@@ -310,4 +313,166 @@ fn people_are_created_in_one_place() {
     // Adoption paths give an existing account its sign-in; nothing else
     // inserts users.
     assert_eq!(offenders, vec!["bootstrap.rs".to_owned()], "{offenders:?}");
+}
+
+/// K1.6: an agent belongs to the workspace, not to the project it was first
+/// added to. Removing it from that project leaves it working in another it
+/// belongs to; the project it left is closed to it.
+#[tokio::test]
+async fn an_agent_removed_from_its_first_project_still_works_in_another() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .project("SIDE")
+        .build("k16_anchor")
+        .await
+    else {
+        return;
+    };
+    let work = world.project("WORK").to_owned();
+    let side = world.project("SIDE").to_owned();
+    let (agent, token) = create_agent(&world.app, &world.owner.browser, &work, "Scout", "scout").await;
+    let (status, added) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{side}/members"),
+            None,
+            json!({"actorId": agent, "role": "member"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1::uuid AND actor_id = $2",
+    )
+    .bind(&work)
+    .bind(agent)
+    .fetch_one(world.pool())
+    .await
+    .expect("membership version");
+    let (status, removed) = send(
+        &world.app,
+        world.owner.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/members/{agent}"),
+            Some("remove-scout"),
+            json!({"expectedVersion": version, "enabled": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    let session = initialize(&world.app, &token)
+        .await
+        .expect("the agent still connects after leaving its first project");
+    let listed = tool(
+        &world.app,
+        &token,
+        &session,
+        "conversation_list",
+        json!({"projectId": side}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let closed = tool(
+        &world.app,
+        &token,
+        &session,
+        "conversation_list",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_ne!(closed["outcome"], "ok", "{closed}");
+    world.finish().await;
+}
+
+/// K1.6: an agent made at workspace level holds the role it was given, is
+/// owned by the workspace, names its maker as a manager and starts in the
+/// workspace's own space only: it sees no project until it joins one. A
+/// member without "create agents" can't make one.
+#[tokio::test]
+async fn an_agent_made_at_workspace_level_starts_with_workspace_things_only() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("k16_workspace_agent")
+        .await
+    else {
+        return;
+    };
+    let route = format!("/api/v2/w/{}/ops/agent_create", world.organization);
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route,
+            Some("make-ivy"),
+            json!({ "displayName": "Ivy", "handle": "ivy" }),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let account = made["value"]["accountId"]
+        .as_str()
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .expect("account id");
+    let token = made["value"]["credential"]
+        .as_str()
+        .expect("credential")
+        .to_owned();
+    let pool = world.pool();
+    let (kind, owner, role) = sqlx::query_as::<_, (String, Option<Uuid>, String)>(
+        "SELECT account.account_kind, account.owner_workspace_id, membership.role \
+         FROM actors account JOIN organization_memberships membership \
+           ON membership.actor_id = account.id AND membership.organization_id = $2 \
+         WHERE account.id = $1",
+    )
+    .bind(account)
+    .bind(world.organization)
+    .fetch_one(pool)
+    .await
+    .expect("the agent");
+    assert_eq!(
+        (kind.as_str(), owner, role.as_str()),
+        ("agent", Some(world.organization), "member")
+    );
+    let manages = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM account_managers WHERE account_id = $1 AND manager_account_id = $2)",
+    )
+    .bind(account)
+    .bind(world.owner.actor)
+    .fetch_one(pool)
+    .await
+    .expect("managers");
+    assert!(manages, "its maker manages it");
+    let session = initialize(&world.app, &token).await.expect("agent MCP");
+    let projects = tool(&world.app, &token, &session, "projects_list", json!({})).await;
+    let work = world.project("WORK").to_owned();
+    let ids = projects["value"]["projects"]
+        .as_array()
+        .expect("projects")
+        .iter()
+        .filter_map(|project| project["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(!ids.contains(&work.as_str()), "{projects}");
+    let closed = tool(
+        &world.app,
+        &token,
+        &session,
+        "conversation_list",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_ne!(closed["outcome"], "ok", "{closed}");
+    let (_, refused) = send(
+        &world.app,
+        world.people["lena"].browser.request(
+            "POST",
+            &route,
+            Some("lena-makes"),
+            json!({ "displayName": "Lena's", "handle": "lenas" }),
+        ),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    world.finish().await;
 }

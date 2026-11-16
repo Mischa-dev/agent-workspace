@@ -449,6 +449,7 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
 
 /// Every MCP tool that isn't read-only, which `mcp_cases` covers.
 const MCP_WRITE_TOOLS: &[&str] = &[
+    "agent_create",
     "agent_managers_set",
     "agent_profile_write",
     "ai_analyze",
@@ -5980,6 +5981,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "person_create",
             json!({"displayName": "Net person", "handle": "net-person"}),
             vec![json!({"displayName": "Net person b", "handle": "net-person-b", "roleId": b.organization})],
+        ),
+        // K1.6: making an agent at workspace level. B's roles and B's
+        // people aren't A's.
+        mcp_case(
+            "agent_create",
+            json!({"displayName": "Net agent made", "handle": "net-agent-made"}),
+            vec![
+                json!({"displayName": "Net agent b", "handle": "net-agent-b", "roleId": bx.custom_role}),
+                json!({"displayName": "Net agent c", "handle": "net-agent-c", "ownerAccountId": b.rook}),
+            ],
         ),
         // K1.4: naming an agent's managers. B's agent isn't in A, and B's
         // accounts can't be named in A.

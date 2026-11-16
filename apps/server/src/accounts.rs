@@ -8,12 +8,14 @@
 //! trigger while old code still writes `kind`), the owner columns, and the
 //! one parser that replaces the copies each module had. K1.29 adds the one
 //! way to create a person (`create_person`) and unclaimed accounts
-//! (`claims`).
+//! (`claims`); K1.6 the one way to create an agent (`create_agent`).
 
+mod agents;
 pub mod claims;
 pub mod ops;
 mod people;
 
+pub use agents::{NewAgent, create_agent};
 pub use people::{NewPerson, Person, create_person};
 
 use serde::{Deserialize, Serialize};
