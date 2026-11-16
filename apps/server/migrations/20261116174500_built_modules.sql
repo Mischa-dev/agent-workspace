@@ -92,8 +92,10 @@ AS $$
         SELECT 1
         FROM module_parts part
         JOIN modules module ON module.id = part.module_id
-        WHERE part.part_kind = kind
-          AND part.object_id = object
+        -- $1 and $2, not the parameters' names: modules has a kind column,
+        -- which a bare name would mean.
+        WHERE part.part_kind = $1
+          AND part.object_id = $2
           AND (
               module.archived_at IS NOT NULL
               OR EXISTS (

@@ -277,6 +277,26 @@ async fn a_part_from_another_workspace_never_joins() {
     .execute(&pool)
     .await
     .expect("space");
+    // The owner belongs there too: even someone in both workspaces can't
+    // move a part across.
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(other)
+    .bind(world.owner.actor)
+    .execute(&pool)
+    .await
+    .expect("membership");
+    sqlx::query(
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
+         VALUES ($1, $2, $3, 'owner', 'Owner', 'owner')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(other_space)
+    .bind(world.owner.actor)
+    .execute(&pool)
+    .await
+    .expect("space membership");
     sqlx::query(
         "INSERT INTO collections (id, project_id, name, description, title_name, position, \
          created_by_actor_id) VALUES ($1, $2, 'Secrets', '', 'Name', 0, $3)",
