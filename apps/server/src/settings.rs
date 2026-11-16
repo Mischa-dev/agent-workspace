@@ -1266,7 +1266,7 @@ async fn effective(
         }
         (None, None) => return Err(AppError::Validation("projectId or organizationId")),
     };
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let effective = resolve(
         &mut connection,
         SettingsContext {
@@ -1419,7 +1419,7 @@ async fn set_value(
     if has_own_routes(definition.key) {
         return Err(AppError::Validation("setting key"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let target = authorize_target(
         &mut transaction,
         &principal,
@@ -1471,7 +1471,7 @@ async fn reset_value(
     if has_own_routes(definition.key) {
         return Err(AppError::Validation("setting key"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let target = authorize_target(
         &mut transaction,
         &principal,
