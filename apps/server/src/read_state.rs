@@ -2,6 +2,8 @@
 //! moves it, for the web and for agents and apps, so reading anywhere also
 //! reads the notifications the conversation holds for them.
 
+pub mod ops;
+
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 

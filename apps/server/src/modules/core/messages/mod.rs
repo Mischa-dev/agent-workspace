@@ -19,6 +19,8 @@ impl CoreModule for Module {
         module.routes(crate::reactions::router);
         module.routes(crate::scheduled_messages::router);
         module.routes(crate::forwarding::router);
+        module.operations(crate::read_state::ops::register_ops);
+        module.operations(crate::drafts::ops::register_ops);
         module.filter(ModuleFilter::Conversations { direct: true });
         // Threads belong to Channels, and work in DMs and groups too.
         module.filter(ModuleFilter::AlsoServes(&["thread_start", "thread_update"]));
