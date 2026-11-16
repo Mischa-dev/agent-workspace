@@ -236,9 +236,7 @@ tool_op!(TaskReorder {
     emits: ["task.updated"],
     input: tasks::TaskReorderArguments,
     output: tasks::ReorderValue,
-    run: |call, input| {
-        tool!(call, None, tasks::task_reorder, input)
-    }
+    run: |call, input| { tool!(call, None, tasks::task_reorder, input) }
 });
 
 // ---------------------------------------------------------------------------
@@ -476,9 +474,7 @@ tool_op!(TaskWatchSet {
     emits: ["task.updated"],
     input: planning::TaskWatchArguments,
     output: planning::WatchValue,
-    run: |call, input| {
-        tool!(call, None, planning::task_watch, input)
-    }
+    run: |call, input| { tool!(call, None, planning::task_watch, input) }
 });
 
 // ---------------------------------------------------------------------------
@@ -605,9 +601,7 @@ tool_op!(LabelList {
     emits: [],
     input: labels::LabelListArguments,
     output: labels::LabelListValue,
-    run: |call, input| {
-        tool!(call, None, labels::label_list, input)
-    }
+    run: |call, input| { tool!(call, None, labels::label_list, input) }
 });
 
 tool_op!(LabelCreate {
@@ -663,9 +657,7 @@ tool_op!(FieldList {
     emits: [],
     input: field_tools::FieldListArguments,
     output: field_tools::FieldListValue,
-    run: |call, input| {
-        tool!(call, None, field_tools::field_list, input)
-    }
+    run: |call, input| { tool!(call, None, field_tools::field_list, input) }
 });
 
 tool_op!(FieldCreate {
@@ -720,9 +712,7 @@ tool_op!(ViewList {
     emits: [],
     input: views_data::ViewListArguments,
     output: views_data::ViewListValue,
-    run: |call, input| {
-        tool!(call, None, views_data::view_list, input)
-    }
+    run: |call, input| { tool!(call, None, views_data::view_list, input) }
 });
 
 tool_op!(ViewCreate {
@@ -776,9 +766,7 @@ tool_op!(MilestoneList {
     emits: [],
     input: planning::MilestoneListArguments,
     output: planning::MilestoneListValue,
-    run: |call, input| {
-        tool!(call, None, planning::milestone_list, input)
-    }
+    run: |call, input| { tool!(call, None, planning::milestone_list, input) }
 });
 
 tool_op!(MilestoneCreate {
@@ -841,9 +829,7 @@ tool_op!(TemplateList {
     emits: [],
     input: views_data::TemplateListArguments,
     output: views_data::TemplateListValue,
-    run: |call, input| {
-        tool!(call, None, views_data::template_list, input)
-    }
+    run: |call, input| { tool!(call, None, views_data::template_list, input) }
 });
 
 tool_op!(TemplateCreate {
@@ -935,9 +921,7 @@ tool_op!(TaskImport {
     emits: ["task.created"],
     input: views_data::TaskImportArguments,
     output: views_data::TaskImportValue,
-    run: |call, input| {
-        tool!(call, None, views_data::task_import, input)
-    }
+    run: |call, input| { tool!(call, None, views_data::task_import, input) }
 });
 
 tool_op!(PlanImport {
@@ -949,16 +933,15 @@ tool_op!(PlanImport {
     description: "Turn a plan into milestones, tasks and dependencies. Start with title and plan \
         (Markdown or text, or JSON in the draft shape or a roadmap with workstreams and items, \
         read as is) or pageId; you get a draft to review, where each item already in the space \
-        (by key, or by the same title) is matched and will be updated instead of made twice. \
+        (by key, or by the same title) is matched, listed under updates, and will be updated \
+        instead of made twice. \
         Then call again with importId, commit: true and expectedVersion to create and update it \
         all, in batches that resume where they stopped. importId alone reads an import's \
         progress.",
     emits: ["task.created", "task.updated"],
     input: ai_tools::PlanImportArguments,
     output: serde_json::Value,
-    run: |call, input| {
-        tool!(call, None, ai_tools::plan_import, input)
-    }
+    run: |call, input| { tool!(call, None, ai_tools::plan_import, input) }
 });
 
 // ---------------------------------------------------------------------------
@@ -978,9 +961,7 @@ tool_op!(BugReportLinkList {
     emits: [],
     input: bug_report_tools::BugReportLinkListArguments,
     output: serde_json::Value,
-    run: |call, input| {
-        tool!(call, None, bug_report_tools::bug_report_link_list, input)
-    }
+    run: |call, input| { tool!(call, None, bug_report_tools::bug_report_link_list, input) }
 });
 
 tool_op!(BugReportLinkCreate {

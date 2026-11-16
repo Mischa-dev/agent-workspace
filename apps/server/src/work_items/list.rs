@@ -12,12 +12,17 @@
 //! stands for no value where a field can be empty (`assigneeActorId=none,x`
 //! is unassigned or assigned to x). Labels have three: `labelIds` (all of
 //! them, as it always was), `anyLabelIds` and `notLabelIds`.
+//!
+//! It is the one task list engine (K2.15): agents' `task_list` resolves its
+//! arguments (names, keys, "me") into these same [`Filters`], with the few
+//! a call by name or across spaces adds in [`AgentFilters`], so the web and
+//! agents list the same tasks for the same filter.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use axum::{Json, extract::State};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
@@ -98,13 +103,13 @@ pub(super) struct TaskListQuery {
 
 /// A filter that names one thing or asks for "none".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum OneOrNone {
+pub(crate) enum OneOrNone {
     One(Uuid),
     None,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum LabelFilter {
+pub(crate) enum LabelFilter {
     /// The task has every one of these.
     All(Vec<Uuid>),
     None,
@@ -249,33 +254,164 @@ fn parse_values<T: Ord>(
 }
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct Filters {
-    search: Option<String>,
-    types: FieldFilter<Uuid>,
-    statuses: FieldFilter<Uuid>,
-    categories: FieldFilter<String>,
-    priorities: FieldFilter<String>,
-    assignees: FieldFilter<Uuid>,
-    archived: bool,
+pub(crate) struct Filters {
+    pub(crate) search: Option<String>,
+    pub(crate) types: FieldFilter<Uuid>,
+    pub(crate) statuses: FieldFilter<Uuid>,
+    pub(crate) categories: FieldFilter<String>,
+    pub(crate) priorities: FieldFilter<String>,
+    pub(crate) assignees: FieldFilter<Uuid>,
+    /// Only archived tasks.
+    pub(crate) archived: bool,
+    /// Archived tasks and the rest alike (agents' includeArchived).
+    pub(crate) include_archived: bool,
     /// All of these labels (`labelIds`), or none at all.
-    labels: Option<LabelFilter>,
+    pub(crate) labels: Option<LabelFilter>,
     /// At least one of these; "none" also lets in tasks with no labels.
-    any_labels: Option<Values<Uuid>>,
+    pub(crate) any_labels: Option<Values<Uuid>>,
     /// None of these; "none" leaves out tasks with no labels.
-    not_labels: Option<Values<Uuid>>,
-    milestones: FieldFilter<Uuid>,
-    parent: Option<OneOrNone>,
-    blocked: Option<bool>,
-    ready: bool,
-    claimed: Option<bool>,
-    due_before: Option<NaiveDate>,
-    due_after: Option<NaiveDate>,
-    overdue: bool,
-    hide_done: bool,
+    pub(crate) not_labels: Option<Values<Uuid>>,
+    pub(crate) milestones: FieldFilter<Uuid>,
+    pub(crate) parent: Option<OneOrNone>,
+    pub(crate) blocked: Option<bool>,
+    pub(crate) ready: bool,
+    pub(crate) claimed: Option<bool>,
+    pub(crate) due_before: Option<NaiveDate>,
+    pub(crate) due_after: Option<NaiveDate>,
+    pub(crate) overdue: bool,
+    pub(crate) hide_done: bool,
     /// Custom field filters, all of which must match.
-    fields: Vec<FieldClause>,
+    pub(crate) fields: Vec<FieldClause>,
     /// The board column's field value (`groupField`), on top of `fields`.
-    group_field: Option<FieldClause>,
+    pub(crate) group_field: Option<FieldClause>,
+    /// What only agents' task_list asks for (K2.15).
+    pub(crate) agent: Option<Box<AgentFilters>>,
+}
+
+/// The filters a task_list call adds to the list's own: words searched as
+/// the search box can't (full text, or a key in any space), labels by name
+/// across spaces, who made it, since when it changed, who holds it, the
+/// negative of ready and overdue, a saved view, and a collection.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AgentFilters {
+    /// Words in the title or description, or a key such as AW-12.
+    pub(crate) words: Option<String>,
+    pub(crate) created_by: Option<Uuid>,
+    pub(crate) updated_since: Option<DateTime<Utc>>,
+    /// Someone's claim holds it.
+    pub(crate) claimed_by: Option<Uuid>,
+    /// Label names, lowercased and each once: the task has all of them.
+    pub(crate) label_names: Vec<String>,
+    /// At least one of these names, or no labels at all (true).
+    pub(crate) any_label_names: Option<(Vec<String>, bool)>,
+    /// None of these names, nor no labels at all (true).
+    pub(crate) not_label_names: Option<(Vec<String>, bool)>,
+    pub(crate) not_ready: bool,
+    pub(crate) not_overdue: bool,
+    /// A saved view's own filters, applied as the list page applies them.
+    pub(crate) view: Option<ViewFilters>,
+    /// Only tasks made in this collection (`work_items.collection_id`; None
+    /// for the Tasks collection).
+    pub(crate) collection: Option<Option<Uuid>>,
+}
+
+/// ...or one of the lowercased names bound next, closed with `))`.
+const HAS_LABEL_NAMED: &str = "EXISTS (SELECT 1 FROM work_item_active_labels has_label \
+     WHERE has_label.project_id = item.project_id AND has_label.work_item_id = item.id \
+       AND lower(has_label.name) = ANY(";
+
+/// Ready to start: not archived, not finished, not marked blocked, and
+/// nothing unfinished blocking it.
+fn ready_condition() -> String {
+    format!(
+        "item.archived_at IS NULL AND NOT ({FINISHED}) AND item.blocked_reason IS NULL \
+         AND NOT {HAS_OPEN_BLOCKER}"
+    )
+}
+
+impl AgentFilters {
+    fn push_conditions(&self, builder: &mut QueryBuilder<'_, Postgres>) {
+        if let Some(words) = &self.words {
+            builder
+                // One document: the record's words and the description's.
+                .push(" AND (item.search_vector @@ websearch_to_tsquery('english', ")
+                .push_bind(words.clone())
+                .push(") OR item.title ILIKE '%' || ")
+                .push_bind(words.clone())
+                .push(" || '%' OR upper(project.project_key || '-' || item.number::text) = upper(")
+                .push_bind(words.clone())
+                .push("))");
+        }
+        if let Some(id) = self.created_by {
+            builder
+                .push(" AND item.created_by_actor_id = ")
+                .push_bind(id);
+        }
+        if let Some(time) = self.updated_since {
+            builder.push(" AND item.updated_at >= ").push_bind(time);
+        }
+        if let Some(id) = self.claimed_by {
+            builder
+                .push(
+                    " AND EXISTS (SELECT 1 FROM work_item_claims claim \
+                       WHERE claim.work_item_id = item.id AND claim.expires_at > now() \
+                         AND claim.actor_id = ",
+                )
+                .push_bind(id)
+                .push(")");
+        }
+        if !self.label_names.is_empty() {
+            builder
+                .push(
+                    " AND (SELECT count(*) FROM work_item_active_labels has_label \
+                       WHERE has_label.project_id = item.project_id \
+                         AND has_label.work_item_id = item.id AND lower(has_label.name) = ANY(",
+                )
+                .push_bind(self.label_names.clone())
+                .push(")) = ")
+                .push_bind(self.label_names.len() as i64);
+        }
+        if let Some((names, none)) = &self.any_label_names {
+            builder.push(" AND (false");
+            if !names.is_empty() {
+                builder
+                    .push(format!(" OR {HAS_LABEL_NAMED}"))
+                    .push_bind(names.clone())
+                    .push("))");
+            }
+            if *none {
+                builder.push(format!(" OR NOT {HAS_SOME_LABEL}"));
+            }
+            builder.push(")");
+        }
+        if let Some((names, none)) = &self.not_label_names {
+            if !names.is_empty() {
+                builder
+                    .push(format!(" AND NOT {HAS_LABEL_NAMED}"))
+                    .push_bind(names.clone())
+                    .push("))");
+            }
+            if *none {
+                builder.push(format!(" AND {HAS_SOME_LABEL}"));
+            }
+        }
+        if self.not_ready {
+            builder.push(format!(" AND NOT ({})", ready_condition()));
+        }
+        if self.not_overdue {
+            builder.push(format!(
+                " AND NOT COALESCE(item.due_date < current_date AND NOT ({FINISHED}), false)"
+            ));
+        }
+        if let Some(view) = &self.view {
+            view.push_where(builder);
+        }
+        if let Some(collection) = self.collection {
+            builder
+                .push(" AND item.collection_id IS NOT DISTINCT FROM ")
+                .push_bind(collection);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -944,6 +1080,8 @@ impl Filters {
             )?,
             assignees,
             archived: query.archived.unwrap_or(false),
+            include_archived: false,
+            agent: None,
             labels,
             any_labels: parse_values(query.any_label_ids.as_deref(), "anyLabelIds", true, id)?,
             not_labels: parse_values(query.not_label_ids.as_deref(), "notLabelIds", true, id)?,
@@ -1149,7 +1287,7 @@ impl Filters {
     }
 
     /// Appends ` AND ...` for every filter.
-    fn push_where(&self, builder: &mut QueryBuilder<'_, Postgres>) {
+    pub(crate) fn push_where(&self, builder: &mut QueryBuilder<'_, Postgres>) {
         self.push_conditions(builder, true);
     }
 
@@ -1182,7 +1320,7 @@ impl Filters {
         push_field(builder, "status.semantic_category", false, &self.categories);
         push_field(builder, "item.priority", false, &self.priorities);
         push_field(builder, "item.assignee_actor_id", true, &self.assignees);
-        if archived_rule {
+        if archived_rule && !self.include_archived {
             builder.push(if self.archived {
                 " AND item.archived_at IS NOT NULL"
             } else {
@@ -1253,9 +1391,7 @@ impl Filters {
             None => {}
         }
         if self.ready {
-            builder.push(format!(
-                " AND NOT ({FINISHED}) AND item.blocked_reason IS NULL AND NOT {HAS_OPEN_BLOCKER}"
-            ));
+            builder.push(format!(" AND {}", ready_condition()));
         }
         if let Some(claimed) = self.claimed {
             builder.push(if claimed { " AND " } else { " AND NOT " });
@@ -1281,6 +1417,9 @@ impl Filters {
         fields::push_clauses(builder, "item.field_values", &self.fields);
         if let Some(clause) = &self.group_field {
             fields::push_clauses(builder, "item.field_values", std::slice::from_ref(clause));
+        }
+        if let Some(agent) = &self.agent {
+            agent.push_conditions(builder);
         }
     }
 }

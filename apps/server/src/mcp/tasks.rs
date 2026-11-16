@@ -17,9 +17,8 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, ToolResult, accessible_project_ids, archived_task_message,
-        flag_or_text, one_or_many, parse_id, parse_message_id, parse_since,
-        project_is_chosen, public_url, scope_projects, snippet, string_or_number,
-        version_conflict_message,
+        flag_or_text, one_or_many, parse_id, parse_message_id, parse_since, project_is_chosen,
+        public_url, scope_projects, snippet, string_or_number, version_conflict_message,
     },
     field_tools, history, planning,
     reads::{self, ReadResult, WorkItemProjection},
@@ -39,10 +38,9 @@ use crate::{
     work_item_planning::{HAS_OPEN_BLOCKER, OPEN_BLOCKER_COUNT},
     work_items::{
         decode_work_item_timeline_cursor,
-        list::{FieldFilter, Values, ViewFilters, push_field},
+        list::{AgentFilters, FieldFilter, Filters, OneOrNone, Values, ViewFilters},
     },
 };
-
 
 // ---------------------------------------------------------------------------
 // task_list
@@ -219,6 +217,12 @@ pub(crate) struct TaskSummary {
     /// Its milestone, by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub milestone: Option<String>,
+    /// How many of its acceptance criteria are checked, out of
+    /// criteriaTotal. Both left out when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria_done: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria_total: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<String>,
     pub project: String,
@@ -239,7 +243,7 @@ pub(crate) struct TaskSummary {
 
 /// The planning columns of a task line: blocked (marked or by an unfinished
 /// dependency), how many unfinished tasks it waits on, whether it's ready,
-/// its due date and milestone.
+/// its due date, milestone and acceptance criteria progress.
 fn task_planning_columns() -> String {
     format!(
         r#"
@@ -249,7 +253,14 @@ fn task_planning_columns() -> String {
         item.due_date::text AS due_date,
         ({OVERDUE}) AS overdue,
         (SELECT milestone.name FROM project_milestones milestone
-          WHERE milestone.project_id = item.project_id AND milestone.id = item.milestone_id) AS milestone
+          WHERE milestone.project_id = item.project_id AND milestone.id = item.milestone_id) AS milestone,
+        (SELECT CASE WHEN count(*) > 0 THEN count(*) FILTER (WHERE criterion.completed) END
+           FROM work_item_acceptance_criteria criterion
+          WHERE criterion.project_id = item.project_id
+            AND criterion.work_item_id = item.id) AS criteria_done,
+        (SELECT NULLIF(count(*), 0) FROM work_item_acceptance_criteria criterion
+          WHERE criterion.project_id = item.project_id
+            AND criterion.work_item_id = item.id) AS criteria_total
         "#
     )
 }
@@ -300,47 +311,6 @@ pub(crate) struct TaskListValue {
     pub next_cursor: Option<String>,
 }
 
-/// What a task_list call filters on, resolved. `push_where` writes the same
-/// conditions for the count and the page, so `total` and the page agree.
-#[derive(Debug, Default)]
-struct ListFilters {
-    projects: Vec<Uuid>,
-    include_done: bool,
-    include_archived: bool,
-    /// The call names statuses to list: finished tasks in them count even
-    /// without includeDone.
-    names_statuses: bool,
-    statuses: FieldFilter<Uuid>,
-    assignees: FieldFilter<Uuid>,
-    query: String,
-    parent: Option<Parent>,
-    types: FieldFilter<Uuid>,
-    priorities: FieldFilter<String>,
-    created_by: Option<Uuid>,
-    updated_since: Option<DateTime<Utc>>,
-    blocked: Option<bool>,
-    claimed_mode: &'static str,
-    claimed_id: Option<Uuid>,
-    /// Label names, lowercased and each once: the task has all of them.
-    labels: Vec<String>,
-    /// At least one of these names, or no labels at all (true).
-    any_labels: Option<(Vec<String>, bool)>,
-    /// None of these names, nor no labels at all (true).
-    not_labels: Option<(Vec<String>, bool)>,
-    milestones: FieldFilter<Uuid>,
-    ready: Option<bool>,
-    due_before: Option<NaiveDate>,
-    due_after: Option<NaiveDate>,
-    overdue: Option<bool>,
-    /// A saved view's own filters, applied as the task list applies them.
-    view: Option<ViewFilters>,
-    /// Custom field filters, as stored values (one project only).
-    fields: Vec<crate::fields::FieldClause>,
-    /// Only tasks made in this collection (`work_items.collection_id`; None
-    /// for the Tasks collection).
-    collection: Option<Option<Uuid>>,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Parent {
     /// Subtasks of this task.
@@ -349,144 +319,19 @@ enum Parent {
     TopLevel,
 }
 
-/// SQL for a task row aliased `item`: it has an active label...
-const HAS_SOME_LABEL: &str = "EXISTS (SELECT 1 FROM work_item_active_labels active \
-     WHERE active.project_id = item.project_id AND active.work_item_id = item.id)";
-/// ...or one of the lowercased names bound next, closed with `))`.
-const HAS_LABEL_NAMED: &str = "EXISTS (SELECT 1 FROM work_item_active_labels active \
-     WHERE active.project_id = item.project_id AND active.work_item_id = item.id \
-       AND lower(active.name) = ANY(";
-
-impl ListFilters {
-    /// Every filter, as the WHERE clause of a query over `TASK_FROM`.
-    /// Labels match by name through the active-labels view, so an archived
-    /// label never matches.
-    fn push_where(&self, builder: &mut QueryBuilder<'_, Postgres>) {
-        builder
-            .push(" WHERE item.project_id = ANY(")
-            .push_bind(self.projects.clone())
-            .push(")");
-        if !self.include_archived {
-            builder.push(" AND item.archived_at IS NULL");
-        }
-        if !self.include_done && !self.names_statuses {
-            builder.push(" AND status.semantic_category NOT IN ('completed', 'canceled')");
-        }
-        push_field(builder, "item.status_id", false, &self.statuses);
-        push_field(builder, "item.assignee_actor_id", true, &self.assignees);
-        if !self.query.is_empty() {
-            builder
-                // One document: the record's words and the description's.
-                .push(" AND (item.search_vector @@ websearch_to_tsquery('english', ")
-                .push_bind(self.query.clone())
-                .push(") OR item.title ILIKE '%' || ")
-                .push_bind(self.query.clone())
-                .push(" || '%' OR upper(project.project_key || '-' || item.number::text) = upper(")
-                .push_bind(self.query.clone())
-                .push("))");
-        }
-        match self.parent {
-            Some(Parent::Of(id)) => {
-                builder
-                    .push(" AND item.parent_work_item_id = ")
-                    .push_bind(id);
-            }
-            Some(Parent::TopLevel) => {
-                builder.push(" AND item.parent_work_item_id IS NULL");
-            }
-            None => {}
-        }
-        push_field(builder, "item.type_id", false, &self.types);
-        push_field(builder, "item.priority", false, &self.priorities);
-        if let Some(id) = self.created_by {
-            builder
-                .push(" AND item.created_by_actor_id = ")
-                .push_bind(id);
-        }
-        if let Some(time) = self.updated_since {
-            builder.push(" AND item.updated_at >= ").push_bind(time);
-        }
-        match self.claimed_mode {
-            "none" => {
-                builder.push(" AND claim.work_item_id IS NULL");
-            }
-            "some" => {
-                builder.push(" AND claim.work_item_id IS NOT NULL");
-            }
-            "one" => {
-                builder
-                    .push(" AND claim.actor_id = ")
-                    .push_bind(self.claimed_id);
-            }
-            _ => {}
-        }
-        if !self.labels.is_empty() {
-            builder
-                .push(
-                    " AND (SELECT count(*) FROM work_item_active_labels active \
-                       WHERE active.project_id = item.project_id \
-                         AND active.work_item_id = item.id AND lower(active.name) = ANY(",
-                )
-                .push_bind(self.labels.clone())
-                .push(")) = ")
-                .push_bind(self.labels.len() as i64);
-        }
-        if let Some((names, none)) = &self.any_labels {
-            builder.push(" AND (false");
-            if !names.is_empty() {
-                builder
-                    .push(format!(" OR {HAS_LABEL_NAMED}"))
-                    .push_bind(names.clone())
-                    .push("))");
-            }
-            if *none {
-                builder.push(format!(" OR NOT {HAS_SOME_LABEL}"));
-            }
-            builder.push(")");
-        }
-        if let Some((names, none)) = &self.not_labels {
-            if !names.is_empty() {
-                builder
-                    .push(format!(" AND NOT {HAS_LABEL_NAMED}"))
-                    .push_bind(names.clone())
-                    .push("))");
-            }
-            if *none {
-                builder.push(format!(" AND {HAS_SOME_LABEL}"));
-            }
-        }
-        if let Some(blocked) = self.blocked {
-            builder
-                .push(format!(
-                    " AND (item.blocked_reason IS NOT NULL OR {HAS_OPEN_BLOCKER}) = "
-                ))
-                .push_bind(blocked);
-        }
-        push_field(builder, "item.milestone_id", true, &self.milestones);
-        if let Some(ready) = self.ready {
-            builder.push(format!(" AND ({READY}) = ")).push_bind(ready);
-        }
-        if let Some(date) = self.due_before {
-            builder.push(" AND item.due_date <= ").push_bind(date);
-        }
-        if let Some(date) = self.due_after {
-            builder.push(" AND item.due_date >= ").push_bind(date);
-        }
-        if let Some(overdue) = self.overdue {
-            builder
-                .push(format!(" AND ({OVERDUE}) = "))
-                .push_bind(overdue);
-        }
-        if let Some(view) = &self.view {
-            view.push_where(builder);
-        }
-        crate::fields::push_clauses(builder, "item.field_values", &self.fields);
-        if let Some(collection) = self.collection {
-            builder
-                .push(" AND item.collection_id IS NOT DISTINCT FROM ")
-                .push_bind(collection);
-        }
-    }
+/// A task_list call's filters as the one list engine reads them (K2.15),
+/// within `projects`. The same conditions go into the count and the page,
+/// so `total` and the page agree.
+fn push_list_where(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    projects: &[Uuid],
+    filters: &crate::work_items::list::Filters,
+) {
+    builder
+        .push(" WHERE item.project_id = ANY(")
+        .push_bind(projects.to_vec())
+        .push(")");
+    filters.push_where(builder);
 }
 
 /// The filters a cursor was made for. A cursor carries a short hash of it,
@@ -1281,11 +1126,10 @@ async fn list_tasks(
         .map_err(|_| AppError::Internal("task_list statuses"))?;
     let [any_types, not_types] =
         <[Vec<Uuid>; 2]>::try_from(types).map_err(|_| AppError::Internal("task_list types"))?;
-    let filters = ListFilters {
-        projects,
-        include_done,
+    let filters = Filters {
+        // Finished tasks only when asked for, or when the call names statuses.
+        hide_done: !include_done && status.is_empty(),
         include_archived,
-        names_statuses: !status.is_empty(),
         statuses: FieldFilter::new(
             (!status.is_empty()).then(|| Values::new(any_statuses, false)),
             (!not_status.is_empty()).then(|| Values::new(not_statuses, false)),
@@ -1294,32 +1138,44 @@ async fn list_tasks(
             chosen(assignees.0, assignees.1),
             chosen(not_assignees.0, not_assignees.1),
         ),
-        query,
-        parent,
+        parent: parent.map(|parent| match parent {
+            Parent::Of(id) => OneOrNone::One(id),
+            Parent::TopLevel => OneOrNone::None,
+        }),
         types: FieldFilter::new(
             (!task_type.is_empty()).then(|| Values::new(any_types, false)),
             (!not_type.is_empty()).then(|| Values::new(not_types, false)),
         ),
         priorities: FieldFilter::new(chosen(priorities, false), chosen(not_priorities, false)),
-        created_by,
-        updated_since,
         blocked: arguments.blocked,
-        claimed_mode,
-        claimed_id,
-        labels,
-        any_labels,
-        not_labels,
+        ready: arguments.ready == Some(true),
+        claimed: match claimed_mode {
+            "some" => Some(true),
+            "none" => Some(false),
+            _ => None,
+        },
         milestones: FieldFilter::new(
             chosen(milestones.0, milestones.1),
             chosen(not_milestones.0, not_milestones.1),
         ),
-        ready: arguments.ready,
         due_before,
         due_after,
-        overdue: arguments.overdue,
-        view,
+        overdue: arguments.overdue == Some(true),
         fields: field_clauses,
-        collection,
+        agent: Some(Box::new(AgentFilters {
+            words: (!query.is_empty()).then(|| query.clone()),
+            created_by,
+            updated_since,
+            claimed_by: claimed_id.filter(|_| claimed_mode == "one"),
+            label_names: labels,
+            any_label_names: any_labels,
+            not_label_names: not_labels,
+            not_ready: arguments.ready == Some(false),
+            not_overdue: arguments.overdue == Some(false),
+            view,
+            collection,
+        })),
+        ..Filters::default()
     };
 
     // One snapshot for both queries, so the total and the page agree.
@@ -1328,7 +1184,7 @@ async fn list_tasks(
         .execute(&mut *transaction)
         .await?;
     let mut count = QueryBuilder::<Postgres>::new(format!("SELECT count(*) {TASK_FROM}"));
-    filters.push_where(&mut count);
+    push_list_where(&mut count, &projects, &filters);
     let total = count
         .build_query_scalar::<i64>()
         .fetch_one(&mut *transaction)
@@ -1365,7 +1221,7 @@ async fn list_tasks(
             SELECT item.id
             {TASK_FROM}"#
     ));
-    filters.push_where(&mut page);
+    push_list_where(&mut page, &projects, &filters);
     if let Some(position) = &position {
         push_after(&mut page, sort, position);
     }

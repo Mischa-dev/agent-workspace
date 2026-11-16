@@ -217,6 +217,9 @@ fn written(result: writes::WriteResult) -> Result<TaskWritten, OpError> {
 fn answer<T>(result: ToolResult<T>) -> Result<T, OpError> {
     match result {
         ToolResult::Ok { value } => Ok(value),
+        ToolResult::NotFound { message } if !message.is_empty() => Err(OpError::Missing {
+            message: Cow::Owned(message),
+        }),
         ToolResult::NotFound { .. } => Err(OpError::not_found("That task")),
         ToolResult::InvalidRequest { field, message } => Err(OpError::Invalid {
             field: Cow::Owned(field),

@@ -136,10 +136,7 @@ impl Operation for TaskClaim {
     async fn run(call: &mut OpCall<'_>, input: TaskClaimInput) -> Result<ClaimValue, OpError> {
         let minutes = input.minutes.map_or(DEFAULT_CLAIM_MINUTES, i32::from);
         if !(5..=1440).contains(&minutes) {
-            return Err(OpError::invalid(
-                "minutes",
-                "Claim for 5 to 1440 minutes.",
-            ));
+            return Err(OpError::invalid("minutes", "Claim for 5 to 1440 minutes."));
         }
         let note = input
             .note
@@ -299,17 +296,10 @@ impl Operation for TaskRelease {
         let actor = call.ctx.caller.account_id;
         let via = call.ctx.caller.via_grant_id;
         let tx = call.tx().await?;
-        let released = claims::release(
-            tx,
-            space,
-            task_id,
-            actor,
-            via,
-            handoff.as_deref(),
-            releaser,
-        )
-        .await
-        .map_err(|error| task_error("task_release", error))?;
+        let released =
+            claims::release(tx, space, task_id, actor, via, handoff.as_deref(), releaser)
+                .await
+                .map_err(|error| task_error("task_release", error))?;
         let released = match released {
             Released::Ended { .. } => true,
             Released::Nothing => false,

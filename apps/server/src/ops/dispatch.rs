@@ -166,6 +166,7 @@ async fn task_keys_to_ids(
         "/parentId",
         "/parentWorkItemId",
         "/taskIds/0",
+        "/links/0/taskId",
     ] {
         let Some((space_key, number)) = input
             .pointer(field)

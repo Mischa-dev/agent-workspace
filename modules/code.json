@@ -18,8 +18,7 @@
     "pull_request_create": "change",
     "pull_request_merge": "change",
     "pull_request_refresh": "change",
-    "pull_request_get": "describe",
-    "task_link_pull_request": "change"
+    "pull_request_get": "describe"
   },
   "routes": [
     "/api/v1/integrations/github/*",

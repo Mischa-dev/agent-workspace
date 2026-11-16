@@ -91,6 +91,11 @@ pub struct DraftTask {
     pub parent: Option<String>,
     #[serde(default)]
     pub blocked_by: Vec<String>,
+    /// An existing task this one is (such as AWD-12): committing updates it
+    /// instead of making a new one. Without it, a task the project already
+    /// has with the same title is updated (AWD-168).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 fn no_priority() -> String {
@@ -209,6 +214,16 @@ pub fn check(draft: &Draft) -> Vec<String> {
         {
             problems.push(format!(
                 "Task {} names milestone {milestone}, which isn't in the plan.",
+                task.reference
+            ));
+        }
+        if task
+            .key
+            .as_deref()
+            .is_some_and(|key| !(1..=64).contains(&key.trim().len()))
+        {
+            problems.push(format!(
+                "Task {}'s key should name an existing task, such as AWD-12.",
                 task.reference
             ));
         }
@@ -391,6 +406,7 @@ fn read_roadmap(value: &Value) -> Draft {
                     .filter_map(Value::as_str)
                     .filter_map(|dep| task_of.get(dep).cloned())
                     .collect(),
+                key: None,
             }
         })
         .collect();
@@ -497,6 +513,10 @@ fn merge_parts(parts: Vec<Draft>) -> Draft {
                 } else {
                     no_priority()
                 },
+                key: task
+                    .key
+                    .map(|key| key.trim().to_owned())
+                    .filter(|key| (1..=64).contains(&key.len())),
             });
         }
     }
@@ -685,6 +705,63 @@ pub async fn get(
     .bind(id)
     .bind(project_id)
     .fetch_optional(pool)
+    .await?)
+}
+
+/// Which draft tasks committing would update instead of create: each
+/// draft ref with the existing task's key, by the rule `existing_match`
+/// follows (AWD-168). A preview; the commit decides again.
+pub async fn existing_matches(
+    pool: &PgPool,
+    project_id: Uuid,
+    draft: &Draft,
+) -> Result<Vec<(String, String)>, AppError> {
+    if draft.tasks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let refs = draft
+        .tasks
+        .iter()
+        .map(|task| task.reference.clone())
+        .collect::<Vec<_>>();
+    let keys = draft
+        .tasks
+        .iter()
+        .map(|task| task.key.clone().unwrap_or_default())
+        .collect::<Vec<_>>();
+    let titles = draft
+        .tasks
+        .iter()
+        .map(|task| task.title.clone())
+        .collect::<Vec<_>>();
+    Ok(crate::db::scoped_one(pool, async |connection| {
+    sqlx::query_as::<_, (String, String)>(
+        r#"
+        SELECT requested.ref, found.key
+        FROM unnest($2::text[], $3::text[], $4::text[]) WITH ORDINALITY
+             AS requested(ref, key, title, ordinality)
+        CROSS JOIN LATERAL (
+            SELECT project.project_key || '-' || item.number::text AS key
+            FROM task_rows item
+            JOIN projects project ON project.id = item.project_id
+            WHERE item.project_id = $1 AND item.archived_at IS NULL
+              AND (upper(project.project_key || '-' || item.number::text) = upper(btrim(requested.key))
+                   OR lower(btrim(item.title)) = lower(btrim(requested.title)))
+            ORDER BY upper(project.project_key || '-' || item.number::text)
+                       = upper(btrim(requested.key)) DESC,
+                     item.number
+            LIMIT 1
+        ) found
+        ORDER BY requested.ordinality
+        "#,
+    )
+    .bind(project_id)
+    .bind(&refs)
+    .bind(&keys)
+    .bind(&titles)
+    .fetch_all(connection)
+    .await
+    })
     .await?)
 }
 
@@ -1245,6 +1322,50 @@ async fn commit_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
         }
     }
     if !batch.is_empty() {
+        // Tasks the project already has (by key, else by title) are updated
+        // instead of made again (AWD-168). Never a task this import made.
+        let mut taken = tasks.values().flatten().copied().collect::<HashSet<_>>();
+        let mut matched = Vec::new();
+        let mut fresh = Vec::new();
+        for task in batch {
+            match existing_match(&mut transaction, project_id, task, &taken).await? {
+                Some(existing) => {
+                    taken.insert(existing);
+                    matched.push((task, existing));
+                }
+                None => fresh.push(task),
+            }
+        }
+        let mut by_milestone: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
+        for (task, existing) in &matched {
+            if let Err(message) = update_existing(&mut transaction, &actor, task, *existing).await?
+            {
+                transaction.rollback().await?;
+                return Ok(Step::Failed(message));
+            }
+            record(
+                &mut transaction,
+                import_id,
+                "task",
+                &task.reference,
+                Some(*existing),
+                None,
+            )
+            .await?;
+            tasks.insert(task.reference.clone(), Some(*existing));
+            if let Some(milestone) = task
+                .milestone
+                .as_ref()
+                .and_then(|milestone| milestones.get(milestone).copied().flatten())
+            {
+                by_milestone.entry(milestone).or_default().push(*existing);
+            }
+        }
+        let batch = fresh;
+        let in_batch = batch
+            .iter()
+            .map(|task| task.reference.as_str())
+            .collect::<HashSet<_>>();
         let inputs = batch
             .iter()
             .map(|task| ImportTask {
@@ -1272,16 +1393,19 @@ async fn commit_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
                     .and_then(|parent| tasks.get(parent).copied().flatten()),
             })
             .collect::<Vec<_>>();
-        let created = match create_for_import(&mut transaction, &actor, &inputs).await? {
-            Ok(created) => created,
-            Err(message) => {
-                transaction.rollback().await?;
-                return Ok(Step::Failed(format!(
-                    "Some tasks couldn't be created. {message}"
-                )));
+        let created = if inputs.is_empty() {
+            Vec::new()
+        } else {
+            match create_for_import(&mut transaction, &actor, &inputs).await? {
+                Ok(created) => created,
+                Err(message) => {
+                    transaction.rollback().await?;
+                    return Ok(Step::Failed(format!(
+                        "Some tasks couldn't be created. {message}"
+                    )));
+                }
             }
         };
-        let mut by_milestone: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
         for (task, id) in batch.iter().zip(&created) {
             record(
                 &mut transaction,
@@ -1380,6 +1504,173 @@ async fn commit_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
     Ok(Step::Done)
 }
 
+/// The project's task a draft task stands for, if it has one: the task
+/// its `key` names, else an open task with the same title (any case; the
+/// oldest when several have it). `taken` are tasks matched or made already.
+async fn existing_match(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    task: &DraftTask,
+    taken: &HashSet<Uuid>,
+) -> Result<Option<Uuid>, AppError> {
+    let taken = taken.iter().copied().collect::<Vec<_>>();
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT item.id
+        FROM task_rows item
+        JOIN projects project ON project.id = item.project_id
+        WHERE item.project_id = $1 AND item.archived_at IS NULL
+          AND NOT (item.id = ANY($4))
+          AND (upper(project.project_key || '-' || item.number::text) = upper(btrim($2))
+               OR lower(btrim(item.title)) = lower(btrim($3)))
+        ORDER BY upper(project.project_key || '-' || item.number::text) = upper(btrim($2))
+                   IS TRUE DESC,
+                 item.number
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(task.key.as_deref())
+    .bind(&task.title)
+    .bind(&taken)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
+/// Brings an existing task in line with its draft: the title (when it was
+/// matched by key), a description and priority the draft sets, labels and
+/// criteria it lacks. Its milestone and dependencies follow in the steps
+/// that set every task's. Returns a message when the change is refused.
+async fn update_existing(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    task: &DraftTask,
+    work_item_id: Uuid,
+) -> Result<Result<(), String>, AppError> {
+    use crate::work_item_commands::{
+        AuditVersionMetadata, CriteriaCommand, CriteriaOperation, CriteriaOutcome,
+        UpdateWorkItemCommand, UpdateWorkItemOutcome, lock_work_item, update_locked_work_item,
+    };
+    let Some(current) = lock_work_item(transaction, actor.project_id, work_item_id).await? else {
+        return Ok(Ok(()));
+    };
+    let title = task.title.trim();
+    let title = (!title.is_empty() && title != current.title.trim()).then_some(title);
+    let description = task.description.trim();
+    let description = (!description.is_empty() && description != current.description.trim())
+        .then_some(description);
+    let priority = (task.priority != "no_priority" && task.priority != current.priority)
+        .then_some(task.priority.as_str());
+    let wanted = task
+        .labels
+        .iter()
+        .map(|label| (label.trim().to_owned(), String::new()))
+        .filter(|(label, _)| !label.is_empty())
+        .collect::<Vec<_>>();
+    let labels = if wanted.is_empty() {
+        Vec::new()
+    } else {
+        crate::work_item_labels::ensure_by_name(
+            transaction,
+            actor.project_id,
+            actor.actor_id,
+            &wanted,
+        )
+        .await?
+        .ids
+    };
+    let mut version = current.version;
+    if title.is_some() || description.is_some() || priority.is_some() || !labels.is_empty() {
+        let outcome = update_locked_work_item(
+            transaction,
+            actor,
+            current,
+            UpdateWorkItemCommand {
+                expected_version: version,
+                title,
+                description,
+                type_id: None,
+                status_id: None,
+                priority,
+                assignee_actor_id: None,
+                parent_work_item_id: None,
+                board_placement: None,
+                labels: (!labels.is_empty()).then_some(crate::work_item_labels::LabelDelta {
+                    add: &labels,
+                    remove: &[],
+                }),
+                fields: Default::default(),
+                field_values: None,
+                summary: "Updated from a plan",
+                audit_action: "work_item.updated",
+                audit_version_metadata: AuditVersionMetadata::Omit,
+            },
+        )
+        .await?;
+        version = match outcome {
+            UpdateWorkItemOutcome::Applied { version, .. } => version,
+            UpdateWorkItemOutcome::Noop(current) => current.version,
+            UpdateWorkItemOutcome::NotFound => return Ok(Ok(())),
+            UpdateWorkItemOutcome::TooManyLabels { .. } => {
+                return Ok(Err(format!(
+                    "Task {} would have too many labels.",
+                    task.reference
+                )));
+            }
+            _ => {
+                return Ok(Err(format!(
+                    "The existing task for {} couldn't be updated.",
+                    task.reference
+                )));
+            }
+        };
+    }
+    let have = sqlx::query_scalar::<_, String>(
+        "SELECT lower(btrim(text)) FROM work_item_acceptance_criteria WHERE project_id = $1 AND work_item_id = $2",
+    )
+    .bind(actor.project_id)
+    .bind(work_item_id)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect::<HashSet<_>>();
+    let mut seen = have;
+    let operations = task
+        .criteria
+        .iter()
+        .map(|criterion| criterion.trim())
+        .filter(|criterion| !criterion.is_empty() && seen.insert(criterion.to_lowercase()))
+        .map(|criterion| CriteriaOperation::Add {
+            text: criterion.to_owned(),
+            position: None,
+            completed: false,
+        })
+        .collect::<Vec<_>>();
+    if !operations.is_empty() {
+        match crate::work_item_commands::change_criteria(
+            transaction,
+            actor,
+            work_item_id,
+            CriteriaCommand {
+                expected_version: version,
+                operations: &operations,
+                audit_action: "work_item.updated",
+            },
+        )
+        .await?
+        {
+            CriteriaOutcome::Applied { .. } => {}
+            _ => {
+                return Ok(Err(format!(
+                    "The existing task for {} couldn't take its criteria.",
+                    task.reference
+                )));
+            }
+        }
+    }
+    Ok(Ok(()))
+}
+
 async fn record(
     transaction: &mut Transaction<'_, Postgres>,
     import_id: Uuid,
@@ -1442,6 +1733,7 @@ mod tests {
             milestone: None,
             parent: parent.map(str::to_owned),
             blocked_by: Vec::new(),
+            key: None,
         };
         let looped = Draft {
             milestones: Vec::new(),
@@ -1481,6 +1773,7 @@ mod tests {
                 milestone: Some("m1".to_owned()),
                 parent: Some("t1".to_owned()),
                 blocked_by: vec!["missing".to_owned()],
+                key: None,
             }],
         };
         let merged = merge_parts(vec![part("One"), part("Two")]);

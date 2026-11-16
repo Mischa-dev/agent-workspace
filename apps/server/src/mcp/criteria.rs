@@ -68,6 +68,9 @@ pub struct CriterionOperationArgument {
     /// For add (default: the end) and move: where it goes, 1 being first,
     /// counted in the list as it stands after the operations before this one.
     pub position: Option<i32>,
+    /// For add: true adds it already checked (done).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -154,6 +157,8 @@ struct CheckedOperation {
     text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     position: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -188,6 +193,7 @@ impl CheckedOperation {
             CriterionOp::Add => CriteriaOperation::Add {
                 text: self.text.clone().unwrap_or_default(),
                 position: self.position,
+                completed: self.completed == Some(true),
             },
             CriterionOp::Edit => CriteriaOperation::Update {
                 target,
@@ -241,6 +247,14 @@ fn check(arguments: &TaskCriteriaArguments) -> Result<Vec<CheckedOperation>, Pro
             CriterionOp::Check | CriterionOp::Uncheck | CriterionOp::Remove => (true, false, false),
             CriterionOp::Move => (true, false, true),
         };
+        if operation.completed.is_some() && operation.op != CriterionOp::Add {
+            return Err((
+                field("completed"),
+                format!(
+                    "Operation {number} ({name}) doesn't take completed: use check or uncheck."
+                ),
+            ));
+        }
         let needs_text = takes_text;
         let needs_position = operation.op == CriterionOp::Move;
         if operation.criterion.is_some() && !needs_criterion {
@@ -324,6 +338,7 @@ fn check(arguments: &TaskCriteriaArguments) -> Result<Vec<CheckedOperation>, Pro
             criterion,
             text,
             position: operation.position,
+            completed: operation.completed,
         });
     }
     Ok(checked)

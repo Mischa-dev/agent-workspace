@@ -64,6 +64,6 @@
   "whiteboards/api.ts": 15,
   "work-items/api.ts": 25,
   "work-items/moveApi.ts": 3,
-  "work-items/planningApi.ts": 12,
+  "work-items/planningApi.ts": 11,
   "workspace-templates/api.ts": 4
 }

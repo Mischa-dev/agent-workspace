@@ -43,6 +43,7 @@ mod export_declarations;
 mod github_task_keys;
 mod harness_support;
 mod journey;
+mod k2_14_planning_ops;
 mod layouts;
 mod m0_database;
 mod m1_api_policy_database;

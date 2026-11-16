@@ -396,22 +396,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/bug-report-links",
-            Tool("bug_report_link_write"),
+            Tool("bug_report_link_create"),
         ),
         (
             Patch,
             "/api/v1/bug-report-links/{link_id}",
-            Tool("bug_report_link_write"),
+            Tool("bug_report_link_update"),
         ),
         (
             Delete,
             "/api/v1/bug-report-links/{link_id}",
-            Tool("bug_report_link_write"),
+            Tool("bug_report_link_update"),
         ),
         (
             Post,
             "/api/v1/bug-report-links/{link_id}/replace",
-            Tool("bug_report_link_write"),
+            Tool("bug_report_link_update"),
         ),
         (
             Post,
@@ -1206,17 +1206,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
-            Tool("task_depend"),
+            Tool("task_link"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-            Tool("task_relate"),
+            Tool("task_link"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
-            Tool("task_watch"),
+            Tool("task_watch_set"),
         ),
         (
             Post,
@@ -1226,22 +1226,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/labels",
-            Tool("label_write"),
+            Tool("label_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/labels/{label_id}",
-            Tool("label_write"),
+            Tool("label_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/fields",
-            Tool("field_write"),
+            Tool("field_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/fields/{field_id}",
-            Tool("field_write"),
+            Tool("field_update"),
         ),
         (
             Post,
@@ -1311,12 +1311,12 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/milestones",
-            Tool("milestone_write"),
+            Tool("milestone_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/milestones/{milestone_id}",
-            Tool("milestone_write"),
+            Tool("milestone_update"),
         ),
         (
             Post,
@@ -1381,32 +1381,32 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/views",
-            Tool("view_write"),
+            Tool("view_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/views/{view_id}",
-            Tool("view_write"),
+            Tool("view_update"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/views/{view_id}",
-            Tool("view_write"),
+            Tool("view_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/views/{view_id}/pin",
-            Tool("view_write"),
+            Tool("view_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/task-templates",
-            Tool("template_write"),
+            Tool("template_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/task-templates/{template_id}",
-            Tool("template_write"),
+            Tool("template_update"),
         ),
         (
             Post,
@@ -1441,17 +1441,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/recurring-tasks",
-            Tool("recurring_write"),
+            Tool("recurring_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Tool("recurring_write"),
+            Tool("recurring_update"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Tool("recurring_write"),
+            Tool("recurring_update"),
         ),
         (
             Put,

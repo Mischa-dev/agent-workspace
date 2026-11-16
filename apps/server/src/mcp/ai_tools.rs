@@ -466,6 +466,11 @@ pub(crate) struct DependencyGraphArguments {
     pub milestone_id: Option<String>,
     /// Also finished tasks that block nothing open.
     pub include_finished: Option<bool>,
+    /// Only tasks with this label (name or ID), with what links to them.
+    pub label: Option<String>,
+    /// Only the subtasks of this task (key such as AWD-12, or ID), at any
+    /// depth, with what links to them.
+    pub parent_id: Option<String>,
 }
 
 pub(crate) async fn dependency_graph(
@@ -484,6 +489,20 @@ pub(crate) async fn dependency_graph(
             },
             None => None,
         };
+        let label_id = match &arguments.label {
+            Some(label) => match project_label(state, principal.project_id, label).await? {
+                Some(id) => Some(id),
+                None => return Ok(ToolResult::not_found("That label")),
+            },
+            None => None,
+        };
+        let parent_id = match &arguments.parent_id {
+            Some(reference) => match task_in_project(state, principal, reference).await? {
+                Some(id) => Some(id),
+                None => return Ok(ToolResult::not_found("That parent task")),
+            },
+            None => None,
+        };
         let graph = ready::graph(
             &state.pool,
             reader(principal),
@@ -491,6 +510,8 @@ pub(crate) async fn dependency_graph(
             &GraphFilter {
                 milestone_id,
                 include_finished: arguments.include_finished.unwrap_or(false),
+                label_id,
+                parent_id,
             },
         )
         .await?;
@@ -498,6 +519,43 @@ pub(crate) async fn dependency_graph(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "dependency_graph"))
+}
+
+/// The draft tasks that would update a task the project already has
+/// instead of making a new one, as {ref, key}.
+async fn draft_updates(
+    state: &AppState,
+    project_id: Uuid,
+    draft: &plans::Draft,
+) -> Result<Vec<Value>, AppError> {
+    Ok(plans::existing_matches(&state.pool, project_id, draft)
+        .await?
+        .into_iter()
+        .map(|(reference, key)| json!({"ref": reference, "key": key}))
+        .collect())
+}
+
+/// An active label of the project, by ID or by name (any case).
+async fn project_label(
+    state: &AppState,
+    project_id: Uuid,
+    reference: &str,
+) -> Result<Option<Uuid>, AppError> {
+    let reference = reference.trim();
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT label.id FROM project_labels label
+        WHERE label.project_id = $1 AND label.archived_at IS NULL
+          AND (label.id = $2 OR lower(label.name) = lower($3))
+        ORDER BY label.id = $2 DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(parse_id(reference))
+    .bind(reference)
+    .fetch_optional(&state.pool)
+    .await?)
 }
 
 // ---------------------------------------------------------------------------
@@ -645,12 +703,16 @@ pub(crate) async fn plan_import(
                     });
                 }
             }
-            return Ok(
-                match plans::get(&state.pool, principal.project_id, import_id).await? {
-                    Some(plan) => value(json!({"plan": plan})),
-                    None => ToolResult::not_found("That plan"),
-                },
-            );
+            let Some(plan) = plans::get(&state.pool, principal.project_id, import_id).await?
+            else {
+                return Ok(ToolResult::not_found("That plan"));
+            };
+            return Ok(if plan.state == "draft" {
+                let updates = draft_updates(state, principal.project_id, &plan.draft).await?;
+                value(json!({"plan": plan, "updates": updates}))
+            } else {
+                value(json!({"plan": plan}))
+            });
         }
         let Some(title) = arguments.title.as_deref() else {
             return Ok(ToolResult::invalid("title", "Give the plan a title."));
@@ -672,10 +734,14 @@ pub(crate) async fn plan_import(
         let actor = command_actor(principal, principal.project_id);
         Ok::<_, AppError>(
             match plans::create(state, organization_id, &actor, title, source).await? {
-                Ok(plan) => value(json!({
-                    "plan": plan,
-                    "next": "Review the draft, then call plan_import with importId, commit: true and expectedVersion.",
-                })),
+                Ok(plan) => {
+                    let updates = draft_updates(state, principal.project_id, &plan.draft).await?;
+                    value(json!({
+                        "plan": plan,
+                        "updates": updates,
+                        "next": "Review the draft, then call plan_import with importId, commit: true and expectedVersion.",
+                    }))
+                }
                 Err(plans::CreateRefusal::Invalid(message)) => ToolResult::invalid("plan", message),
                 Err(plans::CreateRefusal::NotFound(message)) => ToolResult::NotFound {
                     message: message.to_owned(),

@@ -446,7 +446,16 @@ pub(crate) async fn task_depend(
             blocks: arguments.blocks,
         };
         let remove = arguments.remove.unwrap_or(false);
-        match depend_in(&mut transaction, principal, project_id, task_id, &links, remove).await? {
+        match depend_in(
+            &mut transaction,
+            principal,
+            project_id,
+            task_id,
+            &links,
+            remove,
+        )
+        .await?
+        {
             Ok(value) => {
                 transaction.commit().await?;
                 Ok::<_, AppError>(ToolResult::ok(value))
@@ -524,9 +533,13 @@ pub(crate) async fn task_depend_many(
         let mut tasks = Vec::with_capacity(links.len());
         let mut total = 0_u32;
         for (index, entry) in links.iter().enumerate() {
-            let found =
-                resolve_linked(&mut transaction, principal, project_id, &[entry.task_id.clone()])
-                    .await?;
+            let found = resolve_linked(
+                &mut transaction,
+                principal,
+                project_id,
+                &[entry.task_id.clone()],
+            )
+            .await?;
             let task_id = match found.ok().and_then(|ids| ids.first().copied()) {
                 Some(task_id) => task_id,
                 None => {
@@ -538,8 +551,15 @@ pub(crate) async fn task_depend_many(
                     });
                 }
             };
-            match depend_in(&mut transaction, principal, project_id, task_id, entry, remove)
-                .await?
+            match depend_in(
+                &mut transaction,
+                principal,
+                project_id,
+                task_id,
+                entry,
+                remove,
+            )
+            .await?
             {
                 Ok(value) => {
                     total = total.saturating_add(value.changed);
@@ -652,21 +672,16 @@ async fn depend_in(
         }
     };
     let actor = command_actor(principal, project_id);
-    let outcome = match work_item_planning::change_dependencies(
-        transaction,
-        &actor,
-        task_id,
-        &edges,
-        remove,
-    )
-    .await?
-    {
-        Ok(outcome) => outcome,
-        Err((index, refusal)) => {
-            let reference = references.get(index).map_or("", String::as_str);
-            return Ok(Err(link_refusal(field(index), reference, &refusal)));
-        }
-    };
+    let outcome =
+        match work_item_planning::change_dependencies(transaction, &actor, task_id, &edges, remove)
+            .await?
+        {
+            Ok(outcome) => outcome,
+            Err((index, refusal)) => {
+                let reference = references.get(index).map_or("", String::as_str);
+                return Ok(Err(link_refusal(field(index), reference, &refusal)));
+            }
+        };
     let (task, sees) = changed_task(transaction, principal, project_id, task_id).await?;
     let links = visible_links(transaction, principal, project_id, task_id).await?;
     Ok(Ok(DependencyValue {

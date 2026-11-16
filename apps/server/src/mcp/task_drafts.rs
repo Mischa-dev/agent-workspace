@@ -330,11 +330,17 @@ pub(super) fn check_shapes(tasks: &[NewTask]) -> (Vec<Draft>, Vec<BatchProblem>)
             ));
         }
         let date = |value: &Option<String>, field: &'static str, found: &mut Vec<_>| {
-            let value = value.as_deref().map(str::trim).filter(|value| !value.is_empty())?;
+            let value = value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
             match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
                 Ok(date) => Some(date),
                 Err(_) => {
-                    found.push((field, "Use a date as YYYY-MM-DD, such as 2026-12-01.".to_owned()));
+                    found.push((
+                        field,
+                        "Use a date as YYYY-MM-DD, such as 2026-12-01.".to_owned(),
+                    ));
                     None
                 }
             }
@@ -344,7 +350,10 @@ pub(super) fn check_shapes(tasks: &[NewTask]) -> (Vec<Draft>, Vec<BatchProblem>)
         if let (Some(start), Some(due)) = (start_date, due_date)
             && due < start
         {
-            found.push(("dueDate", "The due date can't be before the start date.".to_owned()));
+            found.push((
+                "dueDate",
+                "The due date can't be before the start date.".to_owned(),
+            ));
         }
         if task
             .estimate

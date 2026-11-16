@@ -35,8 +35,8 @@ use crate::{
     policy::{Action, Permission},
     work_item_commands::{
         ArchiveCommand, ArchiveOutcome, AuditVersionMetadata, CommandActor, TaskFieldChanges,
-        UpdateWorkItemCommand, UpdateWorkItemOutcome,
-        record_audit_for, set_archived, update_work_item_by_id,
+        UpdateWorkItemCommand, UpdateWorkItemOutcome, record_audit_for, set_archived,
+        update_work_item_by_id,
     },
     work_item_labels::{
         self, ChangeLabelOutcome, CreateLabelOutcome, LabelChange, LabelDelta, LabelLimit,
