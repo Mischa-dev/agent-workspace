@@ -377,7 +377,7 @@ async fn removed_message_text_vanishes_everywhere() {
         json!({"projectId": "WORK", "title": "Rotate the key"}),
     )
     .await;
-    assert_eq!(task["outcome"], "applied", "{task}");
+    assert_eq!(task["outcome"], "ok", "{task}");
     let linked = call(
         "task_link",
         json!({"taskId": "WORK-1", "messageId": message}),
@@ -835,7 +835,7 @@ async fn removed_message_text_vanishes_everywhere() {
         json!({"projectId": "WORK", "title": "Audit the logs"}),
     )
     .await;
-    assert_eq!(second_task["outcome"], "applied", "{second_task}");
+    assert_eq!(second_task["outcome"], "ok", "{second_task}");
     let link_again = call(
         "task_link",
         json!({"taskId": "WORK-2", "messageId": message}),
@@ -1651,7 +1651,7 @@ async fn edits_keep_every_revision_and_projections_follow() {
         json!({"projectId": "WORK", "title": "Zebracorn task"}),
     )
     .await;
-    let task_id = task["workItemId"].as_str().expect("task").to_owned();
+    let task_id = task["value"]["workItemId"].as_str().expect("task").to_owned();
     let general = create_channel(&setup, &work, "general").await;
     let message = say(
         &setup,

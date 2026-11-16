@@ -270,6 +270,32 @@ fn hoist(tool: &str, schema: &Map<String, Value>, components: &mut Map<String, V
     value
 }
 
+/// An operation's result is the envelope: its `ok` branch and one branch
+/// per refusal, the same for every operation. Each refusal branch is
+/// written once in `components.schemas` and referenced, which keeps the
+/// document small as operations are added.
+fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
+    let Some(branches) = result.get_mut("oneOf").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for branch in branches {
+        let Some(outcome) = branch["properties"]["outcome"]["const"]
+            .as_str()
+            .filter(|outcome| *outcome != "ok")
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let key = format!("Refusal{}", pascal(&outcome));
+        let shared = components
+            .entry(key.clone())
+            .or_insert_with(|| branch.clone());
+        if shared == branch {
+            *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
+        }
+    }
+}
+
 fn rewrite_refs(value: &mut Value, names: &BTreeMap<String, String>) {
     match value {
         Value::Object(object) => {
@@ -373,7 +399,8 @@ pub(crate) fn document() -> Value {
                     Some(key) => String::clone(key),
                     None => {
                         let root = format!("{name}_result");
-                        let hoisted = hoist(&root, schema, &mut components);
+                        let mut hoisted = hoist(&root, schema, &mut components);
+                        share_refusals(&mut hoisted, &mut components);
                         let key = pascal(&root);
                         components.insert(key.clone(), hoisted);
                         results.insert(raw, key.clone());

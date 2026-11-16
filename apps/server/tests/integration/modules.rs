@@ -690,8 +690,8 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
         json!({"projectId": work, "title": "Follow the group's plans"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    let task = created["workItemId"].as_str().expect("task").to_owned();
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let task = created["value"]["workItemId"].as_str().expect("task").to_owned();
     sqlx::query(
         r#"
         INSERT INTO work_item_links (work_item_id, project_id, target_kind, target_id, created_by_actor_id)

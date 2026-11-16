@@ -167,7 +167,7 @@ async fn members_never_read_what_they_are_not_in() {
         json!({"projectId": "WORK", "title": format!("The {TASK} migration"), "clientRequestId": "quokka-task"}),
     )
     .await;
-    let task_key = string_at(&task, "/key");
+    let task_key = string_at(&task, "/value/key");
     owner_call(
         "task_comment",
         json!({"workItemId": task_key, "update": format!("{TASK} is half done"), "clientRequestId": "quokka-comment"}),
@@ -241,7 +241,7 @@ async fn members_never_read_what_they_are_not_in() {
         timeline.to_ascii_lowercase().contains(PRIVATE),
         "owner's DM: {timeline}"
     );
-    let task_id = string_at(&task, "/workItemId");
+    let task_id = string_at(&task, "/value/workItemId");
     let task_uri = format!("/api/v1/projects/{}/work-items/{task_id}", a.project);
     let (status, item) = get_text(app, &a.browser, &task_uri).await;
     assert!(

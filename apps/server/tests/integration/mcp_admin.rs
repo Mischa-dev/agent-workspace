@@ -606,8 +606,8 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         }),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    let task = created["workItemId"].as_str().expect("task").to_owned();
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let task = created["value"]["workItemId"].as_str().expect("task").to_owned();
     let subtask = tool(
         app,
         &codex,
@@ -616,7 +616,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         json!({"parentId": task, "title": "Write a failing test"}),
     )
     .await;
-    assert_eq!(subtask["outcome"], "applied", "{subtask}");
+    assert_eq!(subtask["outcome"], "ok", "{subtask}");
     let commented = tool(
         app,
         &codex,
@@ -637,14 +637,14 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         json!({"taskId": task, "expectedVersion": 1, "status": "Ready"}),
     )
     .await;
-    assert_eq!(started["outcome"], "applied", "{started}");
+    assert_eq!(started["outcome"], "ok", "{started}");
     let (status, criterion) = send(
         app,
         setup.browser.request(
             "POST",
             &format!("/api/v1/projects/{old}/work-items/{task}/acceptance-criteria"),
             Some("criterion-1"),
-            json!({"expectedVersion": started["version"], "text": "Mirrors prepare with a token"}),
+            json!({"expectedVersion": started["value"]["version"], "text": "Mirrors prepare with a token"}),
         ),
     )
     .await;
@@ -790,7 +790,7 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
         (&other, "Elsewhere"),
     ] {
         let created = call("task_create", json!({"projectId": project, "title": title})).await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
 
     // Ship waits on Build, Build on Design.
@@ -920,8 +920,8 @@ async fn moving_an_archived_original_does_not_reveal_its_hidden_destination() {
         json!({"projectId": source, "title": "Move me"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    let original = created["workItemId"].clone();
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let original = created["value"]["workItemId"].clone();
     let moved = tool(
         &setup.app,
         &owner_token,
@@ -993,13 +993,13 @@ async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
         json!({"title": "Stay here"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
     let result = tool(
         &setup.app,
         &issued.token,
         &session,
         "task_move",
-        json!({"taskId": created["workItemId"], "toProjectId": target}),
+        json!({"taskId": created["value"]["workItemId"], "toProjectId": target}),
     )
     .await;
     assert_ne!(
@@ -1086,7 +1086,7 @@ async fn task_moves_lock_projects_in_id_order() {
         json!({"projectId": high, "title": "Move down"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
     let mut blocker = setup.pool.begin().await.expect("blocker");
     let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
         .fetch_one(&mut *blocker)
@@ -1104,7 +1104,7 @@ async fn task_moves_lock_projects_in_id_order() {
             &token,
             &session,
             "task_move",
-            json!({"taskId": created["workItemId"], "toProjectId": low}),
+            json!({"taskId": created["value"]["workItemId"], "toProjectId": low}),
         )
         .await
     });

@@ -668,7 +668,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         json!({"taskId": made_title, "title": "Renamed by the app", "expectedVersion": 1}),
     )
     .await;
-    assert_ne!(refused["outcome"], "applied", "{refused}");
+    assert_ne!(refused["outcome"], "ok", "{refused}");
     assert_ne!(refused["outcome"], "ok", "{refused}");
 
     // The public API is an app acting for her too.

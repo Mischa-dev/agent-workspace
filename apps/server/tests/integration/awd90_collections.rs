@@ -887,7 +887,7 @@ async fn ids_from_another_project_never_match() {
             json!({"projectId": key, "title": "Ship it", "clientRequestId": format!("task-{key}")}),
         )
         .await;
-        assert_eq!(task["outcome"], "applied", "{task}");
+        assert_eq!(task["outcome"], "ok", "{task}");
         let page = call(
             "page_write",
             json!({"projectId": key, "title": "Spec", "body": "What it does"}),

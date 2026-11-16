@@ -92,6 +92,7 @@ mod layout_preset_tools;
 mod memory_tools;
 mod message_edits;
 pub(crate) mod messaging;
+pub(crate) use common::string_or_number;
 mod model_catalog_tools;
 mod module_tools;
 mod notifications;
@@ -114,12 +115,14 @@ mod talk;
 mod task_batch;
 mod workspace_template_tools;
 pub(crate) use task_batch::{ImportTask, create_for_import};
+pub(crate) mod task_commands;
 mod task_drafts;
 mod task_move;
 mod tasks;
 mod tool_permissions;
 mod usage_tools;
 mod views_data;
+pub(crate) mod whiteboard_commands;
 mod whiteboard_tools;
 mod workflow;
 mod writes;
@@ -1423,44 +1426,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a task in a project, or a subtask (parentId). Optional: status and type by name, labels, acceptanceCriteria (a list), assignee (me or @handle), and its place in its column (position: top, bottom, or a number; or beforeTaskId/afterTaskId). Returns its key and link. Pass clientRequestId so a retry never creates it twice.",
-        annotations(
-            title = "Create task",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_create(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskCreateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(tasks::task_create(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Change a task: title, description, priority, assignee, type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), or archive it (archived: true; false restores; pass it on its own). Pass the version you last read as expectedVersion; on a conflict, open it again and retry.",
-        annotations(
-            title = "Update task",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_update(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(tasks::task_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Create up to 100 tasks in one project at once, all or nothing, such as a plan turned into tasks. Each takes a title and optionally a description, priority, status and type (by name), assignee, labels and acceptanceCriteria. Make subtasks with parentRef (the ref of an earlier task in the list) or parentId (an existing task such as AWD-12). Send preview: true first to check everything and see the keys they'd get, without creating anything. clientRequestId is required: a retry within 24 hours returns the first result instead of creating twice. createMissingLabels: true creates labels the project doesn't have yet. If anything is wrong, nothing is created and each problem is listed. Keep one call under about 1 MB; split bigger plans into several calls.",
         annotations(
             title = "Create tasks",
@@ -1502,126 +1467,6 @@ impl McpServer {
             task_batch::BatchResult::denied("Sign in again: this connection isn't authorized.")
         );
         Json(task_batch::task_update_many(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Change a task's acceptance criteria in one call: add (optionally at a position), edit, check, uncheck, remove, or move. Name a criterion by its ID or by its position in the version you read. Operations apply in order, and either all apply or none do. Pass the task's version as expectedVersion and a clientRequestId so a retry is safe.",
-        annotations(
-            title = "Task acceptance criteria",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_criteria(
-        &self,
-        Parameters(arguments): Parameters<criteria::TaskCriteriaArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<criteria::CriteriaValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(criteria::task_criteria(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Comment on a task: progress, a handoff, or what's left. Keep it useful; skip status-only noise. To answer one comment, pass replyToCommentId: it shows quoted above yours and its author is told.",
-        annotations(
-            title = "Comment on task",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_comment(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<writes::PostUpdateArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(writes::post_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Edit your own comment on a task. Earlier versions stay in the comment's history for everyone who can see the task, and it shows (edited). To take down a secret, use task_comment_delete instead: editing keeps the old text in the history.",
-        annotations(
-            title = "Edit task comment",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_comment_edit(
-        &self,
-        Parameters(arguments): Parameters<comment_tools::TaskCommentEditArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<comment_tools::EditedComment>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(comment_tools::task_comment_edit(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Delete a comment on a task for everyone, leaving \"comment deleted\" in the task's history. Its text and every earlier version are deleted, with its files. You can delete your own comments; project owners and admins (people, not agents) can delete anyone's. This can't be undone. Rotate any secret it held.",
-        annotations(
-            title = "Delete task comment",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_comment_delete(
-        &self,
-        Parameters(arguments): Parameters<comment_tools::TaskCommentDeleteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<comment_tools::DeletedComment>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(comment_tools::task_comment_delete(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Mark a task blocked, with the reason someone needs to act on.",
-        annotations(
-            title = "Mark task blocked",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_mark_blocked(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<writes::MarkBlockedArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(writes::mark_blocked(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Clear a task's blocker and move it to review.",
-        annotations(
-            title = "Mark task ready for review",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_mark_ready_for_review(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<writes::MarkReadyForReviewArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(writes::mark_ready_for_review(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -2223,63 +2068,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a whiteboard, for the whole workspace or (with projectId) one project, optionally linked to a task, project or page and drawn on straight away with operations.",
-        annotations(
-            title = "Create whiteboard",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_create(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardCreateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_create(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Draw on a whiteboard with operations: add shapes, text and images, connect them with arrows, update, move, delete, align, distribute, lay out, group and order. All or nothing; people with the board open see it at once. Pass expectedSceneSeq from whiteboard_read so you don't overwrite someone's change.",
-        annotations(
-            title = "Edit whiteboard",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_edit(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardEditArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<crate::whiteboards::edit::EditOutcome>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_edit(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Rename a whiteboard, change who sees it (a project, or the whole workspace), move it to or from the trash, or restore a saved revision of its drawing.",
-        annotations(
-            title = "Update whiteboard",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_update(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Empty the whiteboard trash, as the web's Empty trash does: every trashed board you may change goes for good, with its drawing, images and links. Narrow it to one project or workspace. This can't be undone. Up to 200 go per call.",
         annotations(
             title = "Empty whiteboard trash",
@@ -2296,44 +2084,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardTrashEmptyValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(whiteboard_tools::whiteboard_trash_empty(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Copy a whiteboard's drawing and images into a new board beside it. Links stay with the original.",
-        annotations(
-            title = "Duplicate whiteboard",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_duplicate(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardDuplicateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_duplicate(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Link a whiteboard to a task, project or page (it shows there), or take the link off. One board can be linked to many things; unlinking never deletes it.",
-        annotations(
-            title = "Link whiteboard",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_link(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardLinkArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardLinkValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_link(&self.state, principal, arguments).await)
     }
 
     // -- Code, runs and approvals --------------------------------------------
@@ -5531,7 +5281,7 @@ async fn repository_by_name(
 }
 
 /// Splits a task key such as "AWD-12" into its project key and number.
-pub(super) fn split_task_key(value: &str) -> Option<(&str, i64)> {
+pub(crate) fn split_task_key(value: &str) -> Option<(&str, i64)> {
     let (project_key, number) = value.trim().rsplit_once('-')?;
     if !is_project_key(project_key) || !number.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;

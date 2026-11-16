@@ -1012,7 +1012,8 @@ async fn receive(
                 AppError::Internal("bug report task_create call")
             }
         })?;
-    if result.get("outcome").and_then(Value::as_str) != Some("applied") {
+    // task_create is an operation (K2.13): it answers in the envelope.
+    if result.get("outcome").and_then(Value::as_str) != Some("ok") {
         let outcome = result
             .get("outcome")
             .and_then(Value::as_str)
@@ -1024,7 +1025,8 @@ async fn receive(
             .unwrap_or("The task couldn't be created.");
         return Ok(refused(crate::public_api::status_for(&result), message));
     }
-    let duplicate = result
+    let created = &result["value"];
+    let duplicate = created
         .get("idempotentReplay")
         .and_then(Value::as_bool)
         .unwrap_or(false);
@@ -1049,7 +1051,7 @@ async fn receive(
         status,
         Json(json!({
             "ok": true,
-            "task": result.get("key"),
+            "task": created.get("key"),
             "duplicate": duplicate,
         })),
     )

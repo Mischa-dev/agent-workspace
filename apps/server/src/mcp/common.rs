@@ -327,7 +327,7 @@ pub(super) async fn insert_audit(
 /// bad value in plain words instead of failing to parse the call. Pair it
 /// with `#[schemars(with = "Option<String>")]`: the input schema stays a
 /// plain string, without an anyOf.
-pub(super) fn string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+pub(crate) fn string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

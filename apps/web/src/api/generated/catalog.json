@@ -606,5 +606,213 @@
     "preview": false,
     "proposable": false,
     "title": "Change scheduled message"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_archive",
+    "permission": "tasks.delete",
+    "preview": false,
+    "proposable": false,
+    "title": "Archive task"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.commented"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "task_comment_create",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Comment on task"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "task.comment_removed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_comment_delete",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Delete task comment"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.comment_updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_comment_update",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Edit task comment"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "task_create",
+    "permission": "tasks.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Create task"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_criteria_update",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Task acceptance criteria"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_restore",
+    "permission": "tasks.delete",
+    "preview": false,
+    "proposable": false,
+    "title": "Restore task"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_update",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": true,
+    "title": "Update task"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "whiteboard.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_create",
+    "permission": "whiteboards.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Create whiteboard"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "whiteboard.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_duplicate",
+    "permission": "whiteboards.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Copy whiteboard"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "whiteboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_link",
+    "permission": "whiteboards.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Link whiteboard"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "whiteboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_update",
+    "permission": "whiteboards.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Update whiteboard"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "whiteboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_update_elements",
+    "permission": "whiteboards.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Draw on whiteboard"
   }
 ]

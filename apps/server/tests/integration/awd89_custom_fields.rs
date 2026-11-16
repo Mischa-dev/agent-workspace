@@ -134,13 +134,13 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         json!({"projectId": "SIDE", "title": "Elsewhere", "clientRequestId": "side-1"}),
     )
     .await;
-    assert_eq!(other["outcome"], "applied", "{other}");
+    assert_eq!(other["outcome"], "ok", "{other}");
     let first = agent(
         "task_create",
         json!({"projectId": "WORK", "title": "First", "clientRequestId": "first"}),
     )
     .await;
-    assert_eq!(first["outcome"], "applied", "{first}");
+    assert_eq!(first["outcome"], "ok", "{first}");
     let created = agent(
         "task_create",
         json!({
@@ -152,7 +152,7 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         }),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
     let opened = agent("task_open", json!({"taskId": "WORK-2"})).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert_eq!(
@@ -173,7 +173,7 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
 
     // Wrong types, unknown fields, people outside the project and links to
     // another project's tasks are refused, and nothing changes.
-    let side_task = other["workItemId"].as_str().expect("side task").to_owned();
+    let side_task = other["value"]["workItemId"].as_str().expect("side task").to_owned();
     for (fields, at) in [
         (json!({"Points": "lots"}), "fields.Points"),
         (json!({"Risk": "Medium"}), "fields.Risk"),
@@ -199,7 +199,7 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
             "PATCH",
             &format!(
                 "/api/v1/projects/{work}/work-items/{}",
-                created["workItemId"].as_str().expect("id")
+                created["value"]["workItemId"].as_str().expect("id")
             ),
             Some("web-wrong"),
             json!({"expectedVersion": version, "fieldValues": {risk.clone(): "Medium"}}),
@@ -215,9 +215,9 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
                "fields": {"Risk": "Low", "Points": null}}),
     )
     .await;
-    assert_eq!(updated["outcome"], "applied", "{updated}");
-    assert_eq!(updated["version"], version + 1, "{updated}");
-    assert_eq!(updated["changedFields"], json!(["fields"]), "{updated}");
+    assert_eq!(updated["outcome"], "ok", "{updated}");
+    assert_eq!(updated["value"]["version"], version + 1, "{updated}");
+    assert_eq!(updated["value"]["changedFields"], json!(["fields"]), "{updated}");
     let history = agent(
         "task_open",
         json!({"taskId": "WORK-2", "include": ["history"]}),
@@ -228,7 +228,7 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     assert!(text.contains("Points: 3 → none"), "{text}");
 
     // The web reads and writes the same values, keyed by field ID.
-    let task_id = created["workItemId"].as_str().expect("id").to_owned();
+    let task_id = created["value"]["workItemId"].as_str().expect("id").to_owned();
     let (status, body) = send(
         app,
         setup.browser.request(
@@ -779,7 +779,7 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
         json!({"taskId": "WORK-1", "expectedVersion": task_version(&setup.pool, &task_id).await, "fields": {"Risk": "High"}}),
     )
     .await;
-    assert_eq!(set["outcome"], "applied", "{set}");
+    assert_eq!(set["outcome"], "ok", "{set}");
 
     // Only Alex's value landed, and nothing Bea or the app tried defined a field.
     let (values, count) = sqlx::query_as::<_, (Value, i64)>(

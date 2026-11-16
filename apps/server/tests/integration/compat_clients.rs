@@ -165,7 +165,11 @@ fn connected_clients_find_their_tools() {
     let mut problems = Vec::new();
     for (client, contract) in fixture["clients"].as_object().expect("clients") {
         for (name, arguments) in contract["tools"].as_object().expect("tools") {
-            let Some(tool) = catalog.iter().find(|tool| tool.name == name.as_str()) else {
+            // An old name that became an alias (K2) still answers: its
+            // arguments are checked against the operation it runs.
+            let alias = agent_workspace_server::ops::aliases::active(name);
+            let named = alias.map_or(name.as_str(), |alias| alias.runs[0]);
+            let Some(tool) = catalog.iter().find(|tool| tool.name == named) else {
                 problems.push(format!("{client}: {name} is gone"));
                 continue;
             };

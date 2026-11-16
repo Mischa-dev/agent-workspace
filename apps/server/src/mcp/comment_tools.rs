@@ -57,7 +57,7 @@ pub(super) struct TaskCommentDeleteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct EditedComment {
+pub struct EditedComment {
     pub task_id: String,
     pub comment_id: String,
     /// Pass as expectedRevision next time.
@@ -68,7 +68,7 @@ pub(super) struct EditedComment {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct DeletedComment {
+pub struct DeletedComment {
     pub task_id: String,
     pub comment_id: String,
     /// True when it was already deleted; nothing changed.

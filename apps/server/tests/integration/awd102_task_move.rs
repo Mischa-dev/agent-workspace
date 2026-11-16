@@ -239,7 +239,7 @@ async fn world(setup: &Setup, codex: &str, session: &str) -> World {
             json!({"taskId": task, "fields": fields, "expectedVersion": version_of(setup, task).await}),
         )
         .await;
-        assert_eq!(updated["outcome"], "applied", "{updated}");
+        assert_eq!(updated["outcome"], "ok", "{updated}");
     }
     World {
         src,
@@ -620,7 +620,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         json!({"taskId": "SRC-2", "archived": true, "expectedVersion": version_of(&setup, "SRC-2").await}),
     )
     .await;
-    assert_eq!(archived["outcome"], "applied", "{archived}");
+    assert_eq!(archived["outcome"], "ok", "{archived}");
     let before = footprint(&setup).await;
     let refused = tool(
         app,
@@ -640,7 +640,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         json!({"taskId": "SRC-2", "archived": false, "expectedVersion": version_of(&setup, "SRC-2").await}),
     )
     .await;
-    assert_eq!(restored["outcome"], "applied", "{restored}");
+    assert_eq!(restored["outcome"], "ok", "{restored}");
 
     // Someone who loses the right to create in the target after previewing.
     let (mo, mo_browser) = add_person(&setup, &[&w.src, &w.dst], "moira").await;

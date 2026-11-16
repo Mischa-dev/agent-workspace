@@ -49,7 +49,10 @@ fn message(result: &Value) -> &str {
 fn assert_refused(result: &Value, field: &str, says: &str) {
     assert_eq!(result["outcome"], "invalid_request", "{result}");
     assert_eq!(result["field"], field, "{result}");
-    assert_eq!(result["retryCategory"], "correct_input", "{result}");
+    assert!(
+        matches!(result["retryCategory"].as_str(), Some("correct_input" | "fix_input")),
+        "{result}"
+    );
     assert!(message(result).contains(says), "{result}");
 }
 
@@ -159,7 +162,7 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
             json!({"projectId": "WORK", "title": title, "status": status}),
         )
         .await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
 
     // One call sets everything, as one change: version 1 and one activity,
@@ -181,14 +184,14 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
     });
     let before = side_effects(&setup).await;
     let created = call("task_create", plan.clone()).await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    assert_eq!(created["version"], 1);
-    assert_eq!(created["key"], "WORK-4");
-    assert_eq!(created["changedFields"], json!(["work_item"]));
-    assert_eq!(created["labels"], json!(["Mobile", "Sync"]), "{created}");
-    let offline = id(&created["workItemId"]);
+    assert_eq!(created["outcome"], "ok", "{created}");
+    assert_eq!(created["value"]["version"], 1);
+    assert_eq!(created["value"]["key"], "WORK-4");
+    assert_eq!(created["value"]["changedFields"], json!(["work_item"]));
+    assert_eq!(created["value"]["labels"], json!(["Mobile", "Sync"]), "{created}");
+    let offline = id(&created["value"]["workItemId"]);
     assert!(
-        created["url"]
+        created["value"]["url"]
             .as_str()
             .expect("url")
             .ends_with(&format!("/projects/{work}/work-items/{offline}")),
@@ -218,9 +221,9 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         ["WORK-4", "WORK-1", "WORK-2"]
     );
     let replay = call("task_create", plan).await;
-    assert_eq!(replay["idempotentReplay"], true, "{replay}");
-    assert_eq!(replay["key"], "WORK-4");
-    assert_eq!(replay["labels"], json!(["Mobile", "Sync"]));
+    assert_eq!(replay["value"]["idempotentReplay"], true, "{replay}");
+    assert_eq!(replay["value"]["key"], "WORK-4");
+    assert_eq!(replay["value"]["labels"], json!(["Mobile", "Sync"]));
     assert_eq!(side_effects(&setup).await, after);
 
     // Refused creates write nothing: no task, no task number, and the
@@ -289,8 +292,8 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         tasks
     );
     let corrected = refuse(json!({"labels": ["Mobile"], "clientRequestId": "plan-retry"})).await;
-    assert_eq!(corrected["outcome"], "applied", "{corrected}");
-    assert_eq!(corrected["key"], "WORK-5");
+    assert_eq!(corrected["outcome"], "ok", "{corrected}");
+    assert_eq!(corrected["value"]["key"], "WORK-5");
 
     // A subtask keeps everything it's given (it used to lose its priority
     // and assignee on the way).
@@ -310,9 +313,9 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         }),
     )
     .await;
-    assert_eq!(subtask["outcome"], "applied", "{subtask}");
-    assert_eq!(subtask["changedFields"], json!(["subtask"]));
-    assert_eq!(subtask["key"], "WORK-6");
+    assert_eq!(subtask["outcome"], "ok", "{subtask}");
+    assert_eq!(subtask["value"]["changedFields"], json!(["subtask"]));
+    assert_eq!(subtask["value"]["key"], "WORK-6");
     let opened = call("task_open", json!({"taskId": "WORK-6"})).await;
     let task = &opened["value"]["task"];
     assert_eq!(id(&task["parentWorkItemId"]), offline, "{opened}");
@@ -336,15 +339,15 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         json!({"taskId": "WORK-2", "expectedVersion": 1, "position": 1}),
     )
     .await;
-    assert_eq!(moved["outcome"], "applied", "{moved}");
-    assert_eq!(moved["changedFields"], json!(["position"]));
-    assert_eq!(moved["version"], 2);
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    assert_eq!(moved["value"]["changedFields"], json!(["position"]));
+    assert_eq!(moved["value"]["version"], 2);
     let moved = call(
         "task_update",
         json!({"taskId": "WORK-1", "expectedVersion": 1, "beforeTaskId": "WORK-4"}),
     )
     .await;
-    assert_eq!(moved["changedFields"], json!(["position"]), "{moved}");
+    assert_eq!(moved["value"]["changedFields"], json!(["position"]), "{moved}");
     assert_eq!(
         column(app, &codex, &session, "Ready").await,
         ["WORK-2", "WORK-1", "WORK-4", "WORK-6"]
@@ -354,14 +357,14 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         json!({"taskId": "WORK-1", "expectedVersion": 2, "afterTaskId": "WORK-2"}),
     )
     .await;
-    assert_eq!(stays["outcome"], "applied", "{stays}");
-    assert_eq!(stays["changedFields"], json!([]), "{stays}");
-    assert_eq!(stays["version"], 2);
+    assert_eq!(stays["outcome"], "ok", "{stays}");
+    assert_eq!(stays["value"]["changedFields"], json!([]), "{stays}");
+    assert_eq!(stays["value"]["version"], 2);
     assert_eq!(
-        stays["key"], "WORK-1",
+        stays["value"]["key"], "WORK-1",
         "a no-op names the task too: {stays}"
     );
-    assert!(stays["url"].is_string(), "{stays}");
+    assert!(stays["value"]["url"].is_string(), "{stays}");
     assert_refused(
         &call(
             "task_update",
@@ -400,15 +403,15 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         }),
     )
     .await;
-    assert_eq!(promoted["outcome"], "applied", "{promoted}");
-    assert_eq!(promoted["version"], 2);
+    assert_eq!(promoted["outcome"], "ok", "{promoted}");
+    assert_eq!(promoted["value"]["version"], 2);
     for field in ["status", "position", "type", "labels"] {
         assert!(
-            strings(&promoted["changedFields"]).contains(&field.to_owned()),
+            strings(&promoted["value"]["changedFields"]).contains(&field.to_owned()),
             "{field}: {promoted}"
         );
     }
-    assert_eq!(promoted["labels"], json!(["Mobile"]));
+    assert_eq!(promoted["value"]["labels"], json!(["Mobile"]));
     assert_eq!(
         column(app, &codex, &session, "Ready").await,
         ["WORK-2", "WORK-3", "WORK-1", "WORK-4", "WORK-6"]
@@ -433,14 +436,14 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         json!({"taskId": "WORK-5", "expectedVersion": 1, "status": "Done", "position": "top"}),
     )
     .await;
-    assert_eq!(skipped["outcome"], "invalid_transition", "{skipped}");
+    assert_eq!(skipped["code"], "transition", "{skipped}");
     let nested = call(
         "task_update",
         json!({"taskId": "WORK-5", "expectedVersion": 1, "status": "Ready", "parentId": "WORK-4"}),
     )
     .await;
-    assert_eq!(nested["outcome"], "applied", "{nested}");
-    let changed = strings(&nested["changedFields"]);
+    assert_eq!(nested["outcome"], "ok", "{nested}");
+    let changed = strings(&nested["value"]["changedFields"]);
     assert!(
         changed.contains(&"status".to_owned()) && changed.contains(&"parent".to_owned()),
         "{nested}"
@@ -469,9 +472,9 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         let mut arguments = arguments;
         arguments["taskId"] = json!(key);
         let started = call("task_update", arguments).await;
-        assert_eq!(started["outcome"], "applied", "{started}");
-        assert_eq!(started["version"], 3, "{started}");
-        let changed = strings(&started["changedFields"]);
+        assert_eq!(started["outcome"], "ok", "{started}");
+        assert_eq!(started["value"]["version"], 3, "{started}");
+        let changed = strings(&started["value"]["changedFields"]);
         assert!(
             changed.contains(&"status".to_owned()) && changed.contains(&also.to_owned()),
             "{started}"
@@ -507,8 +510,8 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
         let call = &call;
         async move {
             let created = call("task_create", arguments).await;
-            assert_eq!(created["outcome"], "applied", "{created}");
-            id(&created["workItemId"])
+            assert_eq!(created["outcome"], "ok", "{created}");
+            id(&created["value"]["workItemId"])
         }
     };
     let a = create(json!({"projectId": "WORK", "title": "A"})).await;
@@ -558,7 +561,7 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
         )
         .await,
         "parentWorkItemId",
-        "The parent OTHER-1 is in Other, not Work.",
+        "The parent is in another space than projectId.",
     );
     assert_eq!(parent(&setup, c).await, Some(b));
 
@@ -572,8 +575,15 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
             json!({"taskId": c, "expectedVersion": 1, "parentId": reference}),
         )
         .await;
-        assert_eq!(refused["outcome"], "invalid_request", "{refused}");
-        assert_eq!(refused["field"], "parentId");
+        // A key is looked up before the write and isn't found; an ID is
+        // refused by the write. Neither names the task.
+        match refused["outcome"].as_str() {
+            Some("not_found") => {}
+            _ => {
+                assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+                assert_eq!(refused["field"], "parentId");
+            }
+        }
         assert!(!refused.to_string().contains("Secret"), "{refused}");
         assert!(!refused.to_string().contains("SECRET-1") || reference == "SECRET-1");
         let created = tool(
@@ -584,7 +594,7 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
             json!({"projectId": work, "parentId": secret, "title": "Stray"}),
         )
         .await;
-        assert_ne!(created["outcome"], "applied", "{created}");
+        assert_ne!(created["outcome"], "ok", "{created}");
         assert!(!created.to_string().contains("Secret"), "{created}");
     }
     assert_eq!(version(&setup, c).await, 1);
@@ -596,7 +606,7 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
         json!({"taskId": archived, "expectedVersion": 1, "archived": true}),
     )
     .await;
-    assert_eq!(shelved["outcome"], "applied", "{shelved}");
+    assert_eq!(shelved["outcome"], "ok", "{shelved}");
     assert_refused(
         &call(
             "task_update",
@@ -621,9 +631,9 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
         json!({"taskId": "WORK-3", "expectedVersion": 1, "clearParent": true}),
     )
     .await;
-    assert_eq!(cleared["outcome"], "applied", "{cleared}");
-    assert_eq!(cleared["changedFields"], json!(["parent"]));
-    assert_eq!(cleared["version"], 2);
+    assert_eq!(cleared["outcome"], "ok", "{cleared}");
+    assert_eq!(cleared["value"]["changedFields"], json!(["parent"]));
+    assert_eq!(cleared["value"]["version"], 2);
     let opened = call("task_open", json!({"taskId": "WORK-3"})).await;
     assert!(
         opened["value"]["task"]["parentWorkItemId"].is_null(),
@@ -646,7 +656,7 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
         json!({"taskId": "WORK-3", "expectedVersion": 2, "parentId": "WORK-1"}),
     )
     .await;
-    assert_eq!(moved["changedFields"], json!(["parent"]), "{moved}");
+    assert_eq!(moved["value"]["changedFields"], json!(["parent"]), "{moved}");
     assert_eq!(parent(&setup, c).await, Some(a));
 
     // The database refuses a cycle from any writer, not only through MCP.
@@ -711,24 +721,24 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
         json!({"projectId": "WORK", "title": "Shelf"}),
     )
     .await;
-    assert_eq!(shelf["outcome"], "applied", "{shelf}");
+    assert_eq!(shelf["outcome"], "ok", "{shelf}");
     let book = call(
         "task_create",
-        json!({"parentId": shelf["url"], "title": "Book"}),
+        json!({"parentId": shelf["value"]["url"], "title": "Book"}),
     )
     .await;
-    assert_eq!(book["outcome"], "applied", "{book}");
+    assert_eq!(book["outcome"], "ok", "{book}");
     assert_eq!(
-        parent(&setup, id(&book["workItemId"])).await,
-        Some(id(&shelf["workItemId"]))
+        parent(&setup, id(&book["value"]["workItemId"])).await,
+        Some(id(&shelf["value"]["workItemId"]))
     );
     let renamed = call(
         "task_update",
-        json!({"taskId": book["url"], "expectedVersion": 1, "parentId": shelf["url"], "title": "A book"}),
+        json!({"taskId": book["value"]["url"], "expectedVersion": 1, "parentId": shelf["value"]["url"], "title": "A book"}),
     )
     .await;
-    assert_eq!(renamed["outcome"], "applied", "{renamed}");
-    assert_eq!(renamed["changedFields"], json!(["title"]), "{renamed}");
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
+    assert_eq!(renamed["value"]["changedFields"], json!(["title"]), "{renamed}");
 }
 
 #[tokio::test]
@@ -763,8 +773,8 @@ async fn labels_change_in_one_version_and_only_members_change_them() {
         json!({"projectId": "WORK", "title": "Relabel me", "labels": ["Gamma"]}),
     )
     .await;
-    assert_eq!(created["labels"], json!(["Gamma"]), "{created}");
-    let task = id(&created["workItemId"]);
+    assert_eq!(created["value"]["labels"], json!(["Gamma"]), "{created}");
+    let task = id(&created["value"]["workItemId"]);
 
     let relabel = json!({
         "taskId": "WORK-1",
@@ -774,10 +784,10 @@ async fn labels_change_in_one_version_and_only_members_change_them() {
         "clientRequestId": "relabel-1"
     });
     let relabeled = call("task_update", relabel.clone()).await;
-    assert_eq!(relabeled["outcome"], "applied", "{relabeled}");
-    assert_eq!(relabeled["version"], 2);
-    assert_eq!(relabeled["changedFields"], json!(["labels"]));
-    assert_eq!(relabeled["labels"], json!(["Alpha", "Beta"]));
+    assert_eq!(relabeled["outcome"], "ok", "{relabeled}");
+    assert_eq!(relabeled["value"]["version"], 2);
+    assert_eq!(relabeled["value"]["changedFields"], json!(["labels"]));
+    assert_eq!(relabeled["value"]["labels"], json!(["Alpha", "Beta"]));
     let payloads = sqlx::query_scalar::<_, Value>(
         "SELECT payload FROM work_item_activity WHERE work_item_id = $1 AND kind = 'work_item_updated'",
     )
@@ -791,19 +801,19 @@ async fn labels_change_in_one_version_and_only_members_change_them() {
     assert_eq!(payload["labelsAdded"].as_array().map(Vec::len), Some(2));
     assert_eq!(payload["labelsRemoved"], json!([gamma]), "{payload}");
     let replay = call("task_update", relabel).await;
-    assert_eq!(replay["idempotentReplay"], true, "{replay}");
-    assert_eq!(replay["version"], 2);
-    assert_eq!(replay["labels"], json!(["Alpha", "Beta"]));
+    assert_eq!(replay["value"]["idempotentReplay"], true, "{replay}");
+    assert_eq!(replay["value"]["version"], 2);
+    assert_eq!(replay["value"]["labels"], json!(["Alpha", "Beta"]));
 
     let again = call(
         "task_update",
         json!({"taskId": "WORK-1", "expectedVersion": 2, "addLabels": ["Alpha"]}),
     )
     .await;
-    assert_eq!(again["outcome"], "applied", "{again}");
-    assert_eq!(again["changedFields"], json!([]));
-    assert_eq!(again["version"], 2);
-    assert_eq!(again["labels"], json!(["Alpha", "Beta"]));
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["value"]["changedFields"], json!([]));
+    assert_eq!(again["value"]["version"], 2);
+    assert_eq!(again["value"]["labels"], json!(["Alpha", "Beta"]));
     assert_refused(
         &call(
             "task_update",
@@ -851,7 +861,7 @@ async fn labels_change_in_one_version_and_only_members_change_them() {
     )
     .await;
     assert_eq!(viewer["outcome"], "permission_denied", "{viewer}");
-    assert_eq!(viewer["retryCategory"], "ask_project_owner");
+    assert_eq!(viewer["retryCategory"], "ask_for_access");
     let viewer_create = tool(
         app,
         &vic_token,
@@ -873,7 +883,7 @@ async fn labels_change_in_one_version_and_only_members_change_them() {
     )
     .await;
     assert_eq!(read_only["outcome"], "permission_denied", "{read_only}");
-    assert_eq!(read_only["retryCategory"], "request_write_scope");
+    assert_eq!(read_only["retryCategory"], "reauthenticate");
     assert_eq!(version(&setup, task).await, 2);
 
     let moved = call(
@@ -881,10 +891,10 @@ async fn labels_change_in_one_version_and_only_members_change_them() {
         json!({"taskId": "WORK-1", "expectedVersion": 2, "status": "Ready", "removeLabels": ["Beta"]}),
     )
     .await;
-    assert_eq!(moved["outcome"], "applied", "{moved}");
-    assert_eq!(moved["version"], 3);
-    assert_eq!(moved["labels"], json!(["Alpha"]));
-    let changed = strings(&moved["changedFields"]);
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    assert_eq!(moved["value"]["version"], 3);
+    assert_eq!(moved["value"]["labels"], json!(["Alpha"]));
+    let changed = strings(&moved["value"]["changedFields"]);
     assert!(
         changed.contains(&"status".to_owned()) && changed.contains(&"labels".to_owned()),
         "{moved}"
@@ -926,7 +936,7 @@ async fn archiving_through_task_update_releases_claims_and_keeps_moved_originals
         json!({"parentId": "OLD-1", "title": "Second part"}),
     )
     .await;
-    let original = id(&second["workItemId"]);
+    let original = id(&second["value"]["workItemId"]);
     let claimed = call("task_claim", json!({"taskId": "OLD-1"})).await;
     assert_eq!(claimed["outcome"], "ok", "{claimed}");
 
@@ -944,12 +954,12 @@ async fn archiving_through_task_update_releases_claims_and_keeps_moved_originals
 
     let archive = json!({"taskId": "OLD-1", "expectedVersion": 1, "archived": true, "clientRequestId": "archive-parent"});
     let archived = call("task_update", archive.clone()).await;
-    assert_eq!(archived["outcome"], "applied", "{archived}");
-    assert_eq!(archived["changedFields"], json!(["archived"]));
-    assert_eq!(archived["version"], 2);
-    assert_eq!(archived["key"], "OLD-1");
+    assert_eq!(archived["outcome"], "ok", "{archived}");
+    assert_eq!(archived["value"]["changedFields"], json!(["archived"]));
+    assert_eq!(archived["value"]["version"], 2);
+    assert_eq!(archived["value"]["key"], "OLD-1");
     assert_eq!(
-        archived["message"],
+        archived["value"]["message"],
         "Archived. Its subtasks OLD-2 and OLD-3 are still open."
     );
     assert_eq!(
@@ -963,16 +973,16 @@ async fn archiving_through_task_update_releases_claims_and_keeps_moved_originals
         "{listed}"
     );
     let replay = call("task_update", archive).await;
-    assert_eq!(replay["idempotentReplay"], true, "{replay}");
-    assert_eq!(replay["version"], 2);
+    assert_eq!(replay["value"]["idempotentReplay"], true, "{replay}");
+    assert_eq!(replay["value"]["version"], 2);
     let already = call(
         "task_update",
         json!({"taskId": "OLD-1", "expectedVersion": 2, "archived": true}),
     )
     .await;
-    assert_eq!(already["outcome"], "applied", "{already}");
-    assert_eq!(already["changedFields"], json!([]));
-    assert_eq!(already["version"], 2);
+    assert_eq!(already["outcome"], "ok", "{already}");
+    assert_eq!(already["value"]["changedFields"], json!([]));
+    assert_eq!(already["value"]["version"], 2);
 
     // An archived task refuses every change but a restore.
     let renamed = call(
@@ -981,7 +991,7 @@ async fn archiving_through_task_update_releases_claims_and_keeps_moved_originals
     )
     .await;
     assert_eq!(renamed["outcome"], "conflict", "{renamed}");
-    assert_eq!(renamed["changedFields"], json!(["archived"]));
+    assert_eq!(renamed["code"], "archived", "{renamed}");
     assert_eq!(renamed["retryCategory"], "do_not_retry");
     assert!(message(&renamed).contains("archived"), "{renamed}");
     let stale = call(
@@ -990,15 +1000,15 @@ async fn archiving_through_task_update_releases_claims_and_keeps_moved_originals
     )
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
-    assert_eq!(stale["retryCategory"], "refetch_then_decide");
+    assert_eq!(stale["retryCategory"], "reread");
     let restored = call(
         "task_update",
         json!({"taskId": "OLD-1", "expectedVersion": 2, "archived": false}),
     )
     .await;
-    assert_eq!(restored["outcome"], "applied", "{restored}");
-    assert_eq!(restored["changedFields"], json!(["archived"]));
-    assert_eq!(restored["version"], 3);
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    assert_eq!(restored["value"]["changedFields"], json!(["archived"]));
+    assert_eq!(restored["value"]["version"], 3);
     let listed = call("task_list", json!({"projectId": "OLD"})).await;
     assert!(
         strings(&listed["value"]["tasks"]).contains(&"OLD-1".to_owned()),
@@ -1015,8 +1025,8 @@ async fn archiving_through_task_update_releases_claims_and_keeps_moved_originals
             json!({"taskId": "OLD-2", "expectedVersion": expected_version, "archived": archived}),
         )
         .await;
-        assert_eq!(changed["outcome"], "applied", "{changed}");
-        assert_eq!(changed["version"], expected_version + 1);
+        assert_eq!(changed["outcome"], "ok", "{changed}");
+        assert_eq!(changed["value"]["version"], expected_version + 1);
     }
 
     // A moved task's original stays archived: restoring it would make a
@@ -1090,8 +1100,8 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
     let mut tasks = Vec::new();
     for title in ["Ship it", "Write the notes"] {
         let created = call("task_create", json!({"projectId": "WORK", "title": title})).await;
-        assert_eq!(created["outcome"], "applied", "{created}");
-        tasks.push(id(&created["workItemId"]));
+        assert_eq!(created["outcome"], "ok", "{created}");
+        tasks.push(id(&created["value"]["workItemId"]));
     }
     let comment = json!({
         "taskId": tasks[0],

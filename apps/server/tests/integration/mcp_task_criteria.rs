@@ -113,8 +113,8 @@ async fn criteria_change_all_together_and_retry_safely() {
         json!({"projectId": "WORK", "title": "Export archived items"}),
     )
     .await;
-    assert_eq!(created["version"], 1, "{created}");
-    let task = id(&created["workItemId"]);
+    assert_eq!(created["value"]["version"], 1, "{created}");
+    let task = id(&created["value"]["workItemId"]);
 
     // Three adds are one change: one version, one audit row, one outbox
     // event, and an activity each.
@@ -420,7 +420,7 @@ async fn criteria_follow_roles_tasks_and_archives() {
         }),
     )
     .await;
-    let task = id(&created["workItemId"]);
+    let task = id(&created["value"]["workItemId"]);
     let other = tool(
         app,
         &codex,
@@ -433,7 +433,7 @@ async fn criteria_follow_roles_tasks_and_archives() {
         }),
     )
     .await;
-    let other_task = id(&other["workItemId"]);
+    let other_task = id(&other["value"]["workItemId"]);
     let check = |task: Value, version: i64| {
         json!({
             "taskId": task, "expectedVersion": version,
@@ -459,7 +459,10 @@ async fn criteria_follow_roles_tasks_and_archives() {
     )
     .await;
     assert_eq!(viewer["outcome"], "permission_denied", "{viewer}");
-    assert_eq!(message(&viewer), "You can't change tasks in that project.");
+    assert!(
+        message(&viewer).contains("needs \"Edit tasks\" here"),
+        "{viewer}"
+    );
     let outsider = tool(
         app,
         &mara_token,
@@ -583,13 +586,13 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
         json!({"projectId": "WORK", "title": "Offline mode"}),
     )
     .await;
-    let task = id(&created["workItemId"]);
+    let task = id(&created["value"]["workItemId"]);
     let ready = call(
         "task_update",
         json!({"taskId": "WORK-1", "expectedVersion": 1, "status": "Ready"}),
     )
     .await;
-    assert_eq!(ready["version"], 2, "{ready}");
+    assert_eq!(ready["value"]["version"], 2, "{ready}");
     let (status, described) = send(
         app,
         setup.browser.request(
@@ -735,7 +738,7 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     .await;
     let commented = call(
         "task_comment",
-        json!({"taskId": second["workItemId"], "text": "Noted", "clientRequestId": "history-other"}),
+        json!({"taskId": second["value"]["workItemId"], "text": "Noted", "clientRequestId": "history-other"}),
     )
     .await;
     assert_eq!(commented["outcome"], "applied", "{commented}");
@@ -889,7 +892,7 @@ async fn history_of_a_moved_task_points_back_only_where_the_reader_reaches() {
         json!({"projectId": "OLD", "title": "Private mirrors"}),
     )
     .await;
-    let original = id(&created["workItemId"]);
+    let original = id(&created["value"]["workItemId"]);
     let moved = tool(
         app,
         &codex,

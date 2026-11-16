@@ -154,8 +154,8 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
         json!({"projectId": "PLAN", "title": "Existing parent"}),
     )
     .await;
-    assert_eq!(existing["key"], "PLAN-1", "{existing}");
-    let existing = id(&existing["workItemId"]);
+    assert_eq!(existing["value"]["key"], "PLAN-1", "{existing}");
+    let existing = id(&existing["value"]["workItemId"]);
     let label = call(
         "label_write",
         json!({"projectId": "PLAN", "name": "Import"}),
@@ -329,7 +329,7 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     );
     assert_eq!(footprint(&setup).await, after);
     let next = call("task_create", json!({"projectId": "PLAN", "title": "Next"})).await;
-    assert_eq!(next["key"], "PLAN-6", "no numbers were used up: {next}");
+    assert_eq!(next["value"]["key"], "PLAN-6", "no numbers were used up: {next}");
     // Refused batches aren't stored: the corrected one reuses the ID.
     let fixed = call(
         "task_create_many",
@@ -440,7 +440,7 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
         json!({"taskId": "PLAN-1", "expectedVersion": 1, "archived": true}),
     )
     .await;
-    assert_eq!(archived["outcome"], "applied", "{archived}");
+    assert_eq!(archived["outcome"], "ok", "{archived}");
     let under_archived = call(
         "task_create_many",
         json!({"projectId": "PLAN", "preview": true, "tasks": [{"title": "Orphan", "parentId": "PLAN-1"}]}),
@@ -844,7 +844,7 @@ async fn bulk_tools_check_access_for_every_task() {
             json!({"projectId": project, "title": format!("{project} task")}),
         )
         .await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
     let plan_task =
         id(&call("task_open", json!({"taskId": "PLAN-1"})).await["value"]["task"]["id"]);
@@ -1087,8 +1087,8 @@ async fn an_agent_imports_a_plan_and_reorganizes_the_board() {
         }),
     )
     .await;
-    assert_eq!(regrouped["outcome"], "applied", "{regrouped}");
-    assert_eq!(regrouped["changedFields"], json!(["parent", "labels"]));
+    assert_eq!(regrouped["outcome"], "ok", "{regrouped}");
+    assert_eq!(regrouped["value"]["changedFields"], json!(["parent", "labels"]));
     let parent = call("task_open", json!({"taskId": "SHIP-1"})).await;
     assert_eq!(
         keys(&parent["value"]["subtasks"]),

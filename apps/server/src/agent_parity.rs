@@ -653,17 +653,17 @@ mod tests {
         (
             Post,
             "/api/v1/whiteboards/{id}/scene",
-            Tool("whiteboard_edit"),
+            Tool("whiteboard_update_elements"),
         ),
         (
             Post,
             "/api/v1/whiteboards/{id}/operations",
-            Tool("whiteboard_edit"),
+            Tool("whiteboard_update_elements"),
         ),
         (
             Post,
             "/api/v1/whiteboards/{id}/files",
-            Tool("whiteboard_edit"),
+            Tool("whiteboard_update_elements"),
         ),
         (
             Post,
@@ -1131,32 +1131,32 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-            Tool("task_update"),
+            Tool("task_restore"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-            Tool("task_criteria"),
+            Tool("task_criteria_update"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            Tool("task_criteria"),
+            Tool("task_criteria_update"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            Tool("task_criteria"),
+            Tool("task_criteria_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-            Tool("task_comment"),
+            Tool("task_comment_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            Tool("task_comment_edit"),
+            Tool("task_comment_update"),
         ),
         (
             Delete,

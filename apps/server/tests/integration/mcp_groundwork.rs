@@ -47,11 +47,11 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         json!({"projectId": "WORK", "title": "Offline mode", "clientRequestId": "ground-create-1"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    let task = created["workItemId"].as_str().expect("task").to_owned();
-    assert_eq!(created["key"], "WORK-1", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let task = created["value"]["workItemId"].as_str().expect("task").to_owned();
+    assert_eq!(created["value"]["key"], "WORK-1", "{created}");
     assert!(
-        created["url"]
+        created["value"]["url"]
             .as_str()
             .expect("url")
             .ends_with(&format!("/projects/{project}/work-items/{task}")),
@@ -65,9 +65,9 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         json!({"projectId": "WORK", "title": "Offline mode", "clientRequestId": "ground-create-1"}),
     )
     .await;
-    assert_eq!(replay["idempotentReplay"], true, "{replay}");
+    assert_eq!(replay["value"]["idempotentReplay"], true, "{replay}");
     assert_eq!(
-        replay["key"], "WORK-1",
+        replay["value"]["key"], "WORK-1",
         "a replay carries the key: {replay}"
     );
 
@@ -81,17 +81,16 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         json!({"taskId": "WORK-1", "expectedVersion": 1, "status": "Done", "clientRequestId": "ground-done"}),
     )
     .await;
-    assert_eq!(refused["outcome"], "invalid_transition", "{refused}");
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    assert_eq!(refused["code"], "transition", "{refused}");
+    assert_eq!(refused["retryCategory"], "do_not_retry");
+    let current = &refused["details"]["current"];
+    assert!(current["currentStatusId"].is_string(), "{refused}");
+    assert_eq!(current["currentStatus"], "Backlog", "{refused}");
+    assert_eq!(current["requestedStatus"], "Done", "{refused}");
+    assert_eq!(names(&current["allowedStatuses"]), ["Ready", "Canceled"]);
     assert_eq!(
-        refused["retryCategory"],
-        "ask_user_or_choose_allowed_transition"
-    );
-    assert!(refused["currentStatusId"].is_string(), "{refused}");
-    assert_eq!(refused["currentStatus"], "Backlog", "{refused}");
-    assert_eq!(refused["requestedStatus"], "Done", "{refused}");
-    assert_eq!(names(&refused["allowedStatuses"]), ["Ready", "Canceled"]);
-    assert_eq!(
-        names(&refused["path"]),
+        names(&current["path"]),
         ["Ready", "In Progress", "Review", "Done"]
     );
     assert!(
@@ -118,9 +117,9 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         json!({"taskId": "WORK-1", "expectedVersion": 1, "status": "Ready", "clientRequestId": "ground-done"}),
     )
     .await;
-    assert_eq!(ready["outcome"], "applied", "{ready}");
-    assert_eq!(ready["version"], 2);
-    assert_eq!(ready["key"], "WORK-1");
+    assert_eq!(ready["outcome"], "ok", "{ready}");
+    assert_eq!(ready["value"]["version"], 2);
+    assert_eq!(ready["value"]["key"], "WORK-1");
 
     let review = tool(
         app,
@@ -130,8 +129,12 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         json!({"taskId": "WORK-1", "expectedVersion": 2, "clientRequestId": "ground-review"}),
     )
     .await;
-    assert_eq!(review["outcome"], "invalid_transition", "{review}");
-    assert_eq!(names(&review["path"]), ["In Progress", "Review"]);
+    assert_eq!(review["outcome"], "conflict", "{review}");
+    assert_eq!(review["code"], "transition", "{review}");
+    assert_eq!(
+        names(&review["details"]["current"]["path"]),
+        ["In Progress", "Review"]
+    );
 
     let stale = tool(
         app,
@@ -142,7 +145,7 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
     )
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
-    assert_eq!(stale["retryCategory"], "refetch_then_decide");
+    assert_eq!(stale["retryCategory"], "reread");
     assert_eq!(
         stale["message"],
         "Someone changed WORK-1 first (now version 2). Open it again with task_open, then retry with expectedVersion 2."
@@ -158,7 +161,7 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
     .await;
     assert_eq!(unknown["outcome"], "invalid_request", "{unknown}");
     assert_eq!(unknown["field"], "status");
-    assert_eq!(unknown["retryCategory"], "correct_input");
+    assert_eq!(unknown["retryCategory"], "fix_input");
     assert!(
         unknown["message"]
             .as_str()
@@ -178,7 +181,7 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
     )
     .await;
     assert_eq!(too_long["outcome"], "invalid_request", "{too_long}");
-    assert_eq!(too_long["field"], "clientRequestId");
+    assert_eq!(too_long["field"], "requestId");
     let longest = tool(
         app,
         &codex,
@@ -187,8 +190,8 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         json!({"taskId": "WORK-1", "expectedVersion": 2, "title": "Renamed", "clientRequestId": "r".repeat(128)}),
     )
     .await;
-    assert_eq!(longest["outcome"], "applied", "{longest}");
-    assert_eq!(longest["version"], 3);
+    assert_eq!(longest["outcome"], "ok", "{longest}");
+    assert_eq!(longest["value"]["version"], 3);
 
     let comment = tool(
         app,
@@ -200,7 +203,7 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
     .await;
     assert_eq!(comment["outcome"], "applied", "{comment}");
     assert_eq!(comment["key"], "WORK-1");
-    assert_eq!(comment["url"], created["url"]);
+    assert_eq!(comment["url"], created["value"]["url"]);
 }
 
 #[tokio::test]
@@ -222,7 +225,7 @@ async fn a_task_whose_status_changes_goes_to_the_bottom_of_its_new_column() {
             json!({"projectId": "WORK", "title": title}),
         )
         .await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
     for key in ["WORK-2", "WORK-3", "WORK-1"] {
         let moved = tool(
@@ -233,8 +236,8 @@ async fn a_task_whose_status_changes_goes_to_the_bottom_of_its_new_column() {
             json!({"taskId": key, "expectedVersion": 1, "status": "Ready"}),
         )
         .await;
-        assert_eq!(moved["outcome"], "applied", "{moved}");
-        assert_eq!(moved["changedFields"], json!(["status"]), "{moved}");
+        assert_eq!(moved["outcome"], "ok", "{moved}");
+        assert_eq!(moved["value"]["changedFields"], json!(["status"]), "{moved}");
     }
     let column = tool(
         app,
@@ -314,7 +317,7 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
         json!({"projectId": "OLD", "title": "Mirror private repositories"}),
     )
     .await;
-    let task = created["workItemId"].as_str().expect("task").to_owned();
+    let task = created["value"]["workItemId"].as_str().expect("task").to_owned();
     let claimed = tool(
         app,
         &codex,
@@ -551,7 +554,7 @@ async fn message_links_name_the_message_everywhere() {
         json!({"projectId": "WORK", "title": "Adopt design tokens"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
     let linked = call("task_link", json!({"taskId": "WORK-1", "messageId": link})).await;
     assert_eq!(linked["outcome"], "ok", "{linked}");
     assert_eq!(linked["value"]["kind"], "message", "{linked}");

@@ -52,6 +52,37 @@ fn enveloped(_canonical: &str, value: Value) -> Value {
     serde_json::json!({ "outcome": "ok", "value": value })
 }
 
+/// The old task tools took the project as `projectId`; the operations find
+/// it from the task.
+fn without_project(mut arguments: JsonObject) -> JsonObject {
+    arguments.remove("projectId");
+    arguments
+}
+
+/// `task_mark_blocked`'s `reason` is `task_update`'s `blockedReason`.
+fn mark_blocked_in(arguments: JsonObject) -> JsonObject {
+    let mut arguments = without_project(arguments);
+    if let Some(reason) = arguments.remove("reason") {
+        arguments.insert("blockedReason".to_owned(), reason);
+    }
+    arguments
+}
+
+/// `task_mark_ready_for_review` is `task_update` with `readyForReview`.
+fn mark_ready_in(arguments: JsonObject) -> JsonObject {
+    let mut arguments = without_project(arguments);
+    arguments.insert("readyForReview".to_owned(), Value::Bool(true));
+    arguments
+}
+
+/// The old task write answer: the write's fields with `"outcome": "applied"`.
+fn task_written(_canonical: &str, mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("outcome".to_owned(), Value::String("applied".to_owned()));
+    }
+    value
+}
+
 /// A tool renamed when it became an operation that already answered in
 /// the envelope (A1.3's run tools, K2.7's message tools), answering as it
 /// did.
@@ -123,11 +154,40 @@ pub const ALIASES: &[Alias] = &[
     written!("webhook_write", "webhookId" => "webhook_create", "webhook_update"),
     written!("environment_write", "environmentId" => "environment_create", "environment_update"),
     written!("bug_report_link_write", "linkId" => "bug_report_link_create", "bug_report_link_update"),
-    renamed!("whiteboard_edit" => "whiteboard_update_elements"),
+    // K2.12: whiteboard_edit answered in the envelope already.
+    run_renamed!("whiteboard_edit" => "whiteboard_update_elements"),
     // K2.7: the message tools answered in the envelope already.
     run_renamed!("message_edit" => "message_update"),
-    renamed!("task_comment_edit" => "task_comment_update"),
-    renamed!("task_criteria" => "task_criteria_update"),
+    // K2.13: the comment-edit and criteria tools answered in the envelope
+    // already; task_comment and the two mark tools answered a task write
+    // (`"outcome": "applied"`), and took a projectId the operations find
+    // from the task.
+    run_renamed!("task_comment_edit" => "task_comment_update"),
+    run_renamed!("task_criteria" => "task_criteria_update"),
+    Alias {
+        name: "task_comment",
+        canonical: |_| "task_comment_create",
+        runs: &["task_comment_create"],
+        adapt_in: without_project,
+        adapt_out: task_written,
+        sunset: None,
+    },
+    Alias {
+        name: "task_mark_blocked",
+        canonical: |_| "task_update",
+        runs: &["task_update"],
+        adapt_in: mark_blocked_in,
+        adapt_out: task_written,
+        sunset: None,
+    },
+    Alias {
+        name: "task_mark_ready_for_review",
+        canonical: |_| "task_update",
+        runs: &["task_update"],
+        adapt_in: mark_ready_in,
+        adapt_out: task_written,
+        sunset: None,
+    },
     renamed!("task_watch" => "task_watch_set"),
     renamed!("task_link_pull_request" => "task_link"),
     run_renamed!("mark_read" => "conversation_mark_read"),

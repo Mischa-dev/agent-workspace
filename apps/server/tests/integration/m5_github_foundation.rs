@@ -910,7 +910,7 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
         )
         .await;
         tasks.push(
-            created["workItemId"]
+            created["value"]["workItemId"]
                 .as_str()
                 .unwrap_or_else(|| panic!("task: {created}"))
                 .parse::<Uuid>()

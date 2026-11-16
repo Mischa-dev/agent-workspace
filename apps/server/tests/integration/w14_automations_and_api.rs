@@ -344,7 +344,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     )
     .await;
     assert_eq!(made.0, StatusCode::OK, "{}", made.1);
-    assert_eq!(made.2["outcome"], "applied", "{}", made.1);
+    assert_eq!(made.2["outcome"], "ok", "{}", made.1);
     let listed = bearer(
         &application,
         Some(&token),

@@ -90,16 +90,8 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("reply_retry", Some(ChannelsPost)),
     ("task_list", Some(TasksView)),
     ("task_open", Some(TasksView)),
-    ("task_create", Some(TasksCreate)),
-    ("task_update", Some(TasksEdit)),
     ("task_create_many", Some(TasksCreate)),
     ("task_update_many", Some(TasksEdit)),
-    ("task_criteria", Some(TasksEdit)),
-    ("task_comment", Some(TasksEdit)),
-    ("task_comment_edit", Some(TasksEdit)),
-    ("task_comment_delete", Some(TasksEdit)),
-    ("task_mark_blocked", Some(TasksEdit)),
-    ("task_mark_ready_for_review", Some(TasksEdit)),
     ("task_link_pull_request", Some(TasksEdit)),
     ("task_reorder", Some(TasksEdit)),
     ("task_claim", Some(TasksEdit)),
@@ -141,12 +133,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("whiteboard_list", None),
     ("whiteboard_read", None),
     ("whiteboard_render", None),
-    ("whiteboard_create", Some(WhiteboardsEdit)),
-    ("whiteboard_edit", Some(WhiteboardsEdit)),
-    ("whiteboard_update", Some(WhiteboardsEdit)),
     ("whiteboard_trash_empty", Some(WhiteboardsEdit)),
-    ("whiteboard_duplicate", Some(WhiteboardsEdit)),
-    ("whiteboard_link", Some(WhiteboardsEdit)),
     ("approval_list", None),
     ("task_depend", Some(TasksEdit)),
     ("view_list", Some(TasksView)),
@@ -211,11 +198,10 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
 ];
 
 /// Tools another permission also opens, for the use the handler then
-/// checks itself: archiving through the task update tools needs only
-/// "archive tasks", and uploading to a task needs only "edit tasks" (the
+/// checks itself: archiving through task_update_many needs only "archive
+/// tasks" (task_archive is the operation for one task), and uploading to a task needs only "edit tasks" (the
 /// handler checks "post messages" for a conversation upload).
 const ALSO_OPENED_BY: &[(&str, Permission)] = &[
-    ("task_update", TasksDelete),
     ("task_update_many", TasksDelete),
     ("file_upload", TasksEdit),
     // Forms add a collection's records (AWD-110); the handler checks each
@@ -280,7 +266,6 @@ mod tests {
     #[test]
     fn archiving_alone_opens_the_task_update_tools() {
         let archive_only = PermissionSet::from_keys(&["tasks.view", "tasks.delete"]);
-        assert!(super::reachable("task_update", archive_only));
         assert!(super::reachable("task_update_many", archive_only));
         assert!(!super::reachable("task_comment", archive_only));
     }

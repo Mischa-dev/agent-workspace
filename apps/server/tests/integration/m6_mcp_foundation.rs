@@ -513,10 +513,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         }),
     )
     .await;
-    assert_eq!(unchanged.pointer("/outcome"), Some(&json!("applied")));
-    assert_eq!(unchanged.pointer("/version"), Some(&json!(1)));
-    assert_eq!(unchanged.pointer("/changedFields"), Some(&json!([])));
-    assert!(unchanged.pointer("/resultId").is_some());
+    assert_eq!(unchanged.pointer("/outcome"), Some(&json!("ok")));
+    assert_eq!(unchanged.pointer("/value/version"), Some(&json!(1)));
+    assert_eq!(unchanged.pointer("/value/changedFields"), Some(&json!([])));
+    assert!(unchanged.pointer("/value/resultId").is_some());
 
     let update_arguments = json!({
         "workItemId":work_item_id.to_string(),
@@ -533,9 +533,9 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         update_arguments.clone(),
     )
     .await;
-    assert_eq!(updated.pointer("/outcome"), Some(&json!("applied")));
-    assert_eq!(updated.pointer("/version"), Some(&json!(2)));
-    assert_eq!(updated.pointer("/idempotentReplay"), Some(&json!(false)));
+    assert_eq!(updated.pointer("/outcome"), Some(&json!("ok")));
+    assert_eq!(updated.pointer("/value/version"), Some(&json!(2)));
+    assert_eq!(updated.pointer("/value/idempotentReplay"), Some(&json!(false)));
     let replay = call_tool(
         &application,
         &token,
@@ -545,7 +545,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         update_arguments,
     )
     .await;
-    assert_eq!(replay.pointer("/idempotentReplay"), Some(&json!(true)));
+    assert_eq!(replay.pointer("/value/idempotentReplay"), Some(&json!(true)));
 
     let stale = call_tool(
         &application,
@@ -562,14 +562,14 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     )
     .await;
     assert_eq!(stale.pointer("/outcome"), Some(&json!("conflict")));
-    assert_eq!(stale.pointer("/currentVersion"), Some(&json!(2)));
+    assert_eq!(stale.pointer("/details/currentVersion"), Some(&json!(2)));
     assert_eq!(
-        stale.pointer("/current/id"),
+        stale.pointer("/details/current/task/id"),
         Some(&json!(work_item_id.to_string()))
     );
-    assert_eq!(stale.pointer("/current/version"), Some(&json!(2)));
+    assert_eq!(stale.pointer("/details/current/task/version"), Some(&json!(2)));
     assert_eq!(
-        stale.pointer("/current/title"),
+        stale.pointer("/details/current/task/title"),
         Some(&json!("M6 write contract"))
     );
 
@@ -617,7 +617,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         }),
     )
     .await;
-    assert_eq!(subtask.pointer("/outcome"), Some(&json!("applied")));
+    assert_eq!(subtask.pointer("/outcome"), Some(&json!("ok")));
 
     let ready = call_tool(
         &application,
@@ -633,7 +633,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         }),
     )
     .await;
-    assert_eq!(ready.pointer("/version"), Some(&json!(4)));
+    assert_eq!(ready.pointer("/value/version"), Some(&json!(4)));
     let started = call_tool(
         &application,
         &token,
@@ -648,7 +648,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         }),
     )
     .await;
-    assert_eq!(started.pointer("/version"), Some(&json!(5)));
+    assert_eq!(started.pointer("/value/version"), Some(&json!(5)));
     let review = call_tool(
         &application,
         &token,
@@ -750,9 +750,9 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         }),
     )
     .await;
-    assert_eq!(mcp_created["outcome"], "applied");
+    assert_eq!(mcp_created["outcome"], "ok");
     let mcp_work_item_id = Uuid::parse_str(
-        mcp_created["workItemId"]
+        mcp_created["value"]["workItemId"]
             .as_str()
             .expect("MCP parity Work Item id"),
     )
@@ -845,8 +845,8 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         }),
     )
     .await;
-    assert_eq!(mcp_updated["outcome"], "applied");
-    assert_eq!(mcp_updated["version"], 2);
+    assert_eq!(mcp_updated["outcome"], "ok");
+    assert_eq!(mcp_updated["value"]["version"], 2);
     let after_mcp_update = sqlx::query_as::<_, (i64, i64, i64)>(
         "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
     )

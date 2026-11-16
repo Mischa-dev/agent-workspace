@@ -144,6 +144,86 @@ async fn space_keys_to_ids(
             input[field] = Value::String(id.to_string());
         }
     }
+    task_keys_to_ids(state, request, input).await
+}
+
+/// A task's key (such as "AWD-12") in a field that names a task, replaced
+/// by the task's id (K2.13), the way MCP's own key resolution does for its
+/// tools: the task that has the key now, or the one a moved task went to,
+/// among spaces the caller is an enabled member of and can reach. A key two
+/// of the caller's workspaces share is never guessed; it stays for the
+/// input to refuse.
+async fn task_keys_to_ids(
+    state: &AppState,
+    request: &DispatchRequest,
+    mut input: Value,
+) -> Result<Value, OpError> {
+    for field in ["taskId", "workItemId", "parentId", "parentWorkItemId"] {
+        let Some((space_key, number)) = input
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(crate::mcp::split_task_key)
+            .map(|(key, number)| (key.to_owned(), number))
+        else {
+            continue;
+        };
+        let caller = &request.caller;
+        let workspace = request.workspace;
+        let found = crate::db::scoped_one(&state.pool, async |connection| {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+            SELECT found.id FROM (
+                SELECT item.id, 0 AS preference, item.project_id
+                FROM task_rows item
+                JOIN projects project ON project.id = item.project_id
+                WHERE upper(project.project_key) = upper($3) AND item.number = $4
+                  AND project.archived_at IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM work_item_key_aliases moved
+                      WHERE moved.source_work_item_id = item.id
+                  )
+                UNION ALL
+                SELECT alias.work_item_id, 1, item.project_id
+                FROM work_item_key_aliases alias
+                JOIN task_rows item ON item.id = alias.work_item_id
+                WHERE upper(alias.project_key) = upper($3) AND alias.number = $4
+            ) found
+            JOIN projects project ON project.id = found.project_id
+            JOIN project_memberships membership
+              ON membership.project_id = found.project_id
+             AND membership.actor_id = $1
+             AND membership.enabled
+            WHERE actor_can_access_project($1, $2, found.project_id)
+              AND ($5::uuid IS NULL OR found.project_id = $5)
+              AND ($6::uuid IS NULL OR project.organization_id = $6)
+            GROUP BY found.id
+            ORDER BY min(found.preference)
+            LIMIT 2
+            "#,
+            )
+            .bind(caller.account_id)
+            .bind(caller.connection_id)
+            .bind(&space_key)
+            .bind(number)
+            .bind(caller.confined_space)
+            .bind(workspace)
+            .fetch_all(connection)
+            .await
+        })
+        .await
+        .map_err(|error: sqlx::Error| OpError::logged("task key", &error.into()))?;
+        match found.as_slice() {
+            [id] => input[field] = Value::String(id.to_string()),
+            [] => return Err(OpError::not_found("That task")),
+            _ => {
+                return Err(OpError::invalid(
+                    "taskId",
+                    "That key names tasks in more than one of your workspaces. Use the task's \
+                     id or link.",
+                ));
+            }
+        }
+    }
     Ok(input)
 }
 
