@@ -384,9 +384,37 @@ pub async fn lock_membership(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<ProjectMembership>, AppError> {
+    // NO KEY UPDATE on the project row (C1.12): it orders writers that lock
+    // the project just as FOR UPDATE did, but leaves alone the key-share
+    // lock a foreign key takes, so a write that only adds rows pointing at
+    // the project (a sheet's cells under `share_membership`) never waits
+    // for it, nor it for them.
     Ok(sqlx::query_as::<_, ProjectMembership>(concat!(
         membership_select!(),
-        "FOR UPDATE OF project, membership\n        FOR SHARE OF organization_membership, actor"
+        "FOR NO KEY UPDATE OF project\n        FOR UPDATE OF membership\n        FOR SHARE OF organization_membership, actor"
+    ))
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
+/// `lock_membership` for a write that changes one document's content and
+/// nothing about the project (a sheet's cells and tabs, C1.12): it holds the
+/// membership `FOR SHARE`, so a revocation waits for it and is seen by the
+/// next write, but it takes no lock on the project row, so a long write
+/// never holds up task updates and other writes in the same project. The
+/// document's own row lock orders writes to it. Creating, renaming or
+/// archiving a document still uses `lock_membership` (per-project counts and
+/// unique names).
+pub async fn share_membership(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Option<ProjectMembership>, AppError> {
+    Ok(sqlx::query_as::<_, ProjectMembership>(concat!(
+        membership_select!(),
+        "FOR SHARE OF membership, organization_membership, actor"
     ))
     .bind(project_id)
     .bind(actor_id)

@@ -37,7 +37,7 @@ use crate::{
     policy::Action,
     work_item_commands::{
         AuditAttribution, CommandActor, ProjectMembership, authorize_mutation, lock_membership,
-        read_membership, record_audit_for,
+        read_membership, record_audit_for, share_membership,
     },
 };
 
@@ -162,7 +162,19 @@ enum Started {
     Write(Box<Write>),
 }
 
-/// Checks the session, locks the project, authorizes `sheets.edit` (someone
+/// What a write locks before the sheet's row (C1.12).
+#[derive(Clone, Copy)]
+enum ProjectLock {
+    /// The project row: making, renaming, archiving or restoring a sheet
+    /// checks per-project counts and unique names.
+    Project,
+    /// Only the membership, shared: cell and tab changes, so a long
+    /// recalculation never holds up other writes in the project.
+    Membership,
+}
+
+/// Checks the session, locks the project (or, for cell changes, only the
+/// membership), authorizes `sheets.edit` (someone
 /// who can't see the project gets not found, someone who can but may not
 /// change sheets gets forbidden) and reserves the idempotency key. A
 /// retried request gets the first response back.
@@ -173,14 +185,21 @@ async fn start_write<T: Serialize>(
     project_id: Uuid,
     scope: String,
     request: &T,
+    lock: ProjectLock,
 ) -> Result<Started, AppError> {
     require_authenticated_write(state, headers, principal)?;
     let key = IdempotencyKey::from_headers(headers)?;
     let request_hash = RequestHash::for_value(request)?;
     let mut transaction = state.pool.begin().await?;
-    let membership = lock_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
+    let membership = match lock {
+        ProjectLock::Project => {
+            lock_membership(&mut transaction, principal.actor_id, project_id).await?
+        }
+        ProjectLock::Membership => {
+            share_membership(&mut transaction, principal.actor_id, project_id).await?
+        }
+    }
+    .ok_or(AppError::NotFound("project"))?;
     let actor = browser_actor(headers, principal, project_id)?;
     if !allows(&actor, &membership, Action::ProjectView)? {
         return Err(AppError::NotFound("project"));
@@ -478,6 +497,7 @@ async fn create_sheet(
             project_id,
             resource_bound_scope("projects", project_id, "sheets_create")?,
             &request,
+            ProjectLock::Project,
         )
         .await
     );
@@ -563,6 +583,7 @@ async fn update_sheet(
             project_id,
             resource_bound_scope("sheets", sheet_id, "update")?,
             &request,
+            ProjectLock::Project,
         )
         .await
     );
@@ -786,6 +807,7 @@ async fn change_sheet(
             project_id,
             resource_bound_scope("sheets", sheet_id, "changes")?,
             &request,
+            ProjectLock::Membership,
         )
         .await
     );
@@ -942,6 +964,7 @@ async fn import_sheet(
             project_id,
             resource_bound_scope("projects", project_id, "sheets_import")?,
             &record,
+            ProjectLock::Project,
         )
         .await
     );
