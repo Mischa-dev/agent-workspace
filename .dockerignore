@@ -1,0 +1,13 @@
+# What the container build leaves out (deploy/container/Containerfile).
+.git
+target
+node_modules
+**/node_modules
+apps/web/dist
+apps/web/e2e-output
+.agent-workspace
+.agent-workspace-secrets
+deploy/container/secrets
+deploy/container/.env
+*.pem
+*.key

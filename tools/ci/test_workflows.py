@@ -13,7 +13,7 @@ import unittest
 
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
-HOSTED = re.compile(r"(ubuntu|windows|macos)-[a-z0-9.]+")
+HOSTED = re.compile(r"(ubuntu|windows|macos)-[a-z0-9.]+(-arm)?")
 
 
 class WorkflowRunnerTests(unittest.TestCase):
