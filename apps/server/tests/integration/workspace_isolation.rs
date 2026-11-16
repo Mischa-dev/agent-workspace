@@ -62,7 +62,7 @@ use super::{
     agent_interface::{Browser, initialize},
     mcp_admin::Setup,
     message_edits::{say, text},
-    write_isolation::{digest_changes, digest_ignoring},
+    write_isolation::{digest_changes, digest_ignoring, refresh_digest, table_fingerprints},
 };
 
 pub(super) use super::support::two_workspaces::{
@@ -2688,6 +2688,9 @@ async fn check_mcp(
     // and after each tool's calls; only the columns reads may touch differ.
     let a_ids = sweep_ids(pool, a.organization).await;
     let a_pattern = a_ids.iter().cloned().collect::<Vec<_>>().join("|");
+    // Fingerprints first, so a write landing during the digest is caught
+    // by the next refresh rather than missed.
+    let mut fingerprints = table_fingerprints(pool).await;
     let mut a_rows = digest_ignoring(pool, &a_pattern, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
@@ -2697,7 +2700,7 @@ async fn check_mcp(
             let read_only_check = !READ_TOOLS_THAT_WRITE
                 .iter()
                 .any(|(tool, _)| *tool == case.tool);
-            let before = std::mem::take(&mut a_rows);
+            let before = a_rows.clone();
             for arguments in &case.own {
                 report.mcp_calls += 1;
                 let (status, body) =
@@ -2745,7 +2748,8 @@ async fn check_mcp(
                     b_ids,
                 );
             }
-            a_rows = digest_ignoring(pool, &a_pattern, READ_TOUCHES).await;
+            fingerprints =
+                refresh_digest(pool, &a_pattern, READ_TOUCHES, &fingerprints, &mut a_rows).await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(
