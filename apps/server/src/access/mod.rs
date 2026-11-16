@@ -303,6 +303,92 @@ async fn check_with(
     );
     Ok(decided)
 }
+/// The permission for `level` on things of `kind` (`"page"`), from the
+/// catalogue.
+pub fn level_permission(kind: &str, level: catalogue::Level) -> Option<Permission> {
+    catalogue::PERMISSIONS
+        .iter()
+        .find(|info| info.level == Some((kind, level)))
+        .map(|info| info.permission)
+}
+
+/// The three-way answer for a write on a kind with levels, from a holding
+/// (pure, for `write_mode` and its tests): `Direct` with the kind's edit
+/// level, or its edit-own level on the caller's own thing (`own`);
+/// `Propose` with only its suggest level; otherwise the refusal for edit.
+pub fn decide_write_mode(
+    held: Option<&Holding>,
+    kind: &str,
+    own: bool,
+    module: Option<&'static str>,
+    credential: Credential,
+) -> Result<Grant, Denied> {
+    let need = |level| Need {
+        permission: level_permission(kind, level),
+        module,
+        writes: true,
+    };
+    let edit = decide(held, &need(catalogue::Level::Edit), credential);
+    if edit.is_ok() {
+        return edit;
+    }
+    if own {
+        let edit_own = decide(held, &need(catalogue::Level::EditOwn), credential);
+        if edit_own.is_ok() {
+            return edit_own;
+        }
+    }
+    match decide(held, &need(catalogue::Level::Suggest), credential) {
+        Ok(grant) => Ok(Grant {
+            mode: WriteMode::Propose,
+            ..grant
+        }),
+        Err(_) => edit,
+    }
+}
+
+/// For writes on kinds with levels (K1.12): `Direct` with edit (or
+/// edit-own on the caller's own thing), `Propose` with only suggest, else
+/// refused. Nothing else decides suggest-versus-edit; it never reads the
+/// account's kind.
+pub async fn write_mode(
+    connection: &mut PgConnection,
+    caller: &Caller,
+    kind: &str,
+    space: Uuid,
+    own: bool,
+    module: Option<&'static str>,
+) -> Result<Result<Grant, Denied>, AppError> {
+    let held = holding::load(connection, caller, Scope::Space(space), false).await?;
+    Ok(decide_write_mode(
+        held.as_ref(),
+        kind,
+        own,
+        module,
+        credential_of(caller),
+    ))
+}
+
+/// Same as `write_mode`, taking the membership rows `FOR SHARE` inside a
+/// write transaction.
+pub async fn write_mode_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    kind: &str,
+    space: Uuid,
+    own: bool,
+    module: Option<&'static str>,
+) -> Result<Result<Grant, Denied>, AppError> {
+    let held = holding::load(tx, caller, Scope::Space(space), true).await?;
+    Ok(decide_write_mode(
+        held.as_ref(),
+        kind,
+        own,
+        module,
+        credential_of(caller),
+    ))
+}
+
 /// A list filter: SQL true for rows whose space (`space_column`) the
 /// caller may `need` in, with its binds starting at `$first`.
 pub struct SqlFilter {
@@ -352,5 +438,63 @@ pub fn sql_filter(
         connection_id: caller.connection_id,
         permission: need.key(),
         limited_to,
+    }
+}
+
+#[cfg(test)]
+mod write_mode_tests {
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::policy::{PermissionSet, RoleGrant};
+
+    fn held(permissions: PermissionSet) -> Holding {
+        Holding {
+            scope: Scope::Space(Uuid::nil()),
+            workspace_id: Uuid::nil(),
+            permissions: permissions.implied(),
+            tier: Tier::Member,
+            modules: None,
+            delegated: false,
+        }
+    }
+
+    /// K1.12: edit is direct anywhere, edit-own is direct on one's own page
+    /// and a suggestion elsewhere, suggest alone is always a suggestion,
+    /// and see alone is refused; the same holding answers the same for any
+    /// account.
+    #[test]
+    fn write_mode_has_three_answers() {
+        let member = held(RoleGrant::built_in(MembershipRole::Member).permissions());
+        let suggests = held(
+            RoleGrant::built_in(MembershipRole::Member)
+                .permissions()
+                .without(Permission::PagesEdit)
+                .with(Permission::PagesSuggest)
+                .with(Permission::PagesEditOwn),
+        );
+        let suggest_only = held(
+            PermissionSet::required()
+                .with(Permission::PagesSuggest)
+                .without(Permission::PagesEdit),
+        );
+        let viewer = held(RoleGrant::built_in(MembershipRole::Viewer).permissions());
+        let mode = |holding: &Holding, own: bool| {
+            decide_write_mode(Some(holding), "page", own, None, Credential::FULL)
+                .map(|grant| grant.mode)
+        };
+        assert_eq!(mode(&member, false), Ok(WriteMode::Direct));
+        assert_eq!(mode(&suggests, true), Ok(WriteMode::Direct));
+        assert_eq!(mode(&suggests, false), Ok(WriteMode::Propose));
+        assert_eq!(mode(&suggest_only, true), Ok(WriteMode::Propose));
+        assert!(matches!(
+            mode(&viewer, false),
+            Err(Denied::Permission { .. })
+        ));
+        assert_eq!(
+            decide_write_mode(None, "page", false, None, Credential::FULL),
+            Err(Denied::NotFound)
+        );
+        assert!(level_permission("page", catalogue::Level::Suggest).is_some());
     }
 }

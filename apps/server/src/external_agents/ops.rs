@@ -137,10 +137,9 @@ impl Operation for AgentCreate {
         let workspace_id = call.ctx.workspace_id;
         let caller = call.ctx.caller.clone();
         let tx = call.tx().await?;
-        let (role, role_id) =
-            engine::workspace_role(tx, workspace_id, input.role_id.map(IdRef::id))
-                .await?
-                .ok_or_else(|| OpError::not_found("That role"))?;
+        let (role, role_id) = engine::agent_role(tx, workspace_id, input.role_id.map(IdRef::id))
+            .await?
+            .ok_or_else(|| OpError::not_found("That role"))?;
         if engine::is_ownership(&role) {
             return Err(OpError::invalid(
                 "roleId",

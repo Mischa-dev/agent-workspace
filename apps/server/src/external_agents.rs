@@ -380,13 +380,36 @@ async fn insert_agent(
     normalized: &NormalizedCreate,
 ) -> Result<CreatedAgent, AppError> {
     // K1.6: one way to make an agent account. The workspace owns it, and
-    // its creator manages it.
+    // its creator manages it. Its workspace role is the workspace's role for
+    // new agents (K1.12).
+    // Like every other way in, that is within what its creator may give.
+    let (workspace_role, workspace_role_id) =
+        crate::invitations::engine::agent_role(transaction, organization_id, None)
+            .await?
+            .unwrap_or_else(|| ("member".to_owned(), None));
+    let creator_kind = crate::accounts::actor_kind(
+        &sqlx::query_scalar::<_, String>("SELECT kind FROM actors WHERE id = $1")
+            .bind(created_by)
+            .fetch_one(&mut **transaction)
+            .await?,
+    )?;
+    if !crate::invitations::engine::issuer_may_grant(
+        transaction,
+        &crate::access::Caller::person(created_by, creator_kind),
+        crate::access::Scope::Workspace(organization_id),
+        &workspace_role,
+        workspace_role_id,
+    )
+    .await?
+    {
+        return Err(AppError::Forbidden);
+    }
     let actor_id = crate::accounts::create_agent(
         transaction,
         crate::accounts::NewAgent {
             workspace_id: organization_id,
-            role: "member",
-            role_id: None,
+            role: &workspace_role,
+            role_id: workspace_role_id,
             owner: crate::accounts::Owner::Workspace(organization_id),
             created_by,
         },

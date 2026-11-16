@@ -455,6 +455,18 @@ pub const REGISTRY: &[SettingDef] = &[
         launch_override: false,
         default: "true",
     },
+    // K1.12: the role a new agent gets when whoever adds it names none
+    // (ruling R5: the same as a newly invited person unless changed). A role
+    // id of this workspace; engine::agent_role checks it still is one.
+    SettingDef {
+        key: "access.default_agent_role_id",
+        label: "Role for new agents",
+        description: "The role a new agent gets when whoever adds it doesn't pick one. Unset, it's the role new people get.",
+        kind: SettingType::Identifier { optional: true },
+        scopes: &[Scope::Workspace],
+        launch_override: false,
+        default: "null",
+    },
     // Layouts change through their own routes (crate::layouts), which check
     // presets and parts against the workspace; the generic routes refuse them.
     SettingDef {

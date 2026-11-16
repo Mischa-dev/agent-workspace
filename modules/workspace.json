@@ -138,6 +138,6 @@
     "slash": [],
     "setup": ["template", "workspace", "roles"]
   },
-  "settings": ["notifications.*", "files.*", "layout.*", "modules.*"],
+  "settings": ["notifications.*", "files.*", "layout.*", "modules.*", "access.*"],
   "nouns": []
 }

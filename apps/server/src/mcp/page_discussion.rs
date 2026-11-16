@@ -10,8 +10,7 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{ToolResult, insert_audit, parse_id, public_url},
-    memory_tools::writer,
-    talk::can_write_in,
+    memory_tools::{page_write_mode, writer},
 };
 use crate::{
     AppState,
@@ -24,6 +23,31 @@ use crate::{
     },
     policy::Action,
 };
+
+/// Whether the caller may comment on pages in `project_id`
+/// (`pages.comment`, which a role that only suggests keeps).
+async fn may_comment(
+    state: &AppState,
+    principal: &McpPrincipal,
+    project_id: Uuid,
+) -> Result<bool, AppError> {
+    if !principal.can_write() {
+        return Ok(false);
+    }
+    let (_, limits) = super::caller_reach(state, principal).await?;
+    let caller = crate::access::Caller::of_principal(principal, limits);
+    let mut connection = state.pool.acquire().await?;
+    Ok(crate::access::check(
+        &mut connection,
+        &caller,
+        crate::access::Need::permission(crate::policy::Permission::PagesComment)
+            .writes()
+            .in_module("pages"),
+        crate::access::Target::Space(project_id),
+    )
+    .await?
+    .is_ok())
+}
 
 /// The page, when the caller can read it in the project the call is in.
 async fn readable(
@@ -221,7 +245,7 @@ pub(super) async fn page_comment(
     };
     let result = async {
         let project_id = principal.project_id;
-        if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
+        if !may_comment(state, principal, project_id).await? {
             return Ok(ToolResult::denied(
                 "You can't comment on pages in that project.",
             ));
@@ -337,7 +361,7 @@ pub(super) async fn page_comment_update(
     };
     let result = async {
         let project_id = principal.project_id;
-        if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
+        if !may_comment(state, principal, project_id).await? {
             return Ok(ToolResult::denied(
                 "You can't comment on pages in that project.",
             ));
@@ -548,21 +572,38 @@ pub(super) async fn page_suggestion_decide(
     };
     let result = async {
         let project_id = principal.project_id;
-        if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
+        let mut transaction = state.pool.begin().await?;
+        // Anyone who may at least suggest here reaches the tool (an author
+        // withdraws); accepting and rejecting need edit access to the page
+        // (K1.12).
+        if page_write_mode(state, principal, &mut transaction, project_id, true)
+            .await?
+            .is_none()
+        {
             return Ok(ToolResult::denied("You can't edit pages in that project."));
         }
         let in_project = sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
             .bind(page_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&mut *transaction)
             .await?
             == Some(project_id);
         if !in_project {
             return Ok(ToolResult::not_found("That page"));
         }
-        let mut transaction = state.pool.begin().await?;
+        let creator = suggestions::page_creator(&mut transaction, page_id).await?;
+        let may_edit = page_write_mode(
+            state,
+            principal,
+            &mut transaction,
+            project_id,
+            creator == Some(principal.actor_id),
+        )
+        .await?
+            == Some(crate::access::WriteMode::Direct);
         let decided = match suggestions::decide(
             &mut transaction,
             writer(principal),
+            may_edit,
             page_id,
             suggestion_id,
             decision,

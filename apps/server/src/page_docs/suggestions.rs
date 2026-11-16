@@ -1,14 +1,16 @@
-//! Suggested edits (AWD-53, criterion 6). An agent's edits to a page someone
-//! else owns don't change the page: they're kept as a suggestion that the
-//! owner, or anyone else who may edit the page, accepts or rejects; the agent
-//! may withdraw it. An agent's own pages, and pages people edit, change
-//! directly.
+//! Suggested edits (AWD-53, criterion 6; K1.12). Someone whose role only
+//! suggests on a page (`access::write_mode` answers `Propose`: they hold
+//! `pages.suggest`, or `pages.edit_own` on a page someone else made) doesn't
+//! change it: their edits are kept as a suggestion that anyone who may edit
+//! the page accepts or rejects; the author may withdraw it. Which accounts
+//! suggest is the role's, never the account's kind: existing agents hold
+//! "Member, suggests" from the K1.12 migration.
 //!
 //! A suggestion is a list of block edits by lasting block id, each carrying
-//! the hash of the block as the agent read it, so it can't undo a change the
-//! agent hadn't seen: accepting a suggestion whose blocks have changed since
+//! the hash of the block as the author read it, so it can't undo a change
+//! they hadn't seen: accepting a suggestion whose blocks have changed since
 //! is refused, and the suggestion stays for someone to reject. Accepting
-//! saves the edits as the agent's, with a note naming who accepted them.
+//! saves the edits as the author's, with a note naming who accepted them.
 
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
@@ -23,10 +25,9 @@ use super::{
 };
 use crate::{
     error::AppError,
-    memory::{self, Writer},
+    memory::Writer,
     notifications::{self, NewNotification},
     outbox::{OutboxEventPayload, PageDiscussionUpdatedPayload, enqueue_typed},
-    policy::ActorKind,
 };
 
 /// The most pending suggestions one agent may leave on one page.
@@ -36,16 +37,6 @@ const DECIDED_SHOWN: i64 = 20;
 /// How much of a block's Markdown a suggestion keeps to show what it
 /// changes.
 const BEFORE_CHARACTERS: usize = 4_000;
-
-/// Whether `writer`'s edits to a page created by `creator` must be
-/// suggestions: an agent's, on a page it didn't create.
-pub fn must_suggest(writer: &Writer, creator: Option<Uuid>) -> bool {
-    is_agent(writer.actor_kind) && creator != Some(writer.actor_id)
-}
-
-pub fn is_agent(kind: ActorKind) -> bool {
-    matches!(kind, ActorKind::ExternalAgent | ActorKind::ExecutionWorker)
-}
 
 /// Who created the page, read with the page locked.
 pub async fn page_creator(
@@ -457,16 +448,12 @@ pub(crate) async fn notify(
     if kind.as_deref() != Some("human") {
         return Ok(());
     }
-    if memory::project_access(
-        &mut **transaction,
-        notification.recipient_actor_id,
-        ActorKind::Human,
-        notification.project_id,
-        crate::policy::Action::ProjectView,
-    )
-    .await
-    .is_err()
-    {
+    let reaches = sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, NULL, $2)")
+        .bind(notification.recipient_actor_id)
+        .bind(notification.project_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+    if !reaches {
         return Ok(());
     }
     if notifications::deliver(transaction, notification).await? {
@@ -509,13 +496,14 @@ pub struct Decided {
     pub version: i64,
 }
 
-/// Accepts, rejects or withdraws a suggestion on `page_id`. `decider` must
-/// already be allowed to edit pages in the project (the caller checks);
-/// this checks the rest: agents decide only on pages they own, and only the
-/// author withdraws.
+/// Accepts, rejects or withdraws a suggestion on `page_id`. `may_edit` is
+/// whether `decider` may edit this page directly (`access::write_mode`
+/// answered `Direct`: `pages.edit`, or `pages.edit_own` on their own page);
+/// accepting and rejecting need it, and only the author withdraws.
 pub async fn decide(
     transaction: &mut Transaction<'_, Postgres>,
     decider: Writer,
+    may_edit: bool,
     page_id: Uuid,
     suggestion_id: Uuid,
     decision: Decision,
@@ -554,12 +542,9 @@ pub async fn decide(
                 "Only the agent that made a suggestion can withdraw it. Reject it instead.",
             )));
         }
-        Decision::Accept | Decision::Reject
-            if is_agent(decider.actor_kind)
-                && page_creator(transaction, page_id).await? != Some(decider.actor_id) =>
-        {
+        Decision::Accept | Decision::Reject if !may_edit => {
             return Ok(Err(Refusal::NotYours(
-                "Agents decide suggestions only on pages they made. Ask a person to decide this one.",
+                "Deciding a suggestion needs edit access to the page. Ask someone who edits it.",
             )));
         }
         _ => {}
@@ -760,30 +745,6 @@ mod tests {
         assert!(matches!(
             edits::apply(&changed, &edits),
             Err(EditError::HashMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn agents_suggest_on_pages_they_didnt_make() {
-        let agent = Uuid::now_v7();
-        let person = Uuid::now_v7();
-        let writer = |actor_id, actor_kind| Writer {
-            actor_id,
-            actor_kind,
-            via_grant_id: None,
-        };
-        assert!(must_suggest(
-            &writer(agent, ActorKind::ExternalAgent),
-            Some(person)
-        ));
-        assert!(must_suggest(&writer(agent, ActorKind::ExternalAgent), None));
-        assert!(!must_suggest(
-            &writer(agent, ActorKind::ExternalAgent),
-            Some(agent)
-        ));
-        assert!(!must_suggest(
-            &writer(person, ActorKind::Human),
-            Some(agent)
         ));
     }
 }

@@ -12,11 +12,10 @@ use super::{
         ToolResult, insert_audit, parse_id, parse_time, project_is_chosen, public_url,
         scope_projects, string_or_number, truncate_text,
     },
-    talk::can_write_in,
     writes::{CreateRetry, REQUEST_ID_MESSAGE, complete_create, parse_request_id, reserve_create},
 };
 use crate::{
-    AppState,
+    AppState, access,
     error::AppError,
     memory::{self, PageInput, Writer},
     page_docs::{
@@ -30,6 +29,31 @@ use crate::{
 };
 
 const PAGE_BODY_CHARACTERS: usize = 60_000;
+
+/// How the caller may write to a page in `project_id` (K1.12, from
+/// `access::write_mode`): `Some(Direct)` with `pages.edit`, or
+/// `pages.edit_own` on their own page (`own`); `Some(Propose)` with only
+/// `pages.suggest`; `None` when they may do neither. Never the account's
+/// kind.
+pub(super) async fn page_write_mode(
+    state: &AppState,
+    principal: &McpPrincipal,
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    own: bool,
+) -> Result<Option<access::WriteMode>, AppError> {
+    if !principal.can_write() {
+        return Ok(None);
+    }
+    let (_, limits) = super::caller_reach(state, principal).await?;
+    let caller = access::Caller::of_principal(principal, limits);
+    Ok(
+        access::write_mode(connection, &caller, "page", project_id, own, Some("pages"))
+            .await?
+            .ok()
+            .map(|grant| grant.mode),
+    )
+}
 
 pub(super) fn writer(principal: &McpPrincipal) -> Writer {
     Writer {
@@ -530,16 +554,20 @@ pub(super) async fn page_write(
     };
     let result = async {
         let project_id = principal.project_id;
-        if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
-            return Ok(ToolResult::denied("You can't edit pages in that project."));
-        }
         let mut transaction = state.pool.begin().await?;
+        // Making a page needs edit or edit-own (it will be theirs); changing
+        // one is decided below, once its maker is known.
+        let Some(own_mode) =
+            page_write_mode(state, principal, &mut transaction, project_id, true).await?
+        else {
+            return Ok(ToolResult::denied("You can't edit pages in that project."));
+        };
         let direct = memory::project_access(
             &mut *transaction,
             principal.actor_id,
             principal.actor_kind,
             project_id,
-            Action::PageEdit,
+            Action::ProjectView,
         )
         .await?;
         if direct {
@@ -591,15 +619,29 @@ pub(super) async fn page_write(
                 if owner != Some(project_id) {
                     return Ok(ToolResult::not_found("That page"));
                 }
-                // An agent's new text for someone else's page is kept as a
-                // suggestion; anything else it changes applies.
+                // Someone who only suggests here (K1.12) has new text kept
+                // as a suggestion; the rest of the page needs edit access.
+                let creator = suggestions::page_creator(&mut transaction, page_id).await?;
+                let mode = page_write_mode(
+                    state,
+                    principal,
+                    &mut transaction,
+                    project_id,
+                    creator == Some(principal.actor_id),
+                )
+                .await?;
                 let changes_text = input.body.is_some() || input.restore_version.is_some();
-                if changes_text
-                    && suggestions::must_suggest(
-                        &writer(principal),
-                        suggestions::page_creator(&mut transaction, page_id).await?,
-                    )
-                {
+                let changes_more = input.title.is_some()
+                    || input.is_guide.is_some()
+                    || input.skill_description.is_some()
+                    || input.archived.is_some();
+                if mode == Some(access::WriteMode::Propose) && changes_more {
+                    return Ok(ToolResult::denied(
+                        "You can suggest changes to this page's text, but not change its title, \
+                         guide, skill or archive state. Ask someone who edits it.",
+                    ));
+                }
+                if changes_text && mode == Some(access::WriteMode::Propose) {
                     match suggest_text(&mut transaction, principal, page_id, &input).await? {
                         Ok(made) => suggestion = made,
                         Err(refused) => return Ok(refused),
@@ -620,6 +662,11 @@ pub(super) async fn page_write(
                 page_id
             }
             None => {
+                if own_mode == access::WriteMode::Propose {
+                    return Ok(ToolResult::denied(
+                        "You can suggest changes to pages here, but not make new ones.",
+                    ));
+                }
                 let created =
                     memory::create_page(&mut transaction, writer(principal), project_id, &input)
                         .await?;
@@ -1281,10 +1328,13 @@ pub(super) async fn page_edit(
     }
     let result = async {
         let project_id = principal.project_id;
-        if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
+        let mut transaction = state.pool.begin().await?;
+        if page_write_mode(state, principal, &mut transaction, project_id, true)
+            .await?
+            .is_none()
+        {
             return Ok(ToolResult::denied("You can't edit pages in that project."));
         }
-        let mut transaction = state.pool.begin().await?;
         let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
@@ -1321,7 +1371,15 @@ pub(super) async fn page_edit(
         };
         let writer = writer(principal);
         let creator = suggestions::page_creator(&mut transaction, page_id).await?;
-        if arguments.suggest == Some(true) || suggestions::must_suggest(&writer, creator) {
+        let mode = page_write_mode(
+            state,
+            principal,
+            &mut transaction,
+            project_id,
+            creator == Some(principal.actor_id),
+        )
+        .await?;
+        if arguments.suggest == Some(true) || mode == Some(access::WriteMode::Propose) {
             let stored_edits = match suggestions::resolve(&current, &edits) {
                 Ok(stored) => stored,
                 Err(error) => return Ok(ToolResult::invalid("edits", error.to_string())),

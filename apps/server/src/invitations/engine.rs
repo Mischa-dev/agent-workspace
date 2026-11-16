@@ -176,6 +176,35 @@ pub async fn workspace_role(
     }))
 }
 
+/// The stored form of the role a new agent gets: `role_id` when named, else
+/// the workspace's `access.default_agent_role_id` setting when it names a
+/// role of this workspace, else the role for newcomers (`workspace_role`).
+/// `None` when a named id is no role of this workspace.
+pub async fn agent_role(
+    connection: &mut PgConnection,
+    workspace_id: Uuid,
+    role_id: Option<Uuid>,
+) -> Result<Option<(String, Option<Uuid>)>, AppError> {
+    if role_id.is_some() {
+        return workspace_role(connection, workspace_id, role_id).await;
+    }
+    let chosen = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT value FROM settings WHERE organization_id = $1 AND scope = 'workspace' \
+         AND key = 'access.default_agent_role_id'",
+    )
+    .bind(workspace_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .and_then(|value| value.as_str().and_then(|id| Uuid::parse_str(id).ok()));
+    if let Some(chosen) = chosen
+        && let Some(role) = workspace_role(connection, workspace_id, Some(chosen)).await?
+        && !is_ownership(&role.0)
+    {
+        return Ok(Some(role));
+    }
+    workspace_role(connection, workspace_id, None).await
+}
+
 /// Nobody lets someone in with more than they hold: the role's permissions
 /// are within the issuer's holding in `scope`.
 pub async fn issuer_may_grant(

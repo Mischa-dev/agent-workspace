@@ -19,6 +19,7 @@ use super::{
     message_edits::{add_person, create_channel, direct_space, owner_id, say, text},
     support::{
         app::{Browser, connect_app, create_agent, initialize, send, tool},
+        existing_agents_suggest,
         world::{Setup, create_project, setup},
     },
     w20_files::{read, with_data_root},
@@ -6166,4 +6167,174 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
     .await;
     assert_eq!(status, StatusCode::OK, "{archived}");
     world.finish().await;
+}
+
+/// K1.12: suggesting instead of editing is a permission, not an account
+/// kind. A new agent gets the workspace's role for new agents (the role new
+/// people get, unless an owner picks another) and edits pages directly.
+/// Agents that existed when the rule went keep suggesting through the
+/// "suggests" copy of their role, until an owner gives them plain Member. A
+/// person given that copy suggests too, through their app. Whoever edits a
+/// page decides its suggestions, agent or not; a suggester doesn't.
+#[tokio::test]
+async fn suggesting_is_a_role_not_an_account_kind() {
+    let Some(setup) = setup("k1_suggest").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (status, page) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({"title": "Plan", "body": "First we sketch.\n"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{page}");
+    let page = page["id"].as_str().expect("page").to_owned();
+    let workspace_role = |actor: Uuid| {
+        let pool = setup.pool.clone();
+        let organization = setup.organization_id;
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT role.key FROM organization_memberships membership \
+                 JOIN workspace_roles role ON role.id = membership.role_id \
+                 WHERE membership.organization_id = $1 AND membership.actor_id = $2",
+            )
+            .bind(organization)
+            .bind(actor)
+            .fetch_one(&pool)
+            .await
+            .expect("workspace role")
+        }
+    };
+    let append = |token: String, session: String, text: &'static str| {
+        let page = page.clone();
+        async move {
+            tool(
+                app,
+                &token,
+                &session,
+                "page_edit",
+                json!({"pageId": page, "edits": [{"op": "append", "markdown": text}]}),
+            )
+            .await
+        }
+    };
+    let decide = |token: String, session: String, suggestion: String| {
+        let page = page.clone();
+        async move {
+            tool(
+                app,
+                &token,
+                &session,
+                "page_suggestion_decide",
+                json!({"pageId": page, "suggestionId": suggestion, "decision": "accept"}),
+            )
+            .await
+        }
+    };
+
+    // A new agent is a Member and edits the owner's page directly.
+    let space = space(&setup).await;
+    let (rook, rook_token) = create_agent(app, &setup.browser, &space, "Rook", "rook").await;
+    add_member(&setup, &work, rook, "member").await;
+    assert_eq!(workspace_role(rook).await, "member");
+    let rook_session = initialize(app, &rook_token).await.expect("Rook");
+    let direct = append(rook_token.clone(), rook_session.clone(), "Then we build.").await;
+    assert_eq!(direct["outcome"], "ok", "{direct}");
+    assert!(direct["value"]["suggestion"].is_null(), "{direct}");
+
+    // The one-time step for agents that already existed: Rook now holds
+    // "Member, suggests" and its edits wait for someone who edits the page.
+    existing_agents_suggest(&setup.pool).await;
+    assert_eq!(workspace_role(rook).await, "member-suggests");
+    let suggested = append(rook_token.clone(), rook_session.clone(), "Then we ship.").await;
+    assert_eq!(
+        suggested["value"]["suggestion"]["status"], "pending",
+        "{suggested}"
+    );
+    let rook_suggestion = suggested["value"]["suggestion"]["suggestionId"]
+        .as_str()
+        .expect("suggestion")
+        .to_owned();
+    let own = decide(
+        rook_token.clone(),
+        rook_session.clone(),
+        rook_suggestion.clone(),
+    )
+    .await;
+    assert_eq!(own["outcome"], "permission_denied", "{own}");
+
+    // A person holding the same role suggests too, through their app.
+    let listed = roles(&setup, &setup.browser).await;
+    let suggests = role(&listed, "member-suggests")["id"].clone();
+    let member = role(&listed, "member")["id"].clone();
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-suggests",
+        json!({"roleId": suggests}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let bea_session = initialize(app, &bea_app).await.expect("Bea's app");
+    let from_bea = append(bea_app.clone(), bea_session.clone(), "And we rest.").await;
+    assert_eq!(
+        from_bea["value"]["suggestion"]["status"], "pending",
+        "{from_bea}"
+    );
+    let bea_suggestion = from_bea["value"]["suggestion"]["suggestionId"]
+        .as_str()
+        .expect("suggestion")
+        .to_owned();
+
+    // The owner gives Rook plain Member: it edits directly again and decides
+    // suggestions on a page it didn't make, its own and Bea's.
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        rook,
+        "rook-member",
+        json!({"roleId": member}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let again = append(
+        rook_token.clone(),
+        rook_session.clone(),
+        "Then we celebrate.",
+    )
+    .await;
+    assert!(again["value"]["suggestion"].is_null(), "{again}");
+    for suggestion in [rook_suggestion, bea_suggestion] {
+        let accepted = decide(rook_token.clone(), rook_session.clone(), suggestion).await;
+        assert_eq!(accepted["outcome"], "ok", "{accepted}");
+    }
+
+    // An owner picks the role new agents get.
+    let (status, written) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            "/api/v1/settings/values/access.default_agent_role_id",
+            None,
+            json!({
+                "scope": "workspace",
+                "organizationId": setup.organization_id,
+                "value": suggests,
+                "expectedVersion": 0,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+    let (vale, _) = create_agent(app, &setup.browser, &space, "Vale", "vale").await;
+    assert_eq!(workspace_role(vale).await, "member-suggests");
 }
