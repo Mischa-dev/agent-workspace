@@ -46,16 +46,24 @@ async fn limits_of(
         .map_err(|error| OpError::logged("authenticate", &error))
 }
 
-/// What a tool's description ends with: the permission it needs.
+/// What a tool's description ends with: the permission it needs, and for a
+/// write, what makes a retry safe (R52).
 fn needs(meta: &OpMeta) -> String {
-    match meta.permission {
+    let mut text = match meta.permission {
         Some(permission) => format!(
             "{} Needs \"{}\" where it acts.",
             meta.description,
             permission.info().label
         ),
         None => meta.description.to_owned(),
+    };
+    if meta.kind.writes() && meta.idempotency != super::Idempotency::None {
+        text.push_str(
+            " Send a clientRequestId to make a retry safe; without one the change runs once \
+             and is not retry-safe (replaySafe: false).",
+        );
     }
+    text
 }
 
 /// The tool for an operation.
@@ -79,7 +87,7 @@ pub fn tool_of(meta: &OpMeta) -> Tool {
                 "clientRequestId".into(),
                 json!({
                     "type": "string",
-                    "description": "Your id for this request (1 to 128 letters, digits, '-', '_' or '.'): a retry with the same id is answered once.",
+                    "description": "Your id for this change (1 to 128 letters, digits, '-', '_' or '.'), kept the same when you retry it: a retry with the same id is answered once. Without one the change runs once and a retry runs it again.",
                 }),
             );
         }
@@ -255,6 +263,9 @@ async fn request(
             trace_id,
             workspace,
             request_id,
+            // Agents were never required to send one: without it a write
+            // runs once and says it isn't retry-safe (R52).
+            unkeyed: super::Unkeyed::RunOnce,
             preview,
             renamed_from: None,
         },

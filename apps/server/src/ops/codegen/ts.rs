@@ -274,7 +274,7 @@ pub fn operations(registry: &Registry) -> Result<String, String> {
         "export type OpError = {\n  outcome: OpErrorOutcome\n  message: string\n  retryCategory: string\n  field?: string\n  code?: string\n  module?: string\n  details?: Record<string, unknown>\n}\n\n",
     );
     out.push_str(
-        "export type Envelope<T> =\n  | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; preview?: boolean }\n  | OpError\n",
+        "export type Envelope<T> =\n  | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }\n  | OpError\n",
     );
     for (name, definition) in super::shared_definitions(registry)? {
         let _ = write!(

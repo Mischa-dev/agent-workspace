@@ -170,14 +170,12 @@ async fn own_run(call: &mut OpCall<'_>, run_id: Uuid) -> Result<(), OpError> {
     }
 }
 
-/// The caller's own request id, when they gave one: a derived one (from
-/// the same call within ten minutes) isn't kept, so asking for the same
-/// change again later still applies it.
+/// The caller's own request id, when they gave one (R52: none is ever
+/// derived for them).
 fn given_key(call: &OpCall<'_>) -> Option<IdempotencyKey> {
     call.ctx
         .request_id
         .as_deref()
-        .filter(|key| !key.starts_with("d-"))
         .and_then(|key| IdempotencyKey::parse(key).ok())
 }
 

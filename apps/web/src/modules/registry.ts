@@ -1,5 +1,5 @@
 import type { Experience } from '../experience/layout'
-import type { PaletteEntry, SidebarRow, WebModule } from './define'
+import type { CaptureRegistration, PaletteEntry, ShortcutRegistration, SidebarRow, ThingRegistration, WebModule } from './define'
 import { MODULE_IDS } from './names'
 
 // M1.4: every core module's web registration, found by the build
@@ -61,4 +61,26 @@ export function paletteEntries(
       (module.palette ?? []).filter((entry) => entry.space === space).map((entry) => ({ ...entry, module: module.id })),
     )
     .sort((left, right) => left.rank - right.rank)
+}
+
+/** The G-then-a-letter keys every module brings, in today's order, with each key's module (W1.13). */
+export function moduleShortcuts(modules: readonly WebModule[] = WEB_MODULES): (ShortcutRegistration & { module: string })[] {
+  return modules
+    .flatMap((module) => (module.shortcuts ?? []).map((shortcut) => ({ ...shortcut, module: module.id })))
+    .sort((left, right) => left.rank - right.rank)
+}
+
+/** The kinds of thing the modules open, with each kind's module (W1.13). */
+export function moduleThings(modules: readonly WebModule[] = WEB_MODULES): (ThingRegistration & { module: string })[] {
+  return modules.flatMap((module) => (module.things ?? []).map((thing) => ({ ...thing, module: module.id })))
+}
+
+/** What the modules let a person capture, where their module is on (W1.13). */
+export function captureEntries(
+  experience: Pick<Experience, 'moduleOn'>,
+  modules: readonly WebModule[] = WEB_MODULES,
+): (CaptureRegistration & { module: string })[] {
+  return modules
+    .filter((module) => experience.moduleOn(module.id))
+    .flatMap((module) => (module.capture ?? []).map((entry) => ({ ...entry, module: module.id })))
 }

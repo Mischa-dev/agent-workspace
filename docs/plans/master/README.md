@@ -1,6 +1,9 @@
 # The master plan
 
-Where Agent Workspace is going and the order it is built in. Read in this order:
+Where Agent Workspace is going and the order it is built in. The source of truth is the
+"Master plan: ..." pages in the app's AWD project (start with "Master plan: start here");
+this folder mirrors them next to the code. Change the page and this mirror in the same
+step; if they differ, the page wins. Read in this order:
 
 1. `END-STATE.md`: the finished product, its principles and its words.
 2. `LEAD-RULINGS.md`: decisions that settle disagreements. A ruling beats plan text.

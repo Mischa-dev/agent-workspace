@@ -472,9 +472,12 @@ hash (the pattern `external_event_poll` already uses for signed cursors, inferre
 - Every op with kind create, change or suggest has `IDEMPOTENCY != None`. The request id comes
   from the edge: the web's `Idempotency-Key` header (already sent by `api/client.ts:65`), the
   public API's `Idempotency-Key` header, MCP's `clientRequestId` argument (kept as the name
-  agents know; stripped from the input before decode). If an MCP or API caller omits it, the
-  dispatcher derives one from `(account, op, canonical input hash, 10-minute bucket)`, so a
-  blind retry within ten minutes replays instead of doubling. The web always sends one.
+  agents know; stripped from the input before decode). No id is ever derived from equal input
+  or the clock (ruling R52): the web app and the v2 route (session or bearer) refuse a write
+  without one with a validation error naming `Idempotency-Key`; an automation derives its id
+  from its run and step; an MCP or v1 call without one runs once, and its answer says
+  `replaySafe: false` (the tool description says so too). A write's answer carries
+  `replaySafe` either way.
 - Scope: `op.<name>.<target id>` (fits `MAX_IDEMPOTENCY_SCOPE_BYTES` 120, `idempotency.rs:12`),
   one scope for every edge, so a retry through a different edge replays too. During the wrap
   phase an op may declare `const LEGACY_SCOPES: &[(EdgeKind, &str)]` that `reserve` also
@@ -1116,8 +1119,8 @@ The worked example every later slice copies.
   shared function.
 - Depends on: K2.5, K2.6, P0.5.
 - Acceptance: `tests/integration/ops_messages.rs`: reading through an app still marks the
-  conversation's mention notifications read (P0.5's case, kept); an agent's `message_send` without
-  `clientRequestId` retried within ten minutes sends once; existing `message_edits.rs`,
+  conversation's mention notifications read (P0.5's case, kept); an agent's `message_send` with
+  a `clientRequestId` retried sends once, and without one answers `replaySafe: false` (R52); existing `message_edits.rs`,
   `message_reactions.rs`, `m2_conversations_http.rs` pass unchanged.
 - Beside: K2.9, K2.11, K2.12, K2.14.
 

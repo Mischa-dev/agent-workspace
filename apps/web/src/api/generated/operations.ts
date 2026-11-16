@@ -15,7 +15,7 @@ export type OpError = {
 }
 
 export type Envelope<T> =
-  | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; preview?: boolean }
+  | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }
   | OpError
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
