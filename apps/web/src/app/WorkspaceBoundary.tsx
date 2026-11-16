@@ -2,7 +2,8 @@ import { useEffect } from 'react'
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type OrganizationSummary } from '../auth/session'
-import { useProjects } from '../projects/hooks'
+import { useProject, useProjects } from '../projects/hooks'
+import { CommandCenter } from '../shell/CommandCenter'
 import { useShellPage } from '../shell/shellStore'
 import { ButtonLink, EmptyState } from '../ui'
 import { CURRENT_WORKSPACE, isWorkspacePath, withinWorkspace, workspaceHref, workspaceSlugOf } from './href'
@@ -31,7 +32,11 @@ export function WorkspaceProvider() {
   const slug = workspaceSlugOf(pathname)
   const projectId = slug ? null : decoded(PROJECT_ADDRESS.exec(pathname)?.[1])
   const projects = useProjects()
-  const projectWorkspace = projectId ? projects.data?.projects.find((project) => project.id === projectId)?.organizationId : undefined
+  const listed = projectId ? projects.data?.projects.find((project) => project.id === projectId)?.organizationId : undefined
+  // The rail's list holds only active projects, and not all of them: an
+  // archived or far-down project's own read (the page asks for it too) names its workspace.
+  const opened = useProject(projectId && projects.data && !listed ? projectId : '')
+  const projectWorkspace = listed ?? opened.data?.organizationId
   const named = slug
     ? session.organizations.find((organization) => organization.slug === slug)
     : projectWorkspace
@@ -45,6 +50,8 @@ export function WorkspaceProvider() {
   return (
     <WorkspaceContext.Provider value={workspace}>
       <Outlet />
+      {/* Shortcuts and the palette follow the workspace in the address, so they live inside it. */}
+      <CommandCenter />
     </WorkspaceContext.Provider>
   )
 }

@@ -94,6 +94,8 @@ function Board({ body, config, editable, edits, field, filtered, onClearFilters,
 
   return (
     <BoardPiece
+      // A card moved while the query changes (a search, a filter) doesn't stay on the new board.
+      key={JSON.stringify(source.query)}
       Source={RecordColumn}
       badge={(card) => <span className="aw-records__number">#{card.record.number}</span>}
       columnOf={columnOf}
