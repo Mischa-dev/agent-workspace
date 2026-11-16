@@ -95,6 +95,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{id}/threads",
     "/api/v1/conversations/{id}/timeline",
     "/api/v1/conversations/{conversation_id}/agent-sessions",
+    "/api/v1/custom-emoji/{id}",
     "/api/v1/agent-runs/{run_id}",
     "/api/v1/agent-runs/{run_id}/diff",
     "/api/v1/dev/bootstrap",
@@ -145,6 +146,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{id}/mentionable-actors",
     "/api/v1/projects/{id}/navigation",
     "/api/v1/projects/{id}/pages",
+    "/api/v1/projects/{id}/page-templates",
     "/api/v1/projects/{project_id}/agent-profiles",
     "/api/v1/projects/{project_id}/agents",
     "/api/v1/projects/{project_id}/ai",
@@ -224,6 +226,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/webhooks",
     "/api/v1/webhooks/{webhook_id}/deliveries",
     "/api/v1/whiteboard-links",
+    "/api/v1/whiteboard-templates",
     "/api/v1/whiteboards",
     "/api/v1/whiteboards/{id}",
     "/api/v1/whiteboards/{id}/files/{file_id}",
@@ -813,6 +816,7 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         ),
         project_route("/api/v1/projects/{id}/navigation", "/navigation"),
         project_route("/api/v1/projects/{id}/pages", "/pages"),
+        project_route("/api/v1/projects/{id}/page-templates", "/page-templates"),
         project_route(
             "/api/v1/projects/{project_id}/external-execution-requests",
             "/external-execution-requests",
@@ -1793,6 +1797,32 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         linked(b),
         vec![],
     ));
+    // C2.19: a workspace's own emoji shows only to its members.
+    cases.push(case(
+        "/api/v1/custom-emoji/{id}",
+        vec![format!("/api/v1/custom-emoji/{}", a.custom_emoji)],
+        vec![format!("/api/v1/custom-emoji/{}", b.custom_emoji)],
+        vec![],
+    ));
+    // C1.24: the board template gallery of a workspace or project.
+    cases.push(case(
+        "/api/v1/whiteboard-templates",
+        vec![
+            format!(
+                "/api/v1/whiteboard-templates?organizationId={}",
+                a.organization
+            ),
+            format!("/api/v1/whiteboard-templates?projectId={}", a.project),
+        ],
+        vec![
+            format!(
+                "/api/v1/whiteboard-templates?organizationId={}",
+                b.organization
+            ),
+            format!("/api/v1/whiteboard-templates?projectId={}", b.project),
+        ],
+        vec![],
+    ));
     cases.push(case(
         "/api/v1/pages/{id}/revisions/{version}",
         vec![
@@ -1948,6 +1978,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "question_list",
     "launch_list",
     "message_history",
+    "message_draft_list",
+    "custom_emoji_list",
     "milestone_list",
     "module_list",
     "my_permissions",
@@ -1977,6 +2009,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "run_usage",
     "search",
     "settings_get",
+    "status_list",
     "skill_get",
     "skill_list",
     "task_list",
@@ -2153,6 +2186,30 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("skill_list"),
         by_project("decision_list"),
+        // C2.19: B's own emoji never list in A.
+        case(
+            "custom_emoji_list",
+            vec![json!({}), json!({"includeRetired": true})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.28: B's drafts never show in A, by conversation or listed.
+        case(
+            "message_draft_list",
+            vec![json!({}), json!({"conversationId": a.channel})],
+            vec![
+                json!({"conversationId": b.channel}),
+                json!({"workspace": b.organization}),
+            ],
+            vec![],
+        ),
+        // C2.15: B's accounts' statuses never show in A.
+        case(
+            "status_list",
+            vec![json!({"accounts": [a.rook]})],
+            vec![json!({"workspace": b.organization, "accounts": [b.rook]})],
+            vec![json!({"accounts": [b.rook, a.rook]})],
+        ),
         case(
             "package_export",
             vec![json!({"spaceId": "WORK"}), json!({"wholeWorkspace": true})],

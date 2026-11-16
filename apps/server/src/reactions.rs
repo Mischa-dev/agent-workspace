@@ -1,7 +1,9 @@
 //! Emoji reactions on messages (docs/plans/mcp-tools.md, Phase 3).
 //!
-//! A reaction is a message, an actor (person or agent) and one emoji from a
-//! fixed list of 12. Every call states the result it wants (PUT or DELETE on
+//! A reaction is a message, an actor (person or agent) and one emoji: any
+//! standard emoji on the shared list (`reactions/emoji.json`, which the web's
+//! picker reads too; the quick 12 come first), or one of the workspace's own
+//! (`custom_emoji`, C2.19). Every call states the result it wants (PUT or DELETE on
 //! the web, `reacted: true|false` through MCP), so retries are safe without an
 //! idempotency key. Anyone who can post in a conversation can react there.
 //! Archived conversations and removed messages keep their reactions frozen,
@@ -15,7 +17,7 @@
 //! the same lock and order as sending. Reads go through `reaction_rows`, which
 //! checks `conversation_visible_to` too.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::LazyLock};
 
 use axum::{
     Json, Router,
@@ -52,9 +54,10 @@ pub(crate) struct ReactionChoice {
     aliases: &'static [&'static str],
 }
 
-/// The emoji people can react with. Must match the CHECK in migration 0048
-/// and REACTION_CHOICES in the web app. ❤️ is U+2764 U+FE0F; every other
+/// The quick 12, which lead the shared list in this order, as the web's
+/// REACTION_CHOICES does (a test holds the list to them). ❤️ is U+2764 U+FE0F; every other
 /// entry is a single code point.
+#[cfg(test)]
 pub(crate) const REACTIONS: [ReactionChoice; 12] = [
     ReactionChoice {
         emoji: "👍",
@@ -118,6 +121,35 @@ pub(crate) const REACTIONS: [ReactionChoice; 12] = [
     },
 ];
 
+/// Every standard emoji people can react with (C2.19): the shared list,
+/// read once, the quick 12 first. A parity test holds the web to the same
+/// file.
+static ALL: LazyLock<Vec<ReactionChoice>> = LazyLock::new(|| {
+    #[derive(Deserialize)]
+    struct Entry {
+        emoji: &'static str,
+        name: &'static str,
+        #[serde(default)]
+        aliases: Vec<&'static str>,
+    }
+    serde_json::from_str::<Vec<Entry>>(EMOJI_LIST)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| ReactionChoice {
+            emoji: entry.emoji,
+            name: entry.name,
+            aliases: Vec::leak(entry.aliases),
+        })
+        .collect()
+});
+
+/// The shared emoji list, as JSON.
+pub(crate) const EMOJI_LIST: &str = include_str!("reactions/emoji.json");
+
+fn all() -> &'static [ReactionChoice] {
+    &ALL
+}
+
 /// The list as one line, for tool descriptions and error messages.
 pub(crate) const REACTION_LIST: &str = "👍 👎 ❤️ 😄 🎉 😕 🚀 👀 ✅ ❌ 🙏 🤔";
 
@@ -128,16 +160,16 @@ fn is_ignored_modifier(character: char) -> bool {
     )
 }
 
-/// An emoji, its name, an alias or `:name:`, in any case. Variation selectors
-/// and skin tones are ignored, so "❤" and "👍🏽" resolve; anything else,
-/// including several emoji, is None.
+/// A standard emoji, its name, an alias or `:name:`, in any case. Variation
+/// selectors and skin tones are ignored, so "❤" and "👍🏽" resolve; anything
+/// else, including several emoji, is None.
 pub(crate) fn resolve(input: &str) -> Option<&'static ReactionChoice> {
     let trimmed = input.trim();
     if trimmed.is_empty() || trimmed.len() > 64 {
         return None;
     }
     let word = trimmed.trim_matches(':').to_lowercase();
-    if let Some(choice) = REACTIONS
+    if let Some(choice) = all()
         .iter()
         .find(|choice| choice.name == word || choice.aliases.contains(&word.as_str()))
     {
@@ -147,7 +179,7 @@ pub(crate) fn resolve(input: &str) -> Option<&'static ReactionChoice> {
         .chars()
         .filter(|character| !is_ignored_modifier(*character))
         .collect::<String>();
-    REACTIONS.iter().find(|choice| {
+    all().iter().find(|choice| {
         choice
             .emoji
             .chars()
@@ -156,14 +188,80 @@ pub(crate) fn resolve(input: &str) -> Option<&'static ReactionChoice> {
     })
 }
 
-/// The canonical name, as the web routes take it.
+/// The canonical name.
+#[cfg(test)]
 pub(crate) fn by_name(name: &str) -> Option<&'static ReactionChoice> {
-    REACTIONS.iter().find(|choice| choice.name == name)
+    all().iter().find(|choice| choice.name == name)
 }
 
 /// A stored emoji's entry.
 pub(crate) fn by_emoji(emoji: &str) -> Option<&'static ReactionChoice> {
-    REACTIONS.iter().find(|choice| choice.emoji == emoji)
+    all().iter().find(|choice| choice.emoji == emoji)
+}
+
+/// A custom emoji's name as written: `:party_parrot:` or `party_parrot`.
+pub(crate) fn custom_name(input: &str) -> Option<String> {
+    let word = input.trim().trim_matches(':').to_lowercase();
+    ((2..=32).contains(&word.len())
+        && word.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+        }))
+    .then_some(word)
+}
+
+/// Whether `input` could name a reaction at all, before any lookup.
+pub(crate) fn could_be_reaction(input: &str) -> bool {
+    resolve(input).is_some() || custom_name(input).is_some()
+}
+
+/// The reaction a call named, for a message in `project_id`: a standard
+/// emoji, or a custom one of that project's workspace. Taking a reaction
+/// away finds a retired custom emoji too.
+#[derive(Clone, Debug)]
+pub(crate) struct Picked {
+    /// As stored: the emoji, or `:name:` for a custom one.
+    pub(crate) emoji: String,
+    pub(crate) name: String,
+    pub(crate) custom_emoji_id: Option<Uuid>,
+}
+
+async fn pick(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    input: &str,
+    adding: bool,
+) -> Result<Option<Picked>, AppError> {
+    if let Some(choice) = resolve(input) {
+        return Ok(Some(Picked {
+            emoji: choice.emoji.to_owned(),
+            name: choice.name.to_owned(),
+            custom_emoji_id: None,
+        }));
+    }
+    let Some(name) = custom_name(input) else {
+        return Ok(None);
+    };
+    let found = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT emoji.id
+        FROM custom_emojis emoji
+        JOIN projects project ON project.organization_id = emoji.workspace_id
+        WHERE project.id = $1 AND emoji.name = $2
+          AND ($3 OR emoji.retired_at IS NULL)
+        ORDER BY emoji.retired_at IS NULL DESC, emoji.created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(&name)
+    .bind(!adding)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    Ok(found.map(|id| Picked {
+        emoji: format!(":{name}:"),
+        name,
+        custom_emoji_id: Some(id),
+    }))
 }
 
 /// One emoji on a message: how many reacted with it, whether the viewer did,
@@ -176,6 +274,12 @@ pub struct ReactionView {
     pub count: i64,
     pub by_viewer: bool,
     pub actors: Vec<ActorView>,
+    /// A workspace's own emoji: its image, shown in place of `emoji`. A
+    /// retired one still shows on the reactions that use it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_emoji_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
 }
 
 /// Why a visible message's reactions can't change. Invisible messages never
@@ -231,6 +335,8 @@ pub(crate) struct ReactionOutcome {
     pub(crate) conversation: ConversationAccessRow,
     /// False when the reaction was already that way.
     pub(crate) changed: bool,
+    /// The reaction as stored.
+    pub(crate) picked: Picked,
 }
 
 /// Put `choice` on a message as `actor`, or take it away. The conversation is
@@ -246,7 +352,7 @@ pub(crate) async fn set_reaction(
     conversation_hint: Option<Uuid>,
     project_hint: Option<Uuid>,
     message_id: Uuid,
-    choice: &'static ReactionChoice,
+    reaction: &str,
     reacted: bool,
 ) -> Result<ReactionOutcome, ReactionError> {
     let conversation_id = match conversation_hint {
@@ -294,11 +400,16 @@ pub(crate) async fn set_reaction(
     if removed {
         return Err(ReactionError::Refused(ReactionRefused::Removed));
     }
+    let picked = pick(transaction, conversation.project_id, reaction, reacted)
+        .await?
+        .ok_or(AppError::Validation("reaction"))?;
     let affected = if reacted {
         sqlx::query(
             r#"
-            INSERT INTO message_reactions (project_id, conversation_id, message_id, actor_id, emoji)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO message_reactions (
+                project_id, conversation_id, message_id, actor_id, emoji, custom_emoji_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (message_id, actor_id, emoji) DO NOTHING
             "#,
         )
@@ -306,7 +417,8 @@ pub(crate) async fn set_reaction(
         .bind(conversation.id)
         .bind(message_id)
         .bind(actor.actor_id)
-        .bind(choice.emoji)
+        .bind(&picked.emoji)
+        .bind(picked.custom_emoji_id)
         .execute(&mut **transaction)
         .await?
         .rows_affected()
@@ -316,7 +428,7 @@ pub(crate) async fn set_reaction(
         )
         .bind(message_id)
         .bind(actor.actor_id)
-        .bind(choice.emoji)
+        .bind(&picked.emoji)
         .execute(&mut **transaction)
         .await?
         .rows_affected()
@@ -336,6 +448,7 @@ pub(crate) async fn set_reaction(
     Ok(ReactionOutcome {
         conversation,
         changed,
+        picked,
     })
 }
 
@@ -343,6 +456,7 @@ pub(crate) async fn set_reaction(
 struct ReactionRow {
     message_id: Uuid,
     emoji: String,
+    custom_emoji_id: Option<Uuid>,
     count: i64,
     by_viewer: bool,
     actors: sqlx::types::Json<Vec<ActorView>>,
@@ -367,7 +481,7 @@ where
     }
     let rows = sqlx::query_as::<_, ReactionRow>(
         r#"
-        SELECT reaction.message_id, reaction.emoji, count(*) AS count,
+        SELECT reaction.message_id, reaction.emoji, reaction.custom_emoji_id, count(*) AS count,
                bool_or(reaction.actor_id = $3) AS by_viewer,
                to_jsonb((array_agg(jsonb_build_object(
                    'id', actor.id,
@@ -388,7 +502,7 @@ where
           AND reaction.message_id = ANY($2)
           AND message.removed_at IS NULL
           AND conversation_visible_to($1, $3)
-        GROUP BY reaction.message_id, reaction.emoji
+        GROUP BY reaction.message_id, reaction.emoji, reaction.custom_emoji_id
         ORDER BY reaction.message_id, min(reaction.created_at), reaction.emoji
         "#,
     )
@@ -398,19 +512,29 @@ where
     .fetch_all(executor)
     .await?;
     for row in rows {
-        // The CHECK in migration 0048 keeps every stored emoji on the list.
-        let Some(choice) = by_emoji(&row.emoji) else {
-            continue;
+        // A custom emoji shows by its image; a standard one is on the list
+        // (`pick` stores nothing else).
+        let (name, image_url) = match row.custom_emoji_id {
+            Some(id) => (
+                row.emoji.trim_matches(':').to_owned(),
+                Some(format!("/api/v1/custom-emoji/{id}")),
+            ),
+            None => match by_emoji(&row.emoji) {
+                Some(choice) => (choice.name.to_owned(), None),
+                None => continue,
+            },
         };
         by_message
             .entry(row.message_id)
             .or_default()
             .push(ReactionView {
-                emoji: choice.emoji.to_owned(),
-                name: choice.name.to_owned(),
+                emoji: row.emoji,
+                name,
                 count: row.count,
                 by_viewer: row.by_viewer,
                 actors: row.actors.0,
+                custom_emoji_id: row.custom_emoji_id,
+                image_url,
             });
     }
     Ok(by_message)
@@ -509,7 +633,9 @@ async fn change_reaction(
     reacted: bool,
 ) -> Result<Json<MessageReactionsResponse>, AppError> {
     require_authenticated_write(state, headers, principal)?;
-    let choice = by_name(name).ok_or(AppError::Validation("reaction"))?;
+    if !could_be_reaction(name) {
+        return Err(AppError::Validation("reaction"));
+    }
     let actor = MessageCommandActor {
         actor_id: principal.actor_id,
         actor_kind: principal.actor_kind.clone(),
@@ -523,7 +649,7 @@ async fn change_reaction(
         Some(conversation_id),
         None,
         message_id,
-        choice,
+        name,
         reacted,
     )
     .await?;
@@ -546,7 +672,7 @@ async fn change_reaction(
 
 #[cfg(test)]
 mod tests {
-    use super::{REACTION_LIST, REACTIONS, by_emoji, by_name, resolve};
+    use super::{EMOJI_LIST, REACTION_LIST, REACTIONS, all, by_emoji, by_name, resolve};
 
     fn name_of(input: &str) -> Option<&'static str> {
         resolve(input).map(|choice| choice.name)
@@ -572,17 +698,7 @@ mod tests {
 
     #[test]
     fn resolve_refuses_anything_else() {
-        for input in [
-            "",
-            "   ",
-            "♥",
-            "🦄",
-            "👀✅",
-            "eyes eyes",
-            "::",
-            "🏽",
-            &"x".repeat(65),
-        ] {
+        for input in ["", "   ", "👀✅", "eyes eyes", "::", "🏽", &"x".repeat(65)] {
             assert_eq!(name_of(input), None, "{input:?}");
         }
     }
@@ -621,5 +737,44 @@ mod tests {
             }
         }
         assert!(by_name("EYES").is_none());
+    }
+
+    /// C2.19: the shared list reads, every name and emoji is there once, the
+    /// quick 12 lead it in order, and any emoji on it resolves.
+    #[test]
+    fn the_shared_list_holds_any_emoji_once() {
+        assert!(all().len() > 1000, "{}", all().len());
+        let mut names = std::collections::HashSet::new();
+        let mut emoji = std::collections::HashSet::new();
+        for choice in all() {
+            assert!(names.insert(choice.name), "{} twice", choice.name);
+            assert!(emoji.insert(choice.emoji), "{} twice", choice.emoji);
+            assert!(
+                choice
+                    .name
+                    .chars()
+                    .all(|character| character.is_ascii_lowercase()
+                        || character.is_ascii_digit()
+                        || character == '_'),
+                "{}",
+                choice.name
+            );
+            assert_eq!(
+                resolve(choice.emoji).map(|found| found.name),
+                Some(choice.name)
+            );
+        }
+        for (quick, listed) in REACTIONS.iter().zip(all()) {
+            assert_eq!((quick.emoji, quick.name), (listed.emoji, listed.name));
+        }
+        assert_eq!(resolve("🦄").map(|found| found.name), Some("unicorn_face"));
+        assert_eq!(
+            resolve(":unicorn_face:").map(|found| found.emoji),
+            Some("🦄")
+        );
+        assert!(EMOJI_LIST.starts_with('['));
+        for refused in ["<script>", "a b", "🦄🦄", "\u{7}"] {
+            assert!(resolve(refused).is_none(), "{refused}");
+        }
     }
 }

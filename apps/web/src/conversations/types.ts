@@ -93,6 +93,9 @@ export type MessageReaction = {
   count: number
   byViewer: boolean
   actors: ConversationActor[]
+  /** A workspace's own emoji (C2.19): shown by its image, even once retired. */
+  customEmojiId?: string
+  imageUrl?: string
 }
 
 export type MessageRemoval = {

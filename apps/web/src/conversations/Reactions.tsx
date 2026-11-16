@@ -1,8 +1,10 @@
-import { useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
 import { Icon, IconButton, Tooltip } from '../ui'
 import { Popover } from '../ui/Popover'
-import { REACTION_CHOICES, reactionNames, type ReactionChoice } from './reactions'
+import { CustomEmojiDialog } from './customEmoji'
+import { useCustomEmoji } from './customEmojiQuery'
+import { REACTION_CHOICES, loadEmojiList, reactionNames, searchEmoji, type ReactionChoice } from './reactions'
 import type { MessageReaction } from './types'
 import '../styles/conversation.css'
 
@@ -37,7 +39,7 @@ export function MessageReactions({
         const face = (
           <>
             <span aria-hidden="true" className="aw-reaction__emoji">
-              {reaction.emoji}
+              {reaction.imageUrl ? <img alt="" className="aw-reaction__image" height={16} src={reaction.imageUrl} width={16} /> : reaction.emoji}
             </span>
             <span aria-hidden="true" className="aw-reaction__count">
               {reaction.count}
@@ -116,6 +118,30 @@ export function ReactionPicker({
   const grid = useRef<HTMLDivElement>(null)
   const mine = new Set(reactions.filter((reaction) => reaction.byViewer).map((reaction) => reaction.name))
   const toggle = (element: HTMLElement) => setAnchor((current) => (current ? null : element))
+  // C2.19: any emoji, by name, and the workspace's own.
+  const [query, setQuery] = useState('')
+  const [everyEmoji, setEveryEmoji] = useState<ReactionChoice[] | null>(null)
+  const [adding, setAdding] = useState(false)
+  const custom = useCustomEmoji(Boolean(anchor))
+  useEffect(() => {
+    if (!query.trim() || everyEmoji) return
+    let cancelled = false
+    void loadEmojiList()
+      .then((list) => {
+        if (!cancelled) setEveryEmoji(list)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [query, everyEmoji])
+  const shown = query.trim()
+    ? searchEmoji([...custom, ...(everyEmoji ?? REACTION_CHOICES)], query)
+    : [...REACTION_CHOICES, ...custom]
+  const close = () => {
+    setAnchor(null)
+    setQuery('')
+  }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const buttons = [...(grid.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
@@ -146,16 +172,26 @@ export function ReactionPicker({
         <IconButton
           aria-expanded={Boolean(anchor)}
           aria-haspopup="dialog"
+          data-message-key="e"
           icon="smile-plus"
           label="Add reaction"
           onClick={(event) => toggle(event.currentTarget)}
           pressed={Boolean(anchor)}
+          shortcut="E"
           size="sm"
         />
       )}
-      <Popover anchor={anchor} label="Add reaction" onClose={() => setAnchor(null)} open={Boolean(anchor)} placement="bottom-end">
+      <Popover anchor={anchor} label="Add reaction" onClose={close} open={Boolean(anchor)} placement="bottom-end">
+        <input
+          aria-label="Find an emoji"
+          className="aw-emojigrid__search"
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Find an emoji"
+          type="search"
+          value={query}
+        />
         <div className="aw-emojigrid" onKeyDown={onKeyDown} ref={grid} role="group">
-          {REACTION_CHOICES.map((choice) => (
+          {shown.map((choice) => (
             <button
               aria-label={choice.label}
               aria-pressed={mine.has(choice.name)}
@@ -163,16 +199,25 @@ export function ReactionPicker({
               key={choice.name}
               onClick={() => {
                 onPick(choice, !mine.has(choice.name))
-                setAnchor(null)
+                close()
               }}
               title={choice.label}
               type="button"
             >
-              <span aria-hidden="true">{choice.emoji}</span>
+              {choice.imageUrl ? (
+                <img alt="" height={20} src={choice.imageUrl} width={20} />
+              ) : (
+                <span aria-hidden="true">{choice.emoji}</span>
+              )}
             </button>
           ))}
         </div>
+        {query.trim() && shown.length === 0 ? <p className="aw-emojigrid__none">No emoji matches that.</p> : null}
+        <button className="aw-emojigrid__add" onClick={() => setAdding(true)} type="button">
+          <Icon name="plus" size={14} /> Add an emoji
+        </button>
       </Popover>
+      {adding ? <CustomEmojiDialog onClose={() => setAdding(false)} /> : null}
     </>
   )
 }

@@ -320,3 +320,49 @@
   -webkit-line-clamp: 4;
   line-clamp: 4;
 }
+
+/* C2.19: find any emoji, and add the workspace's own. */
+.aw-emojigrid__search {
+  display: block;
+  width: calc(100% - 2 * var(--space-1));
+  margin: var(--space-1) var(--space-1) 0;
+  padding: var(--space-half) var(--space-1);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  background: var(--content-bg);
+  color: inherit;
+  font: inherit;
+}
+
+.aw-emojigrid__none {
+  margin: 0 var(--space-1) var(--space-1);
+  color: var(--content-fg-muted);
+}
+
+.aw-emojigrid__add {
+  display: flex;
+  align-items: center;
+  gap: var(--space-half);
+  width: 100%;
+  padding: var(--space-1);
+  border: 0;
+  border-top: 1px solid var(--content-border);
+  background: none;
+  color: var(--content-fg-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.aw-emojigrid__add:hover {
+  background: var(--content-hover);
+}
+
+.aw-emojigrid {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.aw-reaction__image {
+  display: block;
+  object-fit: contain;
+}
