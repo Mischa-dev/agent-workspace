@@ -151,10 +151,11 @@ async fn rows_get_their_workspace_on_insert_by_backfill_and_by_the_switch() {
     );
     let before = nulls(&pool, "backfill_probe").await;
     assert_eq!(before, 600);
-    let next = sqlx::query_scalar::<_, Option<i64>>("SELECT tenancy_backfill('backfill_probe', 0, 2)")
-        .fetch_one(&pool)
-        .await
-        .expect("first batch");
+    let next =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT tenancy_backfill('backfill_probe', 0, 2)")
+            .fetch_one(&pool)
+            .await
+            .expect("first batch");
     assert_eq!(next, Some(2));
     let after_one = nulls(&pool, "backfill_probe").await;
     assert!(after_one > 0 && after_one < before, "{after_one}");
@@ -162,22 +163,23 @@ async fn rows_get_their_workspace_on_insert_by_backfill_and_by_the_switch() {
     let mut cursor = next;
     let mut batches = 0;
     while let Some(page) = cursor {
-        cursor = sqlx::query_scalar::<_, Option<i64>>("SELECT tenancy_backfill('backfill_probe', $1, 2)")
-            .bind(page)
-            .fetch_one(&pool)
-            .await
-            .expect("next batch");
+        cursor = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT tenancy_backfill('backfill_probe', $1, 2)",
+        )
+        .bind(page)
+        .fetch_one(&pool)
+        .await
+        .expect("next batch");
         batches += 1;
         assert!(batches < 1000, "the backfill never finished");
     }
     assert_eq!(nulls(&pool, "backfill_probe").await, 0);
-    let filled = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM backfill_probe WHERE workspace_id = $1",
-    )
-    .bind(workspace)
-    .fetch_one(&pool)
-    .await
-    .expect("filled rows");
+    let filled =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM backfill_probe WHERE workspace_id = $1")
+            .bind(workspace)
+            .fetch_one(&pool)
+            .await
+            .expect("filled rows");
     assert_eq!(filled, 600);
 
     // The switch completes when the job never ran: it backfills inline,

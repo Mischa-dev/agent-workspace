@@ -194,7 +194,10 @@ impl<'p> Executor<'p> for Scoped<'p> {
         self.pool.prepare_with(sql, parameters)
     }
 
-    fn describe<'e, 'q: 'e>(self, sql: &'q str) -> BoxFuture<'e, Result<Describe<Postgres>, sqlx::Error>>
+    fn describe<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+    ) -> BoxFuture<'e, Result<Describe<Postgres>, sqlx::Error>>
     where
         'p: 'e,
     {

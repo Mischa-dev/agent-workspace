@@ -62,6 +62,8 @@ pub enum Tenancy {
 pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // Looking up an account's workspaces, before its scope can be set.
     ("auth.lookup", &["tenancy/mod.rs"]),
+    // A whole-server backup or restore: every workspace's rows.
+    ("backup", &["backup.rs"]),
     // Claiming due jobs of every workspace, and finishing them.
     ("jobs.claim", &["jobs.rs"]),
     // Jobs queued for no workspace (the server's own recurring work).

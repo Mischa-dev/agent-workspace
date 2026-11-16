@@ -330,8 +330,7 @@ pub const MUST_BE_GLOBAL: &[&str] = &[
 /// that adds it. Empty since H1.4 to H1.7 gave every one its `workspace_id`
 /// (filled on insert by `<table>_fill_workspace`); a new table is born with
 /// the column instead.
-pub const MISSING_WORKSPACE_COLUMN: &[(&str, &str)] = &[
-];
+pub const MISSING_WORKSPACE_COLUMN: &[(&str, &str)] = &[];
 
 /// Tables that may hold rows of the direct scope (DMs and groups, R20):
 /// conversations and what hangs off them. Row rules give these a

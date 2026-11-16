@@ -131,6 +131,16 @@ fn pg_command(program: &str, database_url: &str) -> anyhow::Result<Command> {
     for (name, value) in libpq_environment(database_url)? {
         command.env(name, value);
     }
+    // Row rules (H1.21, H1.22) apply to the tables' owner too, so a dump or
+    // restore by a role that isn't a superuser reads and writes through
+    // them, in the server-wide scope a backup needs: every workspace's rows.
+    command.env(
+        "PGOPTIONS",
+        format!(
+            "-c app.tenancy={}",
+            crate::tenancy::Tenancy::System("backup").setting()
+        ),
+    );
     Ok(command)
 }
 
@@ -350,7 +360,10 @@ async fn create_set(
         let suffix = if options.recipients.is_some() { ".age" } else { "" };
         let dump = work.join(format!("database.dump{suffix}"));
         let mut pg_dump = pg_command("pg_dump", database_url)?;
-        pg_dump.arg("--format=custom").arg("--no-password");
+        pg_dump
+            .arg("--format=custom")
+            .arg("--no-password")
+            .arg("--enable-row-security");
         let recipients = options.recipients.clone();
         let dumping = {
             let dump = dump.clone();
@@ -875,6 +888,7 @@ async fn restore_database(
         .arg("--no-privileges")
         .arg("--exit-on-error")
         .arg("--no-password")
+        .arg("--enable-row-security")
         .arg(format!(
             "--dbname={}",
             libpq_environment(database_url)?

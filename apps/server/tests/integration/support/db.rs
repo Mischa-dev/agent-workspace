@@ -33,6 +33,30 @@ pub(crate) async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .expect("connect schema pool")
 }
 
+/// [`schema_pool`], with every connection acting as `role` (one from
+/// [`row_rules_role`]).
+pub(crate) async fn schema_pool_as(database_url: &str, schema: &str, role: &'static str) -> PgPool {
+    let schema = Arc::new(schema.to_owned());
+    PgPoolOptions::new()
+        .max_connections(6)
+        .after_connect(move |connection, _metadata| {
+            let schema = Arc::clone(&schema);
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('search_path', $1, false)")
+                    .bind(schema.as_str())
+                    .execute(&mut *connection)
+                    .await?;
+                connection
+                    .execute(format!("SET ROLE {role}").as_str())
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(database_url)
+        .await
+        .expect("connect schema pool as the row rules role")
+}
+
 /// A database for one test: `pool` reaches only it. `finish` drops it.
 pub(crate) struct Db {
     pub(crate) pool: PgPool,
@@ -388,4 +412,51 @@ async fn a_test_database_has_every_migration() {
         .count();
     assert_eq!(recorded, i64::try_from(expected).expect("count"));
     db.finish().await;
+}
+
+/// The role row rules are tested as. Row security binds a table's owner
+/// only because the tables FORCE it, and never binds a superuser or a role
+/// with BYPASSRLS: where the test database's role is one (CI's is), this
+/// makes a plain role `aw_test_app` with the rights the server needs on
+/// `schema`'s tables, and returns its name for `SET [LOCAL] ROLE`. None
+/// when the connecting role is already bound by row rules.
+pub(crate) async fn row_rules_role(pool: &PgPool, schema: &str) -> Option<&'static str> {
+    const ROLE: &str = "aw_test_app";
+    let bypasses = sqlx::query_scalar::<_, bool>(
+        "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("read the test role");
+    if !bypasses {
+        return None;
+    }
+    // Several tests may make it at once; one wins and the rest find it.
+    let made = sqlx::query(&format!(
+        "CREATE ROLE {ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS"
+    ))
+    .execute(pool)
+    .await;
+    if let Err(error) = made {
+        let raced = matches!(
+            error
+                .as_database_error()
+                .and_then(|error| error.code())
+                .as_deref(),
+            Some("42710" | "23505")
+        );
+        assert!(raced, "make the row rules role: {error}");
+    }
+    for grant in [
+        format!("GRANT USAGE, CREATE ON SCHEMA {schema} TO {ROLE}"),
+        format!("GRANT ALL ON ALL TABLES IN SCHEMA {schema} TO {ROLE}"),
+        format!("GRANT ALL ON ALL SEQUENCES IN SCHEMA {schema} TO {ROLE}"),
+        format!("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA {schema} TO {ROLE}"),
+    ] {
+        sqlx::query(&grant)
+            .execute(pool)
+            .await
+            .expect("grant the row rules role");
+    }
+    Some(ROLE)
 }

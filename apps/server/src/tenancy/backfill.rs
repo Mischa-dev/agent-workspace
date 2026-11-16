@@ -83,12 +83,13 @@ pub async fn backfill_batch(
         transaction.commit().await?;
         return Ok(None);
     }
-    let next = sqlx::query_scalar::<_, Option<i64>>("SELECT tenancy_backfill($1::regclass, $2, $3)")
-        .bind(table)
-        .bind(from_page)
-        .bind(BACKFILL_PAGES)
-        .fetch_one(&mut *transaction)
-        .await?;
+    let next =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT tenancy_backfill($1::regclass, $2, $3)")
+            .bind(table)
+            .bind(from_page)
+            .bind(BACKFILL_PAGES)
+            .fetch_one(&mut *transaction)
+            .await?;
     if let Some(next) = next {
         crate::jobs::enqueue(
             &mut *transaction,

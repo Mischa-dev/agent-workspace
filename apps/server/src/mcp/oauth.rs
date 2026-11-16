@@ -188,7 +188,9 @@ async fn register_client(
     }
 
     let client_id = Uuid::now_v7();
-    let mut transaction = crate::db::scoped_tx(&state.pool).await.map_err(AppError::from)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     sqlx::query("SELECT pg_advisory_xact_lock(68458762026001)")
         .execute(&mut *transaction)
         .await
@@ -509,7 +511,9 @@ async fn consent(
         // The app acts as this person across their whole account. The grant is
         // anchored to their Messages space, which every person belongs to;
         // each call is checked against their current memberships.
-        let mut transaction = crate::db::scoped_tx(&state.pool).await.map_err(AppError::from)?;
+        let mut transaction = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(AppError::from)?;
         let (home, _) =
             crate::direct::space_for_actor(&mut transaction, principal.actor_id, None).await?;
         transaction.commit().await.map_err(AppError::from)?;
@@ -727,7 +731,9 @@ async fn exchange_code(
         .ok_or_else(|| OAuthError::invalid_grant("PKCE verifier is required"))?;
     validate_verifier(verifier)?;
     let (prefix, digest) = secret_lookup(code, "aw_code_")?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await.map_err(AppError::from)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     let row = sqlx::query_as::<_, CodeRow>(
         r#"
         SELECT code.id, code.client_id, code.project_id, code.actor_id,
@@ -883,7 +889,9 @@ async fn refresh(state: &AppState, request: &TokenRequest) -> Result<TokenRespon
         .as_deref()
         .ok_or_else(|| OAuthError::invalid_grant("refresh token is required"))?;
     let (prefix, digest) = secret_lookup(refresh_token, "aw_refresh_")?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await.map_err(AppError::from)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     let row = sqlx::query_as::<_, RefreshRow>(
         r#"
         SELECT token.id, token.grant_id, grant_row.client_id, grant_row.scopes,
@@ -1079,7 +1087,9 @@ async fn revoke(
     .await
     .map_err(AppError::from)?;
     if let Some(grant_id) = grant_id {
-        let mut transaction = crate::db::scoped_tx(&state.pool).await.map_err(AppError::from)?;
+        let mut transaction = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(AppError::from)?;
         revoke_grant_family(&mut transaction, grant_id, false).await?;
         transaction.commit().await.map_err(AppError::from)?;
     }
@@ -1311,7 +1321,9 @@ async fn agent_choices(state: &AppState, actor_id: Uuid) -> Result<Vec<AgentChoi
     .fetch_all(crate::db::scoped(&state.pool))
     .await
     .map_err(AppError::from)?;
-    let mut connection = crate::db::scoped_tx(&state.pool).await.map_err(AppError::from)?;
+    let mut connection = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     let mut choices = Vec::new();
     for candidate in candidates {
         if crate::external_agents::may_manage(&mut connection, actor_id, candidate.connection_id)
@@ -1330,7 +1342,9 @@ async fn managed_agent(
     manager_actor_id: Uuid,
     connection_id: Uuid,
 ) -> Result<Option<(Uuid, Uuid)>, OAuthError> {
-    let mut connection = crate::db::scoped_tx(&state.pool).await.map_err(AppError::from)?;
+    let mut connection = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     let Some(managed) =
         crate::external_agents::may_manage(&mut connection, manager_actor_id, connection_id)
             .await?

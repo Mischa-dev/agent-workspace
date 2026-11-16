@@ -276,10 +276,11 @@ async fn a_statement_through_the_scoped_pool_carries_the_scope_and_commits() {
     // A snapshot is read-only and still scoped.
     let refused = tenancy::scoped(scope, async {
         let mut snapshot = db::scoped_snapshot(&pool).await.expect("snapshot");
-        let setting = sqlx::query_scalar::<_, String>("SELECT current_setting('app.tenancy', true)")
-            .fetch_one(&mut *snapshot)
-            .await
-            .expect("scope in the snapshot");
+        let setting =
+            sqlx::query_scalar::<_, String>("SELECT current_setting('app.tenancy', true)")
+                .fetch_one(&mut *snapshot)
+                .await
+                .expect("scope in the snapshot");
         assert_eq!(setting, format!("w:|{a}"));
         sqlx::query("UPDATE organizations SET name = 'No' WHERE id = $1")
             .bind(a)
