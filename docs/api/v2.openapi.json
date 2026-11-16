@@ -4021,7 +4021,7 @@
         },
         "summary": "List agent templates",
         "tags": [
-          "workspace"
+          "agents"
         ],
         "x-operation-kind": "query"
       }

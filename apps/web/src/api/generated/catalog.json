@@ -22,7 +22,7 @@
     "idempotent": false,
     "kind": "query",
     "long": false,
-    "module": "workspace",
+    "module": "agents",
     "name": "agent_template_list",
     "permission": null,
     "preview": false,
