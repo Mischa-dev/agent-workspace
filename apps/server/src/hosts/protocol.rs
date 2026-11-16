@@ -39,6 +39,10 @@ pub enum HostError {
     },
     /// The agent named isn't bound to this host.
     AgentUnknown,
+    /// No such command for this host (404 `command_unknown`).
+    CommandUnknown,
+    /// The command expired or was replaced (410 `command_closed`).
+    CommandClosed,
     App(AppError),
 }
 
@@ -202,9 +206,70 @@ pub struct Enrolled {
     pub push_signing_secret: Option<String>,
 }
 
+/// How a host is reached, as enrolment asked.
+struct PushSetup {
+    url: String,
+    host_token: Option<String>,
+}
+
+/// Read `connection`, `push` and `hostToken`: a dial-out host gives
+/// neither; a push host gives the https address Workspace calls and,
+/// optionally, the token Workspace sends there.
+fn push_setup(
+    request: &EnrolRequest,
+    trusted_origins: &[String],
+) -> Result<Option<PushSetup>, HostError> {
+    match request.connection.as_deref().unwrap_or("dial_out") {
+        "dial_out" => {
+            if request.push.as_ref().is_some_and(|push| !push.is_null())
+                || request.host_token.is_some()
+            {
+                return Err(invalid(
+                    "push",
+                    "Leave push and hostToken out for a dial_out host, or set connection to push.",
+                ));
+            }
+            Ok(None)
+        }
+        "push" => {
+            let url = request
+                .push
+                .as_ref()
+                .and_then(|push| push.get("url"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("push.url", "Give push.url, the https address Workspace calls."))?;
+            let url = crate::outbound::validate_webhook_url(url, trusted_origins)
+                .map_err(|_| invalid("push.url", "Give a public https address without credentials."))?;
+            if url.scheme() != "https" {
+                return Err(invalid("push.url", "Give an https address."));
+            }
+            let host_token = match request.host_token.as_deref() {
+                None => None,
+                Some(token) if token.is_empty() || token.len() > 4096 => {
+                    return Err(invalid("hostToken", "Give a token of 1 to 4,096 characters."));
+                }
+                Some(token) => Some(token.to_owned()),
+            };
+            Ok(Some(PushSetup {
+                url: url.to_string(),
+                host_token,
+            }))
+        }
+        _ => Err(invalid(
+            "connection",
+            "Give connection as dial_out or push.",
+        )),
+    }
+}
+
 /// Turn a one-time code into a linked host with its own account and
-/// credential. The code works once.
-pub async fn enrol(pool: &PgPool, request: EnrolRequest) -> Result<Enrolled, HostError> {
+/// credential. The code works once. A push host (one a workspace owns) also
+/// gets the secret Workspace signs its pushes with, shown once.
+pub async fn enrol(
+    state: &crate::AppState,
+    request: EnrolRequest,
+) -> Result<Enrolled, HostError> {
+    let pool = &state.pool;
     let Some(code) = normalize_code(&request.code) else {
         return Err(HostError::CodeRefused);
     };
@@ -216,27 +281,7 @@ pub async fn enrol(pool: &PgPool, request: EnrolRequest) -> Result<Enrolled, Hos
     {
         return Err(HostError::ProtocolUnsupported);
     }
-    match request.connection.as_deref().unwrap_or("dial_out") {
-        "dial_out" => {}
-        "push" => {
-            return Err(invalid(
-                "connection",
-                "This server takes dial_out hosts for now; push comes with the command channel.",
-            ));
-        }
-        _ => {
-            return Err(invalid(
-                "connection",
-                "Give connection as dial_out or push.",
-            ));
-        }
-    }
-    if request.push.as_ref().is_some_and(|push| !push.is_null()) || request.host_token.is_some() {
-        return Err(invalid(
-            "push",
-            "Leave push and hostToken out: this server takes dial_out hosts for now.",
-        ));
-    }
+    let push = push_setup(&request, &state.config.webhook_trusted_origins)?;
     let name = one_line(&request.host.name, 80, "host.name")?;
     let software = optional_line(request.host.software.as_deref(), 80, "host.software")?;
     let version = optional_line(request.host.version.as_deref(), 40, "host.version")?;
@@ -292,6 +337,10 @@ pub async fn enrol(pool: &PgPool, request: EnrolRequest) -> Result<Enrolled, Hos
         .bind(host_id)
         .execute(&mut *transaction)
         .await?;
+    let push_signing_secret = match push {
+        None => None,
+        Some(push) => Some(store_push(state, &mut transaction, host_id, owner_workspace, created_by, push).await?),
+    };
     let owner = owner_view(&mut transaction, host.owner()).await?;
     transaction.commit().await?;
     Ok(Enrolled {
@@ -302,8 +351,79 @@ pub async fn enrol(pool: &PgPool, request: EnrolRequest) -> Result<Enrolled, Hos
             kind: "bearer",
             token,
         },
-        push_signing_secret: None,
+        push_signing_secret,
     })
+}
+
+/// Keep a push host's address, its signing secret and its own token (both
+/// sealed in `crate::secrets`, owned by the workspace), and return the
+/// signing secret for the host to keep.
+async fn store_push(
+    state: &crate::AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    host_id: Uuid,
+    owner_workspace: Option<Uuid>,
+    created_by: Uuid,
+    push: PushSetup,
+) -> Result<String, HostError> {
+    let Some(organization_id) = owner_workspace else {
+        return Err(invalid(
+            "connection",
+            "A host linked to a person dials out; push is for hosts a workspace owns.",
+        ));
+    };
+    let keys = crate::secrets::keyring(&state.config).map_err(AppError::from)?;
+    let mut random = [0_u8; 32];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut random);
+    let signing = agent_workspace_host_protocol::new_push_secret(random);
+    let signing_value = crate::secrets::SecretValue::new(signing.clone());
+    let signing_id = crate::secrets::put(
+        &mut **transaction,
+        keys.as_ref(),
+        crate::secrets::NewSecret {
+            owner: crate::secrets::SecretOwner::Workspace { organization_id },
+            name: &format!("host_push_signing:{host_id}"),
+            description: Some("Signs the commands Workspace pushes to this host."),
+            value: &signing_value,
+            actor_id: Some(created_by),
+            system_managed: true,
+        },
+    )
+    .await?
+    .id;
+    let token_id = match push.host_token {
+        None => None,
+        Some(token) => Some(
+            crate::secrets::put(
+                &mut **transaction,
+                keys.as_ref(),
+                crate::secrets::NewSecret {
+                    owner: crate::secrets::SecretOwner::Workspace { organization_id },
+                    name: &format!("host_push_token:{host_id}"),
+                    description: Some("Sent to this host when Workspace pushes a command."),
+                    value: &crate::secrets::SecretValue::new(token),
+                    actor_id: Some(created_by),
+                    system_managed: true,
+                },
+            )
+            .await?
+            .id,
+        ),
+    };
+    sqlx::query(
+        r#"
+        UPDATE hosts
+           SET connection = 'push', push_url = $2, push_secret_id = $3, host_token_secret_id = $4
+         WHERE id = $1
+        "#,
+    )
+    .bind(host_id)
+    .bind(&push.url)
+    .bind(signing_id)
+    .bind(token_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(signing)
 }
 
 // ---------------------------------------------------------------- describe
@@ -669,6 +789,23 @@ pub async fn heartbeat(
         .collect::<Vec<_>>();
     let runs_renewed =
         crate::runs::liveness::renew_for_host(&mut transaction, host.id, &run_ids).await?;
+    // A1.12: a start the host never acknowledged is confirmed by its being
+    // listed; an active run left out of three heartbeats in a row is gone.
+    let listed = request
+        .runs
+        .iter()
+        .map(|run| {
+            (
+                run.run_id,
+                run.host_run_ref
+                    .as_deref()
+                    .map(|reference| crate::run_log::redact(reference.trim()))
+                    .filter(|reference| !reference.is_empty() && reference.len() <= 200),
+            )
+        })
+        .collect::<Vec<_>>();
+    crate::runs::liveness::host_confirms_start(&mut transaction, host.id, &listed).await?;
+    crate::runs::liveness::host_beat(&mut transaction, host.id, &run_ids).await?;
     transaction.commit().await?;
     Ok(HeartbeatReply {
         protocol: PROTOCOL,

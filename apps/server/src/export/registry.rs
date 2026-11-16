@@ -1700,6 +1700,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a machine or session on this server; set up again after import",
             ),
             (
+                "host_commands",
+                "requests to a host for runs in flight; a run that moves ends rather than resumes",
+            ),
+            (
                 "provider_accounts",
                 "a connection to an outside service, reconnected after import (needs/connections.jsonl)",
             ),
@@ -1710,6 +1714,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "provider_sessions",
                 "a machine or session on this server; set up again after import",
+            ),
+            (
+                "run_credentials",
+                "short-lived credentials, kept as digests, that end with their run",
             ),
             (
                 "repository_workspaces",

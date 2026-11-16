@@ -29,6 +29,7 @@
     "run_steps": "query",
     "run_activity_list": "query",
     "run_usage": "query",
+    "agent_usage_list": "query",
     "run_request": "create",
     "launch_list": "query",
     "launch_cancel": "change",

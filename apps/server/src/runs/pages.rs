@@ -665,6 +665,171 @@ impl Operation for RunActivityList {
     }
 }
 
+// ------------------------------------------------------- agent_usage_list
+
+/// A1.15: each agent's (or person's) usage in the workspace, for the usage
+/// page: from `run_usage`, so window reports split onto runs are counted
+/// and marked estimated, and windows that found no run are shown apart.
+pub struct AgentUsageList;
+
+/// Days counted when the call names none.
+const USAGE_DAYS: u16 = 30;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentUsageListInput {
+    /// How many days back, today included (default 30, at most 400).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days: Option<u16>,
+}
+
+impl Targeted for AgentUsageListInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageLine {
+    #[schemars(with = "String")]
+    pub account_id: Uuid,
+    pub name: Option<String>,
+    pub handle: Option<String>,
+    /// Runs with usage in the period.
+    pub runs: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub cost: Option<f64>,
+    pub currency: Option<String>,
+    /// exact (every amount reported per run) or estimated (some split from a
+    /// time window).
+    pub confidence: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct UnattributedUsageLine {
+    #[schemars(with = "String")]
+    pub account_id: Uuid,
+    pub name: Option<String>,
+    /// Window reports that overlapped none of its runs.
+    pub reports: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost: Option<f64>,
+    pub currency: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageListOutput {
+    pub days: u16,
+    /// Most tokens first.
+    pub accounts: Vec<AgentUsageLine>,
+    /// Usage reported for a time window that no run was going in ("not
+    /// tied to a run").
+    pub not_tied_to_a_run: Vec<UnattributedUsageLine>,
+}
+
+impl Operation for AgentUsageList {
+    const NAME: &'static str = "agent_usage_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "runs";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List usage by agent";
+    const DESCRIPTION: &'static str = "Tokens and cost per agent (or person) in this workspace \
+        over the last days, from the runs in projects you can open. Usage a host reported for \
+        a time window is split across the runs going then and marked estimated; a window no \
+        run was going in is listed as not tied to a run.";
+
+    type Input = AgentUsageListInput;
+    type Output = AgentUsageListOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: AgentUsageListInput,
+    ) -> Result<AgentUsageListOutput, OpError> {
+        let viewer = call.account_id();
+        let workspace = call.ctx.workspace_id;
+        let days = input.days.unwrap_or(USAGE_DAYS).clamp(1, 400);
+        let tx = call.tx().await?;
+        let accounts = sqlx::query_as::<_, AgentUsageLine>(
+            r#"
+            SELECT usage.account_id, named.display_name AS name, named.handle,
+                   count(DISTINCT usage.run_id) AS runs,
+                   sum(usage.input_tokens)::bigint AS input_tokens,
+                   sum(usage.output_tokens)::bigint AS output_tokens,
+                   sum(usage.cached_input_tokens)::bigint AS cached_input_tokens,
+                   sum(COALESCE(usage.reported_cost, usage.estimated_cost)) AS cost,
+                   min(COALESCE(usage.reported_currency, usage.currency)) AS currency,
+                   CASE WHEN bool_or(usage.confidence = 'estimated') THEN 'estimated'
+                        ELSE 'exact' END AS confidence
+            FROM run_usage usage
+            LEFT JOIN LATERAL (
+                SELECT membership.display_name, membership.handle
+                FROM project_memberships membership
+                WHERE membership.project_id = usage.space_id
+                  AND membership.actor_id = usage.account_id
+                LIMIT 1
+            ) named ON true
+            -- visibility: only runs in projects the viewer can open count.
+            WHERE usage.workspace_id = $1 AND usage.space_id IS NOT NULL
+              AND actor_can_access_project($2, NULL, usage.space_id)
+              AND usage.usage_date >= (now() AT TIME ZONE 'UTC')::date - ($3::int - 1)
+            GROUP BY usage.account_id, named.display_name, named.handle
+            ORDER BY sum(usage.input_tokens + usage.output_tokens) DESC, usage.account_id
+            LIMIT 200
+            "#,
+        )
+        .bind(workspace)
+        .bind(viewer)
+        .bind(i32::from(days))
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
+        let not_tied_to_a_run = sqlx::query_as::<_, UnattributedUsageLine>(
+            r#"
+            SELECT report.account_id, min(named.display_name) AS name, count(*) AS reports,
+                   sum(report.input_tokens)::bigint AS input_tokens,
+                   sum(report.output_tokens)::bigint AS output_tokens,
+                   sum(report.reported_cost) AS cost,
+                   min(report.reported_currency) AS currency
+            FROM usage_reports report
+            -- visibility: an account shown is in a project the viewer can open.
+            JOIN LATERAL (
+                SELECT membership.display_name
+                FROM project_memberships membership
+                JOIN projects project ON project.id = membership.project_id
+                WHERE membership.actor_id = report.account_id AND membership.enabled
+                  AND project.organization_id = $1
+                  AND actor_can_access_project($2, NULL, project.id)
+                LIMIT 1
+            ) named ON true
+            WHERE report.workspace_id = $1 AND report.run_id IS NULL
+              AND report.attributed_at IS NULL
+              AND report.window_end >= now() - make_interval(days => $3::int)
+            GROUP BY report.account_id
+            ORDER BY sum(report.input_tokens + report.output_tokens) DESC, report.account_id
+            LIMIT 200
+            "#,
+        )
+        .bind(workspace)
+        .bind(viewer)
+        .bind(i32::from(days))
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
+        Ok(AgentUsageListOutput {
+            days,
+            accounts,
+            not_tied_to_a_run,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

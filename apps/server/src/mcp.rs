@@ -4930,6 +4930,30 @@ pub(crate) async fn resolve_bearer_principal(
     if token.starts_with("aw_oauth_") {
         return oauth::resolve_access_token(state, token).await;
     }
+    // A1.12: a host's short-lived credential for one run's agent, in the
+    // run's space (interim until K1.24).
+    if token.starts_with(crate::runs::credentials::TOKEN_PREFIX) {
+        let Some(holder) = crate::runs::credentials::resolve(&state.pool, token).await? else {
+            return Ok(None);
+        };
+        let Ok(actor_kind) = parse_mcp_actor_kind(&holder.account_kind) else {
+            return Ok(None);
+        };
+        return Ok(Some(McpPrincipal {
+            credential_id: holder.credential_id,
+            mcp_credential_id: None,
+            oauth_grant_id: None,
+            actor_id: holder.account_id,
+            actor_kind,
+            project_id: holder.space_id,
+            external_agent_connection_id: holder.connection_id,
+            client_name: holder.host_name,
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            authentication_class: "run_credential",
+            account_wide: false,
+            project_explicit: false,
+        }));
+    }
     let Some(prefix) = token.get(..TOKEN_PREFIX_LENGTH) else {
         return Ok(None);
     };

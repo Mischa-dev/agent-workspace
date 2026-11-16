@@ -20,6 +20,8 @@ export type Envelope<T> =
 
 export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
 
+export type AgentUsageLine = { accountId: string; cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; handle?: string | null; inputTokens: number; name?: string | null; outputTokens: number; runs: number }
+
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
@@ -56,9 +58,15 @@ export type RunRecord = { activityCount: number; cancelRequestedAt?: string | nu
 
 export type RunResultInput = { branch?: string | null; id?: string | null; kind: string; number?: number | null; thingKind?: string | null; title?: string | null; url?: string | null }
 
+export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
+
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type AgentUsageListInput = { days?: number | null }
+
+export type AgentUsageListOutput = { accounts: AgentUsageLine[]; days: number; notTiedToARun: UnattributedUsageLine[] }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -130,6 +138,7 @@ export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId
 
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
