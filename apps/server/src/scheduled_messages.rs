@@ -216,7 +216,7 @@ pub async fn list(
         .bind(conversation_id)
         .bind(within)
         .bind(LIST_LIMIT)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .map(view)
@@ -231,7 +231,7 @@ pub async fn get_scheduled(
     sqlx::query_as::<_, ScheduledRow>(&select_sql("AND scheduled.id = $2"))
         .bind(viewer)
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         .map(view)
         .ok_or(AppError::NotFound("scheduled_message"))
@@ -320,7 +320,7 @@ pub(crate) async fn schedule(
     send_at: &str,
     through_app: bool,
 ) -> Result<ScheduledMessageView, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let id = schedule_in(
         &mut transaction,
         actor,
@@ -430,7 +430,7 @@ pub(crate) async fn update(
 ) -> Result<ScheduledMessageView, AppError> {
     get_scheduled(&state.pool, actor.actor_id, id).await?;
     let send_at = send_at.map(parse_send_at).transpose()?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let locked = lock_own(&mut transaction, actor.actor_id, id).await?;
     if !matches!(locked.status.as_str(), "scheduled" | "failed") {
         return Err(AppError::Conflict(
@@ -513,7 +513,7 @@ pub async fn send_now(
     id: Uuid,
 ) -> Result<ScheduledMessageView, AppError> {
     get_scheduled(&state.pool, actor_id, id).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let locked = lock_own(&mut transaction, actor_id, id).await?;
     if locked.status != "scheduled" {
         return Err(AppError::Conflict(
@@ -545,7 +545,7 @@ pub async fn send_now(
 
 /// Cancel one waiting (or failed) message. It isn't sent.
 pub async fn cancel(pool: &PgPool, actor_id: Uuid, id: Uuid) -> Result<(), AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let locked = lock_own(&mut transaction, actor_id, id).await?;
     if !matches!(locked.status.as_str(), "scheduled" | "failed") {
         return Err(AppError::Conflict(
@@ -643,7 +643,7 @@ fn failure_reason(error: &AppError) -> Option<&'static str> {
 }
 
 async fn send_due(state: &AppState, job: &SendJob, last_attempt: bool) -> Result<(), JobError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let Some(row) = sqlx::query_as::<_, DueRow>(
         r#"
         SELECT scheduled.id, scheduled.organization_id, scheduled.conversation_id,
@@ -679,7 +679,7 @@ async fn send_due(state: &AppState, job: &SendJob, last_attempt: bool) -> Result
     // A person's app or script scheduled it: it goes out within that app's
     // agent limit as it is now, as the tool call that scheduled it did.
     let limits = if row.made_through_app && row.author_kind == "human" {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         Some(
             crate::roles::app_access(&mut connection, row.author_actor_id)
                 .await?

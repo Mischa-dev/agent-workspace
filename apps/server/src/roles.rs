@@ -2035,7 +2035,7 @@ async fn list_roles(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<RolesResponse>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut connection, organization_id, principal.actor_id).await?;
     let roles = list(&mut connection, caller, organization_id).await?;
     let (modules, permissions) = catalogue();
@@ -2057,7 +2057,7 @@ async fn create_role_route(
     ApiJson(input): ApiJson<RoleInput>,
 ) -> Result<(StatusCode, Json<RoleView>), AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
     let auditor = Auditor::Browser {
         headers: &headers,
@@ -2079,7 +2079,7 @@ async fn change_role_route(
     if request.expected_version.is_none() {
         return Err(AppError::Validation("expectedVersion"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
     let auditor = Auditor::Browser {
         headers: &headers,
@@ -2105,7 +2105,7 @@ async fn remove_role_route(
     ApiPath((organization_id, role_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
     let auditor = Auditor::Browser {
         headers: &headers,
@@ -2133,7 +2133,7 @@ async fn assign_role_route(
     ApiJson(request): ApiJson<AssignRequest>,
 ) -> Result<Json<Assignment>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
     let auditor = Auditor::Browser {
         headers: &headers,
@@ -2175,7 +2175,7 @@ async fn set_agent_limit_route(
     ApiJson(request): ApiJson<AgentLimitRequest>,
 ) -> Result<Json<AgentLimitResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
     let auditor = Auditor::Browser {
         headers: &headers,
@@ -2209,7 +2209,7 @@ async fn read_permissions(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<PermissionsQuery>,
 ) -> Result<Json<PermissionsView>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut connection, organization_id, principal.actor_id).await?;
     let actor_id = query.actor_id.unwrap_or(principal.actor_id);
     if !may_read_permissions_of(caller, actor_id) {

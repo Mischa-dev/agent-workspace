@@ -213,7 +213,7 @@ pub async fn list_profiles(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.hidden_at IS NULL ORDER BY profile.enabled DESC, membership.display_name, profile.id"
     ))
     .bind(project_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?
     .into_iter()
     .map(|profile| named(state, profile))
@@ -597,7 +597,7 @@ async fn create_http(
     ApiJson(request): ApiJson<ProfileRequest>,
 ) -> Result<Json<ProfileView>, AppError> {
     let organization_id = manage(&state, &headers, &principal, project_id).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (profile_id, metadata) = create_in(
         &state,
         &mut transaction,
@@ -754,7 +754,7 @@ async fn update_http(
     ApiJson(request): ApiJson<ProfileRequest>,
 ) -> Result<Json<ProfileView>, AppError> {
     let organization_id = manage(&state, &headers, &principal, project_id).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (action, metadata) = update_in(
         &state,
         &mut transaction,
@@ -915,7 +915,7 @@ async fn delete_http(
     ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<RemovedProfile>, AppError> {
     manage(&state, &headers, &principal, project_id).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (outcome, handle) =
         remove_in(&mut transaction, principal.actor_id, project_id, profile_id).await?;
     settings::audit(
@@ -1307,7 +1307,7 @@ pub async fn presence(
     ))
     .bind(project_id)
     .bind(viewer)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(PresenceList { agents })
 }

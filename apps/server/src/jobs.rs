@@ -397,6 +397,7 @@ pub fn default_registry() -> JobRegistry {
     crate::things::backfill::register_jobs(&mut registry);
     crate::links::register_jobs(&mut registry);
     crate::repositories::register_jobs(&mut registry);
+    crate::tenancy::backfill::register_jobs(&mut registry);
     registry
 }
 
@@ -553,30 +554,33 @@ pub async fn ensure_recurring(pool: &PgPool, registry: &JobRegistry) -> Result<(
 
 /// Queue the next run of one recurring job, `interval` after its last.
 async fn ensure_next(pool: &PgPool, recurring: &Recurring) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        INSERT INTO background_jobs (id, kind, unique_key, run_at, max_attempts)
-        SELECT $1, $2::text, $3::text,
-               GREATEST(
-                   now(),
-                   (SELECT max(finished_at) FROM background_jobs
-                    WHERE kind = $2::text AND unique_key = $3::text
-                      AND state IN ('succeeded', 'dead'))
-                   + make_interval(secs => $4)
-               ),
-               3
-        ON CONFLICT (unique_key)
-            WHERE unique_key IS NOT NULL AND state IN ('queued', 'running')
-            DO NOTHING
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(recurring.kind)
-    .bind(format!("recurring:{}", recurring.kind))
-    .bind(recurring.interval.as_secs_f64())
-    .execute(pool)
-    .await?;
-    Ok(())
+    crate::tenancy::system("jobs.server", async move {
+        sqlx::query(
+            r#"
+            INSERT INTO background_jobs (id, kind, unique_key, run_at, max_attempts)
+            SELECT $1, $2::text, $3::text,
+                   GREATEST(
+                       now(),
+                       (SELECT max(finished_at) FROM background_jobs
+                        WHERE kind = $2::text AND unique_key = $3::text
+                          AND state IN ('succeeded', 'dead'))
+                       + make_interval(secs => $4)
+                   ),
+                   3
+            ON CONFLICT (unique_key)
+                WHERE unique_key IS NOT NULL AND state IN ('queued', 'running')
+                DO NOTHING
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(recurring.kind)
+        .bind(format!("recurring:{}", recurring.kind))
+        .bind(recurring.interval.as_secs_f64())
+        .execute(crate::db::scoped(pool))
+        .await?;
+        Ok(())
+    })
+    .await
 }
 
 async fn claim(
@@ -585,56 +589,59 @@ async fn claim(
     limit: usize,
     options: &WorkerOptions,
 ) -> Result<Vec<Job>, AppError> {
-    // A job whose lease ran out on its last attempt is dead, not retried. The
-    // claim below also skips such rows, so one whose lease expires between the
-    // two statements waits for the next pass instead of running again.
-    let expired = sqlx::query_as::<_, (Uuid, String)>(
-        r#"
-        UPDATE background_jobs
-        SET state = 'dead', lease_token = NULL, lease_owner = NULL,
-            lease_expires_at = NULL, finished_at = now(), updated_at = now(),
-            last_error = 'The worker stopped before the job finished.'
-        WHERE state = 'running' AND lease_expires_at < now()
-          AND attempts >= max_attempts AND kind = ANY($1)
-        RETURNING id, kind
-        "#,
-    )
-    .bind(kinds)
-    .fetch_all(pool)
-    .await?;
-    for (id, kind) in expired {
-        report_dead(id, &kind, "The worker stopped before the job finished.");
-    }
-    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-    Ok(sqlx::query_as::<_, Job>(
-        r#"
-        WITH due AS (
-            SELECT id FROM background_jobs
-            WHERE kind = ANY($1)
-              AND ((state = 'queued' AND run_at <= now())
-                   OR (state = 'running' AND lease_expires_at < now()
-                       AND attempts < max_attempts))
-            ORDER BY priority DESC, run_at, id
-            LIMIT $2
-            FOR UPDATE SKIP LOCKED
+    crate::tenancy::system("jobs.claim", async move {
+        // A job whose lease ran out on its last attempt is dead, not retried. The
+        // claim below also skips such rows, so one whose lease expires between the
+        // two statements waits for the next pass instead of running again.
+        let expired = sqlx::query_as::<_, (Uuid, String)>(
+            r#"
+            UPDATE background_jobs
+            SET state = 'dead', lease_token = NULL, lease_owner = NULL,
+                lease_expires_at = NULL, finished_at = now(), updated_at = now(),
+                last_error = 'The worker stopped before the job finished.'
+            WHERE state = 'running' AND lease_expires_at < now()
+              AND attempts >= max_attempts AND kind = ANY($1)
+            RETURNING id, kind
+            "#,
         )
-        UPDATE background_jobs job
-        SET state = 'running', attempts = job.attempts + 1,
-            lease_token = gen_random_uuid(), lease_owner = $3,
-            lease_expires_at = now() + make_interval(secs => $4),
-            started_at = now(), updated_at = now()
-        FROM due
-        WHERE job.id = due.id
-        RETURNING job.id, job.kind, job.payload, job.organization_id, job.project_id,
-                  job.attempts, job.max_attempts, job.lease_token
-        "#,
-    )
-    .bind(kinds)
-    .bind(limit)
-    .bind(&options.worker_id)
-    .bind(options.lease.as_secs_f64())
-    .fetch_all(pool)
-    .await?)
+        .bind(kinds)
+        .fetch_all(crate::db::scoped(pool))
+        .await?;
+        for (id, kind) in expired {
+            report_dead(id, &kind, "The worker stopped before the job finished.");
+        }
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        Ok(sqlx::query_as::<_, Job>(
+            r#"
+            WITH due AS (
+                SELECT id FROM background_jobs
+                WHERE kind = ANY($1)
+                  AND ((state = 'queued' AND run_at <= now())
+                       OR (state = 'running' AND lease_expires_at < now()
+                           AND attempts < max_attempts))
+                ORDER BY priority DESC, run_at, id
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE background_jobs job
+            SET state = 'running', attempts = job.attempts + 1,
+                lease_token = gen_random_uuid(), lease_owner = $3,
+                lease_expires_at = now() + make_interval(secs => $4),
+                started_at = now(), updated_at = now()
+            FROM due
+            WHERE job.id = due.id
+            RETURNING job.id, job.kind, job.payload, job.organization_id, job.project_id,
+                      job.attempts, job.max_attempts, job.lease_token
+            "#,
+        )
+        .bind(kinds)
+        .bind(limit)
+        .bind(&options.worker_id)
+        .bind(options.lease.as_secs_f64())
+        .fetch_all(crate::db::scoped(pool))
+        .await?)
+    })
+    .await
 }
 
 async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Duration) {
@@ -717,26 +724,29 @@ async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Dura
 /// Extend a lease this worker holds, giving up after a sixth of it.
 /// `Ok(false)` means the lease is no longer this worker's.
 async fn extend_lease(pool: &PgPool, id: Uuid, token: Uuid, lease: Duration) -> Result<bool, ()> {
-    let extended = tokio::time::timeout(
-        lease / 6,
-        sqlx::query(
-            r#"
-            UPDATE background_jobs
-            SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
-            WHERE id = $1 AND lease_token = $2 AND state = 'running'
-              AND lease_expires_at > now()
-            "#,
+    crate::tenancy::system("jobs.claim", async move {
+        let extended = tokio::time::timeout(
+            lease / 6,
+            sqlx::query(
+                r#"
+                UPDATE background_jobs
+                SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
+                WHERE id = $1 AND lease_token = $2 AND state = 'running'
+                  AND lease_expires_at > now()
+                "#,
+            )
+            .bind(id)
+            .bind(token)
+            .bind(lease.as_secs_f64())
+            .execute(crate::db::scoped(pool)),
         )
-        .bind(id)
-        .bind(token)
-        .bind(lease.as_secs_f64())
-        .execute(pool),
-    )
-    .await;
-    match extended {
-        Ok(Ok(result)) => Ok(result.rows_affected() == 1),
-        Ok(Err(_)) | Err(_) => Err(()),
-    }
+        .await;
+        match extended {
+            Ok(Ok(result)) => Ok(result.rows_affected() == 1),
+            Ok(Err(_)) | Err(_) => Err(()),
+        }
+    })
+    .await
 }
 
 /// Renew a just-claimed lease once before its handler starts. Returns when
@@ -783,70 +793,73 @@ fn lease_still_held(since_renewed: Duration, lease: Duration) -> bool {
 }
 
 async fn finish(pool: &PgPool, job: &Job, result: Result<(), JobError>) -> Result<(), AppError> {
-    match result {
-        Ok(()) => {
-            sqlx::query(
-                r#"
-                UPDATE background_jobs
-                SET state = 'succeeded', lease_token = NULL, lease_owner = NULL,
-                    lease_expires_at = NULL, last_error = NULL,
-                    finished_at = now(), updated_at = now()
-                WHERE id = $1 AND lease_token = $2
-                "#,
-            )
-            .bind(job.id)
-            .bind(job.lease_token)
-            .execute(pool)
-            .await?;
-        }
-        Err(error) => {
-            let permanent = matches!(error, JobError::Permanent(_));
-            let reason = bounded(error.reason());
-            let dead = permanent || job.attempts >= job.max_attempts;
-            let updated = sqlx::query(
-                r#"
-                UPDATE background_jobs
-                SET state = CASE WHEN $3 THEN 'dead' ELSE 'queued' END,
-                    run_at = CASE WHEN $3 THEN run_at ELSE now() + make_interval(secs => $4) END,
-                    finished_at = CASE WHEN $3 THEN now() END,
-                    lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL,
-                    last_error = $5, updated_at = now()
-                WHERE id = $1 AND lease_token = $2
-                "#,
-            )
-            .bind(job.id)
-            .bind(job.lease_token)
-            .bind(dead)
-            .bind(backoff(job.attempts).as_secs_f64())
-            .bind(&reason)
-            .execute(pool)
-            .await?;
-            if updated.rows_affected() == 1 {
-                if dead {
-                    report_dead(job.id, &job.kind, &reason);
-                } else {
-                    if job.attempts == 3 {
-                        metrics::alert(metrics::Alert {
-                            key: "job_failing",
-                            subject: job.kind.clone(),
-                            detail: format!(
-                                "Background job {} ({}) has failed three times and will keep retrying: {reason}",
-                                job.id, job.kind
-                            ),
-                        });
+    crate::tenancy::system("jobs.claim", async move {
+        match result {
+            Ok(()) => {
+                sqlx::query(
+                    r#"
+                    UPDATE background_jobs
+                    SET state = 'succeeded', lease_token = NULL, lease_owner = NULL,
+                        lease_expires_at = NULL, last_error = NULL,
+                        finished_at = now(), updated_at = now()
+                    WHERE id = $1 AND lease_token = $2
+                    "#,
+                )
+                .bind(job.id)
+                .bind(job.lease_token)
+                .execute(crate::db::scoped(pool))
+                .await?;
+            }
+            Err(error) => {
+                let permanent = matches!(error, JobError::Permanent(_));
+                let reason = bounded(error.reason());
+                let dead = permanent || job.attempts >= job.max_attempts;
+                let updated = sqlx::query(
+                    r#"
+                    UPDATE background_jobs
+                    SET state = CASE WHEN $3 THEN 'dead' ELSE 'queued' END,
+                        run_at = CASE WHEN $3 THEN run_at ELSE now() + make_interval(secs => $4) END,
+                        finished_at = CASE WHEN $3 THEN now() END,
+                        lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL,
+                        last_error = $5, updated_at = now()
+                    WHERE id = $1 AND lease_token = $2
+                    "#,
+                )
+                .bind(job.id)
+                .bind(job.lease_token)
+                .bind(dead)
+                .bind(backoff(job.attempts).as_secs_f64())
+                .bind(&reason)
+                .execute(crate::db::scoped(pool))
+                .await?;
+                if updated.rows_affected() == 1 {
+                    if dead {
+                        report_dead(job.id, &job.kind, &reason);
+                    } else {
+                        if job.attempts == 3 {
+                            metrics::alert(metrics::Alert {
+                                key: "job_failing",
+                                subject: job.kind.clone(),
+                                detail: format!(
+                                    "Background job {} ({}) has failed three times and will keep retrying: {reason}",
+                                    job.id, job.kind
+                                ),
+                            });
+                        }
+                        tracing::warn!(
+                            job_id = %job.id,
+                            kind = job.kind,
+                            attempt = job.attempts,
+                            reason,
+                            "background job failed; it will be retried"
+                        );
                     }
-                    tracing::warn!(
-                        job_id = %job.id,
-                        kind = job.kind,
-                        attempt = job.attempts,
-                        reason,
-                        "background job failed; it will be retried"
-                    );
                 }
             }
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 fn report_dead(id: Uuid, kind: &str, reason: &str) {
@@ -888,27 +901,30 @@ fn bounded(reason: &str) -> String {
 /// Delete finished jobs: succeeded and canceled after a week, dead after a
 /// month (long enough to look into).
 pub async fn prune_finished(pool: &PgPool) -> Result<u64, AppError> {
-    let mut removed = 0;
-    loop {
-        let batch = sqlx::query(
-            r#"
-            DELETE FROM background_jobs
-            WHERE id IN (
-                SELECT id FROM background_jobs
-                WHERE (state IN ('succeeded', 'canceled') AND finished_at < now() - interval '7 days')
-                   OR (state = 'dead' AND finished_at < now() - interval '30 days')
-                LIMIT 5000
+    crate::tenancy::system("jobs.queue", async move {
+        let mut removed = 0;
+        loop {
+            let batch = sqlx::query(
+                r#"
+                DELETE FROM background_jobs
+                WHERE id IN (
+                    SELECT id FROM background_jobs
+                    WHERE (state IN ('succeeded', 'canceled') AND finished_at < now() - interval '7 days')
+                       OR (state = 'dead' AND finished_at < now() - interval '30 days')
+                    LIMIT 5000
+                )
+                "#,
             )
-            "#,
-        )
-        .execute(pool)
-        .await?
-        .rows_affected();
-        removed += batch;
-        if batch < 5000 {
-            return Ok(removed);
+            .execute(crate::db::scoped(pool))
+            .await?
+            .rows_affected();
+            removed += batch;
+            if batch < 5000 {
+                return Ok(removed);
+            }
         }
-    }
+    })
+    .await
 }
 
 /// Queue counts for the metrics endpoint.
@@ -924,24 +940,27 @@ pub struct QueueStats {
 }
 
 pub async fn queue_stats(pool: &PgPool) -> Result<QueueStats, AppError> {
-    Ok(sqlx::query_as::<_, QueueStats>(
-        r#"
-        SELECT
-            count(*) FILTER (WHERE state = 'queued' AND run_at <= now()) AS queued_due,
-            count(*) FILTER (WHERE state = 'queued' AND run_at > now()) AS queued_later,
-            count(*) FILTER (WHERE state = 'running') AS running,
-            count(*) FILTER (WHERE state = 'dead' AND finished_at > now() - interval '1 day')
-                AS dead_last_day,
-            COALESCE(EXTRACT(EPOCH FROM now() - min(run_at)
-                FILTER (WHERE state = 'queued' AND run_at <= now())), 0)::float8
-                AS oldest_due_seconds
-        FROM background_jobs
-        WHERE state IN ('queued', 'running')
-           OR (state = 'dead' AND finished_at > now() - interval '1 day')
-        "#,
-    )
-    .fetch_one(pool)
-    .await?)
+    crate::tenancy::system("jobs.queue", async move {
+        Ok(sqlx::query_as::<_, QueueStats>(
+            r#"
+            SELECT
+                count(*) FILTER (WHERE state = 'queued' AND run_at <= now()) AS queued_due,
+                count(*) FILTER (WHERE state = 'queued' AND run_at > now()) AS queued_later,
+                count(*) FILTER (WHERE state = 'running') AS running,
+                count(*) FILTER (WHERE state = 'dead' AND finished_at > now() - interval '1 day')
+                    AS dead_last_day,
+                COALESCE(EXTRACT(EPOCH FROM now() - min(run_at)
+                    FILTER (WHERE state = 'queued' AND run_at <= now())), 0)::float8
+                    AS oldest_due_seconds
+            FROM background_jobs
+            WHERE state IN ('queued', 'running')
+               OR (state = 'dead' AND finished_at > now() - interval '1 day')
+            "#,
+        )
+        .fetch_one(crate::db::scoped(pool))
+        .await?)
+    })
+    .await
 }
 
 #[cfg(test)]

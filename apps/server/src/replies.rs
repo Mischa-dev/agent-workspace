@@ -753,14 +753,14 @@ pub(crate) async fn timeline_requests(
     )
     .bind(conversation_id)
     .bind(viewer_actor_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let remaining = sqlx::query_scalar::<_, i32>(
         "SELECT agent_turns_remaining FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
     )
     .bind(conversation_id)
     .bind(viewer_actor_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
     let views = rows
@@ -805,7 +805,7 @@ async fn continue_conversation(
     ApiPath(conversation_id): ApiPath<Uuid>,
 ) -> Result<Json<ContinueResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let outcome = continue_conversation_in(
         &mut transaction,
         principal.actor_id,
@@ -966,7 +966,7 @@ async fn retry_request(
     ApiPath(request_id): ApiPath<Uuid>,
 ) -> Result<Json<RetryResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     retry_request_in(
         &mut transaction,
         principal.actor_id,
@@ -1099,7 +1099,7 @@ async fn stop_request(
     ApiPath(request_id): ApiPath<Uuid>,
 ) -> Result<Json<StopResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let outcome = stop_request_in(
         &mut transaction,
         principal.actor_id,
@@ -1335,7 +1335,7 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
 }
 
 async fn expire_leases(pool: &PgPool) -> Result<(), AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let expired = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         UPDATE reply_requests
@@ -1427,7 +1427,7 @@ struct ClaimedWakeup {
 /// left to wake are marked delivered, the rest are pushed `WAKEUP_CLAIM` into
 /// the future so no other sweep posts them meanwhile.
 async fn claim_due_wakeups(state: &AppState) -> Result<Vec<ClaimedWakeup>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let due = sqlx::query_as::<_, DueDelivery>(
         r#"
         SELECT delivery.id, delivery.connection_id, delivery.reply_request_id,
@@ -1528,7 +1528,7 @@ async fn record_wakeup(
 ) -> Result<(), AppError> {
     let attempts = delivery.attempts + 1;
     let backoff_seconds = (5_i64 << attempts.min(6)).min(300);
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query(
         r#"
         UPDATE agent_webhook_deliveries

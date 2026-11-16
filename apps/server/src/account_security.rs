@@ -183,7 +183,7 @@ async fn list_sessions(
         "#,
     )
     .bind(principal.user_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     for session in &mut sessions {
         session.current = session.id == principal.session_id;
@@ -202,7 +202,7 @@ async fn revoke_session(
     if session_id == principal.session_id {
         return Err(AppError::Conflict("session", "sign out to end this one"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let revoked = sqlx::query(
         r#"
         UPDATE sessions SET revoked_at = now(), updated_at = now()
@@ -264,7 +264,7 @@ async fn revoke_other_sessions(
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<RevokedResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let revoked =
         revoke_sessions_except(&mut transaction, principal.user_id, principal.session_id).await?;
     account_audit(
@@ -316,7 +316,7 @@ async fn verify_current_password(
         "SELECT password_phc FROM user_password_credentials WHERE user_id = $1",
     )
     .bind(principal.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some(stored) = stored else {
         return Ok(None);
@@ -355,7 +355,7 @@ async fn change_password(
         let _permit = state.rate_limits.try_acquire_password_kdf()?;
         password::hash_password(std::mem::take(&mut request.new_password)).await?
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
         UPDATE user_password_credentials
@@ -741,7 +741,7 @@ async fn login_two_factor(
         return Err(AppError::NotFound("login challenge"));
     }
     let digest: [u8; 32] = Sha256::digest(request.challenge.as_bytes()).into();
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let challenge = sqlx::query_as::<_, ChallengeRow>(
         r#"
         SELECT challenge.id, challenge.user_id, challenge.authentication_epoch,
@@ -897,7 +897,7 @@ async fn security_overview(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
 ) -> Result<Json<SecurityOverview>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let has_password = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM user_password_credentials WHERE user_id = $1)",
     )
@@ -990,7 +990,7 @@ async fn two_factor_setup(
         &secrets::totp_aad(principal.user_id),
         secret.as_ref(),
     )?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     secrets::hold_off_rotation(&mut transaction, keys.as_ref()).await?;
     if two_factor_enabled(&mut transaction, principal.user_id).await? {
         return Err(AppError::Conflict("two_factor", "already on"));
@@ -1047,7 +1047,7 @@ async fn two_factor_confirm(
 ) -> Result<Json<RecoveryCodesResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     state.rate_limits.check_login(&principal.login_name).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let factor = load_factor(&mut transaction, principal.user_id)
         .await?
         .ok_or(AppError::NotFound("two-factor setup"))?;
@@ -1093,7 +1093,7 @@ async fn two_factor_recovery_codes(
 ) -> Result<Json<RecoveryCodesResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     state.rate_limits.check_login(&principal.login_name).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let factor = load_factor(&mut transaction, principal.user_id)
         .await?
         .filter(|factor| factor.confirmed_at.is_some())
@@ -1150,7 +1150,7 @@ async fn two_factor_disable(
     {
         return Err(AppError::NotFound("two-factor"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let factor = load_factor(&mut transaction, principal.user_id)
         .await?
         .ok_or(AppError::NotFound("two-factor"))?;
@@ -1253,7 +1253,7 @@ async fn list_api_tokens(
         "#
     ))
     .bind(principal.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let projects = sqlx::query_as::<_, TokenProject>(
         r#"
@@ -1277,7 +1277,7 @@ async fn list_api_tokens(
         "#,
     )
     .bind(principal.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(TokensResponse { tokens, projects }))
 }
@@ -1313,7 +1313,7 @@ fn validate_token_name(name: &str) -> Result<(), AppError> {
 async fn fetch_token(pool: &sqlx::PgPool, credential_id: Uuid) -> Result<TokenView, AppError> {
     sqlx::query_as::<_, TokenView>(&format!("SELECT {TOKEN_COLUMNS} WHERE credential.id = $1"))
         .bind(credential_id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         .ok_or(AppError::NotFound("api token"))
 }
@@ -1377,7 +1377,7 @@ async fn revoke_api_token(
         "#,
     )
     .bind(credential_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     if owner != Some(principal.actor_id) {
         return Err(AppError::NotFound("api token"));
@@ -1412,7 +1412,7 @@ async fn read_appearance(
         "SELECT appearance, appearance_version FROM users WHERE id = $1",
     )
     .bind(principal.user_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(AppearanceResponse {
         appearance,
@@ -1458,13 +1458,13 @@ async fn write_appearance(
     .bind(principal.user_id)
     .bind(&request.appearance)
     .bind(request.expected_version)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some(version) = updated else {
         let current =
             sqlx::query_scalar::<_, i64>("SELECT appearance_version FROM users WHERE id = $1")
                 .bind(principal.user_id)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?;
         return Err(AppError::VersionConflict {
             resource: "appearance",

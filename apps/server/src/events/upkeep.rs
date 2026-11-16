@@ -97,6 +97,11 @@ pub async fn add_partition(pool: &PgPool, lower: i64) -> Result<(), AppError> {
     ))
     .execute(&mut *transaction)
     .await?;
+    // Row security on the new partition, like every tenant table (H1.21).
+    sqlx::query("SELECT tenancy_protect($1::regclass, 'workspace_id')")
+        .bind(&name)
+        .execute(&mut *transaction)
+        .await?;
     sqlx::query("INSERT INTO events SELECT * FROM events_moving")
         .execute(&mut *transaction)
         .await?;

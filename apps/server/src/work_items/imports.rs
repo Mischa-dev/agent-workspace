@@ -826,7 +826,7 @@ pub(super) async fn list_imports(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let records = sqlx::query_as::<_, ImportRecord>(&format!(
         "{IMPORT_SELECT} WHERE import.project_id = $1 ORDER BY import.created_at DESC, import.id DESC LIMIT 20"
     ))
@@ -853,7 +853,7 @@ pub(super) async fn get_import(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let record = import_row(&mut connection, project_id, import_id, false)
         .await?
         .ok_or(AppError::NotFound("import"))?;
@@ -1570,7 +1570,7 @@ async fn job_record(
 
 async fn fetch_issues(context: &JobContext) -> Result<(), JobError> {
     let pool = &context.state.pool;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let Some(record) = job_record(&mut transaction, context).await? else {
         return Ok(());
     };
@@ -1607,7 +1607,7 @@ async fn fetch_issues(context: &JobContext) -> Result<(), JobError> {
         MAX_ROWS * 2,
     )
     .await?;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let Some(current) = job_record(&mut transaction, context).await? else {
         return Ok(());
     };
@@ -1654,7 +1654,7 @@ async fn fetch_issues(context: &JobContext) -> Result<(), JobError> {
 /// import shows progress and a restart picks up where it stopped.
 async fn commit_rows(context: &JobContext) -> Result<(), JobError> {
     loop {
-        let mut transaction = context.state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&context.state.pool).await?;
         let Some(record) = job_record(&mut transaction, context).await? else {
             return Ok(());
         };
@@ -2241,7 +2241,7 @@ pub(super) async fn export_project(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let key = sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
         .bind(project_id)
         .fetch_one(&mut *connection)

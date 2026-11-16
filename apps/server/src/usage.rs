@@ -173,7 +173,7 @@ async fn read_and_store(state: &AppState, account: &UsageAccount) -> Result<bool
     .await;
     match result {
         Ok(report) => {
-            let mut transaction = state.pool.begin().await?;
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
             store_report(&mut transaction, account, &report, true).await?;
             transaction.commit().await?;
             Ok(true)
@@ -194,7 +194,7 @@ async fn read_and_store(state: &AppState, account: &UsageAccount) -> Result<bool
             .bind(account.id)
             .bind(account.organization_id)
             .bind(category)
-            .execute(&state.pool)
+            .execute(crate::db::scoped(&state.pool))
             .await?;
             Ok(false)
         }
@@ -356,7 +356,7 @@ pub async fn record_run_report(state: &AppState, account_id: Uuid, report: Usage
         let Some(account) = load_account(&state.pool, account_id).await? else {
             return Ok(());
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         store_report(&mut transaction, &account, &report, false).await?;
         jobs::enqueue(
             &mut *transaction,
@@ -424,7 +424,7 @@ pub async fn enqueue_due(pool: &PgPool) -> Result<usize, AppError> {
         LIMIT 2000
         "#
     ))
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let mut queued = 0;
     for (account_id, organization_id, readable) in due {
@@ -698,7 +698,7 @@ async fn account_view(
         "#,
     )
     .bind(account.id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let windows = windows_at(&state.pool, account.id, now).await?;
     let schedules = sqlx::query_as::<_, ScheduleRow>(
@@ -708,7 +708,7 @@ async fn account_view(
         "#,
     )
     .bind(account.id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?
     .into_iter()
     .map(|row| ScheduleView {
@@ -803,7 +803,7 @@ pub async fn list_for(
     ))
     .bind(viewer)
     .bind(organization_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let now = Utc::now();
     let mut views = Vec::with_capacity(accounts.len());
@@ -914,7 +914,7 @@ async fn ready_tasks_http(
     ApiPath(account_id): ApiPath<Uuid>,
 ) -> Result<Json<ready::ReadyTasks>, AppError> {
     let account = owned_account(&state.pool, principal.actor_id, account_id).await?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     Ok(Json(
         ready::ready_tasks(&mut connection, principal.actor_id, account.id, None).await?,
     ))
@@ -951,7 +951,7 @@ pub async fn create_schedule(
     account_id: Uuid,
     request: &NewSchedule,
 ) -> Result<AccountUsageView, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let account = owned_account(&mut *transaction, viewer, account_id).await?;
     let label = bounded_text(Some(&request.label), 60).ok_or(AppError::Validation("label"))?;
     if request.label.chars().count() > 60 {
@@ -1026,7 +1026,7 @@ async fn delete_schedule_http(
     let deleted = sqlx::query("DELETE FROM usage_schedules WHERE id = $1 AND account_id = $2")
         .bind(schedule_id)
         .bind(account.id)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?
         .rows_affected();
     if deleted == 0 {

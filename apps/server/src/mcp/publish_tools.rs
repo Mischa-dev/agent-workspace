@@ -126,7 +126,7 @@ pub(super) async fn run_publish(
     let result = async {
         let project_id = run_project(state, principal, run_id).await?;
         not_configured(state)?;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         github::require_project_access_as(
             &mut transaction,
             principal.actor_id,
@@ -200,7 +200,7 @@ pub(super) async fn pull_request_create(
         }
         work_item_ids.dedup();
         let title = github::checked_pull_request_input(&arguments.title, &body, &work_item_ids)?;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         github::require_project_access_as(
             &mut transaction,
             principal.actor_id,
@@ -266,11 +266,11 @@ pub(super) async fn pull_request_refresh(
         )
         .bind(pull_request_id)
         .bind(&projects)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .ok_or(AppError::NotFound("github_pull_request"))?;
         not_configured(state)?;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         github::require_project_access_as(
             &mut transaction,
             principal.actor_id,
@@ -320,7 +320,7 @@ pub(super) async fn pull_request_merge(
         )
         .bind(pull_request_id)
         .bind(&projects)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .ok_or(AppError::NotFound("github_pull_request"))?;
         let merged = github::merge_pull_request_as(

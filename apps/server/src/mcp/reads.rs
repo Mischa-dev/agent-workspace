@@ -348,7 +348,7 @@ pub async fn pull_request_get(
     .bind(id)
     .bind(identifier)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await;
     match row {
         Ok(Some(row)) => ReadResult::Found {
@@ -388,7 +388,7 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal, action: A
     )
     .bind(principal.project_id)
     .bind(principal.actor_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await
     .ok()
     .flatten();
@@ -472,7 +472,7 @@ async fn resolve_work_item_id(
     )
     .bind(project_id)
     .bind(identifier)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await
     .ok()
     .flatten()
@@ -488,7 +488,7 @@ async fn load_work_item(
     let row = sqlx::query_as::<_, WorkItemRow>(WORK_ITEM_BY_ID_SELECT)
         .bind(project_id)
         .bind(work_item_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?;
     let Some(row) = row else {
         return Ok(None);
@@ -537,7 +537,7 @@ async fn load_acceptance_criteria(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     Ok(rows
         .into_iter()
@@ -558,7 +558,7 @@ async fn load_repository(
     sqlx::query_as::<_, RepositoryRow>(REPOSITORY_SELECT)
         .bind(project_id)
         .bind(repository_id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await
 }
 
@@ -592,7 +592,7 @@ async fn load_linked_repositories(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await
 }
 
@@ -637,7 +637,7 @@ async fn load_linked_pull_requests(
     .bind(project_id)
     .bind(work_item_id)
     .bind(viewer)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await
 }
 

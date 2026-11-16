@@ -177,7 +177,7 @@ async fn start_write<T: Serialize>(
     require_authenticated_write(state, headers, principal).await?;
     let key = IdempotencyKey::from_headers(headers)?;
     let request_hash = RequestHash::for_value(request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -413,7 +413,7 @@ async fn list_sheets(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<ListQuery>,
 ) -> Result<Json<Json_>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let can_edit = reader(&mut connection, &headers, &principal, project_id).await?;
     let sheets = super::list(
         &mut *connection,
@@ -438,7 +438,7 @@ async fn get_sheet(
     ApiPath((project_id, sheet_id)): ApiPath<(Uuid, Uuid)>,
     ApiQuery(query): ApiQuery<SheetQuery>,
 ) -> Result<Json<SheetBody>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let can_edit = reader(&mut connection, &headers, &principal, project_id).await?;
     let sheet = super::find(&mut *connection, project_id, &sheet_id.to_string())
         .await?
@@ -1055,7 +1055,7 @@ async fn export_sheet(
     let Some(format) = Format::parse(&query.format) else {
         return Ok(invalid("format", "Export as xlsx or csv."));
     };
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     reader(&mut connection, &headers, &principal, project_id).await?;
     let sheet = super::find(&mut *connection, project_id, &sheet_id.to_string())
         .await?

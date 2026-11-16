@@ -337,9 +337,9 @@ async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
           AND scheduler_lease_expires_at <= now()
         "#,
     )
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('agent_workspace_scheduler', 0))")
         .execute(&mut *transaction)
         .await?;
@@ -590,7 +590,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
     if let Some(predecessor_run_id) = run.predecessor_run_id {
         match reusable_retry_workspace(state, &run, predecessor_run_id, &mirror).await? {
             RetryWorkspace::Reuse(workspace_id, worktree_id, worktree) => {
-                let mut transaction = state.pool.begin().await?;
+                let mut transaction = crate::db::scoped_tx(&state.pool).await?;
                 let owned = sqlx::query_scalar::<_, bool>(
                     r#"
                     SELECT EXISTS (
@@ -676,7 +676,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
     };
     let branch = git_runtime::unique_run_branch(&branch_prefix, &run.project_key)?;
     let worktree = managed_worktree_path(&state.config.data_root, run.repository_id, workspace_id)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let owned = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
@@ -763,7 +763,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
         "#,
     )
     .bind(worktree_id)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
 
     start_admitted_run(state, &run, worktree).await?;
@@ -830,7 +830,7 @@ async fn reusable_retry_workspace(
     .bind(run.project_id)
     .bind(run.conversation_id)
     .bind(run.repository_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some(workspace) = workspace else {
         return Ok(RetryWorkspace::Unsafe);
@@ -859,7 +859,7 @@ async fn reusable_retry_workspace(
             "UPDATE git_worktrees SET state = 'missing', dirty = false, last_inspected_at = now(), updated_at = now() WHERE id = $1",
         )
         .bind(worktree_id)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?;
         return Ok(RetryWorkspace::Unsafe);
     };
@@ -870,7 +870,7 @@ async fn reusable_retry_workspace(
         .bind(worktree_id)
         .bind(if inspection.dirty { "dirty" } else { "failed" })
         .bind(inspection.dirty)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?;
         return Ok(RetryWorkspace::Unsafe);
     }
@@ -883,7 +883,7 @@ async fn fail_admission(
     reason: &'static str,
     failed_worktree_id: Option<Uuid>,
 ) -> Result<(), AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current =
         sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
             .bind(run.run_id)
@@ -937,7 +937,7 @@ async fn fail_admission(
 }
 
 async fn clear_claim(state: &AppState, run_id: Uuid, claim_id: Uuid) -> Result<(), AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     clear_claim_in_transaction(&mut transaction, run_id, claim_id).await?;
     transaction.commit().await?;
     Ok(())

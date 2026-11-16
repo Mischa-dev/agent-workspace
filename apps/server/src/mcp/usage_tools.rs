@@ -76,11 +76,11 @@ pub(super) async fn usage_windows(
         let organization_id =
             sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
                 .bind(principal.project_id)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?;
         let accounts = usage::list_for(state, principal.actor_id, Some(organization_id)).await?;
         let mut lines = Vec::new();
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         for account in accounts
             .into_iter()
             .filter(|account| account_id.is_none_or(|id| id == account.account_id))

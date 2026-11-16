@@ -214,7 +214,7 @@ async fn list_connections(
     authorize_management(&principal, &access, project_id)?;
     let rows = sqlx::query_as::<_, ConnectionRow>(connection_query(false))
         .bind(project_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
     Ok(Json(ConnectionsResponse {
         connections: rows.into_iter().map(ConnectionView::from).collect(),
@@ -241,7 +241,7 @@ async fn create_connection(
         return Err(AppError::Validation("app"));
     }
     let normalized = validate_create(request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_project(&mut transaction, project_id).await?;
     let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -479,7 +479,7 @@ pub async fn set_webhook_for_host(
 ) -> Result<String, AppError> {
     crate::outbound::validate_webhook_url(url, trusted_origins)?;
     let secret = crate::replies::new_webhook_secret();
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let secret_id = crate::secrets::put_webhook_secret(
         &mut transaction,
         config,
@@ -537,7 +537,7 @@ pub async fn provision(
         webhook_url: None,
         setup_app: None,
     })?;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     lock_project(&mut transaction, project_id).await?;
     let (organization_id, owner_role, owner_role_permissions) =
         sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
@@ -661,7 +661,7 @@ async fn set_webhook(
     };
     let url = validate_webhook_url(request.url, &state.config.webhook_trusted_origins)?;
     let secret = url.as_ref().map(|_| crate::replies::new_webhook_secret());
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_project(&mut transaction, project_id).await?;
     let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -745,7 +745,7 @@ async fn test_webhook(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<crate::replies::TestWakeup>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -909,7 +909,7 @@ async fn mutate_connection(
     if expected_version < 1 {
         return Err(AppError::Invalid("expected_version"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_project(&mut transaction, project_id).await?;
     let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -1463,7 +1463,7 @@ async fn load_access(
     Ok(sqlx::query_as::<_, AccessRow>(access_sql(false))
         .bind(actor_id)
         .bind(project_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?)
 }
 

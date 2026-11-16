@@ -276,7 +276,7 @@ pub async fn answer(
     key: &IdempotencyKey,
 ) -> Result<(QuestionView, bool), AppError> {
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let row = sqlx::query_as::<_, QuestionRow>(&format!(
         r#"
         SELECT {ROW_COLUMNS}

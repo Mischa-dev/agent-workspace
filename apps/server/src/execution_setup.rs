@@ -181,7 +181,7 @@ pub async fn activate_pending_worker(
         "#,
     )
     .bind(execution_profile_id)
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?;
     Ok(())
 }
@@ -207,7 +207,7 @@ pub async fn activate_pending_worker_for_account(
         "#,
     )
     .bind(provider_account_id)
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?;
     Ok(())
 }

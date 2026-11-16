@@ -292,7 +292,7 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
         "SELECT organization_id, url, status FROM link_previews WHERE id = $1",
     )
     .bind(payload.preview_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     else {
         return Ok(());
@@ -315,7 +315,7 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
     let result = match outcome {
         Ok((found, picture)) => {
             let room = match &picture {
-                Some((bytes, _, _, _)) => match state.pool.acquire().await {
+                Some((bytes, _, _, _)) => match crate::db::scoped_tx(&state.pool).await {
                     Ok(mut connection) => crate::files::require_room(
                         state,
                         &mut connection,
@@ -374,7 +374,7 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
                     .map(|(_, _, _, height)| i32::try_from(*height).unwrap_or(i32::MAX)),
             )
             .bind(picture.as_ref().map(|(_, content_type, ..)| *content_type))
-            .execute(&state.pool)
+            .execute(crate::db::scoped(&state.pool))
             .await
         }
         Err(reason) => {
@@ -387,7 +387,7 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
             )
             .bind(payload.preview_id)
             .bind(reason)
-            .execute(&state.pool)
+            .execute(crate::db::scoped(&state.pool))
             .await
         }
     };
@@ -410,7 +410,7 @@ async fn preview_image(
 
 /// Open timelines refetch the messages that show this preview.
 async fn refresh_messages(state: &AppState, preview_id: Uuid) -> Result<(), AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let messages = sqlx::query_as::<_, (Uuid, Uuid, Uuid, i32)>(
         r#"
         SELECT message.project_id, message.conversation_id, message.id, message.revision
@@ -459,7 +459,7 @@ pub(crate) async fn cleanup(state: &AppState, store: &FileStore) -> Result<u64, 
         LIMIT 200
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut deleted = 0;
     for (id, key) in orphans {
@@ -481,7 +481,7 @@ pub(crate) async fn cleanup(state: &AppState, store: &FileStore) -> Result<u64, 
         )
         .bind(id)
         .bind(RETRY_FAILED_AFTER_HOURS)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?;
         deleted += 1;
     }
@@ -526,7 +526,7 @@ async fn image_http(
     )
     .bind(preview_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("link_preview"))?;
     crate::files::http::serve(&state, &key, &content_type, "preview", false).await
@@ -546,7 +546,7 @@ async fn hide_http(
         mcp_credential: None,
         via_grant_id: None,
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let locked = lock_message_for_change(
         &mut transaction,
         &actor,

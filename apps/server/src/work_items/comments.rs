@@ -550,7 +550,7 @@ pub(crate) async fn comment_revisions(
     .bind(project_id)
     .bind(work_item_id)
     .bind(comment_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     else {
         return Ok(None);
@@ -575,7 +575,7 @@ pub(crate) async fn comment_revisions(
     .bind(project_id)
     .bind(work_item_id)
     .bind(comment_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?
     .into_iter()
     .map(|row| CommentRevisionView {
@@ -701,7 +701,7 @@ async fn edit_comment_http(
 ) -> Result<Json<EditCommentResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (locked, _) = lock_for_change(
         &mut transaction,
         &principal,
@@ -742,7 +742,7 @@ async fn remove_comment_http(
     ApiPath((project_id, work_item_id, comment_id)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<RemoveCommentResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (locked, moderator) = lock_for_change(
         &mut transaction,
         &principal,

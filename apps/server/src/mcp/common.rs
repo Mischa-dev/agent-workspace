@@ -257,7 +257,7 @@ pub(super) async fn project_role(
     .bind(principal.actor_id)
     .bind(project_id)
     .bind(principal.external_agent_connection_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -534,7 +534,7 @@ pub(super) async fn content_from_text(
         "#,
     )
     .bind(project_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?
     .into_iter()
     .map(|row| (row.handle, row.actor_id))
@@ -555,7 +555,7 @@ pub(super) async fn comment_content_from_text(
     let project_key =
         sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
             .bind(project_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?;
     let Some(project_key) = project_key else {
         return Ok(content);
@@ -569,7 +569,7 @@ pub(super) async fn comment_content_from_text(
     )
     .bind(project_id)
     .bind(&numbers)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?
     .into_iter()
     .collect::<HashMap<_, _>>();
@@ -707,7 +707,7 @@ pub(super) async fn resolve_people(
             )
             .bind(project_id)
             .bind(actor_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
         } else {
             sqlx::query_scalar::<_, Uuid>(
@@ -715,7 +715,7 @@ pub(super) async fn resolve_people(
             )
             .bind(project_id)
             .bind(person.trim_start_matches('@'))
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
         };
         match found {

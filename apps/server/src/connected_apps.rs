@@ -114,11 +114,11 @@ async fn list(
         "#
     ))
     .bind(principal.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     // Apps connected as an agent show only to those who may manage it
     // (external_agents::may_manage, the one rule; P0.6).
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let mut managed = Vec::with_capacity(apps.len());
     for app in apps {
         let mine = match app.agent_connection_id {
@@ -193,7 +193,7 @@ async fn update(
     ApiJson(request): ApiJson<UpdateRequest>,
 ) -> Result<Json<ConnectedApp>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     owned_grant(&mut transaction, principal.actor_id, grant_id).await?;
     sqlx::query("UPDATE mcp_oauth_grants SET show_via = $2 WHERE id = $1")
         .bind(grant_id)
@@ -222,7 +222,7 @@ async fn revoke(
     ApiPath(grant_id): ApiPath<Uuid>,
 ) -> Result<Json<RevokeResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     owned_grant(&mut transaction, principal.actor_id, grant_id).await?;
     // Same effect as the client revoking its own token: the grant and every
     // access and refresh token issued from it stop working at once.

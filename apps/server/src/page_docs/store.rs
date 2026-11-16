@@ -583,7 +583,7 @@ pub async fn snapshot(pool: &PgPool, page_id: Uuid) -> Result<Option<Snapshot>, 
         "#,
     )
     .bind(page_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?)
 }
 
@@ -592,7 +592,7 @@ pub async fn open(pool: &PgPool, page_id: Uuid) -> Result<Snapshot, AppError> {
     if let Some(snapshot) = snapshot(pool, page_id).await? {
         return Ok(snapshot);
     }
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let page = lock_page(&mut transaction, page_id)
         .await?
         .ok_or(AppError::NotFound("page"))?;

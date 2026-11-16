@@ -116,7 +116,7 @@ impl ProfileAccount {
             "#,
         )
         .bind(execution_profile_id)
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?)
     }
 }
@@ -124,7 +124,7 @@ impl ProfileAccount {
 async fn run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, AppError> {
     let config = sqlx::query_scalar::<_, Value>("SELECT config FROM agent_runs WHERE id = $1")
         .bind(run_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
     Ok(RunConfig::from_value(&config))
 }
@@ -200,7 +200,7 @@ async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, 
             "#,
     )
     .bind(run_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     // Defaults that stopped matching the catalog fall back one by one.
     let resolved = resolve_stored_run_config(
@@ -216,7 +216,7 @@ async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, 
     sqlx::query("UPDATE agent_runs SET config = $2 WHERE id = $1 AND config = '{}'::jsonb")
         .bind(run_id)
         .bind(value)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?;
     run_config(state, run_id).await
 }
@@ -274,7 +274,7 @@ pub async fn start_run(
     )
     .bind(conversation_id)
     .bind(execution_profile_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
 
     let (provider_session_id, provider_thread_id) = if let Some((session_id, thread_id)) = existing
@@ -312,7 +312,7 @@ pub async fn start_run(
         .bind(conversation_id)
         .bind(execution_profile_id)
         .bind(&thread_id)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?;
         (session_id, thread_id)
     };
@@ -321,7 +321,7 @@ pub async fn start_run(
     // process dies around the external turn/start side effect, recovery can
     // distinguish an unbound turn from a durably identified one and must not
     // mistake an older completed turn for this run.
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let bound = sqlx::query(
         r#"
         UPDATE agent_runs
@@ -354,7 +354,7 @@ pub async fn start_run(
         .await
         .map_err(|error| provider_error(run_id, "start turn", error))?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let bound = sqlx::query(
         r#"
         UPDATE agent_runs
@@ -471,7 +471,7 @@ pub(crate) async fn follow_recovered_run(
             "#,
         )
         .bind(run_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
     else {
         return Ok(false);
@@ -503,7 +503,7 @@ pub(crate) async fn follow_recovered_run(
     {
         return Ok(false);
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     transition_run(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
@@ -575,7 +575,7 @@ pub(crate) async fn inspect_provider_for_recovery(
         "#,
     )
     .bind(run_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await;
     let Ok(Some((provider_thread_id, execution_profile_id, provider_turn_id))) = provider else {
         return ProviderRecovery::Unavailable;
@@ -643,7 +643,7 @@ async fn mark_account_healthy(state: &AppState, account_id: Uuid) -> Result<(), 
         "#,
     )
     .bind(account_id)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     Ok(())
 }
@@ -668,7 +668,7 @@ async fn idle_unowned_provider_session(
         "#,
     )
     .bind(provider_session_id)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     Ok(())
 }
@@ -684,7 +684,7 @@ async fn mark_account_failure(state: &AppState, account_id: Uuid, category: &'st
     )
     .bind(account_id)
     .bind(category)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await
     {
         tracing::error!(
@@ -713,9 +713,9 @@ pub(crate) async fn complete_recovered_run(
             "#,
     )
     .bind(run_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     transition_run(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
@@ -882,7 +882,7 @@ async fn drive_turn(
                     "SELECT state FROM agent_runs WHERE id = $1",
                 )
                 .bind(run_id)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?;
                 if run_state == "interrupted" {
                     let _ = provider.interrupt_turn(&provider_thread_id, &turn_id).await;
@@ -924,7 +924,7 @@ async fn handle_provider_request(
     let provider_request_id = request.durable_id.clone();
     let summary = request.summary.clone();
     let options = request.public_options();
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let inserted_approval_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO agent_approvals (
@@ -1026,7 +1026,7 @@ async fn handle_provider_request(
             "#,
         )
         .bind(approval_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         if resolution.run_state == "interrupted" {
             provider
@@ -1049,7 +1049,7 @@ async fn handle_provider_request(
             "#,
         )
         .bind(approval_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?;
         if claimed.is_none() {
             return Ok(());
@@ -1071,7 +1071,7 @@ async fn handle_provider_request(
             .answer(request, answer)
             .await
             .map_err(|error| provider_error(run_id, "answer provider request", error))?;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         sqlx::query(
             "UPDATE agent_approvals SET provider_response_delivered_at = now() WHERE id = $1",
         )
@@ -1105,7 +1105,7 @@ async fn complete_run(
         "#,
     )
     .bind(run_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let dirty = tokio::task::spawn_blocking(move || {
         worktree_is_dirty(PathBuf::from(worktree_path).as_path())
@@ -1121,9 +1121,9 @@ async fn complete_run(
         "#,
     )
     .bind(run_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
         UPDATE git_worktrees gw
@@ -1336,7 +1336,7 @@ async fn persist_event(
     conversation_id: Uuid,
     event: SignificantProviderEvent<'_>,
 ) -> Result<(), AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(event_id) = insert_event(
         &mut transaction,
         run_id,
@@ -1419,7 +1419,7 @@ async fn fail_run(
 ) -> Result<(), AppError> {
     let current = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
         .bind(run_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
     if matches!(
         current.as_str(),
@@ -1427,7 +1427,7 @@ async fn fail_run(
     ) {
         return Ok(());
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     transition_run(&mut transaction, run_id, RunState::Failed, Some(reason)).await?;
     sqlx::query(
         r#"

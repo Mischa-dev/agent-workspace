@@ -282,7 +282,7 @@ async fn list_execution_workers(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<ExecutionWorkersResponse>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_action(
         &mut transaction,
         &principal,
@@ -384,7 +384,7 @@ async fn list_execution_profiles(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<ExecutionProfilesResponse>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = require_project_action(
         &mut transaction,
         &principal,
@@ -495,7 +495,7 @@ async fn register_personal_execution_profile(
         .manifest(&adapter_kind)
         .map(|manifest| (*manifest).clone())
         .ok_or(AppError::Validation("adapterKind"))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = require_project_action(
         &mut transaction,
         &principal,
@@ -716,7 +716,7 @@ async fn list_harnesses(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<HarnessesResponse>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_action(
         &mut transaction,
         &principal,
@@ -831,7 +831,7 @@ pub(crate) async fn refresh_in(
             "this harness can't list its models; add them by hand",
         ));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // A retry whose first refresh already landed replays it instead of
     // asking the harness again. The key is only held once the models are in
     // hand, below, so a failed listing can be retried with the same key.
@@ -881,7 +881,7 @@ pub(crate) async fn refresh_in(
         .await
         .map_err(|error| catalog_error(&manifest.kind, error))?;
     drop(session);
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let Some((scope, idempotency_key)) = idempotency else {
         catalog::store_refresh(&mut transaction, organization_id, &manifest.kind, &models).await?;
         transaction.commit().await?;
@@ -940,7 +940,7 @@ async fn require_catalog_editor(
     principal: &AuthenticatedActor,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_action(&mut transaction, principal, project_id, Action::ProjectView).await?;
     let workspace = workspace_access(&mut transaction, principal, project_id).await?;
     transaction.commit().await?;
@@ -1134,7 +1134,7 @@ async fn fetch_owned_execution_profile(
     .bind(project_id)
     .bind(profile_id)
     .bind(owner_actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("execution_profile"))?;
     let health = state
