@@ -1,0 +1,102 @@
+[
+  {
+    "stored": true,
+    "system": false,
+    "type": "text"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "long_text"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "number"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "date"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "single_choice"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "multiple_choice"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "status"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "person"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "url"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "email"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "phone"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "checkbox"
+  },
+  {
+    "stored": true,
+    "system": false,
+    "type": "link"
+  },
+  {
+    "stored": true,
+    "system": true,
+    "type": "created_time"
+  },
+  {
+    "stored": true,
+    "system": true,
+    "type": "edited_time"
+  },
+  {
+    "stored": true,
+    "system": true,
+    "type": "created_by"
+  },
+  {
+    "stored": true,
+    "system": true,
+    "type": "edited_by"
+  },
+  {
+    "stored": true,
+    "system": true,
+    "type": "auto_id"
+  },
+  {
+    "stored": false,
+    "system": false,
+    "type": "people"
+  },
+  {
+    "stored": false,
+    "system": false,
+    "type": "labels"
+  }
+]

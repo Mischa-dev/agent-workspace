@@ -141,6 +141,32 @@ impl FieldType {
         Self::AutoId,
     ];
 
+    /// Every type, with the ones only module manifests name: the list the
+    /// web app's field registry is checked against (T1.13a,
+    /// `apps/web/src/fields/fieldTypes.generated.json`).
+    pub const EVERY: [Self; 20] = [
+        Self::Text,
+        Self::LongText,
+        Self::Number,
+        Self::Date,
+        Self::SingleChoice,
+        Self::MultipleChoice,
+        Self::Status,
+        Self::Person,
+        Self::Url,
+        Self::Email,
+        Self::Phone,
+        Self::Checkbox,
+        Self::Link,
+        Self::CreatedTime,
+        Self::EditedTime,
+        Self::CreatedBy,
+        Self::EditedBy,
+        Self::AutoId,
+        Self::People,
+        Self::Labels,
+    ];
+
     /// Whether fields of this type can be made.
     pub fn is_stored(self) -> bool {
         Self::ALL.contains(&self)
@@ -291,6 +317,26 @@ impl FieldType {
             | Self::AutoId => &[Empty, NotEmpty],
         }
     }
+}
+
+/// The field types as the web app's field registry is checked against
+/// (T1.13a): every type, whether fields can be made with it, and whether it
+/// reads the record's own columns. Written to
+/// `apps/web/src/fields/fieldTypes.generated.json` by the generated-files
+/// check (`ops::codegen`).
+pub fn web_type_list() -> Value {
+    Value::Array(
+        FieldType::EVERY
+            .iter()
+            .map(|field_type| {
+                serde_json::json!({
+                    "type": field_type.as_str(),
+                    "stored": field_type.is_stored(),
+                    "system": field_type.is_system(),
+                })
+            })
+            .collect(),
+    )
 }
 
 /// How a list grouped by a date puts records together: by day, by week
@@ -2950,6 +2996,44 @@ mod tests {
             archived: false,
             version: 1,
             accessor: crate::fields::Accessor::Stored,
+        }
+    }
+
+    #[test]
+    fn every_type_is_listed_for_the_web_registry() {
+        // The schema lists every variant the type has; EVERY must too, or
+        // the web app's registry check (fieldTypes.generated.json) misses one.
+        let schema = serde_json::to_value(schemars::schema_for!(FieldType)).unwrap();
+        let mut named = schema["enum"]
+            .as_array()
+            .or_else(|| schema["oneOf"].as_array())
+            .expect("an enum schema")
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .as_str()
+                    .map(|name| vec![name.to_owned()])
+                    .or_else(|| {
+                        entry["enum"].as_array().map(|names| {
+                            names
+                                .iter()
+                                .filter_map(|name| name.as_str().map(str::to_owned))
+                                .collect()
+                        })
+                    })
+                    .or_else(|| entry["const"].as_str().map(|name| vec![name.to_owned()]))
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        named.sort();
+        let mut listed = FieldType::EVERY
+            .iter()
+            .map(|field_type| field_type.as_str().to_owned())
+            .collect::<Vec<_>>();
+        listed.sort();
+        assert_eq!(named, listed);
+        for field_type in FieldType::ALL {
+            assert!(FieldType::EVERY.contains(&field_type));
         }
     }
 

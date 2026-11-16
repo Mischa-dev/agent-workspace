@@ -11,34 +11,16 @@
  */
 
 /**
- * A field's type: the one list (T1.2) tasks, collections and module
- * manifests name types from; `modules/contract.ts` re-exports it. The
- * server's `crate::fields::FieldType` is the same list. `FIELD_TYPES` are
- * the ones a field can be made with; `people` and `labels` are named by
- * manifests only, for now. System types (`isSystemType`) show the record's
- * own columns and take no values.
+ * A field's type: the one list (T1.2, T1.13a), in `fieldTypes.ts`;
+ * `modules/contract.ts` re-exports it. The server's
+ * `crate::fields::FieldType` is the same list. `FIELD_TYPES` are the ones a
+ * field can be made with; `people` and `labels` are named by manifests only,
+ * for now. System types (`isSystemType`) show the record's own columns and
+ * take no values.
  */
-export type FieldType =
-  | 'text'
-  | 'long_text'
-  | 'number'
-  | 'date'
-  | 'single_choice'
-  | 'multiple_choice'
-  | 'status'
-  | 'person'
-  | 'people'
-  | 'labels'
-  | 'url'
-  | 'email'
-  | 'phone'
-  | 'checkbox'
-  | 'link'
-  | 'created_time'
-  | 'edited_time'
-  | 'created_by'
-  | 'edited_by'
-  | 'auto_id'
+export type { FieldType, FieldOp } from './fieldTypes'
+import type { FieldDecl } from '../modules/contract'
+import { FIELD_TYPE_INFO, FIELD_TYPE_LIST, isFieldType, typeInfo, type FieldOp, type FieldType } from './fieldTypes'
 
 /** What kind of status a status option is, in workflow order (the server's STATUS_CATEGORIES). */
 export const STATUS_CATEGORIES = ['backlog', 'unstarted', 'started', 'review', 'verification', 'completed', 'canceled'] as const
@@ -80,48 +62,29 @@ export type LinkTarget = 'task' | 'page' | 'record'
 
 export type FieldReference = { id: string; kind: 'person' | 'task' | 'page' | 'record'; label: string; key: string | null }
 
-export type FieldOp = 'is' | 'isNot' | 'empty' | 'notEmpty' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'within' | 'categoryIs' | 'categoryIsNot'
-
 /** One field filter, with stored values (option IDs, actor IDs, "true", numbers, dates). */
 export type FieldClause = { field: string; op: FieldOp; values?: string[] }
 
-/** The types a field can be made with. `tasks: false` ones are for collections only. */
-export const FIELD_TYPES: Array<{ type: FieldType; label: string; hint: string; tasks?: false }> = [
-  { type: 'text', label: 'Text', hint: 'A line or a few lines of text' },
-  { type: 'long_text', label: 'Long text', hint: 'Paragraphs, such as notes' },
-  { type: 'number', label: 'Number', hint: 'Such as 3 or 2.5' },
-  { type: 'date', label: 'Date', hint: 'A day' },
-  { type: 'single_choice', label: 'Choice', hint: 'One of a set of options' },
-  { type: 'multiple_choice', label: 'Choices', hint: 'Any of a set of options' },
-  { type: 'status', label: 'Status', hint: 'Where it is: options in categories such as started or done', tasks: false },
-  { type: 'person', label: 'Person', hint: 'Someone in the project' },
-  { type: 'url', label: 'Link (URL)', hint: 'A web address' },
-  { type: 'email', label: 'Email', hint: 'An email address' },
-  { type: 'phone', label: 'Phone', hint: 'A phone number' },
-  { type: 'checkbox', label: 'Checkbox', hint: 'Yes or no' },
-  { type: 'link', label: 'Task, page or record', hint: 'A task, a page or a collection’s record in the project' },
-  { type: 'created_time', label: 'Created time', hint: 'When the record was made', tasks: false },
-  { type: 'edited_time', label: 'Edited time', hint: 'When the record last changed', tasks: false },
-  { type: 'created_by', label: 'Created by', hint: 'Who made the record', tasks: false },
-  { type: 'edited_by', label: 'Edited by', hint: 'Who last changed the record', tasks: false },
-  { type: 'auto_id', label: 'ID', hint: 'The record’s number', tasks: false },
-]
+/** The types a field can be made with, from the registry. `tasks: false` ones are for collections only. */
+export const FIELD_TYPES: Array<{ type: FieldType; label: string; hint: string; tasks?: false }> = FIELD_TYPE_LIST.filter(
+  (type) => FIELD_TYPE_INFO[type].creatable,
+).map((type) => {
+  const { label, hint, tasks } = FIELD_TYPE_INFO[type]
+  return tasks ? { type, label, hint } : { type, label, hint, tasks: false as const }
+})
 
 /** Whether a type shows the record's own columns: nobody fills it in. */
 export function isSystemType(type: FieldType) {
-  return type === 'created_time' || type === 'edited_time' || type === 'created_by' || type === 'edited_by' || type === 'auto_id'
+  return typeInfo(type).system
 }
 
 /** The type it filters, sorts and groups like (the server's `behaves_as`). */
 export function behavesAs(type: FieldType): FieldType {
-  if (type === 'created_time' || type === 'edited_time') return 'date'
-  if (type === 'created_by' || type === 'edited_by') return 'person'
-  if (type === 'auto_id') return 'number'
-  return type
+  return typeInfo(type).behavesAs
 }
 
 export function typeLabel(type: FieldType) {
-  return FIELD_TYPES.find((entry) => entry.type === type)?.label ?? type
+  return FIELD_TYPE_INFO[type]?.label ?? type
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +96,7 @@ const asRecord = (value: unknown): Wire =>
 const asString = (value: unknown) => (typeof value === 'string' ? value : '')
 
 function fieldType(value: unknown): FieldType {
-  return FIELD_TYPES.some((entry) => entry.type === value) ? (value as FieldType) : 'text'
+  return isFieldType(value) ? value : 'text'
 }
 
 export function normalizeField(value: unknown): FieldDefinition {
@@ -297,26 +260,9 @@ export function opLabel(op: FieldOp, type?: FieldType) {
   return OP_LABELS[op]
 }
 
-/** The filter operations a type offers, as the server accepts them. */
+/** The filter operations a type offers, as the server accepts them (the registry's). */
 export function opsFor(type: FieldType): FieldOp[] {
-  switch (behavesAs(type)) {
-    case 'text':
-    case 'url':
-    case 'email':
-    case 'phone':
-      return ['contains', 'is', 'isNot', 'empty', 'notEmpty']
-    case 'long_text':
-      return ['contains', 'empty', 'notEmpty']
-    case 'number':
-    case 'date':
-      return ['is', 'gt', 'gte', 'lt', 'lte', 'empty', 'notEmpty']
-    case 'checkbox':
-      return ['is', 'empty']
-    case 'status':
-      return ['is', 'isNot', 'categoryIs', 'categoryIsNot', 'empty', 'notEmpty']
-    default:
-      return ['is', 'isNot', 'empty', 'notEmpty']
-  }
+  return [...typeInfo(type).ops]
 }
 
 export function opTakesValues(op: FieldOp) {
@@ -325,8 +271,7 @@ export function opTakesValues(op: FieldOp) {
 
 /** Whether a task list groups by a field of the type: one group per task. */
 export function canGroup(type: FieldType) {
-  const like = behavesAs(type)
-  return like === 'single_choice' || like === 'status' || like === 'person' || like === 'checkbox'
+  return typeInfo(type).grouping === 'one'
 }
 
 /**
@@ -334,8 +279,7 @@ export function canGroup(type: FieldType) {
  * choices (a record in each of its groups) and dates (by day, week or month).
  */
 export function canGroupRecords(type: FieldType) {
-  const like = behavesAs(type)
-  return canGroup(type) || like === 'multiple_choice' || like === 'date'
+  return typeInfo(type).grouping !== null
 }
 
 /** How a view grouped by a date puts records together. */
@@ -427,4 +371,27 @@ export function clauseText(clause: FieldClause, field: FieldDefinition | undefin
   })
   const words = [field.name, opLabel(clause.op, field.type), values.filter(Boolean).join(', ')].filter(Boolean)
   return words.join(' ')
+}
+
+// ---------------------------------------------------------------------------
+// Fields module manifests declare
+
+/**
+ * A field a module manifest declares (`FieldDecl`), as a field definition
+ * (T1.13a): manifests declare a subset of a field (an id, a label, a type and
+ * option names), so the registry draws and edits their values the way it does
+ * a project's own fields. An option's id is its name, as manifests' values hold it.
+ */
+export function definitionOfDecl(decl: FieldDecl, position = 1): FieldDefinition {
+  return {
+    id: decl.id,
+    name: decl.label,
+    description: '',
+    type: decl.type,
+    options: (decl.options ?? []).map((name) => ({ id: name, name, color: '#8b8d98', archived: false, category: null })),
+    target: null,
+    position,
+    archived: false,
+    version: 1,
+  }
 }
