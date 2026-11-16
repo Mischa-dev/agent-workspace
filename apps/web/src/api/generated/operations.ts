@@ -15,7 +15,7 @@ export type OpError = {
 }
 
 export type Envelope<T> =
-  | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; preview?: boolean }
+  | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }
   | OpError
 
 export type CommentThreadView = { anchor?: unknown; createdAt: string; id: string; messageCount: number; name: string; outcome?: string | null; status: string; unread: boolean }

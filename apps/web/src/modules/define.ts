@@ -63,6 +63,50 @@ export type PaletteEntry = {
   keywords?: string[]
 }
 
+/**
+ * A keyboard shortcut a module brings (W1.13): G then a letter, opening one
+ * of its pages. The shell's matcher, its handlers and the shortcut sheet are
+ * drawn from these, so a module's keys come and go with it.
+ */
+export type ShortcutRegistration = {
+  /** The action's name, `go-<page>`; the module's manifest claims it. */
+  action: `go-${string}`
+  /** The letter after G, lower case. */
+  key: string
+  /** What the sheet calls it. */
+  label: string
+  /** Where it goes: from the root, or, with `inProject`, after the open project's address. */
+  path: string
+  /** Acts in the open project (and follows that project's modules). */
+  inProject?: boolean
+  /** Keeps today's order on the sheet. */
+  rank: number
+}
+
+/**
+ * A kind of thing the module opens (W1.13), for the shell's "open anything"
+ * and for drawing a link to one: its label and icon. K3's thing registry
+ * names the kinds; this is how the web app shows them.
+ */
+export type ThingRegistration = {
+  kind: string
+  label: string
+  icon: IconName
+}
+
+/**
+ * Something the module lets a person capture quickly (W1.13; W1.32 shows
+ * them on the capture page and share-in): a page that starts it.
+ */
+export type CaptureRegistration = {
+  id: string
+  label: string
+  icon: IconName
+  /** From the root, or, with `inProject`, after a project's address. */
+  path: string
+  inProject?: boolean
+}
+
 export type WebModule = {
   /** A manifest id (`modules/<id>.json`). */
   id: string
@@ -75,4 +119,10 @@ export type WebModule = {
   palette?: PaletteEntry[]
   /** Shown on a phone's bottom bar (W1.13). */
   phone?: boolean
+  /** G-then-a-letter keys to its pages (W1.13). */
+  shortcuts?: ShortcutRegistration[]
+  /** The kinds of thing it opens, as the shell shows them (W1.13). */
+  things?: ThingRegistration[]
+  /** What it lets a person capture quickly (W1.13). */
+  capture?: CaptureRegistration[]
 }

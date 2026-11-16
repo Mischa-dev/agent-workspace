@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
@@ -76,7 +77,9 @@ export function asAgent(request: APIRequestContext, token: string) {
   return {
     call: async (operation: string, input: Record<string, unknown>, workspace?: string) => {
       const route = workspace ? `/api/v2/w/${encodeURIComponent(workspace)}/ops/${operation}` : `/api/v2/ops/${operation}`
-      const response = await request.post(route, { headers: { authorization: `Bearer ${token}` }, data: input })
+      // v2 refuses a write without an Idempotency-Key (ruling R52): one per call here.
+      const headers = { authorization: `Bearer ${token}`, 'idempotency-key': randomUUID() }
+      const response = await request.post(route, { headers, data: input })
       return (await response.json()) as { outcome: string; value?: unknown; message?: string }
     },
   }

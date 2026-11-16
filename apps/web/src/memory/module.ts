@@ -27,4 +27,12 @@ export default {
     { id: 'p:pages', space: 'project', rank: 30, label: 'Pages', icon: 'list', shortcut: 'G P', keywords: ['docs', 'wiki'], path: '/pages' },
     { id: 'p:decisions', space: 'project', rank: 140, label: 'Decisions', icon: 'circle-check', shortcut: 'G D', path: '/decisions' },
   ],
+  shortcuts: [
+    { action: 'go-pages', key: 'p', label: 'Pages', path: '/pages', inProject: true, rank: 80 },
+    { action: 'go-decisions', key: 'd', label: 'Decisions', path: '/decisions', inProject: true, rank: 90 },
+  ],
+  things: [
+    { kind: 'page', label: 'Page', icon: 'list' },
+    { kind: 'decision', label: 'Decision', icon: 'circle-check' },
+  ],
 } satisfies WebModule

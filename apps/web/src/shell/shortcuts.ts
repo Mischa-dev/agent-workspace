@@ -1,10 +1,16 @@
 /**
  * The app's keyboard shortcuts: turning key presses into actions. Their
  * labels live in shortcutSheet.ts, loaded with the command menu; a test
- * presses every key the sheet shows, so the two can't drift apart.
+ * presses every key the sheet shows, so the two can't drift apart. The
+ * G-then-a-letter keys to a module's pages are the modules' registrations
+ * (W1.13, `shortcuts` in each `module.ts`); the shell keeps its own.
  */
 
-export type ShortcutAction =
+import type { WebModule } from '../modules/define'
+import { moduleShortcuts, WEB_MODULES } from '../modules/registry'
+
+/** The shell's own actions; a module's G keys are `go-<page>`. */
+export type ShellAction =
   | 'command-menu'
   | 'shortcut-sheet'
   | 'create-task'
@@ -18,30 +24,25 @@ export type ShortcutAction =
   | 'previous-unread'
   | 'next-unread'
   | 'go-home'
-  | 'go-messages'
-  | 'go-inbox'
-  | 'go-my-work'
-  | 'go-later'
-  | 'go-tasks'
-  | 'go-board'
-  | 'go-pages'
-  | 'go-decisions'
   | 'go-settings'
   | 'go-appearance'
 
-/** G then a letter. The shortcut sheet (shortcutSheet.ts) lists these with labels. */
-const G_SEQUENCES: Record<string, ShortcutAction> = {
+export type ShortcutAction = ShellAction | `go-${string}`
+
+/** G then a letter that the shell itself owns. */
+export const SHELL_G_SEQUENCES: Readonly<Record<string, ShellAction>> = {
   h: 'go-home',
-  i: 'go-inbox',
-  w: 'go-my-work',
-  l: 'go-later',
-  m: 'go-messages',
-  t: 'go-tasks',
-  b: 'go-board',
-  p: 'go-pages',
-  d: 'go-decisions',
   s: 'go-settings',
   a: 'go-appearance',
+}
+
+/** G then a letter: the shell's and every registered module's. */
+export function gSequences(modules: readonly WebModule[] = WEB_MODULES): Record<string, ShortcutAction> {
+  const sequences: Record<string, ShortcutAction> = { ...SHELL_G_SEQUENCES }
+  for (const shortcut of moduleShortcuts(modules)) {
+    if (!(shortcut.key in sequences)) sequences[shortcut.key] = shortcut.action
+  }
+  return sequences
 }
 
 const SEQUENCE_TIMEOUT_MS = 1_200
@@ -72,7 +73,7 @@ function inComposer(target: EventTarget | null) {
  * (⌥↑, Esc, ⇧Esc) work in the message composer too, as in Slack. In any other field ⌥↑ and
  * ⌥↓ keep moving the cursor by paragraph. Call `press` for each keydown.
  */
-export function createShortcutMatcher(now: () => number = Date.now) {
+export function createShortcutMatcher(now: () => number = Date.now, sequences: Record<string, ShortcutAction> = gSequences()) {
   let pending: { key: string; at: number } | null = null
 
   return function press(event: KeyLike): ShortcutAction | null {
@@ -108,7 +109,7 @@ export function createShortcutMatcher(now: () => number = Date.now) {
     if (pending && now() - pending.at <= SEQUENCE_TIMEOUT_MS) {
       const first = pending.key
       pending = null
-      const match = first === 'g' ? G_SEQUENCES[key] : undefined
+      const match = first === 'g' ? sequences[key] : undefined
       if (match) return match
     }
     pending = null

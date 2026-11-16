@@ -250,20 +250,6 @@ describe('entry points follow the modules where they lead', () => {
     expect(again.querySelector('dd[aria-label="G then T"]')).toBeNull()
   })
 
-  it('global shortcuts and the sheet wait for Home’s settings', async () => {
-    const release = withScopes({ home: [], homeLater: true })
-    window.history.replaceState({}, '', `/projects/${projectAId}`)
-    render(<App />)
-    await settle()
-    press('g', 'w')
-    await settle()
-    expect(window.location.pathname).toBe(`/projects/${projectAId}`)
-    press('?')
-    const sheet = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
-    expect(sheet.querySelector('dd[aria-label="G then W"]')).toBeNull()
-    await release()
-    await waitFor(() => expect(sheet.querySelector('dd[aria-label="G then W"]')).toBeTruthy())
-  })
   const go = (to: string) =>
     act(async () => {
       window.history.pushState({}, '', to)

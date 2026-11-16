@@ -1,7 +1,9 @@
 //! K2.2: the operation kernel's pipeline, through a test-only operation
 //! (`echo_create`, over a scratch table) so it is checked before any real
-//! module's operations exist: a retried request id replays, a reused one
-//! with other input is refused, a caller outside the workspace finds
+//! module's operations exist: a retried request id replays (across any
+//! clock edge), a reused one with other input is refused, two ids with the
+//! same input both run, a write without an id runs once and says it isn't
+//! retry-safe (ruling R52), a caller outside the workspace finds
 //! nothing, a read-only credential can't write, and every answer matches the
 //! operation's envelope schema. `ops_edges` calls the same test operations
 //! through every edge.
@@ -13,7 +15,7 @@ use agent_workspace_server::{
     config::AppConfig,
     ops::{
         self, Caller, DispatchRequest, Edge, Idempotency, OpCall, OpError, OpKind, Operation,
-        Registry, Target, Targeted, envelope, refs::IdRef, registry::register_for_tests,
+        Registry, Target, Targeted, Unkeyed, envelope, refs::IdRef, registry::register_for_tests,
     },
     policy::{ActorKind, Permission},
     provider::SupervisorRegistry,
@@ -169,6 +171,7 @@ fn request(caller: Caller, request_id: Option<&str>) -> DispatchRequest {
         trace_id: Some("trace-1".to_owned()),
         workspace: None,
         request_id: request_id.map(str::to_owned),
+        unkeyed: Unkeyed::RunOnce,
         preview: false,
         renamed_from: None,
     }
@@ -271,29 +274,91 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     );
     matches_schema(&reused.body);
 
-    // Without a request id, an agent's identical retry is answered once.
-    let derived = ops::dispatch(
+    // A replay doesn't depend on the clock: the same id an hour later (the
+    // reservation aged past any bucket edge) still answers once.
+    sqlx::query(
+        "UPDATE idempotency_keys SET created_at = created_at - interval '1 hour' \
+         WHERE key = 'echo-1'",
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("age the reservation");
+    let later = ops::dispatch(
         &state,
-        request(person.clone(), None),
+        request(person.clone(), Some("echo-1")),
         "echo_create",
-        json!({ "space": space, "text": "derived" }),
+        input.clone(),
     )
     .await;
-    let retried = ops::dispatch(
+    assert_eq!(later.body["replayed"], true, "{:?}", later.body);
+    assert_eq!(later.body["value"]["id"], first.body["value"]["id"]);
+    assert_eq!(rows(&setup).await, 1);
+
+    // Two ids with the same input are two changes.
+    let second = ops::dispatch(
+        &state,
+        request(person.clone(), Some("echo-1b")),
+        "echo_create",
+        input.clone(),
+    )
+    .await;
+    assert!(second.is_ok(), "{:?}", second.body);
+    assert_eq!(second.body["replayed"], false);
+    assert_ne!(second.body["value"]["id"], first.body["value"]["id"]);
+    assert_eq!(rows(&setup).await, 2);
+
+    // Without a request id (MCP, v1), a write runs once and says a retry
+    // isn't safe: an identical second call is a second change, never a
+    // guessed replay.
+    let unkeyed = ops::dispatch(
         &state,
         request(person.clone(), None),
         "echo_create",
-        json!({ "space": space, "text": "derived" }),
+        json!({ "space": space, "text": "unkeyed" }),
+    )
+    .await;
+    let again_unkeyed = ops::dispatch(
+        &state,
+        request(person.clone(), None),
+        "echo_create",
+        json!({ "space": space, "text": "unkeyed" }),
     )
     .await;
     assert!(
-        derived.is_ok() && retried.is_ok(),
+        unkeyed.is_ok() && again_unkeyed.is_ok(),
         "{:?} {:?}",
-        derived.body,
-        retried.body
+        unkeyed.body,
+        again_unkeyed.body
     );
-    assert_eq!(retried.body["replayed"], true);
-    assert_eq!(rows(&setup).await, 2);
+    assert_eq!(unkeyed.body["replaySafe"], false, "{:?}", unkeyed.body);
+    assert_eq!(again_unkeyed.body["replayed"], false);
+    assert!(
+        unkeyed.body.get("requestId").is_none(),
+        "{:?}",
+        unkeyed.body
+    );
+    assert_eq!(first.body["replaySafe"], true, "{:?}", first.body);
+    matches_schema(&unkeyed.body);
+    assert_eq!(rows(&setup).await, 4);
+
+    // An edge that requires one (the web app, v2) refuses a write without.
+    let mut required = request(person.clone(), None);
+    required.unkeyed = Unkeyed::Refuse("Idempotency-Key");
+    let refused_unkeyed = ops::dispatch(
+        &state,
+        required,
+        "echo_create",
+        json!({ "space": space, "text": "nope" }),
+    )
+    .await;
+    assert_eq!(
+        refused_unkeyed.outcome(),
+        "invalid_request",
+        "{:?}",
+        refused_unkeyed.body
+    );
+    assert_eq!(refused_unkeyed.body["field"], "Idempotency-Key");
+    assert_eq!(rows(&setup).await, 4);
 
     // A bad input names its field.
     let invalid = ops::dispatch(
@@ -377,5 +442,5 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     // An unknown operation is not found.
     let unknown = ops::dispatch(&state, request(person, None), "no_such_op", json!({})).await;
     assert_eq!(unknown.outcome(), "not_found");
-    assert_eq!(rows(&setup).await, 2);
+    assert_eq!(rows(&setup).await, 4);
 }
