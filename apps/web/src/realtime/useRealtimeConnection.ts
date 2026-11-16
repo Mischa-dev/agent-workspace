@@ -2,19 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { origins } from '../api/client'
-import { isThingKey, isThingReferencesKey, queryKeys } from '../api/queryKeys'
 import { currentQueryScopeGeneration } from '../api/queryScope'
 import { coalesceDeltaBatch } from '../app/streaming'
 import {
   dropRemovedConversation,
   dropRemovedMessage,
-  invalidateConversation,
   refreshMemoryCaches,
   rememberMessageUpdate,
   rememberReactionUpdate,
   type MessageUpdates,
   type ReactionUpdates,
 } from '../conversations/liveMessages'
+import { cacheContext, RECONNECT, SELF_HANDLED, touchesFor, type Touch } from './handlers'
 import { createLiveStore, NO_STREAMS, type Streams } from './liveStore'
 import { modulesChanged } from './moduleSwitches'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
@@ -31,9 +30,8 @@ import {
 import { workItemChange } from './workItemEvent'
 
 const MAX_RECENT_EVENT_IDS = 512
+/** A burst of events refetches each touched query once. */
 const INVALIDATION_DELAY_MS = 40
-/** Thing kinds whose id is a conversation's (see modules/channels.json and messages.json). */
-const CONVERSATION_THINGS = new Set(['thread', 'channel', 'conversation'])
 const MAX_RECONNECT_DELAY_MS = 10_000
 // Phones suspend a page in the background, and its socket can die without a
 // close event. After this long away, reconnect on return rather than trust it.
@@ -98,88 +96,22 @@ export function useRealtimeConnection(): RealtimeContextValue {
       return true
     }
 
-    const invalidateProject = (projectId: string) => {
-      if (invalidationTimers.has(projectId)) return
-      const timer = window.setTimeout(() => {
-        invalidationTimers.delete(projectId)
-        void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
-        // DMs and groups live in a Project the client does not list, so
-        // refresh the Messages overview on any change.
-        void queryClient.invalidateQueries({ queryKey: queryKeys.direct })
-        // The inbox reads names and previews live, so any change can show there.
-        void queryClient.invalidateQueries({ queryKey: queryKeys.inbox })
-        void queryClient.invalidateQueries({
-          predicate: (query) =>
-            query.queryKey[0] === 'project' &&
-            query.queryKey[1] === projectId,
-        })
-      }, INVALIDATION_DELAY_MS)
-      invalidationTimers.set(projectId, timer)
-    }
+    const context = cacheContext(queryClient)
 
-    // A thread, channel or conversation embedded in a page as a card.
-    const invalidateConversationThing = (conversationId: string) => {
-      const key = `thing:${conversationId}`
-      if (invalidationTimers.has(key)) return
-      const timer = window.setTimeout(() => {
-        invalidationTimers.delete(key)
-        void queryClient.invalidateQueries({
-          predicate: (query) =>
-            [...CONVERSATION_THINGS].some((kind) => isThingKey(query.queryKey, kind, conversationId)) ||
-            // A message may have added or dropped a link: "Referenced in" lists refetch.
-            isThingReferencesKey(query.queryKey),
-        })
-      }, INVALIDATION_DELAY_MS)
-      invalidationTimers.set(key, timer)
-    }
-
-    // Reactions change one conversation's timelines and nothing else, so
-    // they refetch only those (including a DM thread shown in a side panel).
-    const invalidateReactions = (projectId: string, conversationId: string) => {
-      const key = `${projectId}:${conversationId}`
-      if (invalidationTimers.has(key)) return
-      const timer = window.setTimeout(() => {
-        invalidationTimers.delete(key)
-        invalidateConversation(queryClient, projectId, conversationId)
-      }, INVALIDATION_DELAY_MS)
-      invalidationTimers.set(key, timer)
-    }
-
-    // A changed task is patched into lists, boards and its detail in place.
-    // Everything else in the project that might show it converges by HTTP,
-    // leaving the patched work-item views alone.
-    const invalidateAroundWorkItem = (projectId: string, workItemId: string) => {
-      const key = `${projectId}:work-item:${workItemId}`
-      if (invalidationTimers.has(key)) return
-      const timer = window.setTimeout(() => {
-        invalidationTimers.delete(key)
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.workItemTimeline(projectId, workItemId),
-        })
-        void queryClient.invalidateQueries({
-          predicate: (query) =>
-            query.queryKey[0] === 'project' &&
-            query.queryKey[1] === projectId &&
-            query.queryKey[2] !== 'work-items',
-        })
-        // My work lists tasks across projects, so it isn't under the project key.
-        void queryClient.invalidateQueries({ queryKey: queryKeys.myWork })
-        // A task embedded in a page as a card, and "Referenced in" lists its
-        // description or comments may have changed.
-        void queryClient.invalidateQueries({
-          predicate: (query) => isThingKey(query.queryKey, 'task', workItemId) || isThingReferencesKey(query.queryKey),
-        })
-      }, INVALIDATION_DELAY_MS)
-      invalidationTimers.set(key, timer)
+    // Each touch refetches once per burst (handlers/index.ts).
+    const invalidate = (touches: readonly Touch[]) => {
+      for (const touch of touches) {
+        if (invalidationTimers.has(touch.id)) continue
+        const timer = window.setTimeout(() => {
+          invalidationTimers.delete(touch.id)
+          void queryClient.invalidateQueries(touch.filters)
+        }, INVALIDATION_DELAY_MS)
+        invalidationTimers.set(touch.id, timer)
+      }
     }
 
     const refetchAuthenticatedState = () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.direct })
-      void queryClient.invalidateQueries({
-        predicate: (query) => query.queryKey[0] === 'project',
-      })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.inbox })
+      for (const touch of RECONNECT) void queryClient.invalidateQueries(touch.filters)
     }
 
     const queueDelta = (
@@ -310,8 +242,6 @@ export function useRealtimeConnection(): RealtimeContextValue {
           const reactions = reactionChange(envelope)
           if (reactions) {
             setReactionUpdates((current) => rememberReactionUpdate(current, reactions))
-            invalidateReactions(envelope.projectId, reactions.conversationId)
-            return
           }
           const workItem = workItemChange(envelope)
           if (workItem) {
@@ -327,17 +257,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
                   : undefined,
               )
               .catch(() => undefined)
-            invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
-            return
           }
           if (modulesChanged(queryClient, envelope)) return
-          if (
-            envelope.type === 'whiteboard.updated' ||
-            envelope.type === 'page.updated' ||
-            envelope.type === 'page.discussion.updated' ||
-            envelope.type === 'collection.updated' ||
-            envelope.type === 'sheet.updated'
-          ) {
+          if (SELF_HANDLED.has(envelope.type)) {
             // An open board or page fetches what changed itself, and lists
             // (and a collection's records) refetch; that code loads with the
             // first such event.
@@ -360,8 +282,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
           } else if (envelope.conversationId && terminalRunId) {
             clearRunStreams(envelope.conversationId, terminalRunId)
           }
-          invalidateProject(envelope.projectId)
-          if (envelope.conversationId) invalidateConversationThing(envelope.conversationId)
+          invalidate(touchesFor(envelope, context))
           if (update?.removed) refreshMemoryCaches(queryClient)
           return
         }
@@ -376,9 +297,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
             delta.runId,
             delta.delta,
           )
-          return
         }
-        invalidateProject(legacy.projectId)
+        // Only stream text is sent outside the durable envelope; anything
+        // else there names nothing to refetch.
       })
       current.addEventListener('close', () => {
         // A socket replaced by reconnectNow closes quietly.

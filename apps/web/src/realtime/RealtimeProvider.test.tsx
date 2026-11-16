@@ -87,13 +87,14 @@ describe('authenticated realtime provider', () => {
     socket.message(event)
     socket.message(event)
 
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(5))
+    // One event, once: the message's own handler (realtime/handlers), nothing project-wide.
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(7))
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ['projects', 'rail'],
     })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] })
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['inbox'] })
-    // Thread boards are project queries, so the project refresh reaches them.
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['inbox'] })
+    // Nothing of the conversation is cached, so it may be a thread: thread boards refetch.
     expect(queryClient.getQueryState(boardKey)?.isInvalidated).toBe(true)
     // So is the conversation's card where a page embeds it.
     expect(queryClient.getQueryState(cardKey)?.isInvalidated).toBe(true)
