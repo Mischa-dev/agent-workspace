@@ -1406,7 +1406,8 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .fetch_one(&pool)
         .await
         .expect("external audit count"),
-        13
+        // K2.7: a sent message leaves an audit row (its replay doesn't).
+        14
     );
 
     drop(application);

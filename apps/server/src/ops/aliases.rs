@@ -52,7 +52,9 @@ fn enveloped(_canonical: &str, value: Value) -> Value {
     serde_json::json!({ "outcome": "ok", "value": value })
 }
 
-/// A run tool renamed when it became an operation, answering as it did.
+/// A tool renamed when it became an operation that already answered in
+/// the envelope (A1.3's run tools, K2.7's message tools), answering as it
+/// did.
 macro_rules! run_renamed {
     ($old:literal => $new:literal) => {
         Alias {
@@ -122,12 +124,13 @@ pub const ALIASES: &[Alias] = &[
     written!("environment_write", "environmentId" => "environment_create", "environment_update"),
     written!("bug_report_link_write", "linkId" => "bug_report_link_create", "bug_report_link_update"),
     renamed!("whiteboard_edit" => "whiteboard_update_elements"),
-    renamed!("message_edit" => "message_update"),
+    // K2.7: the message tools answered in the envelope already.
+    run_renamed!("message_edit" => "message_update"),
     renamed!("task_comment_edit" => "task_comment_update"),
     renamed!("task_criteria" => "task_criteria_update"),
     renamed!("task_watch" => "task_watch_set"),
     renamed!("task_link_pull_request" => "task_link"),
-    renamed!("mark_read" => "conversation_mark_read"),
+    run_renamed!("mark_read" => "conversation_mark_read"),
     renamed!("briefing" => "briefing_get"),
     renamed!("settings_set" => "setting_update"),
     renamed!("project_member_set" => "member_update"),

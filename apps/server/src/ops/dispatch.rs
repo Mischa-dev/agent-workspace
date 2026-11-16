@@ -252,16 +252,27 @@ async fn pipeline<O: Operation>(
         request.workspace,
     )
     .await?;
+    let module = module_here::<O>(&mut connection, &located).await?;
     let mode = state.config.access_mode("ops");
     let old = if mode == AccessMode::New {
         None
     } else {
-        Some(old_check::<O>(&mut connection, &request.caller, &target, &located, writes).await)
+        Some(
+            old_check::<O>(
+                &mut connection,
+                &request.caller,
+                &target,
+                &located,
+                writes,
+                module,
+            )
+            .await,
+        )
     };
     if mode != AccessMode::Old {
         let need = crate::access::Need::maybe(O::PERMISSION)
             .writing(writes)
-            .in_module(O::MODULE);
+            .in_module(module);
         let access_target = access_target(&target, &located);
         let new = crate::access::check(&mut connection, &request.caller, need, access_target)
             .await
@@ -317,6 +328,7 @@ async fn pipeline<O: Operation>(
         audit: None,
         replayed: false,
         keyed: false,
+        audited: false,
     };
     let mut reservation = None;
     if let Some(key) = key.as_ref()
@@ -379,6 +391,7 @@ async fn pipeline<O: Operation>(
     }
     if writes {
         let audit = call.audit.take();
+        let audited = call.audited;
         let tx = call.tx().await?;
         let (kind, id, metadata) = match audit {
             Some(facts) => (facts.kind, facts.id, facts.metadata),
@@ -387,7 +400,9 @@ async fn pipeline<O: Operation>(
                 (kind, id, serde_json::json!({}))
             }
         };
-        audit_row(tx, &ctx, kind, id, metadata).await?;
+        if !audited {
+            audit_row(tx, &ctx, kind, id, metadata).await?;
+        }
         if let Some(reservation) = reservation.as_ref() {
             idempotency::complete(tx, reservation, answer.status, &answer.body).await?;
         }
@@ -420,6 +435,31 @@ async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid])
     }
 }
 
+/// The module that must be on where an operation acts: its own, except
+/// that a conversation's follows the space it is in (registered as
+/// conversation filters: Messages in the direct space, Channels in a
+/// project), as the older tools decide.
+async fn module_here<O: Operation>(
+    connection: &mut sqlx::PgConnection,
+    located: &target::Located,
+) -> Result<&'static str, OpError> {
+    let registry = crate::modules::registry::Registry::global();
+    let Some(space) = located.space_id else {
+        return Ok(O::MODULE);
+    };
+    if !registry.governs_conversations(O::MODULE) {
+        return Ok(O::MODULE);
+    }
+    let direct =
+        sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
+            .bind(space)
+            .fetch_optional(&mut *connection)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error.into()))?
+            .unwrap_or(false);
+    Ok(registry.conversation_module(direct).unwrap_or(O::MODULE))
+}
+
 /// Today's checks, which decide while the `ops` area is in compare mode:
 /// the module gate, then the access shim.
 async fn old_check<O: Operation>(
@@ -428,8 +468,9 @@ async fn old_check<O: Operation>(
     target: &Target,
     located: &target::Located,
     writes: bool,
+    module: &'static str,
 ) -> Result<(), OpError> {
-    module_gate::<O>(connection, caller, target, located).await?;
+    module_gate(connection, caller, target, located, module).await?;
     access_shim::check(
         connection,
         caller,
@@ -510,13 +551,14 @@ fn denied_error<O: Operation>(
 }
 
 /// The operation's module must be on where it acts.
-async fn module_gate<O: Operation>(
+async fn module_gate(
     connection: &mut sqlx::PgConnection,
     caller: &Caller,
     target: &Target,
     located: &target::Located,
+    module: &'static str,
 ) -> Result<(), OpError> {
-    let Some(manifest) = crate::modules::manifest::get(O::MODULE) else {
+    let Some(manifest) = crate::modules::manifest::get(module) else {
         return Ok(());
     };
     if !manifest.switchable || matches!(target, Target::Account) {
@@ -531,7 +573,7 @@ async fn module_gate<O: Operation>(
                 .await?,
         ),
     };
-    if modules.is_some_and(|modules| !modules.contains(O::MODULE)) {
+    if modules.is_some_and(|modules| !modules.contains(module)) {
         return Err(OpError::Denied {
             reason: DenyReason::ModuleOff {
                 module: manifest.id.clone(),

@@ -221,39 +221,71 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Moves a schema's `$defs` into `components.schemas` under the tool's name,
-/// and points its references there.
+/// Moves a schema's `$defs` into `components.schemas` and points its
+/// references there. A definition keeps its own name when every tool that
+/// has one defines it the same way (shared message content, a thread's
+/// summary), so it is written once; a tool whose copy differs gets its own,
+/// under the tool's name.
 fn hoist(tool: &str, schema: &Map<String, Value>, components: &mut Map<String, Value>) -> Value {
     let mut schema = schema.clone();
     schema.remove("$schema");
     let prefix = pascal(tool);
-    if let Some(Value::Object(definitions)) = schema.remove("$defs") {
-        for (name, definition) in definitions {
-            let mut definition = definition;
-            rewrite_refs(&mut definition, &prefix);
-            components.insert(format!("{prefix}{name}"), definition);
+    let definitions = match schema.remove("$defs") {
+        Some(Value::Object(definitions)) => definitions,
+        _ => Map::new(),
+    };
+    let mut names = definitions
+        .keys()
+        .map(|name| (name.clone(), name.clone()))
+        .collect::<BTreeMap<_, _>>();
+    // A definition that must take the tool's name changes the ones that
+    // refer to it, so decide until nothing moves.
+    loop {
+        let mut moved = false;
+        for (name, definition) in &definitions {
+            if names.get(name) != Some(name) {
+                continue;
+            }
+            let mut written = definition.clone();
+            rewrite_refs(&mut written, &names);
+            if components
+                .get(name)
+                .is_some_and(|existing| *existing != written)
+            {
+                names.insert(name.clone(), format!("{prefix}{name}"));
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
         }
     }
+    for (name, mut definition) in definitions {
+        rewrite_refs(&mut definition, &names);
+        let key = names.get(&name).cloned().unwrap_or(name);
+        components.insert(key, definition);
+    }
     let mut value = Value::Object(schema);
-    rewrite_refs(&mut value, &prefix);
+    rewrite_refs(&mut value, &names);
     value
 }
 
-fn rewrite_refs(value: &mut Value, prefix: &str) {
+fn rewrite_refs(value: &mut Value, names: &BTreeMap<String, String>) {
     match value {
         Value::Object(object) => {
             if let Some(Value::String(reference)) = object.get_mut("$ref")
                 && let Some(name) = reference.strip_prefix("#/$defs/")
             {
-                *reference = format!("#/components/schemas/{prefix}{name}");
+                let key = names.get(name).cloned().unwrap_or_else(|| name.to_owned());
+                *reference = format!("#/components/schemas/{key}");
             }
             for child in object.values_mut() {
-                rewrite_refs(child, prefix);
+                rewrite_refs(child, names);
             }
         }
         Value::Array(items) => {
             for child in items {
-                rewrite_refs(child, prefix);
+                rewrite_refs(child, names);
             }
         }
         _ => {}
@@ -293,6 +325,25 @@ pub(crate) fn document() -> Value {
     let mut tags = BTreeMap::new();
     let mut results: BTreeMap<String, String> = BTreeMap::new();
     let mut refusals = Map::new();
+    // First, so no tool's own definition takes its name.
+    components.insert(
+        "Error".to_owned(),
+        json!({
+            "type": "object",
+            "required": ["error"],
+            "properties": {
+                "error": {
+                    "type": "object",
+                    "required": ["code", "message"],
+                    "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" },
+                        "retryAfterSeconds": { "type": "integer" },
+                    },
+                },
+            },
+        }),
+    );
     for tool in tools {
         let name = tool.name.to_string();
         let tag = tag_for(&name);
@@ -380,24 +431,6 @@ pub(crate) fn document() -> Value {
             }),
         );
     }
-    components.insert(
-        "Error".to_owned(),
-        json!({
-            "type": "object",
-            "required": ["error"],
-            "properties": {
-                "error": {
-                    "type": "object",
-                    "required": ["code", "message"],
-                    "properties": {
-                        "code": { "type": "string" },
-                        "message": { "type": "string" },
-                        "retryAfterSeconds": { "type": "integer" },
-                    },
-                },
-            },
-        }),
-    );
     json!({
         "openapi": "3.1.0",
         "info": {

@@ -107,6 +107,9 @@ pub struct OpCall<'a> {
     /// An `Idempotency::Command` operation made this call retry-safe
     /// (`key_honoured`).
     pub(super) keyed: bool,
+    /// The command wrote the write's audit row itself (K2.7's message
+    /// commands keep theirs), so dispatch adds none.
+    pub(super) audited: bool,
 }
 
 /// What the audit row says the write was about, when not the target.
@@ -145,6 +148,12 @@ impl OpCall<'_> {
     /// `replaySafe: true` (ruling R52).
     pub fn key_honoured(&mut self) {
         self.keyed = true;
+    }
+
+    /// The command wrote this write's audit row itself (or changed
+    /// nothing), so dispatch writes none: one row per write.
+    pub fn audited_by_command(&mut self) {
+        self.audited = true;
     }
 
     /// The account the call acts as.

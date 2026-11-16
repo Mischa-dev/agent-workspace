@@ -91,6 +91,7 @@ mod launch_tools;
 mod layout_preset_tools;
 mod memory_tools;
 mod message_edits;
+pub(crate) mod messaging;
 mod model_catalog_tools;
 mod module_tools;
 mod notifications;
@@ -825,44 +826,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Send a message to a channel, thread, DM or group. Write plain text; @handles of people in the project become mentions and notify them. To answer one message there, pass replyToMessageId: it shows quoted above yours. Pass a clientRequestId so a retry never sends twice.",
-        annotations(
-            title = "Send message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_send(
-        &self,
-        Parameters(arguments): Parameters<talk::MessageSendArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<talk::SentMessage>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(talk::message_send(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Forward a message you can see into another channel, thread, DM or group you can post in. It shows there quoted, with who wrote it and where, and a link back that works for whoever can see the original. Add an optional plain-text comment. Pass a clientRequestId so a retry never sends twice.",
-        annotations(
-            title = "Forward message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_forward(
-        &self,
-        Parameters(arguments): Parameters<talk::MessageForwardArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<talk::SentMessage>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(talk::message_forward(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Upload a file (text or base64, up to 4 MiB) to a conversation, then send it by passing the returned fileId in message_send's or reply_send's attachmentIds; or keep it on a task (taskId), such as a run's output, report or screenshot.",
         annotations(
             title = "Upload file",
@@ -934,82 +897,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Edit your own message. The old text is kept as a revision that everyone in the conversation can see, and the message shows (edited). People and agents you newly @mention are notified; mentions you take out aren't un-notified. To take down a secret, use message_delete instead: editing keeps the old text in the history.",
-        annotations(
-            title = "Edit message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_edit(
-        &self,
-        Parameters(arguments): Parameters<message_edits::MessageEditArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<message_edits::EditedMessage>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(message_edits::message_edit(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Remove a message for everyone, leaving \"message removed\" in its place. Its text and every earlier version are deleted, it is unpinned, and agents' pending reply requests about it are cancelled. You can remove your own messages; project owners and admins (people, not agents) can remove anyone's, for example a leaked token. This can't be undone. Rotate any secret it held.",
-        annotations(
-            title = "Remove message",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_delete(
-        &self,
-        Parameters(arguments): Parameters<message_edits::MessageDeleteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<message_edits::RemovedMessage>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(message_edits::message_delete(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Hide the link previews under a message, for everyone, as the remove button on a preview does: the one for url, or all of them. Your own messages, or anyone's if you own or administer the project. The message and its links stay.",
-        annotations(
-            title = "Hide link previews",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_preview_hide(
-        &self,
-        Parameters(arguments): Parameters<message_edits::MessagePreviewHideArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<message_edits::HiddenPreviews>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(message_edits::message_preview_hide(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Every version of a message, oldest first: who wrote each one, when, and through which app. Versions of a removed message show as redacted.",
-        annotations(
-            title = "Message history",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_history(
-        &self,
-        Parameters(arguments): Parameters<message_edits::MessageHistoryArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<message_edits::MessageHistoryValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(message_edits::message_history(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Add or remove people and agents in a group (pass the group, or a thread in it). Whoever you add can read everything said in the group so far. Remove your own @handle to leave. People can add and remove anyone; agents can only leave. DMs never change; channels are open to everyone in the project.",
         annotations(
             title = "Change group members",
@@ -1045,25 +932,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<groups::ContinueValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(groups::conversation_continue(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Mark a conversation read, up to its newest message or a given sequence, so it stops showing as unread in your briefing. To come back to something later, pass unread: true: the conversation is unread again from fromMessageId (default: its newest message) onward. Marking unread never marks anything read.",
-        annotations(
-            title = "Mark read",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn mark_read(
-        &self,
-        Parameters(arguments): Parameters<talk::MarkReadArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<talk::ReadMark>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(talk::mark_read(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -1219,44 +1087,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Schedule a message to send later (sendAt, RFC 3339, up to a year ahead), as you. When it sends, it's checked as if you sent it then: you must still be able to post there, and its mentions and reply rules apply then. Change or cancel it with scheduled_message_update; list them with later_list view scheduled.",
-        annotations(
-            title = "Schedule message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn message_schedule(
-        &self,
-        Parameters(arguments): Parameters<later_tools::MessageScheduleArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<later_tools::ScheduledValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(later_tools::message_schedule(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Change one of your scheduled messages: new text or sendAt, sendNow: true to send it now, or cancel: true not to send it. A failed one is scheduled again by giving it a new sendAt.",
-        annotations(
-            title = "Update scheduled message",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn scheduled_message_update(
-        &self,
-        Parameters(arguments): Parameters<later_tools::ScheduledUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<later_tools::ScheduledUpdateValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(later_tools::scheduled_message_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "List the agents you share a project with: handle, status, when they last checked in, the projects you share, what they're working on (claimed tasks, and reply requests in conversations you can see). People who manage an agent also see how it connects, whether it gets wakeups, its access, whether it can ask for runs or answer approvals, and its last error. Never shows tokens or other secrets; agents are added and changed in the web app.",
         annotations(title = "List agents", read_only_hint = true, open_world_hint = false)
     )]
@@ -1375,25 +1205,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<channels::PinValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(channels::pin_set(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "React to a message with an emoji, or take your reaction away (reacted: false). Use 👀 when you start on something and ✅ when it's done, instead of posting a message that only acknowledges. Emoji: 👍 👎 ❤️ 😄 🎉 😕 🚀 👀 ✅ ❌ 🙏 🤔, or their names, such as eyes or check. Doing it twice changes nothing. Reactions notify nobody and don't answer reply requests.",
-        annotations(
-            title = "React to message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_react(
-        &self,
-        Parameters(arguments): Parameters<reactions::MessageReactArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<reactions::MessageReactionValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(reactions::message_react(&self.state, principal, arguments).await)
     }
 
     // -- Replies (agents) ----------------------------------------------------

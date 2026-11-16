@@ -582,12 +582,12 @@ mod tests {
         (
             Post,
             "/api/v1/conversations/{id}/mark-seen",
-            Tool("mark_read"),
+            Tool("conversation_mark_read"),
         ),
         (
             Post,
             "/api/v1/conversations/{id}/mark-unread",
-            Tool("mark_read"),
+            Tool("conversation_mark_read"),
         ),
         (
             Post,
@@ -727,7 +727,7 @@ mod tests {
         (
             Patch,
             "/api/v1/conversations/{id}/messages/{message_id}",
-            Tool("message_edit"),
+            Tool("message_update"),
         ),
         (
             Delete,

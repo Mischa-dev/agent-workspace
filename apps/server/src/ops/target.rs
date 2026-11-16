@@ -77,14 +77,37 @@ const KINDS: &[(&str, &str)] = &[
         "conversation",
         "SELECT project.organization_id, project.id FROM conversations conversation \
          JOIN projects project ON project.id = conversation.project_id \
-         WHERE conversation.id = $1 AND conversation_visible_to(conversation.id, $2)",
+         WHERE conversation.id = $1 AND conversation_visible_to(conversation.id, $2) \
+           AND EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
     ),
     (
         "message",
         "SELECT project.organization_id, project.id FROM messages message \
          JOIN projects project ON project.id = message.project_id \
          WHERE message.id = $1 AND message.removed_at IS NULL \
-           AND conversation_visible_to(message.conversation_id, $2)",
+           AND conversation_visible_to(message.conversation_id, $2) \
+           AND EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
+    ),
+    // K2.7: a message found after it was removed too (its history, a
+    // removal retried); still only in a conversation the caller may see.
+    (
+        "message_record",
+        "SELECT project.organization_id, project.id FROM messages message \
+         JOIN projects project ON project.id = message.project_id \
+         WHERE message.id = $1 AND conversation_visible_to(message.conversation_id, $2) \
+           AND EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
+    ),
+    // K2.7: a scheduled message is found only by its author.
+    (
+        "scheduled_message",
+        "SELECT organization_id, project_id FROM scheduled_messages \
+         WHERE id = $1 AND author_actor_id = $2",
     ),
     (
         "decision",

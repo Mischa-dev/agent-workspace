@@ -53,6 +53,9 @@ pub enum DenyReason {
     Delegation,
     AccountPaused,
     HostRevoked,
+    /// A rule of the thing itself, whatever the role: only the author
+    /// edits a message, for one.
+    Rule,
 }
 
 #[derive(Clone, Debug)]
@@ -128,7 +131,9 @@ impl OpError {
             Self::Denied { reason, .. } => match reason {
                 DenyReason::ModuleOff { .. } => RetryCategory::Module,
                 DenyReason::ReadOnlyCredential => RetryCategory::Reauthenticate,
-                DenyReason::AccountPaused | DenyReason::HostRevoked => RetryCategory::DoNotRetry,
+                DenyReason::AccountPaused | DenyReason::HostRevoked | DenyReason::Rule => {
+                    RetryCategory::DoNotRetry
+                }
                 DenyReason::Role { .. } | DenyReason::Delegation => RetryCategory::AskForAccess,
             },
             Self::Conflict { reason, .. } => match reason {
@@ -208,6 +213,7 @@ impl OpError {
                     DenyReason::Delegation => "delegation",
                     DenyReason::AccountPaused => "account_paused",
                     DenyReason::HostRevoked => "host_revoked",
+                    DenyReason::Rule => "rule",
                 };
                 body["code"] = code.into();
             }

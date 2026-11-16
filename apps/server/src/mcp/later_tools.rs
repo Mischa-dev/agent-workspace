@@ -59,7 +59,7 @@ pub(super) struct LaterLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ScheduledLine {
+pub struct ScheduledLine {
     pub id: String,
     pub conversation_id: String,
     pub place: String,
@@ -480,7 +480,7 @@ pub(super) struct MessageScheduleArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ScheduledValue {
+pub struct ScheduledValue {
     pub scheduled: ScheduledLine,
     /// True when this answers a retry: the message the first call scheduled.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -605,7 +605,7 @@ pub(super) struct ScheduledUpdateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ScheduledUpdateValue {
+pub struct ScheduledUpdateValue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduled: Option<ScheduledLine>,
     pub canceled: bool,

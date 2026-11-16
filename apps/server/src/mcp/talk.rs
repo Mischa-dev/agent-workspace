@@ -331,7 +331,7 @@ pub(super) struct ReplyQuote {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ThreadRef {
+pub struct ThreadRef {
     pub id: String,
     pub name: String,
     pub status: String,
@@ -441,7 +441,7 @@ pub(super) struct ConversationReadValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SentMessage {
+pub struct SentMessage {
     pub conversation_id: String,
     pub message_id: String,
     pub sequence: i64,
@@ -463,7 +463,7 @@ pub(super) struct StartedConversation {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ReadMark {
+pub struct ReadMark {
     pub conversation_id: String,
     pub last_read_sequence: i64,
     /// Messages after lastReadSequence.
