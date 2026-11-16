@@ -67,7 +67,7 @@ fn collection_url(state: &AppState, project_id: Uuid, collection_id: Uuid) -> St
 /// AWD-75: whether Collections is off in the project, for its workspace or
 /// the caller's role there.
 async fn module_off(state: &AppState, principal: &McpPrincipal) -> Result<bool, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let projects = [principal.project_id];
     Ok(
         crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &projects)
@@ -103,7 +103,7 @@ async fn read_access(state: &AppState, principal: &McpPrincipal) -> Result<Readi
     let project_key =
         sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
             .bind(principal.project_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
     Ok(Reading::Ok { project_key })
 }
@@ -132,7 +132,7 @@ async fn begin_write<T>(
     if !can_write_in(state, principal, project_id, action).await? {
         return Ok(Err(ToolResult::denied(denied)));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     mark_via(&mut transaction, principal).await?;
     let Some(membership) =
         lock_membership(&mut transaction, principal.actor_id, project_id).await?
@@ -247,9 +247,10 @@ pub(super) async fn collection_list(
             return Ok(ToolResult::module_off("collection_list", "Collections"));
         }
         {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             collections::tasks::ensure(&mut connection, principal.project_id, principal.actor_id)
                 .await?;
+            connection.commit().await?;
         }
         let listed = collections::list(
             &state.pool,
@@ -261,7 +262,7 @@ pub(super) async fn collection_list(
         let project_open =
             sqlx::query_scalar::<_, bool>("SELECT archived_at IS NULL FROM projects WHERE id = $1")
                 .bind(principal.project_id)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?;
         let can_build = project_open
             && can_write_in(
@@ -354,7 +355,7 @@ pub(super) async fn collection_describe(
         if module_off(state, principal).await? {
             return Ok(ToolResult::module_off("collection_describe", "Collections"));
         }
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let collection =
             match find_collection(&mut connection, project_id, &arguments.collection).await? {
                 Ok(collection) => collection,
@@ -384,7 +385,7 @@ pub(super) async fn collection_describe(
             "SELECT archived_at IS NULL FROM projects WHERE id = $1",
         )
         .bind(project_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         let can_edit_records = project_open
             && !collection.archived
@@ -997,7 +998,7 @@ pub(super) async fn record_query(
         if module_off(state, principal).await? {
             return Ok(ToolResult::module_off("record_query", "Collections"));
         }
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let collection =
             match find_collection(&mut connection, project_id, &arguments.collection).await? {
                 Ok(collection) => collection,

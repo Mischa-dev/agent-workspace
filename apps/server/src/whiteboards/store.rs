@@ -483,11 +483,8 @@ pub async fn scene(
     whiteboard_id: Uuid,
     since: Option<i64>,
 ) -> Result<SceneView, AppError> {
-    let mut transaction = pool.begin().await?;
     // One snapshot, so the counter and the elements agree.
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        .execute(&mut *transaction)
-        .await?;
+    let mut transaction = crate::db::scoped_snapshot(pool).await?;
     let scene_seq = sqlx::query_scalar::<_, i64>("SELECT scene_seq FROM whiteboards WHERE id = $1")
         .bind(whiteboard_id)
         .fetch_optional(&mut *transaction)

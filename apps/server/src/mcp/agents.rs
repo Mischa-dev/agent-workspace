@@ -213,7 +213,7 @@ pub(super) async fn agent_list(
         // Messages space too, as its workspace says), before the limit; their
         // memberships below are shown from those projects only.
         let projects = {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &projects)
                 .await?
                 .keep(&projects, |set, _| set.contains("agents"))
@@ -264,7 +264,7 @@ pub(super) async fn agent_list(
         .bind(&query)
         .bind(include_disabled)
         .bind(limit)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         if agents.is_empty() {
             return Ok(ToolResult::ok(AgentListValue { agents: Vec::new() }));
@@ -277,7 +277,7 @@ pub(super) async fn agent_list(
         )
         .bind(principal.actor_id)
         .bind(&projects)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let sees_roles = my_roles
             .into_iter()
@@ -308,7 +308,7 @@ pub(super) async fn agent_list(
         )
         .bind(&actor_ids)
         .bind(&projects)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let mut shared: HashMap<Uuid, Vec<AgentProject>> = HashMap::new();
         for row in memberships {
@@ -341,7 +341,7 @@ pub(super) async fn agent_list(
         )
         .bind(&actor_ids)
         .bind(&task_projects)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let mut claims: HashMap<Uuid, Vec<AgentClaim>> = HashMap::new();
         for row in claim_rows {
@@ -379,7 +379,7 @@ pub(super) async fn agent_list(
         .bind(&actor_ids)
         .bind(&projects)
         .bind(principal.actor_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?
         .into_iter()
         .map(|row| {
@@ -402,7 +402,7 @@ pub(super) async fn agent_list(
             .map(|agent| agent.actor_id)
             .collect::<Vec<_>>();
         let managed = {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             crate::access::manage::manageable(&mut connection, &principal.caller(), &candidates)
                 .await?
                 .into_iter()
@@ -489,7 +489,7 @@ async fn managed_projects(
     .bind(principal.actor_id)
     .bind(&homes)
     .bind(&reach)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(roles
         .into_iter()
@@ -532,7 +532,7 @@ async fn connection_methods(
         "#,
     )
     .bind(connections)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     for connection in tokens {
         methods
@@ -551,7 +551,7 @@ async fn connection_methods(
         "#,
     )
     .bind(connections)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     for (connection, name) in apps {
         let entry = methods.entry(connection).or_default();
@@ -566,7 +566,7 @@ async fn connection_methods(
         "#,
     )
     .bind(connections)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     for connection in workos {
         methods

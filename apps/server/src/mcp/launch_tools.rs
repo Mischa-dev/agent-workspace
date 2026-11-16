@@ -513,14 +513,14 @@ pub(super) async fn session_bind(
         .bind(conversation_id)
         .bind(principal.actor_id)
         .bind(principal.external_agent_connection_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         else {
             return Ok(ToolResult::not_found(
                 "A conversation you were asked to reply in",
             ));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let session_id = crate::agent_sessions::bind(
             &mut transaction,
             crate::agent_sessions::Binding {
