@@ -389,3 +389,138 @@ async fn things_have_discussions_as_visible_as_they_are() {
         "Lena commented before, so Rook's answer tells her: {inbox}"
     );
 }
+
+async fn mentioned_events(pool: &sqlx::PgPool, connection: Uuid) -> Vec<(String, Uuid, String)> {
+    sqlx::query_as::<_, (String, Uuid, String)>(
+        r#"
+        SELECT resource_kind, resource_id, canonical_path
+        FROM external_agent_events
+        WHERE connection_id = $1 AND kind = 'comment.mentioned'
+        ORDER BY sequence
+        "#,
+    )
+    .bind(connection)
+    .fetch_all(pool)
+    .await
+    .expect("events")
+}
+
+/// C1.1: a task or page comment that mentions a connected agent enqueues one
+/// `comment.mentioned` event for it, with a link to the comment and no
+/// words; an agent not in the project, and the author, get none. A task
+/// comment is one path for the web and agent tools.
+#[tokio::test]
+async fn comments_that_mention_agents_tell_them() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .agent("kite", "member")
+        .build("c1_1_comment_mentioned")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let work = world.project("WORK").to_owned();
+    let lena = &world.people["lena"];
+    let rook = &world.agents["rook"];
+    let kite = &world.agents["kite"];
+    // Kite is in the workspace but not in WORK.
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1::uuid AND actor_id = $2",
+    )
+    .bind(&work)
+    .bind(kite.actor)
+    .execute(pool)
+    .await
+    .expect("leave WORK");
+
+    let (status, task) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"title": "Ship it"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{task}");
+    let task_id = task["id"]
+        .as_str()
+        .or_else(|| task["workItem"]["id"].as_str())
+        .expect("task id")
+        .to_owned();
+    let (status, posted) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{task_id}/comments"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"content": mention(rook.actor, "can you look, ")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{posted}");
+    let comment_id =
+        Uuid::parse_str(posted["comment"]["id"].as_str().expect("comment")).expect("id");
+    let events = mentioned_events(pool, rook.connection).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].0, "work_item_comment");
+    assert_eq!(events[0].1, comment_id);
+    assert_eq!(
+        events[0].2,
+        format!("/projects/{work}/work-items/{task_id}#comment-{comment_id}")
+    );
+
+    // An agent's own comment naming itself and an agent outside the project
+    // tells neither.
+    let own = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "task_comment",
+        json!({"taskId": task_id, "text": "@rook and @kite on it", "clientRequestId": "rook-1"}),
+    )
+    .await;
+    assert_eq!(own["outcome"], "applied", "{own}");
+    assert_eq!(mentioned_events(pool, rook.connection).await.len(), 1);
+    assert!(mentioned_events(pool, kite.connection).await.is_empty());
+
+    // A page comment names agents by handle.
+    let (status, page) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"title": "Plan", "body": "The plan."}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{page}");
+    let page_id = page["id"].as_str().expect("page").to_owned();
+    let (status, created) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/pages/{page_id}/comments"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"body": "@Rook and @kite, thoughts?"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{created}");
+    let page_comment = created["id"].as_str().expect("comment").to_owned();
+    let events = mentioned_events(pool, rook.connection).await;
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[1].0, "page_comment");
+    assert_eq!(events[1].1.to_string(), page_comment);
+    assert_eq!(
+        events[1].2,
+        format!("/projects/{work}/pages/{page_id}#comment-{page_comment}")
+    );
+    assert!(mentioned_events(pool, kite.connection).await.is_empty());
+}

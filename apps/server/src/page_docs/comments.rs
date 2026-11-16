@@ -457,8 +457,59 @@ pub async fn create(
         });
         notify(transaction, &notification).await?;
     }
+    // C1.1: an agent the comment names by `@handle` hears about it.
+    let handles = mentioned_handles(&body);
+    if !handles.is_empty() {
+        let mentioned = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT actor_id FROM project_memberships
+            WHERE project_id = $1 AND enabled AND lower(handle) = ANY($2)
+            "#,
+        )
+        .bind(page.project_id)
+        .bind(&handles)
+        .fetch_all(&mut **transaction)
+        .await?;
+        crate::external_events::enqueue_comment_mentioned(
+            transaction,
+            crate::external_events::MentioningComment {
+                project_id: page.project_id,
+                thing_kind: "page",
+                thing_id: page_id,
+                comment_kind: "page_comment",
+                comment_id: id,
+                anchor: thread_id,
+                author_actor_id: writer.actor_id,
+            },
+            &mentioned,
+        )
+        .await?;
+    }
     discussion_updated(transaction, page.project_id, page_id).await?;
     Ok(Ok((id, thread_id)))
+}
+
+/// The `@handles` a page comment's words name, lowercased: an `@` that
+/// starts a word, then letters, digits, `_` or `-` (the rule agents'
+/// messages use). At most 32.
+fn mentioned_handles(body: &str) -> Vec<String> {
+    let is_handle = |value: char| value.is_ascii_alphanumeric() || value == '_' || value == '-';
+    let mut handles = Vec::new();
+    let mut previous: Option<char> = None;
+    for (offset, character) in body.char_indices() {
+        if character == '@' && !previous.is_some_and(is_handle) && handles.len() < 32 {
+            let handle = body[offset + 1..]
+                .chars()
+                .take_while(|value| is_handle(*value))
+                .collect::<String>()
+                .to_lowercase();
+            if !handle.is_empty() && !handles.contains(&handle) {
+                handles.push(handle);
+            }
+        }
+        previous = Some(character);
+    }
+    handles
 }
 
 /// A change to a comment: new words (the author's own), resolve or reopen
@@ -563,6 +614,16 @@ mod tests {
             block.id = Some(format!("block{index}"));
         }
         blocks
+    }
+
+    #[test]
+    fn mentions_are_handles_that_start_a_word() {
+        assert_eq!(
+            mentioned_handles(
+                "@Rook see this, mail me@example.com, @rook again, @ alone, (@mara-2)"
+            ),
+            vec!["rook".to_owned(), "mara-2".to_owned()]
+        );
     }
 
     #[test]
