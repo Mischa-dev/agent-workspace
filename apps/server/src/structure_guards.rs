@@ -522,8 +522,11 @@ fn exempt(rule: &str, path: &str) -> bool {
                 || path.starts_with("ai/providers/")
                 || path == "harnesses.rs"
         }
-        // The run service (A1) is where run SQL belongs (rule 3).
-        "agent_runs_sql" | "active_run_states_literal" => path.starts_with("runs/"),
+        // The run service (A1) is where run SQL belongs (rule 3), and the
+        // built-in host keeps its own detail rows until it leaves (A1.17).
+        "agent_runs_sql" | "active_run_states_literal" => {
+            path.starts_with("runs/") || path.starts_with("hosts/builtin/")
+        }
         _ => false,
     }
 }

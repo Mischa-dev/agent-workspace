@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    domain::{RunState, allocate_conversation_sequence, transition_run},
+    domain::{RunState, allocate_conversation_sequence},
     error::AppError,
     git_runtime::worktree_is_dirty,
     message_content::{MessageContentError, PlainTextMessageBuffer, ValidatedMessageContent},
@@ -379,7 +379,7 @@ pub async fn start_run(
             "provider turn binding is no longer available",
         ));
     }
-    transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
@@ -439,7 +439,7 @@ fn spawn_drive(
                 %run_id,
                 "agent turn failed"
             );
-            let _ = fail_run(
+            fail_run_reliably(
                 &background_state,
                 project_id,
                 run_id,
@@ -504,7 +504,7 @@ pub(crate) async fn follow_recovered_run(
         return Ok(false);
     }
     let mut transaction = state.pool.begin().await?;
-    transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
@@ -716,7 +716,7 @@ pub(crate) async fn complete_recovered_run(
     .fetch_one(&state.pool)
     .await?;
     let mut transaction = state.pool.begin().await?;
-    transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
@@ -754,6 +754,13 @@ async fn drive_turn(
 ) -> Result<(), AppError> {
     let mut message = PlainTextMessageBuffer::default();
     let message_stream_id = Uuid::now_v7();
+    // A1.9: this process drives the run while it holds the run's lease.
+    if !crate::hosts::builtin::lease::take(&state.pool, run_id).await? {
+        tracing::warn!(%run_id, "another process drives this run; not driving it here");
+        provider.shutdown().await;
+        return Ok(());
+    }
+    let mut renewal = crate::hosts::builtin::lease::Renewal::default();
     loop {
         tokio::select! {
             event = provider.next_event() => {
@@ -774,6 +781,7 @@ async fn drive_turn(
                     HarnessEvent::Request(request) => handle_provider_request(
                         &state,
                         &mut provider,
+                        &mut renewal,
                         project_id,
                         run_id,
                         conversation_id,
@@ -866,6 +874,12 @@ async fn drive_turn(
                     provider.shutdown().await;
                     return Ok(());
                 }
+                if !renewal.keep(&state.pool, run_id).await? {
+                    // Its lease lapsed and another process recovered it.
+                    tracing::warn!(%run_id, "lost the run's lease; stopped driving it");
+                    provider.shutdown().await;
+                    return Ok(());
+                }
                 if provider.is_stopping() {
                     provider.shutdown().await;
                     fail_run(
@@ -899,6 +913,7 @@ async fn drive_turn(
 async fn handle_provider_request(
     state: &AppState,
     provider: &mut Box<dyn HarnessSession>,
+    renewal: &mut crate::hosts::builtin::lease::Renewal,
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
@@ -954,7 +969,8 @@ async fn handle_provider_request(
                 approval_id,
             )
             .await?;
-            transition_run(&mut transaction, run_id, RunState::Blocked, None).await?;
+            crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Blocked, None)
+                .await?;
             let event_id = insert_event(
                 &mut transaction,
                 run_id,
@@ -992,6 +1008,13 @@ async fn handle_provider_request(
     loop {
         sleep(Duration::from_millis(300)).await;
         if state.supervisors.is_shutting_down() {
+            let _ = provider.answer(request, HarnessAnswer::Deny).await;
+            provider.shutdown().await;
+            return Ok(());
+        }
+        // A run waiting for an answer is still driven here: keep its lease.
+        if !renewal.keep(&state.pool, run_id).await? {
+            tracing::warn!(%run_id, "lost the run's lease while it waited; stopped driving it");
             let _ = provider.answer(request, HarnessAnswer::Deny).await;
             provider.shutdown().await;
             return Ok(());
@@ -1204,7 +1227,7 @@ async fn complete_run(
             .await?;
         }
     }
-    transition_run(&mut transaction, run_id, RunState::Completed, None).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Completed, None).await?;
     sqlx::query(
         r#"
         UPDATE repository_workspaces rw
@@ -1409,6 +1432,47 @@ async fn insert_entry(
     Ok(())
 }
 
+/// Attempts at failing a run whose turn failed before leaving it to
+/// recovery, and the wait before the first retry (doubled each time).
+const FAIL_RUN_ATTEMPTS: u32 = 4;
+const FAIL_RUN_FIRST_RETRY: Duration = Duration::from_millis(500);
+
+/// A1.9: a turn that failed must not leave its run "working" because the
+/// database was briefly unreachable when it said so. Each failure is logged
+/// and retried; if every attempt fails, the run's lease stops being renewed
+/// (its driver has ended), so lapsed-lease recovery interrupts it within a
+/// couple of minutes. Nothing is dropped silently.
+async fn fail_run_reliably(
+    state: &AppState,
+    project_id: Uuid,
+    run_id: Uuid,
+    conversation_id: Uuid,
+    reason: &'static str,
+) {
+    let mut wait = FAIL_RUN_FIRST_RETRY;
+    for attempt in 1..=FAIL_RUN_ATTEMPTS {
+        match fail_run(state, project_id, run_id, conversation_id, reason).await {
+            Ok(()) => return,
+            Err(error) => {
+                tracing::error!(
+                    error_category = error.log_category(),
+                    %run_id,
+                    attempt,
+                    "could not record the failed turn"
+                );
+                if attempt < FAIL_RUN_ATTEMPTS {
+                    sleep(wait).await;
+                    wait *= 2;
+                }
+            }
+        }
+    }
+    tracing::error!(
+        %run_id,
+        "left the failed turn's run to recovery once its lease lapses"
+    );
+}
+
 async fn fail_run(
     state: &AppState,
     project_id: Uuid,
@@ -1427,7 +1491,8 @@ async fn fail_run(
         return Ok(());
     }
     let mut transaction = state.pool.begin().await?;
-    transition_run(&mut transaction, run_id, RunState::Failed, Some(reason)).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Failed, Some(reason))
+        .await?;
     sqlx::query(
         r#"
         UPDATE repository_workspaces rw

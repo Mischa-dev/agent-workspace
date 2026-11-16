@@ -29,6 +29,7 @@ use crate::{
 };
 
 pub mod activities;
+pub mod finished;
 #[cfg(test)]
 mod guards;
 pub mod launch_paths;

@@ -1688,18 +1688,21 @@ async fn work_with_worker(
         "Work Item {work_item_key} ({work_item_id}).\n\nUser instructions:\n{}",
         request.prompt
     );
-    let (_, Json(run)) = crate::api::start_agent_run(
-        State(state.clone()),
-        headers,
-        principal.clone(),
-        ApiPath(thread_id),
-        ApiJson(crate::api::StartRunRequest {
+    // The same creation path as every other start (A1.10), not the HTTP
+    // handler: the run is admitted, capped and given defaults by one rule.
+    let (_, run) = crate::api::start_run_in(
+        &state,
+        &principal,
+        None,
+        thread_id,
+        crate::api::StartRunRequest {
             prompt: provider_prompt,
             repository_id: Some(repository_id),
             config: None,
             provider_account_id: None,
             agent_profile_id: None,
-        }),
+        },
+        IdempotencyKey::from_headers(&headers),
     )
     .await?;
     let response = WorkWithWorkerResponse { thread_id, run };

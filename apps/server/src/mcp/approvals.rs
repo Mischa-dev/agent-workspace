@@ -8,7 +8,7 @@ use super::McpPrincipal;
 use crate::{
     AppState,
     api::{insert_event_entry, insert_significant_event, retain_run_workspace},
-    domain::{RunState, resume_answered_run, transition_run},
+    domain::{RunState, resume_answered_run},
     error::AppError,
     external_events::enqueue_external_approval_resolved,
     idempotency::{
@@ -333,7 +333,7 @@ async fn respond_inner(
     if approved {
         resume_answered_run(&mut transaction, context.run_id).await?;
     } else {
-        transition_run(
+        crate::hosts::builtin::transition(
             &mut transaction,
             context.run_id,
             RunState::Interrupted,

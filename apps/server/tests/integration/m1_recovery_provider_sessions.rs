@@ -576,3 +576,217 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .await
         .expect("connect to isolated recovery schema")
 }
+
+/// A1.9: recovery takes only runs no live process drives. A second process
+/// starting up (or a rolling deploy) leaves another process's live runs
+/// alone; a run whose driver stopped renewing is recovered once, by
+/// whichever process gets to it.
+#[tokio::test]
+async fn recovery_leaves_runs_another_process_drives_and_takes_lapsed_ones_once() {
+    let Some((database_url, administrative_pool)) = integration_pool().await else {
+        return;
+    };
+    let schema = format!("a1_leases_{}", Uuid::now_v7().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&administrative_pool)
+        .await
+        .expect("create isolated lease schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("run migrations");
+    let temporary_root = tempfile::tempdir().expect("temporary lease root");
+    let config = AppConfig::from_values(&BTreeMap::from([
+        ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), database_url),
+        ("AGENT_WORKSPACE_ENV".to_owned(), "development".to_owned()),
+        (
+            "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
+            temporary_root.path().to_string_lossy().into_owned(),
+        ),
+    ]))
+    .expect("development config");
+    let seed = dev_seed(&pool, &config).await.expect("seed lease fixture");
+    sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
+        .bind(seed.execution_profile_id)
+        .execute(&pool)
+        .await
+        .expect("authenticate lease Profile");
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("prepare lease Repository");
+    let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+        .expect("test supervisor registry");
+    let state = AppState {
+        config: Arc::new(config),
+        pool: pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(8),
+        supervisors,
+    };
+
+    // A run another process is driving right now, in its own thread.
+    let thread = |name: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let id = Uuid::now_v7();
+            sqlx::query(
+                r#"
+                INSERT INTO conversations (id, project_id, kind, parent_channel_id, repository_id, name)
+                VALUES ($1, $2, 'thread', $3, $4, $5)
+                "#,
+            )
+            .bind(id)
+            .bind(seed.project_id)
+            .bind(seed.channel_id)
+            .bind(seed.repository_id)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .expect("insert a thread");
+            id
+        }
+    };
+    let insert_run = |conversation: Uuid, driver: Option<Uuid>| {
+        let pool = pool.clone();
+        async move {
+            let id = Uuid::now_v7();
+            sqlx::query(
+                r#"
+                INSERT INTO agent_runs (
+                    id, conversation_id, execution_worker_id, requesting_actor_id,
+                    execution_profile_id, repository_id, state, prompt,
+                    authorization_snapshot, started_at,
+                    driver_instance_id, driver_lease_expires_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, 'working', 'lease test', '{}'::jsonb, now(),
+                        $7, CASE WHEN $7::uuid IS NULL THEN NULL ELSE now() + interval '5 minutes' END)
+                "#,
+            )
+            .bind(id)
+            .bind(conversation)
+            .bind(seed.execution_worker_id)
+            .bind(seed.human_actor_id)
+            .bind(seed.execution_profile_id)
+            .bind(seed.repository_id)
+            .bind(driver)
+            .execute(&pool)
+            .await
+            .expect("insert a working run");
+            id
+        }
+    };
+    let run_state = |run: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+                .bind(run)
+                .fetch_one(&pool)
+                .await
+                .expect("run state")
+        }
+    };
+    let elsewhere = Uuid::now_v7();
+    let live = insert_run(thread("Driven elsewhere").await, Some(elsewhere)).await;
+
+    // Starting up here leaves it alone; so does the lapsed-lease sweep, and
+    // this process can't take it over to drive it.
+    assert_eq!(
+        recovery::reconcile_non_terminal_runs(&state)
+            .await
+            .expect("start-up recovery"),
+        0
+    );
+    assert_eq!(
+        recovery::recover_lapsed_runs(&state)
+            .await
+            .expect("lapsed recovery"),
+        0
+    );
+    assert_eq!(run_state(live).await, "working");
+    assert!(
+        !agent_workspace_server::hosts::builtin::lease::take(&pool, live)
+            .await
+            .expect("try to take a live lease")
+    );
+    assert!(
+        !agent_workspace_server::hosts::builtin::lease::renew(&pool, live)
+            .await
+            .expect("renew someone else's lease"),
+        "only the driver renews"
+    );
+
+    // A run from before leases is only start-up recovery's to take.
+    let unleased = insert_run(thread("No lease").await, None).await;
+    assert_eq!(
+        recovery::recover_lapsed_runs(&state)
+            .await
+            .expect("lapsed recovery skips unleased runs"),
+        0
+    );
+    assert_eq!(run_state(unleased).await, "working");
+
+    // The other process stops renewing: the run is recovered once.
+    sqlx::query(
+        "UPDATE agent_runs SET driver_lease_expires_at = now() - interval '1 second' WHERE id = $1",
+    )
+    .bind(live)
+    .execute(&pool)
+    .await
+    .expect("let the lease lapse");
+    assert_eq!(
+        recovery::recover_lapsed_runs(&state)
+            .await
+            .expect("recover the lapsed run"),
+        1
+    );
+    assert_eq!(run_state(live).await, "interrupted");
+    let (driver, expires) = sqlx::query_as::<_, (Option<Uuid>, Option<String>)>(
+        "SELECT driver_instance_id, driver_lease_expires_at::text FROM agent_runs WHERE id = $1",
+    )
+    .bind(live)
+    .fetch_one(&pool)
+    .await
+    .expect("lease after recovery");
+    assert_eq!(
+        (driver, expires),
+        (None, None),
+        "a finished run holds no lease"
+    );
+    assert_eq!(
+        recovery::recover_lapsed_runs(&state)
+            .await
+            .expect("nothing left to recover"),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM agent_run_events WHERE agent_run_id = $1 AND kind = 'recovery'",
+        )
+        .bind(live)
+        .fetch_one(&pool)
+        .await
+        .expect("recovery steps"),
+        1,
+        "recovered exactly once"
+    );
+
+    // Start-up recovery takes the unleased run.
+    assert_eq!(
+        recovery::reconcile_non_terminal_runs(&state)
+            .await
+            .expect("start-up recovery takes unleased runs"),
+        1
+    );
+    assert_eq!(run_state(unleased).await, "interrupted");
+
+    state.supervisors.shutdown_all().await;
+    pool.close().await;
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
+        .await
+        .expect("drop lease schema");
+}
