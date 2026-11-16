@@ -808,7 +808,10 @@ async fn agent_list_shows_work_and_never_secrets() {
         json!({"projectId": "WORK", "title": "Offline mode"}),
     )
     .await;
-    let task = created["value"]["workItemId"].as_str().expect("task").to_owned();
+    let task = created["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let claimed = call(
         MARA,
         "task_claim",

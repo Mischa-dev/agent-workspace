@@ -48,7 +48,10 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
     )
     .await;
     assert_eq!(created["outcome"], "ok", "{created}");
-    let task = created["value"]["workItemId"].as_str().expect("task").to_owned();
+    let task = created["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     assert_eq!(created["value"]["key"], "WORK-1", "{created}");
     assert!(
         created["value"]["url"]
@@ -237,7 +240,11 @@ async fn a_task_whose_status_changes_goes_to_the_bottom_of_its_new_column() {
         )
         .await;
         assert_eq!(moved["outcome"], "ok", "{moved}");
-        assert_eq!(moved["value"]["changedFields"], json!(["status"]), "{moved}");
+        assert_eq!(
+            moved["value"]["changedFields"],
+            json!(["status"]),
+            "{moved}"
+        );
     }
     let column = tool(
         app,
@@ -317,7 +324,10 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
         json!({"projectId": "OLD", "title": "Mirror private repositories"}),
     )
     .await;
-    let task = created["value"]["workItemId"].as_str().expect("task").to_owned();
+    let task = created["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let claimed = tool(
         app,
         &codex,

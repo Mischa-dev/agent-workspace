@@ -329,7 +329,10 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     );
     assert_eq!(footprint(&setup).await, after);
     let next = call("task_create", json!({"projectId": "PLAN", "title": "Next"})).await;
-    assert_eq!(next["value"]["key"], "PLAN-6", "no numbers were used up: {next}");
+    assert_eq!(
+        next["value"]["key"], "PLAN-6",
+        "no numbers were used up: {next}"
+    );
     // Refused batches aren't stored: the corrected one reuses the ID.
     let fixed = call(
         "task_create_many",
@@ -1088,7 +1091,10 @@ async fn an_agent_imports_a_plan_and_reorganizes_the_board() {
     )
     .await;
     assert_eq!(regrouped["outcome"], "ok", "{regrouped}");
-    assert_eq!(regrouped["value"]["changedFields"], json!(["parent", "labels"]));
+    assert_eq!(
+        regrouped["value"]["changedFields"],
+        json!(["parent", "labels"])
+    );
     let parent = call("task_open", json!({"taskId": "SHIP-1"})).await;
     assert_eq!(
         keys(&parent["value"]["subtasks"]),

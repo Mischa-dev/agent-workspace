@@ -372,7 +372,7 @@ impl Operation for PackageInstall {
             .any(|line| line.kind == "role")
         {
             access_shim::check(
-                &mut **tx,
+                tx,
                 &ctx.caller,
                 &ctx.target,
                 &located,
@@ -389,7 +389,7 @@ impl Operation for PackageInstall {
             .any(|line| line.needs_admin && line.kind != "role")
         {
             access_shim::check(
-                &mut **tx,
+                tx,
                 &ctx.caller,
                 &ctx.target,
                 &located,
@@ -521,7 +521,7 @@ impl Operation for PackageInstall {
                 ..starter.clone()
             });
         }
-        let standing = crate::roles::standing(&mut **tx, workspace, actor).await?;
+        let standing = crate::roles::standing(tx, workspace, actor).await?;
         let view = templates::TemplateView {
             id: package.id.clone(),
             name: package.name.clone(),
@@ -725,13 +725,9 @@ impl Operation for PackageInstall {
                                 "A form names its collection as @<key>.".to_owned(),
                             )
                         })?;
-                    let definitions = crate::collections::field_definitions(
-                        &mut **tx,
-                        space,
-                        collection_id,
-                        false,
-                    )
-                    .await?;
+                    let definitions =
+                        crate::collections::field_definitions(tx, space, collection_id, false)
+                            .await?;
                     let mut questions = Vec::new();
                     for asked in body["fields"].as_array().cloned().unwrap_or_default() {
                         let wanted = asked["field"].as_str().unwrap_or("").trim();

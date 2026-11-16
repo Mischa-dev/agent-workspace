@@ -99,9 +99,9 @@ impl Operation for WhiteboardUpdateElements {
         let id = input.whiteboard_id.id();
         let caller = whiteboard_commands::caller_of(call.ctx);
         let tx = call.tx().await?;
-        let board = access(tx, &caller, id, true).await.map_err(|error| {
-            whiteboard_commands::edit_error(edit::EditError::App(error))
-        })?;
+        let board = access(tx, &caller, id, true)
+            .await
+            .map_err(|error| whiteboard_commands::edit_error(edit::EditError::App(error)))?;
         if board.deleted {
             return Err(OpError::Conflict {
                 reason: ConflictReason::State { code: "deleted" },

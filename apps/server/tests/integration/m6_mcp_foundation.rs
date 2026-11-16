@@ -535,7 +535,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await;
     assert_eq!(updated.pointer("/outcome"), Some(&json!("ok")));
     assert_eq!(updated.pointer("/value/version"), Some(&json!(2)));
-    assert_eq!(updated.pointer("/value/idempotentReplay"), Some(&json!(false)));
+    assert_eq!(
+        updated.pointer("/value/idempotentReplay"),
+        Some(&json!(false))
+    );
     let replay = call_tool(
         &application,
         &token,
@@ -545,7 +548,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         update_arguments,
     )
     .await;
-    assert_eq!(replay.pointer("/value/idempotentReplay"), Some(&json!(true)));
+    assert_eq!(
+        replay.pointer("/value/idempotentReplay"),
+        Some(&json!(true))
+    );
 
     let stale = call_tool(
         &application,
@@ -567,7 +573,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         stale.pointer("/details/current/task/id"),
         Some(&json!(work_item_id.to_string()))
     );
-    assert_eq!(stale.pointer("/details/current/task/version"), Some(&json!(2)));
+    assert_eq!(
+        stale.pointer("/details/current/task/version"),
+        Some(&json!(2))
+    );
     assert_eq!(
         stale.pointer("/details/current/task/title"),
         Some(&json!("M6 write contract"))

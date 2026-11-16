@@ -1651,7 +1651,10 @@ async fn edits_keep_every_revision_and_projections_follow() {
         json!({"projectId": "WORK", "title": "Zebracorn task"}),
     )
     .await;
-    let task_id = task["value"]["workItemId"].as_str().expect("task").to_owned();
+    let task_id = task["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let general = create_channel(&setup, &work, "general").await;
     let message = say(
         &setup,
