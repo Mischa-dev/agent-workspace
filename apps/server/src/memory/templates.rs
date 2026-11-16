@@ -7,6 +7,7 @@
 //! A page template from any project the writer can see in the same workspace
 //! can be used; anything else is "not found", as if it weren't there.
 
+use rmcp::schemars::{self, JsonSchema};
 use serde::Serialize;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -44,8 +45,9 @@ const BUILT_IN: &[BuiltIn] = &[
 pub const BUILT_IN_IDS: &str = "meeting-notes, decision, retrospective, project-brief";
 
 /// A template as the gallery lists it.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(rename = "PageTemplateView")]
 pub struct TemplateSummary {
     /// A page's ID, or a built-in template's name.
     pub id: String,

@@ -6,6 +6,7 @@
 //! A template board from the same workspace that the caller can see can be
 //! used; anything else is "not found", as if it weren't there.
 
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -54,8 +55,9 @@ fn scene(built_in: &BuiltIn) -> Option<Scene> {
 }
 
 /// A template as the gallery lists it.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(rename = "WhiteboardTemplateView")]
 pub struct TemplateSummary {
     /// A board's ID, or a built-in template's name.
     pub id: String,

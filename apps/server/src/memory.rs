@@ -50,10 +50,6 @@ pub fn router() -> Router<AppState> {
             get(list_pages_http).post(create_page_http),
         )
         .route(
-            "/api/v1/projects/{id}/page-templates",
-            get(list_page_templates_http),
-        )
-        .route(
             "/api/v1/pages/{id}",
             get(get_page_http).patch(update_page_http),
         )
@@ -1458,32 +1454,6 @@ pub(crate) async fn free_page_title(
         })
         .find(|candidate| !taken.contains(&candidate.to_lowercase()))
         .unwrap_or(base))
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PageTemplatesResponse {
-    templates: Vec<templates::TemplateSummary>,
-}
-
-/// The gallery for "New page from template" in a project.
-async fn list_page_templates_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-) -> Result<Json<PageTemplatesResponse>, AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    project_access(
-        &mut *transaction,
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        project_id,
-        Action::ProjectView,
-    )
-    .await?;
-    let templates = templates::list(&mut transaction, principal.actor_id, project_id).await?;
-    transaction.commit().await?;
-    Ok(Json(PageTemplatesResponse { templates }))
 }
 
 pub(crate) async fn page_project(pool: &PgPool, page_id: Uuid) -> Result<Uuid, AppError> {

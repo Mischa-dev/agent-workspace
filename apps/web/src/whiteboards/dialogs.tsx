@@ -2,11 +2,11 @@ import { useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
+import { opQuery } from '../api/ops'
 import { useProjects } from '../projects/hooks'
 import { Banner, Button, Dialog, SelectField, TextField, describeError } from '../ui'
 import {
   createWhiteboard,
-  listWhiteboardTemplates,
   updateWhiteboard,
   whiteboardKeys,
   whiteboardPath,
@@ -45,8 +45,9 @@ export function NewWhiteboardDialog({
   const [kind, id] = chosen.split(':')
   const where = projectId ? { projectId } : kind === 'project' ? { projectId: id } : { organizationId: id }
   const templates = useQuery({
-    queryKey: whiteboardKeys.templates(projectId ? `project:${projectId}` : chosen),
-    queryFn: () => listWhiteboardTemplates(where),
+    ...('projectId' in where
+      ? opQuery('whiteboard_template_list', { spaceId: where.projectId })
+      : opQuery('whiteboard_template_list', {}, { workspaceId: where.organizationId })),
     enabled: open && Boolean(projectId || chosen),
   })
   const submit = (event: FormEvent) => {

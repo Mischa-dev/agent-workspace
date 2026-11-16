@@ -14,6 +14,7 @@ impl CoreModule for Module {
 
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::whiteboards::router);
+        module.operations(crate::whiteboards::ops::register_ops);
         module.export(ExportPart {
             name: "whiteboards",
             describe: "Whiteboards as documents and images.",

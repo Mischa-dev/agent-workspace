@@ -38,7 +38,6 @@ pub fn router() -> Router<AppState> {
             get(get_http).patch(change_http).delete(purge_http),
         )
         .route("/api/v1/whiteboard-trash/empty", post(empty_trash_http))
-        .route("/api/v1/whiteboard-templates", get(templates_http))
         .route("/api/v1/whiteboards/{id}/duplicate", post(duplicate_http))
         .route(
             "/api/v1/whiteboards/{id}/scene",
@@ -680,64 +679,6 @@ struct LinkedQuery {
 #[serde(rename_all = "camelCase")]
 struct LinkedResponse {
     whiteboards: Vec<BoardSummary>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct TemplatesQuery {
-    /// The workspace the new board goes in, or the project (its workspace).
-    organization_id: Option<Uuid>,
-    project_id: Option<Uuid>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TemplatesResponse {
-    templates: Vec<super::templates::TemplateSummary>,
-}
-
-/// The gallery for "New board from template" in a workspace.
-async fn templates_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiQuery(query): ApiQuery<TemplatesQuery>,
-) -> Result<Json<TemplatesResponse>, AppError> {
-    let caller = Caller::browser(&principal)?;
-    let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    let organization_id = match (query.organization_id, query.project_id) {
-        (Some(organization_id), _) => organization_id,
-        (None, Some(project_id)) => {
-            crate::memory::project_access(
-                &mut *connection,
-                caller.actor_id,
-                caller.actor_kind,
-                project_id,
-                crate::policy::Action::ProjectView,
-            )
-            .await
-            .map_err(|_| AppError::NotFound("project"))?;
-            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-                .bind(project_id)
-                .fetch_one(&mut *connection)
-                .await?
-        }
-        (None, None) => return Err(AppError::Validation("organizationId")),
-    };
-    // Only a workspace the caller is in has a gallery for them.
-    let member = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM organization_memberships \
-         WHERE organization_id = $1 AND actor_id = $2 AND enabled)",
-    )
-    .bind(organization_id)
-    .bind(caller.actor_id)
-    .fetch_one(&mut *connection)
-    .await?;
-    if !member {
-        return Err(AppError::NotFound("organization"));
-    }
-    Ok(Json(TemplatesResponse {
-        templates: super::templates::list(&mut connection, &caller, organization_id).await?,
-    }))
 }
 
 async fn linked_http(

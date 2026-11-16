@@ -5,7 +5,7 @@
 //! caller can't see is not there for them.
 
 use axum::http::StatusCode;
-use serde_json::{Value, json};
+use serde_json::json;
 use uuid::Uuid;
 
 use super::support::{
@@ -68,15 +68,15 @@ async fn pages_and_boards_start_from_templates() {
     let (status, gallery) = send(
         app,
         mara.browser.request(
-            "GET",
-            &format!("/api/v1/projects/{work}/page-templates"),
-            None,
-            Value::Null,
+            "POST",
+            &format!("/api/v2/w/{}/ops/page_template_list", world.organization),
+            Some(&Uuid::now_v7().to_string()),
+            json!({ "spaceId": work }),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{gallery}");
-    let ids = gallery["templates"]
+    let ids = gallery["value"]["templates"]
         .as_array()
         .expect("templates")
         .iter()
@@ -158,10 +158,10 @@ async fn pages_and_boards_start_from_templates() {
     let (_, gallery) = send(
         app,
         mara.browser.request(
-            "GET",
-            &format!("/api/v1/projects/{work}/page-templates"),
-            None,
-            Value::Null,
+            "POST",
+            &format!("/api/v2/w/{}/ops/page_template_list", world.organization),
+            Some(&Uuid::now_v7().to_string()),
+            json!({ "spaceId": work }),
         ),
     )
     .await;

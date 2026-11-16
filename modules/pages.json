@@ -14,6 +14,7 @@
     "page_get": "describe",
     "page_blocks": "describe",
     "page_write": "change",
+    "page_template_list": "query",
     "page_edit": "change",
     "page_comments": "query",
     "page_comment": "create",
@@ -29,7 +30,6 @@
     "/api/v1/pages/*",
     "/api/v1/projects/{id}/pages",
     "/api/v1/projects/{id}/pages/import",
-    "/api/v1/projects/{id}/page-templates",
     "/api/v1/projects/{id}/decisions",
     "/api/v1/organizations/{organization_id}/pages-space"
   ],

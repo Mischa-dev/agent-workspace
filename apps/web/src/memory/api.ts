@@ -93,7 +93,6 @@ const project = (projectId: string) => `/api/v1/projects/${encodeURIComponent(pr
 // Project first, so a project's refresh and reset reach them.
 export const memoryKeys = {
   pages: (projectId: string) => ['project', projectId, 'memory', 'pages'] as const,
-  pageTemplates: (projectId: string) => ['project', projectId, 'memory', 'page-templates'] as const,
   page: (projectId: string, pageId: string) => ['project', projectId, 'memory', 'page', pageId] as const,
   decisions: (projectId: string) => ['project', projectId, 'memory', 'decisions'] as const,
   pins: (projectId: string, conversationId: string) =>
@@ -111,20 +110,6 @@ export function listPages(projectId: string) {
 
 export function createPage(projectId: string, input: PageInput) {
   return requestJson<Page>(`${project(projectId)}/pages`, { method: 'POST', json: input })
-}
-
-/** Something a new page can start from: a built-in template, or a page marked as one. */
-export type PageTemplate = {
-  id: string
-  title: string
-  excerpt: string
-  builtIn: boolean
-  projectName?: string
-}
-
-/** The templates a new page in this project can start from. */
-export function listPageTemplates(projectId: string) {
-  return requestJson<{ templates: PageTemplate[] }>(`${project(projectId)}/page-templates`)
 }
 
 /** A page made from a file: what the file held that a page can't, left out. */

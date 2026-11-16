@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { opQuery } from '../api/ops'
 import { readLocal, writeLocal } from '../app/localDrafts'
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
@@ -50,7 +51,6 @@ import {
   getPage,
   getPageVersion,
   listDecisions,
-  listPageTemplates,
   listPages,
   memoryKeys,
   recordDecision,
@@ -261,7 +261,7 @@ function NewPageDialog({
   const [template, setTemplate] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const templates = useQuery({ queryKey: memoryKeys.pageTemplates(projectId), queryFn: () => listPageTemplates(projectId) })
+  const templates = useQuery(opQuery('page_template_list', { spaceId: projectId }))
   // A page from a template can keep the template's title.
   const ready = Boolean(title.trim() || template)
   const submit = (event: FormEvent<HTMLFormElement>) => {
