@@ -356,11 +356,14 @@ impl Limits {
             .run(on, async |connection| {
                 sqlx::query(
                     r#"
-                    INSERT INTO rate_limit_counters
+                    INSERT INTO rate_limit_counters AS seen
                         (bucket, key_digest, window_start, window_seconds, used, expires_at)
                     VALUES ($1, $2, now(), $3, 1, now() + make_interval(secs => $3))
                     ON CONFLICT (bucket, key_digest) DO UPDATE
                         SET window_start = now(), expires_at = EXCLUDED.expires_at
+                        -- Written again only once half its time has gone, so a
+                        -- token used on every request isn't a write each time.
+                        WHERE seen.expires_at < now() + make_interval(secs => $3 / 2)
                     "#,
                 )
                 .bind(recent.name)

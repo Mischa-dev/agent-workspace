@@ -267,8 +267,16 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
 const MCP_EXCLUSIONS: &[(&str, &str)] = &[];
 
 /// Columns a read may legitimately change: when a credential or grant was
-/// last used, and when a connection last shook hands.
-const READ_TOUCHES: &[&str] = &["last_used_at", "last_seen_at", "last_handshake_at"];
+/// last used, and when a connection last shook hands. A touch (at most every
+/// five minutes) moves the row's `updated_at` with it, so a suite that runs
+/// longer than that saw a read "change" a credential; a real write always
+/// changes a column besides `updated_at`, so leaving it out loses nothing.
+const READ_TOUCHES: &[&str] = &[
+    "last_used_at",
+    "last_seen_at",
+    "last_handshake_at",
+    "updated_at",
+];
 
 /// Tools marked read-only that change rows anyway, each with why. The list
 /// only shrinks: fix the tool (or its hint) and take it off.
