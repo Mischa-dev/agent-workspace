@@ -308,7 +308,7 @@ impl Operation for ModuleCreate {
             let ctx = call.ctx;
             let tx = call.tx().await?;
             access_shim::check(
-                &mut **tx,
+                tx,
                 &ctx.caller,
                 &ctx.target,
                 &located,
@@ -652,7 +652,7 @@ impl Operation for ModuleOpen {
     async fn run(call: &mut OpCall<'_>, input: ModuleIdInput) -> Result<ModuleView, OpError> {
         let workspace = call.ctx.workspace_id;
         let tx = call.tx().await?;
-        view(&mut **tx, workspace, input.module_id.id()).await
+        view(tx, workspace, input.module_id.id()).await
     }
 }
 

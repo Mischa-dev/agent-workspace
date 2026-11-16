@@ -173,7 +173,10 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
 
     // Wrong types, unknown fields, people outside the project and links to
     // another project's tasks are refused, and nothing changes.
-    let side_task = other["value"]["workItemId"].as_str().expect("side task").to_owned();
+    let side_task = other["value"]["workItemId"]
+        .as_str()
+        .expect("side task")
+        .to_owned();
     for (fields, at) in [
         (json!({"Points": "lots"}), "fields.Points"),
         (json!({"Risk": "Medium"}), "fields.Risk"),
@@ -217,7 +220,11 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     .await;
     assert_eq!(updated["outcome"], "ok", "{updated}");
     assert_eq!(updated["value"]["version"], version + 1, "{updated}");
-    assert_eq!(updated["value"]["changedFields"], json!(["fields"]), "{updated}");
+    assert_eq!(
+        updated["value"]["changedFields"],
+        json!(["fields"]),
+        "{updated}"
+    );
     let history = agent(
         "task_open",
         json!({"taskId": "WORK-2", "include": ["history"]}),
@@ -228,7 +235,10 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     assert!(text.contains("Points: 3 → none"), "{text}");
 
     // The web reads and writes the same values, keyed by field ID.
-    let task_id = created["value"]["workItemId"].as_str().expect("id").to_owned();
+    let task_id = created["value"]["workItemId"]
+        .as_str()
+        .expect("id")
+        .to_owned();
     let (status, body) = send(
         app,
         setup.browser.request(

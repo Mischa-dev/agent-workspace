@@ -669,7 +669,10 @@ async fn the_web_task_detail_hides_a_pull_request_from_a_private_thread() {
         json!({"projectId": "REPO", "title": "Offline mode"}),
     )
     .await;
-    let task_id = created["value"]["workItemId"].as_str().expect("task").to_owned();
+    let task_id = created["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     for link in [
         json!({"taskId": "REPO-1", "pullRequestId": open.to_string()}),
         json!({"taskId": "REPO-1", "pullRequestId": private.to_string()}),

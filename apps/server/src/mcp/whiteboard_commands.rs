@@ -21,11 +21,7 @@ use super::{
 use crate::{
     AppState,
     ops::{ConflictReason, DenyReason, Edge, OpContext, OpError},
-    whiteboards::{
-        Caller,
-        edit::EditError,
-        scene::Operation,
-    },
+    whiteboards::{Caller, edit::EditError, scene::Operation},
 };
 
 /// The caller as whiteboards read it, with the edge it came through for

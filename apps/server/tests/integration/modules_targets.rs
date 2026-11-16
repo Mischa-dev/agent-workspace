@@ -82,7 +82,12 @@ async fn task_and_board_tools_check_the_module_where_they_act() {
     ] {
         let created = call("task_create", json!({"projectId": project, "title": title})).await;
         assert_eq!(created["outcome"], "ok", "{created}");
-        tasks.push(created["value"]["workItemId"].as_str().expect("task").to_owned());
+        tasks.push(
+            created["value"]["workItemId"]
+                .as_str()
+                .expect("task")
+                .to_owned(),
+        );
     }
     let board = call(
         "whiteboard_create",
