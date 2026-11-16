@@ -461,8 +461,20 @@ pub fn part_hash(part: &Content) -> String {
     )
 }
 
+/// Whether `rest` (after `@` or `#`) is a reference's key: one word, so a
+/// page that opens with a Markdown heading or text that starts with an
+/// @mention stays text.
+fn reference_key(rest: &str) -> Option<&str> {
+    (!rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.')))
+    .then_some(rest)
+}
+
 /// `"@key"` strings resolved to the ids made (or reused) for those keys,
-/// and `"#name"` to channels'.
+/// and `"#name"` to channels'. Only a whole one-word string is a
+/// reference.
 pub fn resolve_refs(
     value: Value,
     collections: &HashMap<String, Uuid>,
@@ -470,12 +482,12 @@ pub fn resolve_refs(
 ) -> Result<Value, String> {
     Ok(match value {
         Value::String(text) => {
-            if let Some(key) = text.strip_prefix('@') {
+            if let Some(key) = text.strip_prefix('@').and_then(reference_key) {
                 let id = collections
                     .get(key)
                     .ok_or_else(|| format!("@{key} names no collection in the package"))?;
                 Value::String(id.to_string())
-            } else if let Some(name) = text.strip_prefix('#') {
+            } else if let Some(name) = text.strip_prefix('#').and_then(reference_key) {
                 let id = channels
                     .get(&name.to_lowercase())
                     .ok_or_else(|| format!("#{name} names no channel in the space"))?;
@@ -648,6 +660,13 @@ pub async fn agent_templates(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_that_starts_like_a_reference_stays_text() {
+        let none = HashMap::new();
+        let kept = json!({"markdown": "# Hello\n", "instructions": "@lena reads this"});
+        assert_eq!(resolve_refs(kept.clone(), &none, &none), Ok(kept));
+    }
 
     #[test]
     fn references_resolve_or_say_what_is_missing() {
