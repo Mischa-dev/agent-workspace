@@ -26,12 +26,7 @@ pub async fn find(
     connection: &mut PgConnection,
     organization_id: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM projects WHERE organization_id = $1 AND kind = 'workspace'",
-    )
-    .bind(organization_id)
-    .fetch_optional(&mut *connection)
-    .await?)
+    crate::spaces::workspace_space_id(connection, organization_id).await
 }
 
 /// The workspace's space, made if it doesn't exist yet.

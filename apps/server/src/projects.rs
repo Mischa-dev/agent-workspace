@@ -315,6 +315,9 @@ async fn list_projects(
           AND pm.enabled
           AND (p.archived_at IS NOT NULL) = $5
           AND p.kind = 'standard'
+          -- K4.2: the one readability rule (archived projects stay listed
+          -- for their members, to be restored).
+          AND (p.archived_at IS NOT NULL OR space_readable_by(p.id, $1))
           AND (
               $2::text IS NULL
               OR p.name ILIKE $2
@@ -1239,6 +1242,9 @@ async fn fetch_project_row(
                AND nav_parent.archived_at IS NOT NULL
          )
         WHERE p.id = $1
+          -- K4.2: the one readability rule (an archived project stays
+          -- readable to its members, to be restored).
+          AND (p.archived_at IS NOT NULL OR space_readable_by(p.id, $2))
         "#,
     )
     .bind(project_id)

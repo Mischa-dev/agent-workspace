@@ -349,3 +349,219 @@ async fn slug_rename_keeps_old_links() {
     }
     world.finish().await;
 }
+
+/// K4.2: `space_membership` and `space_readable_by` for each way someone is
+/// or isn't in a space.
+#[tokio::test]
+async fn membership_matrix() {
+    let Some(setup) = setup("k42_membership_matrix").await else {
+        return;
+    };
+    let pool = &setup.pool;
+    let workspace = setup.organization_id;
+    let space = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO projects (id, organization_id, project_key, name) VALUES ($1, $2, 'MTX', 'Matrix')",
+    )
+    .bind(space)
+    .bind(workspace)
+    .execute(pool)
+    .await
+    .expect("a space");
+    let person = |enabled_space: Option<bool>, enabled_workspace: bool, active: bool| {
+        let pool = pool.clone();
+        async move {
+            let id = Uuid::now_v7();
+            sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', $2)")
+                .bind(id)
+                .bind(if active { "active" } else { "disabled" })
+                .execute(&pool)
+                .await
+                .expect("actor");
+            sqlx::query(
+                "INSERT INTO organization_memberships (organization_id, actor_id, role, enabled) \
+                 VALUES ($1, $2, 'member', $3)",
+            )
+            .bind(workspace)
+            .bind(id)
+            .bind(enabled_workspace)
+            .execute(&pool)
+            .await
+            .expect("workspace membership");
+            if let Some(enabled) = enabled_space {
+                sqlx::query(
+                    "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle, enabled) \
+                     VALUES ($1, $2, $3, 'member', 'P', $4, $5)",
+                )
+                .bind(Uuid::now_v7())
+                .bind(space)
+                .bind(id)
+                .bind(format!("p{}", &id.simple().to_string()[24..]))
+                .bind(enabled)
+                .execute(&pool)
+                .await
+                .expect("space membership");
+            }
+            id
+        }
+    };
+    let explicit = person(Some(true), true, true).await;
+    let disabled_member = person(Some(false), true, true).await;
+    let workspace_disabled = person(Some(true), false, true).await;
+    let inactive = person(Some(true), true, false).await;
+    let workspace_only = person(None, true, true).await;
+    let ask = |space: Uuid, account: Uuid| {
+        let pool = pool.clone();
+        async move {
+            let membership = sqlx::query_as::<_, (String, bool)>(
+                "SELECT role, implicit FROM space_membership($1, $2)",
+            )
+            .bind(space)
+            .bind(account)
+            .fetch_optional(&pool)
+            .await
+            .expect("space_membership");
+            let readable = sqlx::query_scalar::<_, bool>("SELECT space_readable_by($1, $2)")
+                .bind(space)
+                .bind(account)
+                .fetch_one(&pool)
+                .await
+                .expect("space_readable_by");
+            (membership, readable)
+        }
+    };
+    assert_eq!(
+        ask(space, explicit).await,
+        (Some(("member".to_owned(), false)), true)
+    );
+    assert_eq!(ask(space, disabled_member).await, (None, false));
+    assert_eq!(ask(space, workspace_disabled).await, (None, false));
+    assert_eq!(ask(space, inactive).await, (None, false));
+    assert_eq!(ask(space, workspace_only).await, (None, false));
+
+    // The workspace space: every enabled workspace member is in it.
+    let mut connection = pool.acquire().await.expect("connection");
+    let mut transaction = sqlx::Connection::begin(&mut *connection)
+        .await
+        .expect("transaction");
+    let workspace_space =
+        agent_workspace_server::workspace_space::join(&mut transaction, workspace, workspace_only)
+            .await
+            .expect("the workspace space")
+            .expect("a workspace member joins it");
+    transaction.commit().await.expect("commit");
+    let (membership, readable) = ask(workspace_space, workspace_only).await;
+    assert!(readable);
+    assert!(membership.is_some());
+    assert_eq!(ask(workspace_space, workspace_disabled).await, (None, false));
+
+    // Another workspace's member reads nothing here.
+    let other = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Elsewhere', $2)")
+        .bind(other)
+        .bind(format!("elsewhere-{}", &other.simple().to_string()[20..]))
+        .execute(pool)
+        .await
+        .expect("another workspace");
+    let stranger = Uuid::now_v7();
+    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
+        .bind(stranger)
+        .execute(pool)
+        .await
+        .expect("someone elsewhere");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(other)
+    .bind(stranger)
+    .execute(pool)
+    .await
+    .expect("their membership");
+    assert_eq!(ask(space, stranger).await, (None, false));
+    assert_eq!(ask(workspace_space, stranger).await, (None, false));
+
+    // An archived space is read by nobody.
+    sqlx::query("UPDATE projects SET archived_at = now() WHERE id = $1")
+        .bind(space)
+        .execute(pool)
+        .await
+        .expect("archive");
+    assert_eq!(ask(space, explicit).await, (None, false));
+    let listed = sqlx::query_scalar::<_, Uuid>("SELECT spaces_readable_by($1, $2)")
+        .bind(explicit)
+        .bind(workspace)
+        .fetch_all(pool)
+        .await
+        .expect("spaces_readable_by");
+    assert!(!listed.contains(&space));
+}
+
+/// K4.2: a team space open to the workspace is readable by every workspace
+/// member, who isn't a member of it until they join.
+#[tokio::test]
+async fn open_team_space_is_readable_not_joined() {
+    let Some(setup) = setup("k42_open_team_space").await else {
+        return;
+    };
+    let pool = &setup.pool;
+    let workspace = setup.organization_id;
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1",
+    )
+    .bind(workspace)
+    .fetch_one(pool)
+    .await
+    .expect("owner");
+    let team = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO spaces (id, workspace_id, key, name, kind, visibility, created_by_actor_id) \
+         VALUES ($1, $2, 'OPEN', 'Open team', 'team', 'workspace', $3)",
+    )
+    .bind(team)
+    .bind(workspace)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("an open team space");
+    let closed = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO spaces (id, workspace_id, key, name, kind, visibility, created_by_actor_id) \
+         VALUES ($1, $2, 'SHUT', 'Closed team', 'team', 'members', $3)",
+    )
+    .bind(closed)
+    .bind(workspace)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("a closed team space");
+    let mut connection = pool.acquire().await.expect("connection");
+    let readable = agent_workspace_server::spaces::readable(
+        &mut connection,
+        owner,
+        workspace,
+        &[agent_workspace_server::spaces::SpaceKind::Team],
+    )
+    .await
+    .expect("readable");
+    assert!(readable.iter().any(|space| space.id == team));
+    assert!(!readable.iter().any(|space| space.id == closed));
+    assert!(
+        agent_workspace_server::spaces::membership(&mut connection, owner, team)
+            .await
+            .expect("membership")
+            .is_none(),
+        "readable, not joined"
+    );
+    assert!(
+        agent_workspace_server::spaces::get(&mut connection, owner, team)
+            .await
+            .expect("get")
+            .is_some()
+    );
+    assert!(
+        agent_workspace_server::spaces::get(&mut connection, owner, closed)
+            .await
+            .expect("get")
+            .is_none()
+    );
+}

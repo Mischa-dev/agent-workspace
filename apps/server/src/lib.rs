@@ -99,6 +99,7 @@ pub mod seed;
 pub mod server_status;
 pub mod settings;
 pub mod sheets;
+pub mod spaces;
 pub mod storage_admission;
 #[cfg(test)]
 mod structure_guards;
