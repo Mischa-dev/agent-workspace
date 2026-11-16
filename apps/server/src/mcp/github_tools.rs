@@ -12,14 +12,10 @@ use super::{
     McpPrincipal,
     common::{ToolResult, insert_audit, mark_via, parse_id},
 };
-use crate::{
-    AppState,
-    error::AppError,
-    github,
-    policy::{Action, ActorKind},
-};
+use crate::{AppState, error::AppError, github, policy::Action};
 
-const PEOPLE_ONLY: &str = "Only people who manage the project's GitHub integration link it or switch its automation, on the web or through an app connected as themselves.";
+const PEOPLE_ONLY: &str =
+    "Linking GitHub or switching its automation takes a role that manages code in this project.";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -69,9 +65,6 @@ pub(super) async fn github_integration_write(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_ONLY);
-    }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
     }
@@ -112,7 +105,7 @@ pub(super) async fn github_integration_write(
             let mut synced = github::sync_installation_as(
                 state,
                 principal.actor_id,
-                ActorKind::Human,
+                principal.actor_kind,
                 project_id,
                 installation_id,
                 &repository_ids,
@@ -152,7 +145,7 @@ pub(super) async fn github_integration_write(
         github::require_project_access_as(
             &mut transaction,
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             project_id,
             Action::GithubIntegrationManage,
         )

@@ -47,7 +47,7 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     layouts,
     modules::{manifest, state},
-    policy::{ActorKind, Permission},
+    policy::Permission,
     roles::{self, Auditor, RoleChange, RoleDefaults, RoleInput, Standing},
     work_item_fields::Writer,
 };
@@ -662,9 +662,7 @@ pub async fn used_any(pool: &sqlx::PgPool, organization_id: Uuid) -> Result<bool
 /// workspace's settings and its roles (an app acting for them is held to
 /// their agent limit).
 pub(crate) fn may_use(caller: Standing) -> bool {
-    caller.kind == ActorKind::Human
-        && caller.may(Permission::SettingsManage)
-        && caller.may(Permission::RolesManage)
+    caller.may(Permission::SettingsManage) && caller.may(Permission::RolesManage)
 }
 
 // ---------------------------------------------------------------------------

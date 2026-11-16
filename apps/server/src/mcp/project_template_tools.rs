@@ -24,8 +24,6 @@ use crate::{
     },
 };
 
-const PEOPLE_WRITE_TEMPLATES: &str = "Agents can read project templates, but only people save or change them, on the web or through an app connected as themselves.";
-
 /// A project template, as a picker shows it.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -187,9 +185,6 @@ pub(super) async fn project_template_write(
 ) -> ToolResult<ProjectTemplateWriteValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_WRITE_TEMPLATES);
     }
     let result = async {
         let Some(organization_id) = workspace_of(state, principal, &arguments.project_id).await?

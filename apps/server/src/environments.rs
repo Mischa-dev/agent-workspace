@@ -453,13 +453,10 @@ async fn create_environment(
     ApiJson(request): ApiJson<EnvironmentRequest>,
 ) -> Result<Json<EnvironmentView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if principal.actor_kind != "human" {
-        return Err(AppError::Forbidden);
-    }
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        ActorKind::Human,
+        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::SettingsManage,
     )
@@ -557,13 +554,10 @@ async fn update_environment(
     ApiJson(request): ApiJson<EnvironmentRequest>,
 ) -> Result<Json<EnvironmentView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if principal.actor_kind != "human" {
-        return Err(AppError::Forbidden);
-    }
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        ActorKind::Human,
+        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::SettingsManage,
     )
@@ -678,13 +672,10 @@ async fn archive_environment(
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<EnvironmentList>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if principal.actor_kind != "human" {
-        return Err(AppError::Forbidden);
-    }
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        ActorKind::Human,
+        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::SettingsManage,
     )
@@ -709,7 +700,13 @@ async fn archive_environment(
     .await?;
     transaction.commit().await?;
     Ok(Json(
-        list_for(&state, principal.actor_id, ActorKind::Human, project_id).await?,
+        list_for(
+            &state,
+            principal.actor_id,
+            crate::settings::actor_kind(&principal.actor_kind)?,
+            project_id,
+        )
+        .await?,
     ))
 }
 
@@ -763,13 +760,10 @@ async fn make_default(
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<EnvironmentList>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if principal.actor_kind != "human" {
-        return Err(AppError::Forbidden);
-    }
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        ActorKind::Human,
+        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::SettingsManage,
     )
@@ -795,7 +789,13 @@ async fn make_default(
     .await?;
     transaction.commit().await?;
     Ok(Json(
-        list_for(&state, principal.actor_id, ActorKind::Human, project_id).await?,
+        list_for(
+            &state,
+            principal.actor_id,
+            crate::settings::actor_kind(&principal.actor_kind)?,
+            project_id,
+        )
+        .await?,
     ))
 }
 
@@ -861,13 +861,10 @@ async fn check_environment(
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<CheckResult>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if principal.actor_kind != "human" {
-        return Err(AppError::Forbidden);
-    }
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
-        ActorKind::Human,
+        crate::settings::actor_kind(&principal.actor_kind)?,
         project_id,
         Action::WorkerInvoke,
     )

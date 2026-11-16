@@ -155,7 +155,7 @@ async fn view(
             .collect(),
         presets: manifest::presets(),
         preset: matching_preset(&switches),
-        can_manage: principal.actor_kind == "human" && matches!(role.as_str(), "owner" | "admin"),
+        can_manage: matches!(role.as_str(), "owner" | "admin"),
     })
 }
 

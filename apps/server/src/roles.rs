@@ -517,9 +517,7 @@ pub(crate) struct RoleCapabilities {
 /// What `caller` may do to a role.
 fn role_capabilities(caller: Standing, row: &RoleRow) -> RoleCapabilities {
     let base_is_high = matches!(row.base_role.as_str(), "owner" | "admin");
-    let manage = caller.kind == ActorKind::Human
-        && caller.may(Permission::RolesManage)
-        && (!base_is_high || caller.is_owner());
+    let manage = caller.may(Permission::RolesManage) && (!base_is_high || caller.is_owner());
     let within_caller = row
         .grant()
         .is_ok_and(|grant| grant.permissions().is_subset_of(caller.permissions));
@@ -530,13 +528,11 @@ fn role_capabilities(caller: Standing, row: &RoleRow) -> RoleCapabilities {
             && !row.built_in
             && !row.is_default
             && row.workspace_holders + row.project_holders == 0,
-        assign: caller.kind == ActorKind::Human
-            && caller.may(Permission::MembersManage)
+        assign: caller.may(Permission::MembersManage)
             && row.key != "owner"
             && (!base_is_high || caller.is_owner())
             && within_caller,
-        invite: caller.kind == ActorKind::Human
-            && matches!(caller.role, MembershipRole::Owner | MembershipRole::Admin)
+        invite: matches!(caller.role, MembershipRole::Owner | MembershipRole::Admin)
             && caller.may(Permission::MembersInvite)
             && row.key != "owner"
             && (!base_is_high || caller.is_owner())
@@ -1027,7 +1023,7 @@ pub(crate) struct RoleInput {
 
 /// Whether `caller` may make or change roles based on `base`.
 fn may_define(caller: Standing, base: MembershipRole) -> Result<(), AppError> {
-    if caller.kind != ActorKind::Human || !caller.may(Permission::RolesManage) {
+    if !caller.may(Permission::RolesManage) {
         return Err(AppError::Forbidden);
     }
     if matches!(base, MembershipRole::Owner | MembershipRole::Admin) && !caller.is_owner() {
@@ -1522,7 +1518,7 @@ pub(crate) async fn assign(
     apply_to_projects: bool,
     expected_version: Option<i64>,
 ) -> Result<Assignment, AppError> {
-    if caller.kind != ActorKind::Human || !caller.may(Permission::MembersManage) {
+    if !caller.may(Permission::MembersManage) {
         return Err(AppError::Forbidden);
     }
     if actor_id == caller.actor_id {
@@ -2384,16 +2380,18 @@ mod tests {
     }
 
     #[test]
-    fn only_owners_define_admin_roles_and_agents_never_do() {
+    fn only_owners_define_admin_roles_and_an_agent_by_its_role() {
         assert!(may_define(caller(MembershipRole::Owner), MembershipRole::Admin).is_ok());
         assert!(may_define(caller(MembershipRole::Admin), MembershipRole::Admin).is_err());
         assert!(may_define(caller(MembershipRole::Admin), MembershipRole::Member).is_ok());
         assert!(may_define(caller(MembershipRole::Member), MembershipRole::Viewer).is_err());
+        // K1.13: the kind of account changes nothing; the role decides.
         let agent = Standing {
             kind: ActorKind::ExternalAgent,
-            ..caller(MembershipRole::Owner)
+            ..caller(MembershipRole::Admin)
         };
-        assert!(may_define(agent, MembershipRole::Member).is_err());
+        assert!(may_define(agent, MembershipRole::Member).is_ok());
+        assert!(may_define(agent, MembershipRole::Admin).is_err());
     }
 
     #[test]

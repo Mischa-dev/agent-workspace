@@ -16,10 +16,11 @@ use crate::{
     AppState,
     environments::{self, EnvironmentRequest},
     error::AppError,
-    policy::{Action, ActorKind},
+    policy::Action,
 };
 
-const PEOPLE_ONLY: &str = "Agents read environments, but only people change them: the project's owners and admins, on the web or through an app connected as themselves.";
+const PEOPLE_ONLY: &str =
+    "Changing environments takes a role that manages this project's settings.";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -119,9 +120,6 @@ pub(super) async fn environment_write(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_ONLY);
-    }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
     }
@@ -151,7 +149,7 @@ pub(super) async fn environment_write(
         let organization_id = environments::authorize_project(
             &state.pool,
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             project_id,
             if check {
                 Action::WorkerInvoke

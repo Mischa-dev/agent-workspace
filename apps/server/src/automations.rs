@@ -818,16 +818,15 @@ async fn reader_access(
     )
     .await
     .is_ok();
-    let admin = caller.actor_kind == ActorKind::Human
-        && crate::memory::project_access(
-            pool,
-            caller.actor_id,
-            caller.actor_kind,
-            project_id,
-            PolicyAction::ProjectManage,
-        )
-        .await
-        .is_ok();
+    let admin = crate::memory::project_access(
+        pool,
+        caller.actor_id,
+        caller.actor_kind,
+        project_id,
+        PolicyAction::ProjectManage,
+    )
+    .await
+    .is_ok();
     Ok((can_edit && caller.can_write, admin))
 }
 

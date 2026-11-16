@@ -387,8 +387,7 @@ async fn manageable(pool: &PgPool, caller: &Caller, link_id: Uuid) -> Result<Lin
     let rights = project_rights(pool, caller, row.project_id)
         .await
         .map_err(|_| AppError::NotFound("bug_report_link"))?;
-    if caller.actor_kind != ActorKind::Human
-        || (row.collection_id.is_none() && !rights.tasks)
+    if (row.collection_id.is_none() && !rights.tasks)
         || !(rights.admin || row.owner_actor_id == caller.actor_id)
     {
         return Err(AppError::NotFound("bug_report_link"));

@@ -18,10 +18,10 @@ use crate::{
     AppState,
     error::AppError,
     invitations::{self, InvitationView},
-    policy::{Action, ActorKind},
+    policy::Action,
 };
 
-const PEOPLE_INVITE: &str = "Only people invite others to a project: a workspace owner or admin who manages its invitations, on the web or through an app connected as themselves.";
+const PEOPLE_INVITE: &str = "Your role here doesn't let you invite people to this project.";
 const DEFAULT_EXPIRY_HOURS: i32 = 72;
 
 /// An invitation, without its link: the link is shown once, when it's made.
@@ -113,9 +113,6 @@ pub(super) async fn invitation_list(
     if !principal.can_read() {
         return ToolResult::denied("This connection can't read.");
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_INVITE);
-    }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
     }
@@ -198,9 +195,6 @@ pub(super) async fn invitation_write(
 ) -> ToolResult<InvitationWriteValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_INVITE);
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");

@@ -19,8 +19,6 @@ use crate::{
     roles::{self, Auditor, PermissionsView, RoleChange, RoleDefaults, RoleInput, RoleView},
 };
 
-const AGENTS_DONT_CHANGE_ROLES: &str = "Agents can't change roles. Ask a workspace owner or admin, who can do it on the Roles page or through an app connected as themselves.";
-
 /// The workspace of the project a call names, once the caller is checked
 /// to be in that project.
 async fn workspace_of(
@@ -340,9 +338,6 @@ pub(super) async fn role_write(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(AGENTS_DONT_CHANGE_ROLES);
-    }
     let defaults = match arguments
         .defaults
         .clone()
@@ -528,9 +523,6 @@ pub(super) async fn role_assign(
 ) -> ToolResult<AssignmentLine> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(AGENTS_DONT_CHANGE_ROLES);
     }
     if arguments.role.is_none() && arguments.agent_limit.is_none() {
         return ToolResult::invalid("role", "Give a role, an agentLimit, or both.");

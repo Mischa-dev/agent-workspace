@@ -1131,9 +1131,8 @@ pub(crate) async fn authorize_personal_as<'e, E: PgExecutor<'e>>(
     workspace_role(executor, actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
-    if kind != ActorKind::Human {
-        return Err(AppError::Forbidden);
-    }
+    // Personal settings need nothing more (K1.13): any account's own.
+    let _ = kind;
     Ok(())
 }
 
