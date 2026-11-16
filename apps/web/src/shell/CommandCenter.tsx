@@ -79,7 +79,7 @@ export function CommandCenter() {
       'mark-all-read': openMarkAllRead,
       'mark-read': () => window.dispatchEvent(new Event(MARK_READ_EVENT)),
       'all-unreads': () => go('/inbox?view=unread'),
-      'all-threads': () => go('/inbox?category=threads'),
+      'all-threads': () => go('/threads'),
       'previous-conversation': () => moveInSidebar(-1, false),
       'next-conversation': () => moveInSidebar(1, false),
       'previous-unread': () => moveInSidebar(-1, true),

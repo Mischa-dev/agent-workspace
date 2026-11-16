@@ -76,6 +76,7 @@ export function ThreadChip({
         </span>
       ) : null}
       {status ? <ThreadStatusChip status={status} /> : null}
+      {thread.outcome ? <span className="aw-threadchip__outcome">{thread.outcome}</span> : null}
       <Icon className="aw-threadchip__chev" name="chevron-right" size={14} />
       {repliers.length ? (
         <span className="visually-hidden">, replies from {repliers.map((actor) => actor.displayName).join(', ')}</span>

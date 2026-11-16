@@ -30,6 +30,8 @@ export type DecisionView = { createdAt: string; decidedBy: string; detail: strin
 
 export type DraftView = { conversationId: string; conversationKind: string; conversationName?: string | null; draft: unknown; previous?: unknown; spaceId: string; updatedAt: string }
 
+export type FollowedThreadView = { id: string; lastActivityAt: string; messageCount: number; name: string; originMessageId?: string | null; outcome?: string | null; parentId: string; parentKind: string; parentName?: string | null; spaceId: string; spaceName: string; status: string; unread: boolean }
+
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
 export type HostOwnerChoice = "person" | "workspace"
@@ -134,6 +136,14 @@ export type MessageDraftSetInput = { conversationId: string; draft?: unknown; sa
 
 export type MessageDraftSetOutput = { draft?: DraftView | null; keptNewer: boolean }
 
+export type NotificationKeywordListInput = Record<string, never>
+
+export type NotificationKeywordListOutput = { keywords: string[]; limit: number }
+
+export type NotificationKeywordSetInput = { keywords: string[] }
+
+export type NotificationKeywordSetOutput = { keywords: string[]; limit: number }
+
 export type PackageExportInput = { includePages?: boolean; includeSkills?: boolean; module?: string | null; spaceId?: string | null; wholeWorkspace?: boolean }
 
 export type PackageExportOutput = { digest: string; package: Package }
@@ -182,6 +192,10 @@ export type StatusSetInput = { account?: string | null; awayUntil?: string | nul
 
 export type StatusSetOutput = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
 
+export type ThreadFollowedListInput = { limit?: number | null; openOnly?: boolean }
+
+export type ThreadFollowedListOutput = { threads: FollowedThreadView[] }
+
 export type WhiteboardTemplateListInput = { spaceId?: string | null }
 
 export type WhiteboardTemplateListOutput = { templates: WhiteboardTemplateView[] }
@@ -204,6 +218,8 @@ export type Operations = {
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
   message_draft_list: { input: MessageDraftListInput; output: MessageDraftListOutput }
   message_draft_set: { input: MessageDraftSetInput; output: MessageDraftSetOutput }
+  notification_keyword_list: { input: NotificationKeywordListInput; output: NotificationKeywordListOutput }
+  notification_keyword_set: { input: NotificationKeywordSetInput; output: NotificationKeywordSetOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
@@ -216,6 +232,7 @@ export type Operations = {
   status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
   status_list: { input: StatusListInput; output: StatusListOutput }
   status_set: { input: StatusSetInput; output: StatusSetOutput }
+  thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
   whiteboard_template_list: { input: WhiteboardTemplateListInput; output: WhiteboardTemplateListOutput }
 }
 

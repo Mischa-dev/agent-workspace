@@ -27,12 +27,12 @@
   "embeds": [],
   "web": { "folder": "inbox" },
   "slots": {
-    "pages": ["/inbox", "/later"],
-    "parts": ["workspace.later", "workspace.inbox_triage"],
+    "pages": ["/inbox", "/threads", "/later"],
+    "parts": ["workspace.threads", "workspace.later", "workspace.inbox_triage"],
     "sidebar": ["home.inbox"],
     "home": ["needsYou"],
     "settings": [],
-    "palette": ["g:inbox", "g:later"],
+    "palette": ["g:inbox", "g:threads", "g:later"],
     "shortcuts": ["go-inbox", "go-later", "all-unreads", "all-threads"],
     "slash": ["remind", "later"],
     "setup": []

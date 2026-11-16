@@ -30,6 +30,9 @@
     "scheduled_message_update": "change",
     "mark_read": "change",
     "conversations_mark_read": "change",
+    "notification_keyword_list": "query",
+    "notification_keyword_set": "change",
+    "thread_followed_list": "query",
     "comment_create": "create",
     "comment_list": "query",
     "comment_thread_update": "change",
@@ -56,6 +59,7 @@
     "conversation_message",
     "direct_message",
     "thread_reply",
+    "keyword",
     "thing_comment",
     "scheduled_send_failed"
   ],

@@ -35,6 +35,7 @@ use crate::{
     replies::{self, ReplyRequestView},
 };
 
+pub mod followed;
 pub(crate) mod threads;
 
 // A valid v1 Message can contain 20,000 four-byte Unicode scalar values plus

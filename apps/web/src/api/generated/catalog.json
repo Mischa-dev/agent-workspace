@@ -268,6 +268,36 @@
     "idempotent": false,
     "kind": "query",
     "long": false,
+    "module": "messages",
+    "name": "notification_keyword_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List keyword alerts"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "notification_keywords.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "notification_keyword_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set keyword alerts"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
     "module": "workspace",
     "name": "package_export",
     "permission": "settings.manage",
@@ -446,6 +476,20 @@
     "preview": false,
     "proposable": false,
     "title": "Set status"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "thread_followed_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List followed threads"
   },
   {
     "automation": false,

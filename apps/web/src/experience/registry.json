@@ -348,6 +348,13 @@
       "default": true
     },
     {
+      "id": "workspace.threads",
+      "group": "workspace",
+      "label": "Threads",
+      "description": "The threads you follow in every space, newest reply first, with their status and outcome.",
+      "default": true
+    },
+    {
       "id": "workspace.later",
       "group": "workspace",
       "label": "Later",
@@ -426,6 +433,7 @@
         "page.import_export",
         "page.references",
         "workspace.my_work",
+        "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage"
       ],
@@ -461,6 +469,7 @@
         "page.import_export",
         "page.references",
         "workspace.my_work",
+        "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage"
       ],
@@ -540,6 +549,7 @@
         "page.import_export",
         "page.references",
         "workspace.my_work",
+        "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage"
       ],
@@ -580,6 +590,7 @@
         "page.references",
         "home.working_now",
         "workspace.my_work",
+        "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage",
         "workspace.runs"
@@ -614,6 +625,7 @@
         "page.import_export",
         "page.references",
         "workspace.my_work",
+        "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage"
       ],
@@ -654,6 +666,7 @@
         "page.import_export",
         "page.references",
         "workspace.my_work",
+        "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage"
       ],
@@ -687,6 +700,7 @@
         "page.import_export",
         "page.references",
         "workspace.my_work",
+        "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage"
       ],
@@ -728,6 +742,7 @@
         "page.references",
         "tech.task_keys",
         "workspace.my_work",
+        "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage"
       ],
