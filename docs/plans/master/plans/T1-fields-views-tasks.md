@@ -17,6 +17,11 @@ code, the path is the file in that pull request.
 
 ---
 
+> **Already done (2026-11-14, roadmap coverage check).** #262, #265 and #268 merged before
+> build 1T started and did steps 2, 3, 5 and 6 of moving tasks into records. T1.3 and T1.4a
+> to T1.4d start from that state: check what is on `main` and build only what is left. The
+> slices below are not rewritten for it.
+
 > **Amended by the architecture review (2026-11-14).** R53 (one public task revision, `work_items.version`) amends section 3.1's separate versions. See `LEAD-RULINGS.md`.
 
 ## 1. Goal
@@ -1168,6 +1173,22 @@ command palette entries for every view action. Depends on T1.16, T1.41 (undo thr
 history). Acceptance: roadmap V2's
 "triage 20 tasks without the mouse" as an e2e; a vitest for the save queue's ordering.
 
+**T1.42 Milestone order and roll-up (S).** Added 2026-11-14 by the roadmap coverage check
+(AWD-168). Milestones get a manual order within their project (an operation with its agent
+tool), and each milestone shows a roll-up of its tasks (done over total, estimate done over
+total, the latest due date) on the milestones page, the timeline and `milestone_list`.
+Depends on K2.14. Acceptance: reordering milestones through the tool shows the same order on
+the web; an agent reads a milestone's roll-up from `milestone_list`.
+
+**T1.43 Project status and update posts (M).** Added 2026-11-14 by the roadmap coverage
+check (project updates as in Linear). A project carries a health (on track, at risk, off
+track), a target date and a lead; an update post is a thread made by C1.2's one
+thread-creation function, with the health it sets as its outcome; the latest update shows on
+the project's home, in My work for its members and in the initiatives it belongs to (T1.26).
+Operations with agent tools, so an agent can post the weekly update. Depends on T1.26, C1.2.
+Acceptance: posting an update with "at risk" changes the project's health and shows on its
+home and in its members' My work; an agent posts one through the tool; an isolation case.
+
 ### Phase F: forms, dashboards, records
 
 **T1.28 Forms as their own definition, internal forms and conditions (M).** `forms` table,
@@ -1451,6 +1472,8 @@ Questions for the owner (with my recommendation):
 | T1.39 | Contract: remove the second task engine (deletes W1.27a/b/d's old screens) | M | T1.9, T1.15, T1.16, parity e2e green, one release | — |
 | T1.40 | Contract: drop `saved_views` | S | T1.39, one release | — |
 | T1.41 | Records and tasks proposable, with K3 history | M | T1.11, C1.7, C1.9, K3.19 | T1.17-T1.21 |
+| T1.42 | Milestone order and roll-up | S | K2.14 | T1.23, T1.24 |
+| T1.43 | Project status and update posts | M | T1.26, C1.2 | T1.42 |
 
 ## Review changes
 

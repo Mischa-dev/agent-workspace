@@ -1214,7 +1214,12 @@ The worked example every later slice copies.
 - Depends on: K2.13; K3.15 (soft: `link_create`; until then the op writes today's link
   tables).
 - Acceptance: `mcp_task_batches.rs`, `mcp_planning.rs`, `mcp_labels.rs`, `awd89_*`,
-  `awd102_task_move.rs` pass; a person can claim and release from the web.
+  `awd102_task_move.rs` pass; a person can claim and release from the web. The planning gaps
+  from AWD-168 (added 2026-11-14): one `task_create_many` call makes 30 tasks with
+  milestones, estimates, dates and blockers; `task_depend_many` writes 30 edges in one call;
+  `task_criteria` adds a criterion already checked; `task_list` rows carry criteria done over
+  total; `dependency_graph` filters by label and parent and returns task keys; `plan_import`
+  matches existing tasks by key or title and updates them instead of making duplicates.
 - Beside: K2.15, K2.16.
 
 ### K2.15 Task and space reads (M)

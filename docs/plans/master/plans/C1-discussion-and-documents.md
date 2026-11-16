@@ -1262,7 +1262,9 @@ Whiteboards (parallel with pages and sheets):
 the contract migration.
 - Depends on: C1.33 (files on things), K5 (storage seam and leases).
 - Acceptance: after the job, a board's images load from the file store and the
-  `whiteboard_files.data` column is gone; duplicating a board doesn't copy bytes.
+  `whiteboard_files.data` column is gone; duplicating a board doesn't copy bytes; server
+  renders (`whiteboard_render`) draw in the hand-drawn style with the board's fonts, as the
+  editor does (added 2026-11-14).
 
 **C1.30 Live cursors, selections and follow (M).** Presence in the board through K5's
 `watch` and `awareness` frames, follow mode, agents' derived presence.
@@ -1304,7 +1306,10 @@ and history payloads (R24.7: compact or move to object storage, never cut).
 
 **C1.35 The document-kind contract test (S).** Guard 6.5 and the matrix integration test.
 - Depends on: C1.11, C1.28, C1.34.
-- Acceptance: the test fails when a new document kind lacks any of the five services.
+- Acceptance: the test fails when a new document kind lacks any of the five services; every
+  page block type names its Word equivalent or its fallback, and the test fails for a block
+  type that names neither, so a round trip through Google or Office stays possible (added
+  2026-11-14).
 
 **C1.36 Files from an outside source, by reference (M; R23).** Section 3.11's second part:
 `files.source_id`, `files.source_ref`, the file thing for source files, browse (`list`),
@@ -1331,6 +1336,19 @@ page and create in the target space. This is how a draft in a personal space is 
   and files; a member of the old space who isn't in the new one gets 404 on the page, its
   comments and its files (isolation case over HTTP and MCP); a link and an embed elsewhere still
   open it for those who can see it.
+
+**C1.38 Pages inside pages (M).** Added 2026-11-14 by the roadmap coverage check. A page's
+parent can be a page, through K3's `things.parent_id` (no new link table): a page tree in the
+sidebar, breadcrumbs, move and reorder within the tree, and a child-pages block. `page_write`
+takes a parent page and a move takes a new parent; moving a page moves its children with it
+(C1.37 for a move between spaces). Access stays each page's own: a child shared with someone
+opens for them even when the parent doesn't, and the breadcrumb then leaves out the parent's
+title.
+- Depends on: K3.10, C1.37.
+- Acceptance: a page nests three deep, moves between parents and between spaces with its
+  children, and shows breadcrumbs; a reader who can't see the parent still opens a child
+  shared with them and sees no parent title; an agent makes a child page through the tool;
+  an isolation case over HTTP and MCP.
 
 ## 6. Guard rails
 
@@ -1552,6 +1570,7 @@ page and create in the target space. This is how a draft in a personal space is 
 | C1.35 | Document-kind contract test | S | C1.11, C1.28, C1.34 | anything |
 | C1.36 | Files from an outside source, by reference | M | C1.33, M1.18, K5 secret store | sheets, pages, boards groups |
 | C1.37 | Move a page between spaces | S/M | C1.3, C1.33, K4.9 | sheets and boards groups |
+| C1.38 | Pages inside pages | M | K3.10, C1.37 | sheets and boards groups |
 
 ## Review changes
 
