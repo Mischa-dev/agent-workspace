@@ -53,6 +53,32 @@ formats from input (`10%`, `$5`) aren't kept yet; values are.
 Keeping the engine behind one trait is what leaves the Google link (AWD-55)
 possible: a linked sheet can compute in Google instead.
 
+## How big a sheet can get (C1.21)
+
+Every write rebuilds the whole workbook in the engine, applies the change
+and recalculates everything, and `apply` reads every stored cell to compare
+against. So a write's cost grows with the filled cells, not with the size of
+the change. `apps/server/benches/sheet_engine.rs` measures the engine's part:
+one tab 20 columns wide, a fifth of the cells formulas, one cell changed.
+
+Measured 2026-11-16 on a 4-core 2.1 GHz cloud machine (release build,
+median of 5):
+
+| Filled cells | Engine time for one write |
+| --- | --- |
+| 25,000 | 51 ms |
+| 50,000 | 104 ms |
+| 100,000 | 209 ms |
+| 200,000 | 444 ms |
+
+It's linear, about 2.1 ms per thousand cells, on top of reading and
+comparing every stored cell. **The limit stays at 50,000 filled cells.** At
+that size a write already spends about a tenth of a second of CPU, while
+holding the sheet's row lock, and a person typing makes one write per cell.
+Doubling the limit doubles that for every keystroke on a large sheet, which
+cheap hosting (ruling R24) can't absorb. Raising it needs recalculating only
+what a change touches (and reading only those cells), not a bigger number.
+
 ## Who can do what
 
 Everyone in a project reads its sheets. `sheets.edit` (on for owners, admins

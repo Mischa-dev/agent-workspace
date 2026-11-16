@@ -76,3 +76,7 @@ tower = { version = "0.5.2", features = ["util"] }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "sheet_engine"
+harness = false
