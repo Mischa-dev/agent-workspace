@@ -14,14 +14,17 @@ pub mod api;
 pub mod audit_log;
 pub mod auth;
 pub mod automations;
+pub mod backup;
 pub mod bootstrap;
 pub mod bug_reports;
+pub mod client_config;
 pub mod code_host;
 pub mod collection_forms;
 pub mod collections;
 pub mod config;
 pub mod connected_apps;
 pub mod conversations;
+pub mod db;
 pub mod direct;
 pub mod domain;
 pub mod environments;
@@ -29,6 +32,7 @@ pub mod error;
 pub mod events;
 pub mod execution;
 pub mod execution_setup;
+pub mod export;
 pub mod external_agents;
 pub mod external_events;
 pub mod external_execution;
@@ -50,6 +54,7 @@ pub mod launch;
 pub mod layouts;
 pub mod link_previews;
 pub mod mail;
+pub mod maintenance_lease;
 pub mod mcp;
 pub mod memberships;
 pub mod memory;
@@ -104,6 +109,7 @@ pub mod storage_admission;
 mod structure_guards;
 pub mod task_records;
 pub mod telemetry;
+pub mod tenancy;
 pub mod test_support;
 pub mod usage;
 pub mod views;
@@ -162,11 +168,21 @@ pub fn router(state: AppState) -> Router {
     let request_id = REQUEST_ID_HEADER.clone();
     let web_root = state.config.web_root.clone();
     let index = web_root.join("index.html");
+    let web_origins = client_config::WebOrigins(state.config.allowed_origins.clone().into());
+    // A web app served from another origin of the same site loads the API's
+    // files (H1.41); otherwise only the server's own pages may.
+    let content_security_policy = client_config::content_security_policy(&state.config);
+    let resource_policy = if client_config::split_origins(&state.config) {
+        "same-site"
+    } else {
+        "same-origin"
+    };
 
     Router::new()
         .merge(health::router(HealthState {
             pool: state.pool.clone(),
         }))
+        .merge(client_config::router())
         .merge(api::router())
         // Each module's routes, from its registration (M1.3).
         .merge(modules::registry::Registry::global().router())
@@ -213,7 +229,14 @@ pub fn router(state: AppState) -> Router {
         )
         .with_state(state)
         .layer(DefaultBodyLimit::max(MAX_APPLICATION_BODY_BYTES))
+        // CORS for the configured web origins (H1.41).
+        .layer(axum::middleware::from_fn_with_state(
+            web_origins,
+            client_config::cors,
+        ))
         .layer(axum::middleware::from_fn(metrics::track_requests))
+        // Each request's tenancy scope (H1.20), inside its span.
+        .layer(axum::middleware::from_fn(tenancy::scope_requests))
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
                 let request_id = request
@@ -227,20 +250,17 @@ pub fn router(state: AppState) -> Router {
                     method = %request.method(),
                     path = %logged_path(request),
                     request_id = request_id,
+                    tenancy = tracing::field::Empty,
+                    account_id = tracing::field::Empty,
                 )
             }),
         )
         .layer(PropagateRequestIdLayer::new(request_id.clone()))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
-        // worker-src allows only the app's own service worker (/sw.js), which
-        // makes it installable and caches the built app shell, never API data.
-        // img-src allows blob: for images the page makes itself: a whiteboard
-        // shrinks a dropped photo through one before saving it.
+        // What each source may load: client_config::content_security_policy.
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("content-security-policy"),
-            HeaderValue::from_static(
-                "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; worker-src 'self'",
-            ),
+            content_security_policy,
         ))
         // Browsers only honor this over HTTPS, so it is harmless on loopback.
         .layer(SetResponseHeaderLayer::overriding(
@@ -271,7 +291,7 @@ pub fn router(state: AppState) -> Router {
         ))
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("cross-origin-resource-policy"),
-            HeaderValue::from_static("same-origin"),
+            HeaderValue::from_static(resource_policy),
         ))
 }
 
