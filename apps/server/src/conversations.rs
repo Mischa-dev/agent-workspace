@@ -821,7 +821,7 @@ async fn list_channels(
     .bind(project_id)
     .bind(principal.actor_id)
     .bind(MAX_CHANNELS_PER_PROJECT)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let channels = rows
         .into_iter()
@@ -880,7 +880,7 @@ async fn create_channel(
     let request_hash = RequestHash::for_value(&command)?;
     let scope = idempotency::resource_bound_scope("project", project_id, "channel_create")?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = lock_project_access(
         &mut transaction,
         &principal,
@@ -1017,7 +1017,7 @@ async fn create_thread(
     let request_hash = RequestHash::for_value(&command)?;
     let scope = idempotency::resource_bound_scope("channel", channel_id, "thread_create")?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let channel = lock_conversation_access(
         &mut transaction,
         &principal,
@@ -1293,7 +1293,7 @@ pub(crate) async fn thread_summaries(
     .bind(status)
     .bind(include_archived)
     .bind(limit)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -1498,7 +1498,7 @@ async fn patch_thread(
     ApiJson(patch): ApiJson<ThreadPatch>,
 ) -> Result<Json<ConversationView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let view = update_thread(
         &mut transaction,
         principal.actor_id,
@@ -1741,7 +1741,7 @@ pub(crate) async fn append_message_command_with(
         }
     };
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let conversation = lock_message_conversation(
         &mut transaction,
         &actor,
@@ -2601,7 +2601,7 @@ async fn conversation_timeline(
     .bind(conversation.project_id)
     .bind(before_sequence)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let has_older = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
     if has_older {
@@ -2660,7 +2660,7 @@ async fn conversation_timeline(
             )
             .bind(conversation.project_id)
             .bind(conversation.id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
             serde_json::from_value(value)
                 .map_err(|_| AppError::Internal("invalid linked Work Item projection"))?
@@ -2705,7 +2705,7 @@ async fn mark_conversation_seen(
     if request.highest_seen_sequence < 0 {
         return Err(AppError::Validation("highest seen sequence"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let conversation = lock_conversation_access(
         &mut transaction,
         &principal,
@@ -2778,7 +2778,7 @@ async fn mark_conversation_unread(
     ApiJson(request): ApiJson<MarkUnreadRequest>,
 ) -> Result<Json<ReadStateView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let change = mark_unread_from(
         &mut transaction,
         principal.actor_id,
@@ -2978,7 +2978,7 @@ async fn archive_conversation(
     request: ArchiveConversationRequest,
 ) -> Result<Json<ArchiveConversationResponse>, AppError> {
     require_authenticated_write(state, headers, principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (conversation, archived) = set_conversation_archived(
         &mut transaction,
         principal.actor_id,
@@ -3066,7 +3066,7 @@ async fn restore_conversation(
     request: ArchiveConversationRequest,
 ) -> Result<Json<RestoreConversationResponse>, AppError> {
     require_authenticated_write(state, headers, principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (conversation, restored) = set_conversation_archived(
         &mut transaction,
         principal.actor_id,
@@ -3327,7 +3327,7 @@ async fn search_mentionable_actors(
     .bind(cursor_handle)
     .bind(cursor_id)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let has_more = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
     if has_more {
@@ -3399,7 +3399,7 @@ async fn project_conversation_sidebar(
     .bind(principal.actor_id)
     .bind(include_archived)
     .bind(MAX_CHANNELS_PER_PROJECT)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let threads = sqlx::query_as::<_, SidebarThreadRow>(
         r#"
@@ -3480,7 +3480,7 @@ async fn project_conversation_sidebar(
     .bind(&principal.actor_kind)
     .bind(include_archived)
     .bind(MAX_THREADS_PER_SIDEBAR)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
 
     let expanded_channel_id = query.expanded_channel_id;
@@ -3679,7 +3679,7 @@ async fn authorized_project(
     )
     .bind(project_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("project"))?;
     require_policy(
@@ -3812,7 +3812,7 @@ pub(crate) async fn fetch_conversation_access(
     )
     .bind(conversation_id)
     .bind(actor_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?)
 }
 
@@ -4105,7 +4105,7 @@ async fn fetch_read_state(
     )
     .bind(conversation_id)
     .bind(actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     Ok(row.map_or(
         ReadStateView {
@@ -4456,7 +4456,7 @@ async fn fetch_run_projection(
         "#,
     )
     .bind(conversation.id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let latest_terminal_run = sqlx::query_as::<_, RunRow>(
         r#"
@@ -4502,7 +4502,7 @@ async fn fetch_run_projection(
         "#,
     )
     .bind(conversation.id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     // Whether the latest run published, for what may be done next, read
     // before its code is left out below.
@@ -4539,7 +4539,7 @@ async fn fetch_run_projection(
             )
             .bind(run.id)
             .bind(principal.actor_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?
         }
         _ => false,
@@ -4567,7 +4567,7 @@ async fn fetch_run_projection(
         "#,
     )
     .bind(conversation.id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let active_run = active_run.map(|run| {
         let scope = ProjectScope::run(
