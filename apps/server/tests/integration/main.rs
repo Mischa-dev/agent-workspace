@@ -41,6 +41,7 @@ mod direct_conversations;
 mod export_declarations;
 mod github_task_keys;
 mod harness_support;
+mod hosting_limits;
 mod journey;
 mod layouts;
 mod m0_database;

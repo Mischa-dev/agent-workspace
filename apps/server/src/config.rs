@@ -158,6 +158,18 @@ pub struct AppConfig {
     /// Cloudflare). Unset, nothing is read from the request for the
     /// caller's address and there are no per-address limits.
     pub client_address_header: Option<String>,
+    /// MCP and public API calls one workspace's agents and apps may make
+    /// together each minute (`AGENT_WORKSPACE_WORKSPACE_CALLS_PER_MINUTE`,
+    /// H1.1).
+    pub workspace_calls_per_minute: u32,
+    /// Apps that registered but never finished connecting the server keeps
+    /// before it refuses new registrations
+    /// (`AGENT_WORKSPACE_OAUTH_MAX_UNCLAIMED_CLIENTS`).
+    pub oauth_max_unclaimed_clients: i64,
+    /// The server's own mail transport (`AGENT_WORKSPACE_MAIL_URL`, H1.17):
+    /// account mail (password resets, address confirmations) goes through
+    /// it, and so does notification mail of a workspace without its own.
+    pub server_mail: Option<ServerMail>,
     /// How each access area decides while it moves onto `access` (K1 §4.3):
     /// `AGENT_WORKSPACE_ACCESS_<AREA>=old|compare|new`, each area's default
     /// from `access::compare::AREAS`.
@@ -582,6 +594,26 @@ impl AppConfig {
             }
         }
         let client_address_header = client_address_header(values)?;
+        let workspace_calls_per_minute: u32 = parse(
+            values,
+            "WORKSPACE_CALLS_PER_MINUTE",
+            &crate::rate_limit::WORKSPACE_CALLS_PER_WINDOW.to_string(),
+        )?;
+        if workspace_calls_per_minute == 0 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}WORKSPACE_CALLS_PER_MINUTE"),
+                reason: "must be at least 1".into(),
+            });
+        }
+        let server_mail = server_mail(values)?;
+        let oauth_max_unclaimed_clients: i64 =
+            parse(values, "OAUTH_MAX_UNCLAIMED_CLIENTS", "1024")?;
+        if oauth_max_unclaimed_clients < 1 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}OAUTH_MAX_UNCLAIMED_CLIENTS"),
+                reason: "must be at least 1".into(),
+            });
+        }
         let access_modes = access_modes(values)?;
         Ok(Self {
             environment,
@@ -623,6 +655,9 @@ impl AppConfig {
             link_previews,
             secrets_key_missing,
             client_address_header,
+            workspace_calls_per_minute,
+            oauth_max_unclaimed_clients,
+            server_mail,
             access_modes,
         })
     }

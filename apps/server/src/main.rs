@@ -375,7 +375,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         config: Arc::clone(&config),
         pool: pool.clone(),
-        rate_limits: RateLimiters::default(),
+        rate_limits: RateLimiters::for_config(&config),
         realtime: realtime.clone(),
         supervisors: supervisors.clone(),
     };

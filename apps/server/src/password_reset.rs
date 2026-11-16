@@ -401,6 +401,7 @@ async fn verify_http(
 ) -> Result<Json<VerifiedResponse>, AppError> {
     require_allowed_origin(&state.config, &headers)?;
     if !well_formed(&request.token, VERIFY_PREFIX) {
+        state.rate_limits.note_invitation_failure();
         return Err(AppError::NotFound("confirmation link"));
     }
     state.rate_limits.check_invitation(&request.token)?;
@@ -417,8 +418,10 @@ async fn verify_http(
     )
     .bind(digest(&request.token).to_vec())
     .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("confirmation link"))?;
+    .await?;
+    let row = state
+        .rate_limits
+        .charge_link_miss(row.ok_or(AppError::NotFound("confirmation link")))?;
     let (user_id, actor_id, address) = row;
     let taken = sqlx::query_scalar::<_, bool>(
         r#"
@@ -728,7 +731,9 @@ async fn inspect_reset_http(
     require_allowed_origin(&state.config, &headers)?;
     state.rate_limits.check_invitation(&request.token)?;
     let mut transaction = state.pool.begin().await?;
-    let reset = live_reset(&mut transaction, &request.token).await?;
+    let reset = state
+        .rate_limits
+        .charge_link_miss(live_reset(&mut transaction, &request.token).await)?;
     let two_factor_required =
         crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await?;
     transaction.commit().await?;
@@ -775,7 +780,9 @@ async fn complete_reset_http(
     // Check the link before spending a password hash on it.
     {
         let mut transaction = state.pool.begin().await?;
-        live_reset(&mut transaction, &request.token).await?;
+        state
+            .rate_limits
+            .charge_link_miss(live_reset(&mut transaction, &request.token).await)?;
         transaction.rollback().await?;
     }
     let new_phc = {
@@ -783,7 +790,9 @@ async fn complete_reset_http(
         password::hash_password(std::mem::take(&mut request.new_password)).await?
     };
     let mut transaction = state.pool.begin().await?;
-    let reset = live_reset(&mut transaction, &request.token).await?;
+    let reset = state
+        .rate_limits
+        .charge_link_miss(live_reset(&mut transaction, &request.token).await)?;
     if crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await? {
         let code = request.code.as_deref().map(str::trim).unwrap_or_default();
         let factor = crate::account_security::load_factor(&mut transaction, reset.user_id)

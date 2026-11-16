@@ -29,8 +29,14 @@ const HOUR: Duration = Duration::from_secs(3_600);
 const AUTHENTICATED_WRITES_PER_WINDOW: u32 = 240;
 const EXPENSIVE_READS_PER_WINDOW: u32 = 120;
 const INVITATION_ATTEMPTS_PER_WINDOW: u32 = 20;
-const GLOBAL_INVITATION_ATTEMPTS_PER_WINDOW: u32 = 120;
+/// Link tokens (invitations, confirmation and reset links) that were
+/// malformed or matched nothing, across every caller. Only misses spend it;
+/// while it's spent, link lookups wait.
+const GLOBAL_INVITATION_FAILURES_PER_WINDOW: u32 = 120;
 const MCP_REQUESTS_PER_WINDOW: u32 = 600;
+/// MCP and public API calls into one workspace, from all its agents and
+/// apps together (H1.1): one workspace can't take the server's capacity.
+pub const WORKSPACE_CALLS_PER_WINDOW: u32 = 3_000;
 const MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 600;
 /// Run reports (A1.3) from one account: 20 a second on average, in bursts
 /// of up to 100. In-process until K5's shared limits.
@@ -43,14 +49,17 @@ const GLOBAL_MCP_AUTH_FAILURES_PER_WINDOW: u32 = 900;
 /// Access tokens last twelve hours, so a day covers every app in use.
 const RECENT_MCP_TOKEN_TTL: Duration = Duration::from_secs(24 * 3_600);
 const OAUTH_CEREMONIES_PER_WINDOW: u32 = 30;
+/// App sign-in ceremonies from one sender address, when the address is
+/// known.
+const OAUTH_CEREMONIES_PER_ADDRESS_PER_WINDOW: u32 = 60;
 /// App registrations from one sender address, when the address is known.
 const OAUTH_REGISTRATIONS_PER_ADDRESS_PER_WINDOW: u32 = 20;
+/// Ceremonies from callers with no known address, across all of them.
 const GLOBAL_OAUTH_CEREMONIES_PER_WINDOW: u32 = 240;
 /// Token refreshes have their own budget: one app running many sessions on a
 /// grant refreshes from all of them at once, and a refused refresh drops the
 /// app's tools, so it mustn't share the sign-in ceremonies' smaller one.
 const OAUTH_REFRESHES_PER_WINDOW: u32 = 300;
-const GLOBAL_OAUTH_REFRESHES_PER_WINDOW: u32 = 1_200;
 /// Refreshes whose token didn't check out, per sender address and in all.
 /// These are spent only by bad refreshes, so junk can't use up the budget
 /// real apps need; the global one keeps junk from reaching the database
@@ -69,24 +78,276 @@ const RECENT_OAUTH_CLIENT_TTL: Duration = Duration::from_secs(24 * 3_600);
 // WorkOS sign-in starts have their own budget so they can neither starve nor
 // be starved by password logins and MCP OAuth ceremonies.
 const WORKOS_STARTS_PER_WINDOW: u32 = 20;
+/// Starts from callers with no known address, across all of them.
 const GLOBAL_WORKOS_STARTS_PER_WINDOW: u32 = 600;
 const WEBHOOK_ATTEMPTS_PER_WINDOW: u32 = 300;
 /// Reports sent to one bug report link, and to all of them: enough for a
 /// burst of real reports, not for a loop to flood a project.
 const BUG_REPORTS_PER_WINDOW: u32 = 30;
-const GLOBAL_BUG_REPORTS_PER_WINDOW: u32 = 300;
+/// Bug reports and public form submissions into one workspace, across all
+/// its links (H1.1).
+const WORKSPACE_PUBLIC_SUBMISSIONS_PER_WINDOW: u32 = 300;
 /// Password reset requests: a few per account an hour and a few dozen per
 /// sender address, checked before a ceiling for the whole server so one
 /// script can't use up everyone's. The mail itself has its own ceiling,
 /// spent only when a reset email really goes out (to a real account).
 const PASSWORD_RESETS_PER_HOUR: u32 = 5;
 const PASSWORD_RESETS_PER_ADDRESS_PER_HOUR: u32 = 30;
+/// Reset requests from callers with no known address, across all of them.
 const GLOBAL_PASSWORD_RESETS_PER_WINDOW: u32 = 120;
 const RESET_EMAILS_PER_WINDOW: u32 = 30;
 const MAX_LOGIN_KEYS: usize = 4_096;
 const MAX_INVITATION_KEYS: usize = 4_096;
 const MAX_SESSION_KEYS: usize = 4_096;
 const CONCURRENT_PASSWORD_KDFS: usize = 2;
+
+/// Who a limiter's budget belongs to (H1.1). A budget shared by the whole
+/// server is spent only by failures and junk, or by callers the server can't
+/// tell apart: a caller that signed in, or sent a valid token, never shares
+/// one with everyone else.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LimitScope {
+    /// One sender address (`AGENT_WORKSPACE_CLIENT_ADDRESS_HEADER`).
+    Address,
+    /// One login name or email address.
+    Login,
+    /// One credential, session or token.
+    Credential,
+    /// One account.
+    Account,
+    /// One workspace, across all its people, agents and apps.
+    Workspace,
+    /// One link token (an invitation, a bug report or form link).
+    Link,
+    /// One connected app (an OAuth client).
+    Client,
+    /// The whole server, spent only by failures and junk.
+    ServerFailuresOnly,
+    /// The whole server, spent only by callers with no known address.
+    ServerUnattributed,
+    /// The whole server, spent by everyone: only the few in
+    /// [`SERVER_WIDE`], each with its reason.
+    Server,
+}
+
+/// One limiter, as declared.
+#[derive(Clone, Copy, Debug)]
+pub struct Limit {
+    /// The field in [`RateLimiters`].
+    pub name: &'static str,
+    pub scope: LimitScope,
+    pub per_window: u32,
+    pub window_seconds: u64,
+}
+
+const fn limit(name: &'static str, scope: LimitScope, per_window: u32, window: Duration) -> Limit {
+    Limit {
+        name,
+        scope,
+        per_window,
+        window_seconds: window.as_secs(),
+    }
+}
+
+/// Every limiter and its scope: the one list (R24 rule 3). K5's shared
+/// store takes these keys and scopes as they are.
+pub const LIMITS: &[Limit] = &[
+    limit(
+        "login",
+        LimitScope::Login,
+        LOGIN_ATTEMPTS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "login_hourly",
+        LimitScope::Login,
+        LOGIN_ATTEMPTS_PER_HOUR,
+        HOUR,
+    ),
+    limit(
+        "login_senders",
+        LimitScope::Address,
+        LOGIN_ATTEMPTS_PER_ADDRESS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "global_login_failures",
+        LimitScope::ServerFailuresOnly,
+        GLOBAL_LOGIN_FAILURES_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "authenticated_writes",
+        LimitScope::Credential,
+        AUTHENTICATED_WRITES_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "expensive_reads",
+        LimitScope::Credential,
+        EXPENSIVE_READS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "invitation_attempts",
+        LimitScope::Link,
+        INVITATION_ATTEMPTS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "global_invitation_failures",
+        LimitScope::ServerFailuresOnly,
+        GLOBAL_INVITATION_FAILURES_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "mcp_requests",
+        LimitScope::Credential,
+        MCP_REQUESTS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "workspace_calls",
+        LimitScope::Workspace,
+        WORKSPACE_CALLS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "run_reports",
+        LimitScope::Account,
+        RUN_REPORTS_PER_WINDOW,
+        RUN_REPORT_WINDOW,
+    ),
+    limit(
+        "mcp_auth_attempts",
+        LimitScope::Credential,
+        MCP_AUTH_ATTEMPTS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "global_mcp_auth_failures",
+        LimitScope::ServerFailuresOnly,
+        GLOBAL_MCP_AUTH_FAILURES_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "oauth_ceremonies",
+        LimitScope::Client,
+        OAUTH_CEREMONIES_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "oauth_ceremony_senders",
+        LimitScope::Address,
+        OAUTH_CEREMONIES_PER_ADDRESS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "oauth_registration_senders",
+        LimitScope::Address,
+        OAUTH_REGISTRATIONS_PER_ADDRESS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "global_oauth_ceremonies",
+        LimitScope::ServerUnattributed,
+        GLOBAL_OAUTH_CEREMONIES_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "oauth_refreshes",
+        LimitScope::Client,
+        OAUTH_REFRESHES_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "oauth_refresh_failures",
+        LimitScope::Address,
+        OAUTH_REFRESH_FAILURES_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "oauth_refresh_client_failures",
+        LimitScope::Client,
+        OAUTH_REFRESH_FAILURES_PER_CLIENT_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "global_oauth_refresh_failures",
+        LimitScope::ServerFailuresOnly,
+        GLOBAL_OAUTH_REFRESH_FAILURES_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "workos_starts",
+        LimitScope::Address,
+        WORKOS_STARTS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "global_workos_starts",
+        LimitScope::ServerUnattributed,
+        GLOBAL_WORKOS_STARTS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "webhook_attempts",
+        LimitScope::Server,
+        WEBHOOK_ATTEMPTS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "bug_reports",
+        LimitScope::Link,
+        BUG_REPORTS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "workspace_public_submissions",
+        LimitScope::Workspace,
+        WORKSPACE_PUBLIC_SUBMISSIONS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "password_resets",
+        LimitScope::Login,
+        PASSWORD_RESETS_PER_HOUR,
+        HOUR,
+    ),
+    limit(
+        "password_reset_senders",
+        LimitScope::Address,
+        PASSWORD_RESETS_PER_ADDRESS_PER_HOUR,
+        HOUR,
+    ),
+    limit(
+        "global_password_resets",
+        LimitScope::ServerUnattributed,
+        GLOBAL_PASSWORD_RESETS_PER_WINDOW,
+        WINDOW,
+    ),
+    limit(
+        "reset_emails",
+        LimitScope::Server,
+        RESET_EMAILS_PER_WINDOW,
+        WINDOW,
+    ),
+];
+
+/// The only limiters every caller shares, and why each can't be narrower.
+/// A guard test holds [`LIMITS`] to this list: a new one is a plan change.
+pub const SERVER_WIDE: &[(&str, &str)] = &[
+    (
+        "webhook_attempts",
+        "GitHub deliveries come from GitHub's shared addresses before any workspace is known; \
+         this bounds signature checks",
+    ),
+    (
+        "reset_emails",
+        "reset emails leave through the server's own mail sender, whose standing every \
+         workspace shares",
+    ),
+];
 
 #[derive(Clone)]
 pub struct RateLimiters {
@@ -98,17 +359,18 @@ pub struct RateLimiters {
     authenticated_writes: FixedWindowLimiter<Uuid>,
     expensive_reads: FixedWindowLimiter<Uuid>,
     invitation_attempts: FixedWindowLimiter<[u8; 32]>,
-    global_invitation_attempts: FixedWindowLimiter<()>,
+    global_invitation_failures: FixedWindowLimiter<()>,
     mcp_requests: FixedWindowLimiter<Uuid>,
+    workspace_calls: FixedWindowLimiter<Uuid>,
     run_reports: FixedWindowLimiter<Uuid>,
     mcp_auth_attempts: FixedWindowLimiter<[u8; 32]>,
     global_mcp_auth_failures: FixedWindowLimiter<()>,
     recent_mcp_tokens: RecentKeys,
     oauth_ceremonies: FixedWindowLimiter<[u8; 32]>,
+    oauth_ceremony_senders: FixedWindowLimiter<[u8; 32]>,
     oauth_registration_senders: FixedWindowLimiter<[u8; 32]>,
     global_oauth_ceremonies: FixedWindowLimiter<()>,
     oauth_refreshes: FixedWindowLimiter<[u8; 32]>,
-    global_oauth_refreshes: FixedWindowLimiter<()>,
     oauth_refresh_failures: FixedWindowLimiter<[u8; 32]>,
     oauth_refresh_client_failures: FixedWindowLimiter<[u8; 32]>,
     global_oauth_refresh_failures: FixedWindowLimiter<()>,
@@ -117,7 +379,7 @@ pub struct RateLimiters {
     global_workos_starts: FixedWindowLimiter<()>,
     webhook_attempts: FixedWindowLimiter<()>,
     bug_reports: FixedWindowLimiter<[u8; 32]>,
-    global_bug_reports: FixedWindowLimiter<()>,
+    workspace_public_submissions: FixedWindowLimiter<Uuid>,
     password_resets: FixedWindowLimiter<[u8; 32]>,
     password_reset_senders: FixedWindowLimiter<[u8; 32]>,
     global_password_resets: FixedWindowLimiter<()>,
@@ -183,19 +445,56 @@ impl RateLimiters {
             .map_err(AppError::rate_limited)
     }
 
+    /// A link token (an invitation, a confirmation or reset link) about to
+    /// be looked up, charged to the token. While misses everywhere have
+    /// spent the shared budget, lookups wait; a hit never spends it.
     pub fn check_invitation(&self, token_prefix: &str) -> Result<(), AppError> {
-        self.global_invitation_attempts
-            .check(())
-            .map_err(AppError::rate_limited)?;
+        if let Some(retry_after) = self
+            .global_invitation_failures
+            .spent_at(&(), Instant::now())
+        {
+            return Err(AppError::rate_limited(retry_after));
+        }
         let key: [u8; 32] = Sha256::digest(token_prefix.as_bytes()).into();
         self.invitation_attempts
             .check(key)
             .map_err(AppError::rate_limited)
     }
 
+    /// A link token that was malformed or matched nothing.
+    pub fn note_invitation_failure(&self) {
+        let _ = self.global_invitation_failures.check(());
+    }
+
+    /// Passes `result` through, charging a miss (`NotFound`) to the shared
+    /// link-failure budget.
+    pub fn charge_link_miss<T>(&self, result: Result<T, AppError>) -> Result<T, AppError> {
+        if matches!(result, Err(AppError::NotFound(_))) {
+            self.note_invitation_failure();
+        }
+        result
+    }
+
     pub fn check_mcp_request(&self, credential_id: Uuid) -> Result<(), AppError> {
         self.mcp_requests
             .check(credential_id)
+            .map_err(AppError::rate_limited)
+    }
+
+    /// An MCP or public API call into `workspace`, from any of its agents
+    /// and apps (H1.1). Browser calls aren't charged: people have their own
+    /// per-session budgets.
+    pub fn check_workspace_call(&self, workspace: Uuid) -> Result<(), AppError> {
+        self.workspace_calls
+            .check(workspace)
+            .map_err(AppError::rate_limited)
+    }
+
+    /// A bug report or public form submission into `workspace`, once its
+    /// link resolved.
+    pub fn check_workspace_public_submission(&self, workspace: Uuid) -> Result<(), AppError> {
+        self.workspace_public_submissions
+            .check(workspace)
             .map_err(AppError::rate_limited)
     }
 
@@ -233,10 +532,19 @@ impl RateLimiters {
         self.recent_mcp_tokens.insert(digest(token), Instant::now());
     }
 
-    pub fn check_oauth_ceremony(&self, untrusted_key: &str) -> Result<(), AppError> {
-        self.global_oauth_ceremonies
-            .check(())
-            .map_err(AppError::rate_limited)?;
+    /// A step of an app's sign-in ceremony from `address` (the caller's,
+    /// when known), charged to the sender, or to the shared budget for
+    /// callers with no address, and then to the app it names.
+    pub fn check_oauth_ceremony(
+        &self,
+        address: Option<&str>,
+        untrusted_key: &str,
+    ) -> Result<(), AppError> {
+        match address {
+            Some(address) => self.oauth_ceremony_senders.check(digest(address)),
+            None => self.global_oauth_ceremonies.check(()),
+        }
+        .map_err(AppError::rate_limited)?;
         let key: [u8; 32] = Sha256::digest(untrusted_key.as_bytes()).into();
         self.oauth_ceremonies
             .check(key)
@@ -285,9 +593,6 @@ impl RateLimiters {
 
     /// A refresh whose token checked out, charged to its app.
     pub fn check_oauth_refresh(&self, client_id: &str) -> Result<(), AppError> {
-        self.global_oauth_refreshes
-            .check(())
-            .map_err(AppError::rate_limited)?;
         self.oauth_refreshes
             .check(digest(client_id))
             .map_err(AppError::rate_limited)
@@ -312,14 +617,14 @@ impl RateLimiters {
             .insert(digest(client_id), Instant::now());
     }
 
-    /// `None` means the caller has no distinguishing key; it is bounded by the
-    /// global ceiling only, so one caller cannot exhaust a shared bucket.
+    /// `None` means the caller has no distinguishing key; only those share
+    /// the global ceiling, so a caller with an address never waits on it.
     pub fn check_workos_start(&self, untrusted_key: Option<&str>) -> Result<(), AppError> {
-        self.global_workos_starts
-            .check(())
-            .map_err(AppError::rate_limited)?;
         let Some(untrusted_key) = untrusted_key else {
-            return Ok(());
+            return self
+                .global_workos_starts
+                .check(())
+                .map_err(AppError::rate_limited);
         };
         let key: [u8; 32] = Sha256::digest(untrusted_key.as_bytes()).into();
         self.workos_starts
@@ -329,23 +634,20 @@ impl RateLimiters {
 
     /// A password reset request from `address` (the caller's, when known)
     /// for `normalized_key` (a login name or an email address, lower case).
-    /// The sender's budget comes first, then the account's, so a script runs
-    /// out of its own before it reaches the server's.
+    /// The sender's budget comes first (or, with no address, the one all
+    /// such callers share), then the account's.
     pub fn check_password_reset(
         &self,
         address: Option<&str>,
         normalized_key: &str,
     ) -> Result<(), AppError> {
-        if let Some(address) = address {
-            self.password_reset_senders
-                .check(digest(address))
-                .map_err(AppError::rate_limited)?;
+        match address {
+            Some(address) => self.password_reset_senders.check(digest(address)),
+            None => self.global_password_resets.check(()),
         }
+        .map_err(AppError::rate_limited)?;
         self.password_resets
             .check(digest(normalized_key))
-            .map_err(AppError::rate_limited)?;
-        self.global_password_resets
-            .check(())
             .map_err(AppError::rate_limited)
     }
 
@@ -362,12 +664,24 @@ impl RateLimiters {
     }
 
     /// A report sent to the bug report link whose token has this digest.
+    /// The workspace's own budget is charged once the link resolves
+    /// ([`Self::check_workspace_public_submission`]).
     pub fn check_bug_report(&self, token_digest: &[u8]) -> Result<(), AppError> {
-        self.global_bug_reports
-            .check(())
-            .map_err(AppError::rate_limited)?;
         let key: [u8; 32] = Sha256::digest(token_digest).into();
         self.bug_reports.check(key).map_err(AppError::rate_limited)
+    }
+}
+
+impl RateLimiters {
+    /// The limiters, with the ceilings the configuration sets.
+    pub fn for_config(config: &crate::config::AppConfig) -> Self {
+        Self::default().with_workspace_calls_per_window(config.workspace_calls_per_minute)
+    }
+
+    /// The per-workspace call ceiling set to `per_window` a minute.
+    pub fn with_workspace_calls_per_window(mut self, per_window: u32) -> Self {
+        self.workspace_calls = FixedWindowLimiter::new(per_window.max(1), WINDOW, MAX_SESSION_KEYS);
+        self
     }
 }
 
@@ -402,13 +716,18 @@ impl Default for RateLimiters {
                 WINDOW,
                 MAX_INVITATION_KEYS,
             ),
-            global_invitation_attempts: FixedWindowLimiter::new(
-                GLOBAL_INVITATION_ATTEMPTS_PER_WINDOW,
+            global_invitation_failures: FixedWindowLimiter::new(
+                GLOBAL_INVITATION_FAILURES_PER_WINDOW,
                 WINDOW,
                 1,
             ),
             mcp_requests: FixedWindowLimiter::new(
                 MCP_REQUESTS_PER_WINDOW,
+                WINDOW,
+                MAX_SESSION_KEYS,
+            ),
+            workspace_calls: FixedWindowLimiter::new(
+                WORKSPACE_CALLS_PER_WINDOW,
                 WINDOW,
                 MAX_SESSION_KEYS,
             ),
@@ -433,6 +752,11 @@ impl Default for RateLimiters {
                 WINDOW,
                 MAX_SESSION_KEYS,
             ),
+            oauth_ceremony_senders: FixedWindowLimiter::new(
+                OAUTH_CEREMONIES_PER_ADDRESS_PER_WINDOW,
+                WINDOW,
+                MAX_LOGIN_KEYS,
+            ),
             oauth_registration_senders: FixedWindowLimiter::new(
                 OAUTH_REGISTRATIONS_PER_ADDRESS_PER_WINDOW,
                 WINDOW,
@@ -447,11 +771,6 @@ impl Default for RateLimiters {
                 OAUTH_REFRESHES_PER_WINDOW,
                 WINDOW,
                 MAX_SESSION_KEYS,
-            ),
-            global_oauth_refreshes: FixedWindowLimiter::new(
-                GLOBAL_OAUTH_REFRESHES_PER_WINDOW,
-                WINDOW,
-                1,
             ),
             oauth_refresh_failures: FixedWindowLimiter::new(
                 OAUTH_REFRESH_FAILURES_PER_WINDOW,
@@ -481,7 +800,11 @@ impl Default for RateLimiters {
             ),
             webhook_attempts: FixedWindowLimiter::new(WEBHOOK_ATTEMPTS_PER_WINDOW, WINDOW, 1),
             bug_reports: FixedWindowLimiter::new(BUG_REPORTS_PER_WINDOW, WINDOW, MAX_SESSION_KEYS),
-            global_bug_reports: FixedWindowLimiter::new(GLOBAL_BUG_REPORTS_PER_WINDOW, WINDOW, 1),
+            workspace_public_submissions: FixedWindowLimiter::new(
+                WORKSPACE_PUBLIC_SUBMISSIONS_PER_WINDOW,
+                WINDOW,
+                MAX_SESSION_KEYS,
+            ),
             password_resets: FixedWindowLimiter::new(
                 PASSWORD_RESETS_PER_HOUR,
                 HOUR,
@@ -678,6 +1001,10 @@ mod tests {
         OAUTH_REFRESH_FAILURES_PER_CLIENT_PER_WINDOW, OAUTH_REFRESH_FAILURES_PER_WINDOW,
         OAUTH_REFRESHES_PER_WINDOW, RateLimiters, WEBHOOK_ATTEMPTS_PER_WINDOW,
     };
+    use super::{
+        GLOBAL_INVITATION_FAILURES_PER_WINDOW, GLOBAL_WORKOS_STARTS_PER_WINDOW, LIMITS, LimitScope,
+        SERVER_WIDE, WORKSPACE_PUBLIC_SUBMISSIONS_PER_WINDOW,
+    };
     use crate::error::AppError;
 
     #[test]
@@ -847,13 +1174,13 @@ mod tests {
         assert!(limiters.check_mcp_auth("bearer-token-b").is_ok());
 
         for _ in 0..OAUTH_CEREMONIES_PER_WINDOW {
-            assert!(limiters.check_oauth_ceremony("client-a").is_ok());
+            assert!(limiters.check_oauth_ceremony(None, "client-a").is_ok());
         }
         assert!(matches!(
-            limiters.check_oauth_ceremony("client-a"),
+            limiters.check_oauth_ceremony(None, "client-a"),
             Err(AppError::RateLimited { .. })
         ));
-        assert!(limiters.check_oauth_ceremony("client-b").is_ok());
+        assert!(limiters.check_oauth_ceremony(None, "client-b").is_ok());
         // Refreshes don't spend the exhausted ceremony budget.
         for _ in 0..OAUTH_REFRESHES_PER_WINDOW {
             assert!(limiters.check_oauth_refresh("client-a").is_ok());
@@ -945,6 +1272,134 @@ mod tests {
                 .check_oauth_refresh_sender(None, "other-app")
                 .is_ok()
         );
+    }
+
+    /// H1.1: every limiter in [`RateLimiters`] is declared, with its scope,
+    /// in [`LIMITS`], and nothing is declared that doesn't exist.
+    #[test]
+    fn every_limiter_is_declared_with_a_scope() {
+        let source = include_str!("rate_limit.rs");
+        let start = source
+            .find("pub struct RateLimiters {")
+            .expect("the struct");
+        let body = &source[start..start + source[start..].find("\n}").expect("its end")];
+        let fields = body
+            .lines()
+            .filter(|line| line.contains("FixedWindowLimiter<"))
+            .filter_map(|line| line.trim().split(':').next())
+            .collect::<std::collections::BTreeSet<_>>();
+        let declared = LIMITS
+            .iter()
+            .map(|limit| limit.name)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            fields, declared,
+            "declare every limiter in LIMITS, with its scope"
+        );
+        assert_eq!(
+            declared.len(),
+            LIMITS.len(),
+            "each limiter is declared once"
+        );
+    }
+
+    /// H1.1 (the guard of H1 6.2): no new budget every caller shares. A
+    /// server-wide one is spent only by failures, junk or callers with no
+    /// address, or is one of the few listed with their reasons.
+    #[test]
+    fn no_new_server_wide_limit() {
+        let server_wide = LIMITS
+            .iter()
+            .filter(|limit| limit.scope == LimitScope::Server)
+            .map(|limit| limit.name)
+            .collect::<Vec<_>>();
+        let listed = SERVER_WIDE
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            server_wide, listed,
+            "a limiter every caller shares needs a plan change, not a new entry"
+        );
+        assert!(SERVER_WIDE.iter().all(|(_, why)| !why.is_empty()));
+    }
+
+    /// H1.1: one workspace's agents spending their budget don't refuse
+    /// another workspace's.
+    #[test]
+    fn one_workspace_spending_its_calls_leaves_another_alone() {
+        let limiters = RateLimiters::default().with_workspace_calls_per_window(5);
+        let (first, second) = (Uuid::now_v7(), Uuid::now_v7());
+        for _ in 0..5 {
+            assert!(limiters.check_workspace_call(first).is_ok());
+        }
+        assert!(matches!(
+            limiters.check_workspace_call(first),
+            Err(AppError::RateLimited { .. })
+        ));
+        assert!(limiters.check_workspace_call(second).is_ok());
+
+        for _ in 0..WORKSPACE_PUBLIC_SUBMISSIONS_PER_WINDOW {
+            assert!(limiters.check_workspace_public_submission(first).is_ok());
+        }
+        assert!(matches!(
+            limiters.check_workspace_public_submission(first),
+            Err(AppError::RateLimited { .. })
+        ));
+        assert!(limiters.check_workspace_public_submission(second).is_ok());
+    }
+
+    /// H1.1: callers the server can tell apart never share a budget: good
+    /// refreshes, sign-in starts and reset requests from known addresses,
+    /// and link tokens that resolve.
+    #[test]
+    fn good_callers_never_spend_a_server_wide_budget() {
+        let limiters = RateLimiters::default();
+        for client in 0..(OAUTH_REFRESHES_PER_WINDOW * 5) {
+            assert!(
+                limiters
+                    .check_oauth_refresh(&format!("app-{client}"))
+                    .is_ok()
+            );
+        }
+        for sender in 0..(GLOBAL_WORKOS_STARTS_PER_WINDOW * 2) {
+            assert!(
+                limiters
+                    .check_workos_start(Some(&format!("198.51.100.{sender}")))
+                    .is_ok()
+            );
+        }
+        for sender in 0..300 {
+            assert!(
+                limiters
+                    .check_password_reset(
+                        Some(&format!("192.0.2.{sender}")),
+                        &format!("person-{sender}")
+                    )
+                    .is_ok()
+            );
+        }
+        for link in 0..(GLOBAL_INVITATION_FAILURES_PER_WINDOW * 2) {
+            assert!(limiters.check_invitation(&format!("aw_inv_{link}")).is_ok());
+        }
+        for sender in 0..300 {
+            assert!(
+                limiters
+                    .check_oauth_ceremony(
+                        Some(&format!("203.0.113.{sender}")),
+                        &format!("app-{sender}")
+                    )
+                    .is_ok()
+            );
+        }
+        // Misses spend the link budget; then lookups wait.
+        for _ in 0..GLOBAL_INVITATION_FAILURES_PER_WINDOW {
+            limiters.note_invitation_failure();
+        }
+        assert!(matches!(
+            limiters.check_invitation("aw_inv_new"),
+            Err(AppError::RateLimited { .. })
+        ));
     }
 
     #[test]

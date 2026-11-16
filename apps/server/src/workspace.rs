@@ -1546,6 +1546,7 @@ fn consume_token(token: &mut String, state: &AppState) -> Result<(String, [u8; 3
     token.zeroize();
     let Some((prefix, digest)) = result else {
         state.rate_limits.check_invitation("invalid")?;
+        state.rate_limits.note_invitation_failure();
         return Err(AppError::NotFound("workspace_invitation"));
     };
     state.rate_limits.check_invitation(&prefix)?;
@@ -1592,7 +1593,9 @@ async fn resolve_invitation(
     require_allowed_origin(&state.config, &headers)?;
     let (prefix, digest) = consume_token(&mut token, &state)?;
     let mut connection = state.pool.acquire().await?;
-    let row = find_invitation(&mut connection, &prefix, &digest, false).await?;
+    let row = state
+        .rate_limits
+        .charge_link_miss(find_invitation(&mut connection, &prefix, &digest, false).await)?;
     Ok(Json(ResolvedInvitation {
         organization_name: row.organization_name,
         role: row.role,
@@ -1781,7 +1784,9 @@ async fn accept_new_user(
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = state.pool.begin().await?;
-    let invitation = find_invitation(&mut transaction, &prefix, &digest, true).await?;
+    let invitation = state
+        .rate_limits
+        .charge_link_miss(find_invitation(&mut transaction, &prefix, &digest, true).await)?;
     let actor_id = Uuid::now_v7();
     let user_id = Uuid::now_v7();
     sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
@@ -1858,7 +1863,9 @@ async fn accept_existing_user(
     let (prefix, digest) = consume_token(&mut token, &state)?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = state.pool.begin().await?;
-    let invitation = find_invitation(&mut transaction, &prefix, &digest, true).await?;
+    let invitation = state
+        .rate_limits
+        .charge_link_miss(find_invitation(&mut transaction, &prefix, &digest, true).await)?;
     let epoch = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT user_account.authentication_epoch

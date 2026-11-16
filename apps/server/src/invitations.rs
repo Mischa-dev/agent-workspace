@@ -650,10 +650,12 @@ async fn resolve_invitation(
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
     require_allowed_origin(&state.config, &headers)?;
     let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
-    let row = fetch_valid_invitation(&state, &prefix)
-        .await?
-        .filter(|row| digest_matches(&row.token_digest, &digest))
-        .ok_or(AppError::NotFound("project_invitation"))?;
+    let row = state.rate_limits.charge_link_miss(
+        fetch_valid_invitation(&state, &prefix)
+            .await?
+            .filter(|row| digest_matches(&row.token_digest, &digest))
+            .ok_or(AppError::NotFound("project_invitation")),
+    )?;
     let mut connection = state.pool.acquire().await?;
     require_issuer_still_grants(&mut connection, &row).await?;
     Ok(Json(ResolvedInvitation {
@@ -690,10 +692,12 @@ async fn accept_new_user(
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = state.pool.begin().await?;
-    let invitation = lock_valid_invitation(&mut transaction, &prefix)
-        .await?
-        .filter(|row| digest_matches(&row.token_digest, &digest))
-        .ok_or(AppError::NotFound("project_invitation"))?;
+    let invitation = state.rate_limits.charge_link_miss(
+        lock_valid_invitation(&mut transaction, &prefix)
+            .await?
+            .filter(|row| digest_matches(&row.token_digest, &digest))
+            .ok_or(AppError::NotFound("project_invitation")),
+    )?;
     require_issuer_still_grants(&mut transaction, &invitation).await?;
     if sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM users WHERE lower(login_name) = $1)",
@@ -828,10 +832,12 @@ async fn accept_existing_user(
     let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = state.pool.begin().await?;
-    let invitation = lock_valid_invitation(&mut transaction, &prefix)
-        .await?
-        .filter(|row| digest_matches(&row.token_digest, &digest))
-        .ok_or(AppError::NotFound("project_invitation"))?;
+    let invitation = state.rate_limits.charge_link_miss(
+        lock_valid_invitation(&mut transaction, &prefix)
+            .await?
+            .filter(|row| digest_matches(&row.token_digest, &digest))
+            .ok_or(AppError::NotFound("project_invitation")),
+    )?;
     require_issuer_still_grants(&mut transaction, &invitation).await?;
     #[derive(FromRow)]
     struct ExistingIdentity {
@@ -1060,6 +1066,7 @@ fn consume_invitation_token(
     token.zeroize();
     let Some((prefix, digest)) = result else {
         state.rate_limits.check_invitation("invalid")?;
+        state.rate_limits.note_invitation_failure();
         return Err(AppError::NotFound("project_invitation"));
     };
     state.rate_limits.check_invitation(&prefix)?;
