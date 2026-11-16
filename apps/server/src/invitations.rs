@@ -890,7 +890,10 @@ async fn accept_existing_user(
             UPDATE organization_memberships
             SET role = 'admin', version = version + 1, updated_at = now()
             WHERE organization_id = $1 AND actor_id = $2
-              AND role_id IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM workspace_roles held
+                  WHERE held.id = organization_memberships.role_id AND NOT held.built_in
+              )
             "#,
         )
         .bind(invitation.organization_id)

@@ -197,24 +197,15 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{beyond}");
 
-    // Built-in roles keep their permissions; their words can change.
+    // Changing a starting role's words keeps its permissions. (K1.10: its
+    // permissions are data an owner may edit, the Owner role's aside:
+    // `every_membership_names_a_role_row_and_starting_roles_are_data`.)
     let member = role(&listed, "member").clone();
     let member_path = format!(
         "{}/{}",
         roles_path(&setup),
         member["id"].as_str().expect("id")
     );
-    let (status, refused) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &member_path,
-            None,
-            json!({"expectedVersion": member["version"], "permissions": ["tasks.view"]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     let (status, renamed) = send(
         app,
         setup.browser.request(
@@ -5704,7 +5695,7 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT role_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+        "SELECT custom_role_id(role_id) FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
     .bind(project.parse::<Uuid>().expect("project"))
     .bind(actor)
@@ -5945,4 +5936,234 @@ async fn a_custom_role_keeps_its_meaning_when_the_catalogue_grows() {
             .permissions()
             .contains(agent_workspace_server::policy::Permission::PagesComment)
     );
+}
+
+/// K1.10: every membership names a role row, and the starting roles hold
+/// their permissions as data. Old code that sets `role` alone gets that
+/// starting row; SQL's effective set of each starting role is the server's
+/// defaults; the Owner role can't be edited; editing Member changes what
+/// members may do in the workspace (the directory) and in a project
+/// (archiving a task).
+#[tokio::test]
+async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
+    use agent_workspace_server::policy::{MembershipRole, PERMISSIONS, Permission, PermissionSet};
+
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("k110_roles_as_data")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let organization = world.organization;
+    let work = world.project("WORK").to_owned();
+    let lena = &world.people["lena"];
+    for table in ["organization_memberships", "project_memberships"] {
+        let unnamed = sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT count(*) FROM {table} WHERE role_id IS NULL"
+        ))
+        .fetch_one(pool)
+        .await
+        .expect("count");
+        assert_eq!(unnamed, 0, "{table}");
+    }
+    // Old code sets `role` alone; the row follows.
+    let held = |role: &'static str| {
+        let work = work.clone();
+        async move {
+            sqlx::query("UPDATE project_memberships SET role = $3 WHERE project_id = $1::uuid AND actor_id = $2")
+                .bind(&work)
+                .bind(lena.actor)
+                .bind(role)
+                .execute(pool)
+                .await
+                .expect("old-style role change");
+            sqlx::query_scalar::<_, String>(
+                "SELECT held.key FROM project_memberships membership \
+                 JOIN workspace_roles held ON held.id = membership.role_id \
+                 WHERE membership.project_id = $1::uuid AND membership.actor_id = $2",
+            )
+            .bind(&work)
+            .bind(lena.actor)
+            .fetch_one(pool)
+            .await
+            .expect("held row")
+        }
+    };
+    assert_eq!(held("viewer").await, "viewer");
+    assert_eq!(held("member").await, "member");
+    // SQL's effective sets are the server's defaults.
+    let rows = sqlx::query_as::<_, (Uuid, String, Vec<String>)>(
+        "SELECT id, key, effective_permissions FROM workspace_roles \
+         WHERE organization_id = $1 AND built_in",
+    )
+    .bind(organization)
+    .fetch_all(pool)
+    .await
+    .expect("starting roles");
+    let keys = |set: PermissionSet| {
+        let mut keys = set
+            .keys()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    };
+    let mut ids = std::collections::BTreeMap::new();
+    for (id, key, effective) in rows {
+        let expected = match key.as_str() {
+            "owner" => {
+                let mut all = PERMISSIONS
+                    .iter()
+                    .map(|info| info.key.to_owned())
+                    .collect::<Vec<_>>();
+                all.sort();
+                all
+            }
+            "guest" => keys(PermissionSet::required()),
+            other => keys(PermissionSet::built_in(
+                MembershipRole::parse(other).expect("a starting role"),
+            )),
+        };
+        assert_eq!(effective, expected, "{key}");
+        ids.insert(key, id);
+    }
+    assert_eq!(ids.len(), 6, "{ids:?}");
+    // The Owner role can't be edited.
+    let owner_version =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM workspace_roles WHERE id = $1")
+            .bind(ids["owner"])
+            .fetch_one(pool)
+            .await
+            .expect("owner version");
+    let (status, refused) = send(
+        &world.app,
+        world.owner.browser.request(
+            "PATCH",
+            &format!(
+                "/api/v1/organizations/{organization}/roles/{}",
+                ids["owner"]
+            ),
+            None,
+            json!({"permissions": ["projects.view"], "expectedVersion": owner_version}),
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{status}: {refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Owner")),
+        "{refused}"
+    );
+    // A task Lena may archive, before the edit.
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("k110-task"),
+            json!({"title": "Kept"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {made}");
+    let task = made["workItem"]["id"]
+        .as_str()
+        .or_else(|| made["id"].as_str())
+        .unwrap_or_else(|| panic!("task id in {made}"))
+        .to_owned();
+    let members_seen = |browser: &super::support::app::Browser| {
+        let request = browser.request(
+            "GET",
+            &format!("/api/v1/organizations/{organization}/members"),
+            None,
+            Value::Null,
+        );
+        let app = world.app.clone();
+        async move {
+            let (status, listed) = send(&app, request).await;
+            assert_eq!(status, StatusCode::OK, "{listed}");
+            listed["members"].as_array().map_or(0, Vec::len)
+        }
+    };
+    assert!(members_seen(&lena.browser).await > 1);
+    // Edit Member: no "delete tasks" in projects, no directory in the
+    // workspace.
+    let narrowed = PermissionSet::built_in(MembershipRole::Member)
+        .keys()
+        .into_iter()
+        .filter(|key| {
+            *key != Permission::TasksDelete.info().key
+                && *key != Permission::DirectoryView.info().key
+        })
+        .collect::<Vec<_>>();
+    let member_version =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM workspace_roles WHERE id = $1")
+            .bind(ids["member"])
+            .fetch_one(pool)
+            .await
+            .expect("member version");
+    let (status, edited) = send(
+        &world.app,
+        world.owner.browser.request(
+            "PATCH",
+            &format!(
+                "/api/v1/organizations/{organization}/roles/{}",
+                ids["member"]
+            ),
+            None,
+            json!({"permissions": narrowed, "expectedVersion": member_version}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    let (customized, effective) = sqlx::query_as::<_, (bool, Vec<String>)>(
+        "SELECT customized, effective_permissions FROM workspace_roles WHERE id = $1",
+    )
+    .bind(ids["member"])
+    .fetch_one(pool)
+    .await
+    .expect("member row");
+    assert!(customized);
+    assert!(
+        !effective.iter().any(|key| key == "tasks.delete"),
+        "{effective:?}"
+    );
+    assert_eq!(
+        members_seen(&lena.browser).await,
+        1,
+        "only herself without the directory"
+    );
+    let (status, archived) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
+            Some("k110-archive"),
+            json!({"expectedVersion": 1}),
+        ),
+    )
+    .await;
+    assert!(
+        matches!(status, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+        "{status}: {archived}"
+    );
+    // The owner, holding everything, still archives it.
+    let (status, archived) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
+            Some("k110-owner-archive"),
+            json!({"expectedVersion": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{archived}");
+    world.finish().await;
 }

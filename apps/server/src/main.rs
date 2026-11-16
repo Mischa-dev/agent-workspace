@@ -74,6 +74,15 @@ async fn main() -> anyhow::Result<()> {
         .run(&pool)
         .await
         .context("apply database migrations")?;
+    let reconciled_roles = agent_workspace_server::roles::reconcile(&pool)
+        .await
+        .context("reconcile role permissions with the catalogue")?;
+    if reconciled_roles > 0 {
+        tracing::info!(
+            reconciled_roles,
+            "reconciled role permissions with the catalogue"
+        );
+    }
     let provisioned_workflows = work_items::provision_missing_default_workflows(&pool)
         .await
         .context("provision default Work Item workflows")?;

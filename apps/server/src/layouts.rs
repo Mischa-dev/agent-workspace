@@ -882,7 +882,7 @@ async fn project_access(
         r#"
         SELECT project.organization_id, membership.role,
                workspace_role_permissions(membership.role_id) AS role_permissions,
-               membership.role_id,
+               custom_role_id(membership.role_id) AS role_id,
                held.defaults->>'layoutPreset' AS role_layout,
                organization_membership.role AS organization_role,
                workspace_role_permissions(organization_membership.role_id)

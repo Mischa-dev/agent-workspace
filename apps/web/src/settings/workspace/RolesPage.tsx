@@ -97,8 +97,8 @@ export default function RolesPage({ workspace }: SettingsPageProps) {
   return (
     <>
       <PageHeader icon="shield-check" title="Roles">
-        What people and agents can do in {workspace.name}, and where they start. Built-in roles keep their permissions;
-        make your own from one of them to give someone less.
+        What people and agents can do in {workspace.name}, and where they start. Change a built-in role for everyone who
+        holds it, or make your own from one of them to give someone less.
       </PageHeader>
       {roles.isPending ? <ListSkeleton label="Loading roles" rows={4} /> : null}
       {roles.isError ? <ErrorState error={roles.error} onRetry={() => void roles.refetch()} title="Roles didn’t load" /> : null}
@@ -292,7 +292,8 @@ function RoleEditor({
   const layout = useWorkspaceLayout(organizationId)
   const role = editing.kind === 'edit' ? editing.role : null
   const readOnly = role ? !role.capabilities.edit : !data.canManage
-  const permissionsLocked = readOnly || Boolean(role?.builtIn)
+  // K1.10: starting roles are editable too, except the Owner role.
+  const permissionsLocked = readOnly || (role ? !role.capabilities.editPermissions : false)
   const isOwnerRole = role?.key === 'owner'
   const base = builtInPermissions(data.permissions, input.baseRole)
   const yours = new Set(data.yourPermissions)
@@ -311,7 +312,7 @@ function RoleEditor({
         return changeRole(organizationId, role, {
           name: input.name,
           description: input.description,
-          ...(role.builtIn ? {} : { permissions: input.permissions }),
+          ...(role.capabilities.editPermissions ? { permissions: input.permissions } : {}),
           ...(isOwnerRole ? {} : { agentLimit: input.agentLimit }),
           defaults,
           ...(isOwnerRole ? {} : { modulesOff: input.modulesOff }),
@@ -419,8 +420,8 @@ function RoleEditor({
 
         <fieldset className="aw-roles__group">
           <legend className="aw-roles__legend">What holders can do</legend>
-          {role?.builtIn ? (
-            <p className="aw-quiet">Built-in roles keep their permissions. Duplicate this one to change them.</p>
+          {isOwnerRole ? (
+            <p className="aw-quiet">The Owner role always holds everything.</p>
           ) : (
             <p className="aw-quiet">A role keeps only what its base role has. You can’t give a role something you can’t do yourself.</p>
           )}

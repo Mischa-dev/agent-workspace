@@ -346,7 +346,7 @@ pub(crate) async fn change_member(
           (SELECT role FROM organization_memberships
             WHERE organization_id = (SELECT organization_id FROM projects WHERE id = $1)
               AND actor_id = $2) AS organization_role,
-          role, role_id, display_name, handle, enabled, version,
+          role, custom_role_id(role_id) AS role_id, display_name, handle, enabled, version,
           invited_by_actor_id,
           (SELECT display_name FROM project_memberships inviter
             WHERE inviter.project_id = $1
@@ -669,7 +669,7 @@ fn member_list_sql() -> &'static str {
         "SELECT * FROM (",
         // The reusable projection is bounded to human Users and safe metadata.
         "SELECT membership.id, membership.project_id, project.organization_id, membership.actor_id, actor.kind AS actor_kind, ",
-        "organization_membership.role AS organization_role, membership.role, membership.role_id, membership.display_name, ",
+        "organization_membership.role AS organization_role, membership.role, custom_role_id(membership.role_id) AS role_id, membership.display_name, ",
         "membership.handle, membership.enabled, membership.version, membership.invited_by_actor_id, ",
         "inviter.display_name AS invited_by_display_name, membership.accepted_invitation_id, ",
         "membership.accepted_at::text, membership.disabled_by_actor_id, membership.disabled_at::text, ",
@@ -691,8 +691,8 @@ fn member_list_sql() -> &'static str {
 fn member_query_sql() -> &'static str {
     r#"
     SELECT membership.id, membership.project_id, project.organization_id, membership.actor_id, actor.kind AS actor_kind,
-           organization_membership.role AS organization_role, membership.role, membership.role_id,
-           membership.display_name, membership.handle, membership.enabled, membership.version,
+           organization_membership.role AS organization_role, membership.role,
+           custom_role_id(membership.role_id) AS role_id, membership.display_name, membership.handle, membership.enabled, membership.version,
            membership.invited_by_actor_id, inviter.display_name AS invited_by_display_name,
            membership.accepted_invitation_id, membership.accepted_at::text,
            membership.disabled_by_actor_id, membership.disabled_at::text,
@@ -776,9 +776,14 @@ async fn sync_organization_role(
                 WHERE project.organization_id = $1 AND project.archived_at IS NULL
                   AND membership.actor_id = $2 AND membership.enabled
                   AND membership.role IN ('owner', 'admin')
-                  -- Only the built-in roles: a custom Admin-based role grants
-                  -- less than workspace Admin, so it never widens into it.
-                  AND membership.role_id IS NULL
+                  -- Only the starting roles as they come: a custom or edited
+                  -- Admin-based role grants less than workspace Admin, so it
+                  -- never widens into it.
+                  AND NOT EXISTS (
+                      SELECT 1 FROM workspace_roles held
+                      WHERE held.id = membership.role_id
+                        AND (NOT held.built_in OR held.customized)
+                  )
             ) THEN 'admin' ELSE 'member' END AS role
         )
         UPDATE organization_memberships
@@ -787,7 +792,10 @@ async fn sync_organization_role(
         WHERE organization_id = $1 AND actor_id = $2
           AND organization_memberships.role IN ('admin', 'member')
           AND NOT organization_memberships.role_explicit
-          AND organization_memberships.role_id IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM workspace_roles held
+              WHERE held.id = organization_memberships.role_id AND NOT held.built_in
+          )
           AND organization_memberships.role <> next.role
         "#,
     )

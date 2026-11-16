@@ -552,7 +552,7 @@ const MEMBER_COLUMNS: &str = r#"
     membership.actor_id, actor.kind,
     COALESCE(profile.display_name, user_account.display_name, 'Unknown') AS display_name,
     COALESCE(profile.handle, user_account.login_name, 'unknown') AS handle,
-    user_account.login_name, membership.role, membership.role_id, held.name AS role_name,
+    user_account.login_name, membership.role, custom_role_id(membership.role_id) AS role_id, held.name AS role_name,
     membership.agent_limit, membership.enabled, membership.version,
     membership.created_at AS joined_at,
     (SELECT count(*) FROM project_memberships project_membership

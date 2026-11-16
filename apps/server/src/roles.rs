@@ -429,6 +429,8 @@ struct RoleRow {
     name: String,
     description: String,
     permissions: Vec<String>,
+    /// A starting role an admin edited (K1.10).
+    customized: bool,
     agent_limit: Option<Vec<String>>,
     defaults: Value,
     /// Modules off for holders (AWD-75).
@@ -445,13 +447,23 @@ impl RoleRow {
         MembershipRole::parse(&self.base_role).ok_or(AppError::Internal("stored base role"))
     }
 
-    /// What the role lets holders do.
+    /// What the role lets holders do: a starting role nobody edited holds
+    /// its defaults; an edited one (K1.10) and a custom one what was ticked.
     fn grant(&self) -> Result<RoleGrant, AppError> {
-        Ok(if self.built_in {
+        Ok(if self.built_in && !self.customized {
             RoleGrant::built_in(self.base()?)
         } else {
             RoleGrant::stored(&self.base_role, Some(&self.permissions))?
         })
+    }
+
+    /// Whether its permissions can be edited: any role but the owner's
+    /// (owners hold everything) and the hidden worker's.
+    fn permissions_editable(&self) -> bool {
+        !matches!(
+            self.base(),
+            Ok(MembershipRole::Owner | MembershipRole::Worker) | Err(_)
+        )
     }
 
     fn defaults(&self) -> RoleDefaults {
@@ -513,7 +525,7 @@ fn role_capabilities(caller: Standing, row: &RoleRow) -> RoleCapabilities {
         .is_ok_and(|grant| grant.permissions().is_subset_of(caller.permissions));
     RoleCapabilities {
         edit: manage,
-        edit_permissions: manage && !row.built_in,
+        edit_permissions: manage && row.permissions_editable(),
         remove: manage
             && !row.built_in
             && !row.is_default
@@ -561,7 +573,8 @@ fn role_view(caller: Standing, row: RoleRow) -> Result<RoleView, AppError> {
 
 const ROLE_SELECT: &str = r#"
     SELECT role.id, role.key, role.built_in, role.base_role, role.name, role.description,
-           role.permissions, role.agent_limit, role.defaults, role.modules_off, role.is_default,
+           role.permissions, role.customized, role.agent_limit, role.defaults, role.modules_off,
+           role.is_default,
            role.version,
            role.updated_at,
            (SELECT count(*) FROM organization_memberships holder
@@ -584,7 +597,8 @@ const ROLE_SELECT: &str = r#"
 "#;
 
 const ROLE_ORDER: &str = "ORDER BY role.built_in DESC, \
-     CASE role.key WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'member' THEN 2 WHEN 'viewer' THEN 3 ELSE 4 END, \
+     CASE role.key WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'member' THEN 2 WHEN 'viewer' THEN 3 \
+     WHEN 'guest' THEN 4 ELSE 5 END, \
      lower(role.name), role.id";
 
 async fn role_rows(
@@ -592,7 +606,9 @@ async fn role_rows(
     organization_id: Uuid,
 ) -> Result<Vec<RoleRow>, AppError> {
     Ok(sqlx::query_as::<_, RoleRow>(&format!(
-        "{ROLE_SELECT} WHERE role.organization_id = $1 {ROLE_ORDER}"
+        // The hidden worker role (K1.10) is nobody's to see or give; the
+        // guest role's screens and grants come with K1.27.
+        "{ROLE_SELECT} WHERE role.organization_id = $1 AND role.tier NOT IN ('worker', 'guest') {ROLE_ORDER}"
     ))
     .bind(organization_id)
     .fetch_all(&mut *connection)
@@ -605,7 +621,8 @@ async fn role_row(
     role_id: Uuid,
 ) -> Result<RoleRow, AppError> {
     sqlx::query_as::<_, RoleRow>(&format!(
-        "{ROLE_SELECT} WHERE role.organization_id = $1 AND role.id = $2"
+        "{ROLE_SELECT} WHERE role.organization_id = $1 AND role.id = $2 \
+         AND role.tier NOT IN ('worker', 'guest')"
     ))
     .bind(organization_id)
     .bind(role_id)
@@ -624,7 +641,7 @@ pub(crate) async fn find_role(
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT id FROM workspace_roles
-        WHERE organization_id = $1
+        WHERE organization_id = $1 AND tier NOT IN ('worker', 'guest')
           AND (id::text = $2 OR key = lower($2) OR lower(name) = lower($2))
         ORDER BY built_in DESC
         LIMIT 1
@@ -1138,7 +1155,7 @@ pub(crate) async fn create(
             !taken.contains(candidate)
                 && !matches!(
                     candidate.as_str(),
-                    "owner" | "admin" | "member" | "viewer" | "worker"
+                    "owner" | "admin" | "member" | "viewer" | "guest" | "worker"
                 )
         })
         .unwrap_or_else(|| format!("role-{}", Uuid::now_v7().simple()));
@@ -1243,6 +1260,7 @@ pub(crate) async fn change(
     lock_roles(transaction, organization_id).await?;
     let row = role_row(transaction, organization_id, role_id).await?;
     let base = row.base()?;
+    let row_editable = row.permissions_editable();
     may_define(caller, base)?;
     if let Some(expected) = change.expected_version
         && expected != row.version
@@ -1265,12 +1283,14 @@ pub(crate) async fn change(
         .map(role_description)
         .transpose()?
         .unwrap_or_else(|| before.description.clone());
+    // K1.10: starting roles are editable too, except the owner's (owners
+    // hold everything) and the hidden worker's.
     let permissions = match change.permissions.as_deref() {
         None => None,
-        Some(_) if before.built_in => {
+        Some(_) if !row_editable => {
             return Err(AppError::Refused {
                 field: "permissions",
-                message: "Built-in roles keep their permissions. Duplicate one to change them.",
+                message: "The Owner role always holds everything.",
             });
         }
         Some(keys) => Some(custom_permissions(caller, base, keys)?.keys()),
@@ -1326,6 +1346,7 @@ pub(crate) async fn change(
         r#"
         UPDATE workspace_roles
         SET name = $3, description = $4, permissions = COALESCE($5, permissions),
+            customized = customized OR (built_in AND $5 IS NOT NULL),
             agent_limit = $6, defaults = $7, is_default = $8, updated_by_actor_id = $9,
             modules_off = $10, version = version + 1, updated_at = now()
         WHERE organization_id = $1 AND id = $2
@@ -1441,7 +1462,7 @@ async fn lock_target(
 ) -> Result<TargetRow, AppError> {
     sqlx::query_as::<_, TargetRow>(&format!(
         r#"
-        SELECT actor.kind, membership.role, membership.role_id, held.name AS role_name,
+        SELECT actor.kind, membership.role, custom_role_id(membership.role_id) AS role_id, held.name AS role_name,
                membership.enabled, membership.version, membership.agent_limit
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
@@ -1679,7 +1700,7 @@ async fn apply_to_their_projects(
 ) -> Result<(Vec<Uuid>, Vec<SkippedProject>), AppError> {
     let memberships = sqlx::query_as::<_, TheirProject>(
         r#"
-        SELECT membership.project_id, membership.role, membership.role_id,
+        SELECT membership.project_id, membership.role, custom_role_id(membership.role_id) AS role_id,
                caller_membership.role AS caller_role,
                workspace_role_permissions(caller_membership.role_id) AS caller_permissions,
                COALESCE(caller_membership.enabled, false) AS caller_enabled
@@ -1941,7 +1962,7 @@ pub(crate) async fn permissions_of(
 ) -> Result<PermissionsView, AppError> {
     let workspace = sqlx::query_as::<_, HeldRow>(&format!(
         r#"
-        SELECT actor.kind, membership.role, membership.role_id, held.name AS role_name,
+        SELECT actor.kind, membership.role, custom_role_id(membership.role_id) AS role_id, held.name AS role_name,
                workspace_role_permissions(membership.role_id) AS role_permissions,
                held.agent_limit AS role_limit, membership.agent_limit AS personal_limit
         FROM organization_memberships membership
@@ -1984,7 +2005,7 @@ pub(crate) async fn permissions_of(
         Some(project_id) => {
             let row = sqlx::query_as::<_, HeldRow>(&format!(
                 r#"
-                SELECT actor.kind, membership.role, membership.role_id, held.name AS role_name,
+                SELECT actor.kind, membership.role, custom_role_id(membership.role_id) AS role_id, held.name AS role_name,
                        workspace_role_permissions(membership.role_id) AS role_permissions,
                        held.agent_limit AS role_limit, NULL::text[] AS personal_limit
                 FROM project_memberships membership
@@ -2250,6 +2271,30 @@ async fn read_permissions(
     Ok(Json(
         permissions_of(&mut connection, organization_id, actor_id, query.project_id).await?,
     ))
+}
+
+/// Start-up reconcile (K1.10): every role row's effective permissions
+/// follow the catalogue, so a key a migration adds reaches the starting
+/// roles nobody edited and every custom role's closure. Only rows whose
+/// value differs are written (`workspace_roles_effective` recomputes them),
+/// so it is safe on every start. Returns how many rows changed.
+pub async fn reconcile(pool: &sqlx::PgPool) -> Result<u64, sqlx::Error> {
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    let changed = sqlx::query(
+        r#"
+        UPDATE workspace_roles role SET updated_at = role.updated_at
+        WHERE role.effective_permissions IS DISTINCT FROM CASE
+            WHEN role.built_in AND (NOT role.customized OR role.tier IN ('owner', 'worker'))
+                THEN starting_role_permissions(role.key)
+            ELSE role_closed_permissions(role.permissions, role.base_role)
+        END
+        "#,
+    )
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    transaction.commit().await?;
+    Ok(changed)
 }
 
 /// Built-in role keys and what each holds, for the equivalence test.

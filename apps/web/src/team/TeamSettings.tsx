@@ -373,7 +373,9 @@ function MemberRow({
   roles: WorkspaceRoleView[]
 }) {
   // A custom role they hold that you can't give still shows as theirs.
-  const held = member.roleId ? roles.find((role) => role.id === member.roleId) : undefined
+  // Every membership names a role row (K1.10); a starting role is picked by its key.
+  const named = member.roleId ? roles.find((role) => role.id === member.roleId) : undefined
+  const held = named && !named.builtIn ? named : undefined
   const options = held && !customRoles.some((role) => role.id === held.id) ? [held, ...customRoles] : customRoles
   return (
     <Row
@@ -384,7 +386,7 @@ function MemberRow({
             className="aw-field--inline"
             disabled={disabled || !member.capabilities.changeRole || !member.enabled}
             onChange={(event) => onChange({ expectedVersion: member.version, ...choiceOf(event.target.value, options) })}
-            value={member.roleId ?? member.role}
+            value={held?.id ?? member.role}
           >
             {member.role === 'owner' && <option value="owner">Owner</option>}
             {member.actorKind !== 'external_agent' && <option value="admin">Admin</option>}
