@@ -286,6 +286,11 @@ pub(super) struct WorkspaceUpdateArguments {
     /// hides a module everywhere in the workspace without deleting anything.
     #[serde(default)]
     pub modules: Option<std::collections::BTreeMap<String, bool>>,
+    /// Switch `modules` in this project only: off hides a module there and
+    /// nowhere else; on undoes that, but never turns on a module the
+    /// workspace has off. No preset with it.
+    #[serde(default)]
+    pub in_project_only: bool,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -388,6 +393,7 @@ pub(super) async fn workspace_update(
                 organization_id,
                 arguments.preset.as_deref(),
                 &switches,
+                arguments.in_project_only.then_some(project_id),
             )
             .await?;
             if let Some(metadata) = metadata {
@@ -441,6 +447,20 @@ pub(super) async fn workspace_update(
         Err(AppError::Validation("module can't be switched")) => {
             ToolResult::invalid("modules", "One of those modules is always on.")
         }
+        Err(AppError::Validation("module is off in the workspace")) => ToolResult::invalid(
+            "modules",
+            "One of those modules is off in the whole workspace; a project can't turn it on.",
+        ),
+        Err(AppError::Validation("a preset applies to the whole workspace")) => {
+            ToolResult::invalid(
+                "preset",
+                "A preset applies to the whole workspace, not one project.",
+            )
+        }
+        Err(AppError::Validation("space")) => ToolResult::invalid(
+            "inProjectOnly",
+            "This project's modules follow the workspace.",
+        ),
         Err(AppError::Validation(field)) if field.contains("name") => {
             ToolResult::invalid("name", "That name isn't valid.")
         }

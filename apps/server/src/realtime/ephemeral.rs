@@ -11,7 +11,7 @@
 //! contract carries them (K5.19).
 
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Transaction};
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use super::{RealtimeEvent, RealtimeHub};
@@ -84,13 +84,13 @@ pub async fn publish(state: &AppState, frame: EphemeralFrame) {
 /// Sends `frame` to every instance, this one included, once `transaction`
 /// commits; nothing is sent if it rolls back.
 pub async fn publish_on_commit(
-    transaction: &mut Transaction<'_, Postgres>,
+    transaction: &mut PgConnection,
     frame: EphemeralFrame,
 ) -> Result<(), AppError> {
     for payload in packed(None, split(frame)) {
         sqlx::query("SELECT pg_notify(realtime_channel('ephemeral'), $1)")
             .bind(payload)
-            .execute(&mut **transaction)
+            .execute(&mut *transaction)
             .await?;
     }
     Ok(())

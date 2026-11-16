@@ -17,4 +17,5 @@ export default {
       path: '/collections',
     },
   ],
+  things: [{ kind: 'record', label: 'Record', icon: 'table' }],
 } satisfies WebModule

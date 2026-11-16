@@ -4005,12 +4005,16 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json_body(json!({"hidden": [], "showHidden": true})),
         ),
         // Modules: switching one on that is on changes nothing in A, so the
-        // rest of the run keeps every module.
+        // rest of the run keeps every module. B's space can't be narrowed
+        // from A (M1.2).
         path_case(
             "PUT /api/v1/organizations/{organization_id}/modules",
             &[organization()],
             json_body(json!({"switches": {"whiteboards": true}})),
-        ),
+        )
+        .rejecting(vec![
+            json!({"switches": {"whiteboards": false}, "space": b.project}),
+        ]),
         // Workspace templates (AWD-76): Everything changes nothing in A, whose
         // modules are all on. B's saved template and project are refused.
         path_case(

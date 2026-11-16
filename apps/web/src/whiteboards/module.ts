@@ -24,4 +24,5 @@ export default {
       path: '/whiteboards',
     },
   ],
+  things: [{ kind: 'whiteboard', label: 'Whiteboard', icon: 'whiteboard' }],
 } satisfies WebModule

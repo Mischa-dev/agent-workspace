@@ -23,5 +23,9 @@ export default {
   palette: [
     { id: 'p:archived', space: 'project', rank: 150, label: 'Archived conversations', icon: 'archive', path: '/conversations/archived' },
   ],
+  things: [
+    { kind: 'channel', label: 'Channel', icon: 'message' },
+    { kind: 'thread', label: 'Thread', icon: 'message' },
+  ],
   phone: true,
 } satisfies WebModule

@@ -53,8 +53,8 @@ pub fn document(registry: &Registry) -> Result<Value, String> {
             parameters.push(json!({
                 "name": "Idempotency-Key",
                 "in": "header",
-                "required": false,
-                "description": "Your id for this request: a retry with the same id is answered once, with replayed: true.",
+                "required": true,
+                "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
                 "schema": { "type": "string", "maxLength": 128 },
             }));
         }

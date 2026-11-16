@@ -157,6 +157,15 @@ pub async fn mirror(
             Some(p.version),
             None,
         ),
+        P::ProjectModulesUpdated(p) => (
+            &catalog::SPACE_MODULES_CHANGED,
+            "space",
+            p.project_id,
+            None,
+            Audience::Space,
+            None,
+            None,
+        ),
         P::NotificationsUpdated(p) => (
             &catalog::NOTIFICATION_CHANGED,
             "account",

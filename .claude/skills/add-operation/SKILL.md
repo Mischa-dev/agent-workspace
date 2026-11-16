@@ -47,7 +47,10 @@ impl Targeted for ThingCreateInput {
   where conversations are involved).
 - An old argument name stays accepted with `#[serde(alias = "oldName")]`.
 - Don't add `workspace`, `clientRequestId` or `preview` fields: the edges
-  read those themselves.
+  read those themselves. A write's request id is never guessed (ruling R52):
+  the web app and v2 must send `Idempotency-Key`, automations derive theirs
+  from their run and step, and an MCP or v1 call without one runs once and
+  answers `replaySafe: false`.
 
 ## 2. The operation
 

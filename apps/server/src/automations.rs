@@ -2488,6 +2488,8 @@ async fn run_operation(
         trace_id: None,
         workspace: None,
         request_id,
+        // Every action derives its id from its run and step.
+        unkeyed: crate::ops::Unkeyed::Refuse("clientRequestId"),
         preview: false,
         renamed_from: None,
     };

@@ -45,6 +45,23 @@ pub struct Contributions {
     pub filters: Vec<ModuleFilter>,
     /// Its parts of a workspace export (H1 fills them in).
     pub exports: Vec<ExportPart>,
+    /// Its routes that name content by id, for the module gate (M1.2).
+    pub id_routes: Vec<IdRoute>,
+}
+
+/// A family of routes that names the module's content by id rather than by
+/// space (`/api/v1/pages/{id}…`): the module gate looks the id up to the
+/// space and workspace it lives in, so the module's switch, the space's
+/// narrowing and the caller's role apply there (M1.2, after P0.7).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IdRoute {
+    /// The path up to the id, such as `/api/v1/pages/`.
+    pub prefix: &'static str,
+    /// The id's parameter name in the route template.
+    pub param: &'static str,
+    /// SQL taking the id as `$1` and returning the space (NULL for
+    /// workspace-level content) and the workspace.
+    pub lookup: &'static str,
 }
 
 /// A rule a module registers instead of other code naming it by hand
@@ -101,6 +118,11 @@ impl Registrar<'_> {
 
     pub fn export(&mut self, part: ExportPart) -> &mut Self {
         self.into.exports.push(part);
+        self
+    }
+
+    pub fn id_route(&mut self, route: IdRoute) -> &mut Self {
+        self.into.id_routes.push(route);
         self
     }
 }
@@ -402,6 +424,17 @@ impl Registry {
                 ModuleFilter::AlsoServes(tools) if tools.contains(&tool) => Some(module),
                 _ => None,
             })
+    }
+
+    /// Every module's id-routed families, with the module's id.
+    pub fn id_routes(&self) -> impl Iterator<Item = (&str, IdRoute)> {
+        self.modules.iter().flat_map(|module| {
+            module
+                .contributions
+                .id_routes
+                .iter()
+                .map(move |route| (module.id.as_str(), *route))
+        })
     }
 
     /// Every module's export parts, with the module's id.

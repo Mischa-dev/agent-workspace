@@ -1,11 +1,12 @@
 //! Which modules are on.
 //!
-//! A workspace switches each module with a `modules.<id>` setting at
-//! workspace scope (unset, it's on). A module is on when its switch is and
-//! every module it needs is on too, so turning Projects off turns Channels,
-//! Tasks and the rest off with it. Roles narrow that further for the people
-//! who hold them. Off means hidden, never deleted: nothing is removed, and
-//! turning a module back on brings everything back.
+//! A workspace switches each module with a `module_installs` row (M1.2;
+//! no row, it's on). A module is on when its switch is and every module it
+//! needs is on too, so turning Projects off turns Channels, Tasks and the
+//! rest off with it. A space can narrow that with rows of its own (only
+//! ever off), and roles narrow it further for the people who hold them.
+//! Off means hidden, never deleted: nothing is removed, and turning a
+//! module back on brings everything back.
 
 use std::collections::BTreeMap;
 
@@ -18,9 +19,28 @@ use super::{
 };
 use crate::error::AppError;
 
-/// The setting that switches a module.
+/// The setting that switched a module before M1.2. It stays defined until
+/// M1.11's contract step, so an older server can still write it (a trigger
+/// mirrors that into `module_installs`); nothing reads it.
 pub fn setting_key(module: &str) -> String {
     format!("modules.{module}")
+}
+
+/// Where a module switch is kept: the workspace's own, or a narrowing in
+/// one of its spaces.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SwitchScope {
+    Workspace,
+    Space(Uuid),
+}
+
+impl SwitchScope {
+    fn space_id(self) -> Option<Uuid> {
+        match self {
+            Self::Workspace => None,
+            Self::Space(space) => Some(space),
+        }
+    }
 }
 
 /// A fixed number of 64-bit words, one bit per index.
@@ -265,43 +285,108 @@ impl Switches {
 
 #[derive(FromRow)]
 struct SwitchRow {
-    organization_id: Uuid,
-    key: String,
-    value: serde_json::Value,
+    workspace_id: Uuid,
+    module_key: String,
+    state: String,
     version: i64,
 }
 
-/// The switches stored for some workspaces.
+/// The switches stored for some workspaces (their own, not their spaces').
 async fn switches_of(
     connection: &mut PgConnection,
     organization_ids: &[Uuid],
 ) -> Result<BTreeMap<Uuid, Switches>, AppError> {
     let rows = sqlx::query_as::<_, SwitchRow>(
         r#"
-        SELECT organization_id, key, value, version
-        FROM settings
-        WHERE organization_id = ANY($1) AND scope = 'workspace' AND key LIKE 'modules.%'
+        SELECT workspace_id, module_key, state, version
+        FROM module_installs
+        WHERE workspace_id = ANY($1) AND space_id IS NULL
         "#,
     )
     .bind(organization_ids)
     .fetch_all(&mut *connection)
     .await?;
+    Ok(collect_switches(organization_ids, rows))
+}
+
+fn collect_switches(organization_ids: &[Uuid], rows: Vec<SwitchRow>) -> BTreeMap<Uuid, Switches> {
     let mut found: BTreeMap<Uuid, Switches> = organization_ids
         .iter()
         .map(|id| (*id, Switches::default()))
         .collect();
     for row in rows {
-        let (Some(module), Some(on)) = (row.key.strip_prefix("modules."), row.value.as_bool())
-        else {
-            continue;
-        };
         found
-            .entry(row.organization_id)
+            .entry(row.workspace_id)
             .or_default()
             .values
-            .insert(module.to_owned(), (on, row.version));
+            .insert(row.module_key, (row.state == "on", row.version));
     }
-    Ok(found)
+    found
+}
+
+/// The switches a space keeps of its own: only narrowings (off) count.
+pub async fn space_switches(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    space_id: Uuid,
+) -> Result<Switches, AppError> {
+    let rows = sqlx::query_as::<_, SwitchRow>(
+        r#"
+        SELECT workspace_id, module_key, state, version
+        FROM module_installs
+        WHERE workspace_id = $1 AND space_id = $2
+        "#,
+    )
+    .bind(organization_id)
+    .bind(space_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    Ok(collect_switches(&[organization_id], rows)
+        .remove(&organization_id)
+        .unwrap_or_default())
+}
+
+/// Write one switch: on or off, in the workspace or a space. Returns
+/// whether it changed. The caller checks who may and audits.
+pub async fn write_switch(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    scope: SwitchScope,
+    module: &str,
+    on: bool,
+    actor_id: Uuid,
+) -> Result<bool, AppError> {
+    let conflict = match scope {
+        SwitchScope::Workspace => "(workspace_id, module_key) WHERE space_id IS NULL",
+        SwitchScope::Space(_) => "(workspace_id, space_id, module_key) WHERE space_id IS NOT NULL",
+    };
+    let changed = sqlx::query_scalar::<_, Uuid>(&format!(
+        r#"
+        INSERT INTO module_installs (
+            id, workspace_id, space_id, module_key, state, changed_by_actor_id
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT {conflict} DO UPDATE
+        SET state = EXCLUDED.state,
+            version = module_installs.version + 1,
+            changed_by_actor_id = EXCLUDED.changed_by_actor_id,
+            changed_at = now()
+        WHERE module_installs.state <> EXCLUDED.state
+        RETURNING id
+        "#
+    ))
+    .bind(Uuid::now_v7())
+    .bind(organization_id)
+    .bind(scope.space_id())
+    .bind(module)
+    .bind(if on { "on" } else { "off" })
+    .bind(actor_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if changed.is_some() {
+        // Every instance forgets once this commits (K5.5).
+        super::gate::forget_everywhere(connection, organization_id).await?;
+    }
+    Ok(changed.is_some())
 }
 
 /// A workspace's switches.
@@ -329,6 +414,16 @@ pub async fn workspace(
 const HELD_MODULES_OFF: &str = "COALESCE((SELECT held.modules_off FROM workspace_roles held \
      WHERE held.organization_id = {org} AND (held.id = {membership}.role_id \
      OR ({membership}.role_id IS NULL AND held.key = {membership}.role))), '{}')";
+
+/// The modules a space's own rows turn off there; `{space}` is the SQL
+/// alias of its `projects` row.
+fn space_modules_off(space: &str) -> String {
+    format!(
+        "ARRAY(SELECT space_switch.module_key FROM module_installs space_switch \
+         WHERE space_switch.workspace_id = {space}.organization_id \
+           AND space_switch.space_id = {space}.id AND space_switch.state = 'off')"
+    )
+}
 
 fn held_modules_off(organization: &str, membership: &str) -> String {
     HELD_MODULES_OFF
@@ -381,10 +476,10 @@ struct ProjectRow {
     id: Uuid,
     organization_id: Uuid,
     kind: String,
-    /// The modules the holder's role turns off here: the project role when
-    /// they're in the project (the one that counts there), else the
-    /// workspace role. The hidden project DMs live in follows the workspace
-    /// role.
+    /// The modules off here for the holder: the space's own narrowing,
+    /// and what their role turns off (the project role when they're in the
+    /// project, the one that counts there, else the workspace role; the
+    /// hidden project DMs live in follows the workspace role).
     role_off: Vec<String>,
 }
 
@@ -406,12 +501,13 @@ async fn project_rows(
                     WHERE membership.organization_id = project.organization_id
                       AND membership.actor_id = $2 AND membership.enabled),
                    '{{}}'
-               ) AS role_off
+               ) || {space_off} AS role_off
         FROM projects project
         WHERE project.id = ANY($1)
         "#,
         project_off = held_modules_off("project.organization_id", "membership"),
         workspace_off = held_modules_off("membership.organization_id", "membership"),
+        space_off = space_modules_off("project"),
     ))
     .bind(projects)
     .bind(actor_id)
@@ -605,8 +701,8 @@ impl ProjectModules {
     }
 }
 
-/// The switches a module needs on: its own and, through its needs, every
-/// module below it.
+/// The switches a module needs on, by module id: its own and, through its
+/// needs, every module below it.
 pub fn required_switches(module: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut queue = vec![module.to_owned()];
@@ -614,7 +710,7 @@ pub fn required_switches(module: &str) -> Vec<String> {
         let Some(manifest) = manifest::get(&next) else {
             continue;
         };
-        let key = setting_key(&manifest.id);
+        let key = manifest.id.clone();
         if manifest.switchable && !found.contains(&key) {
             found.push(key);
         }
@@ -630,8 +726,8 @@ fn sql_array(keys: &[String]) -> String {
     }
     let quoted = keys
         .iter()
-        // Keys come from the compiled-in manifests: lower-case letters,
-        // dots and underscores only (a manifest test checks module ids).
+        // Ids come from the compiled-in manifests: lower-case letters,
+        // digits and underscores only (the registry checks module ids).
         .map(|key| format!("'{}'", key.replace('\'', "")))
         .collect::<Vec<_>>()
         .join(", ");
@@ -640,8 +736,9 @@ fn sql_array(keys: &[String]) -> String {
 
 /// A SQL condition, for notification reads, that is true when the
 /// notification `n`'s module is on for its recipient: switched on in its
-/// project's workspace (and every module that one needs), and not turned off
-/// by the recipient's role there (their project role, or in the direct space
+/// project's workspace and not narrowed off in the project itself (and so
+/// for every module that one needs), and not turned off by the recipient's
+/// role there (their project role, or in the direct space
 /// and where they hold none, their workspace role, as `project_rows` reads
 /// it). Generated once from the manifests.
 pub fn notification_switches_sql() -> &'static str {
@@ -684,12 +781,12 @@ pub fn notification_switches_sql() -> &'static str {
             r#"NOT EXISTS (
                 SELECT 1
                 FROM projects module_project
-                JOIN settings module_switch
-                  ON module_switch.organization_id = module_project.organization_id
-                 AND module_switch.scope = 'workspace'
-                 AND module_switch.value = 'false'::jsonb
+                JOIN module_installs module_switch
+                  ON module_switch.workspace_id = module_project.organization_id
+                 AND (module_switch.space_id IS NULL OR module_switch.space_id = module_project.id)
+                 AND module_switch.state = 'off'
                 WHERE module_project.id = n.project_id
-                  AND module_switch.key = ANY(CASE n.kind{cases} ELSE ARRAY[]::text[] END)
+                  AND module_switch.module_key = ANY(CASE n.kind{cases} ELSE ARRAY[]::text[] END)
             )
             AND NOT EXISTS (
                 SELECT 1
@@ -704,14 +801,10 @@ pub fn notification_switches_sql() -> &'static str {
                        WHERE membership.organization_id = module_project.organization_id
                          AND membership.actor_id = n.recipient_actor_id AND membership.enabled),
                       '{{}}'
-                  ) && ARRAY(
-                      SELECT substring(key FROM {prefix})
-                      FROM unnest(CASE n.kind{cases} ELSE ARRAY[]::text[] END) key
-                  )
+                  ) && (CASE n.kind{cases} ELSE ARRAY[]::text[] END)
             )"#,
             project_off = held_modules_off("module_project.organization_id", "membership"),
             workspace_off = held_modules_off("membership.organization_id", "membership"),
-            prefix = setting_key("").len() + 1,
         )
     })
 }
@@ -723,25 +816,18 @@ mod tests {
     #[test]
     fn module_switch_sql_names_every_notification_kind() {
         let sql = super::notification_switches_sql();
-        assert!(
-            sql.contains("WHEN 'assigned' THEN ARRAY['modules.projects', 'modules.tasks']::text[]")
-        );
+        assert!(sql.contains("WHEN 'assigned' THEN ARRAY['projects', 'tasks']::text[]"));
         assert!(sql.contains("WHEN 'mention' THEN CASE WHEN module_project.kind = 'direct'"));
         // The recipient's role narrows it too: their project role, or their
         // workspace role in the direct space.
         assert!(sql.contains("held.modules_off"));
+        // A space's own narrowing counts as the workspace's does.
+        assert!(sql.contains("module_switch.space_id = module_project.id"));
         assert!(sql.contains("membership.actor_id = n.recipient_actor_id"));
         assert!(sql.contains("module_project.kind NOT IN ('direct', 'workspace')"));
         assert_eq!(
             super::required_switches("runs"),
-            [
-                "modules.channels",
-                "modules.code",
-                "modules.messages",
-                "modules.projects",
-                "modules.runs",
-                "modules.tasks"
-            ]
+            ["channels", "code", "messages", "projects", "runs", "tasks"]
         );
     }
 

@@ -1,13 +1,16 @@
 //! One result shape on every edge.
 //!
 //! ```json
-//! { "outcome": "ok", "value": { ... }, "requestId": "c-41", "replayed": false }
+//! { "outcome": "ok", "value": { ... }, "requestId": "c-41", "replayed": false,
+//!   "replaySafe": true }
 //! { "outcome": "conflict", "code": "version", "message": "...", "retryCategory": "reread",
 //!   "details": { "currentVersion": 8 } }
 //! ```
 //!
 //! `outcome` is the discriminator (as in the older tools' `ToolResult`),
 //! names are camelCase, and `message` is always present on errors. Each
+//! A write's answer says `replaySafe`: whether a retry with the same request
+//! id is answered once (false when it came without one, ruling R52). The
 //! operation's output schema is one `oneOf` over the ok branch and every
 //! error outcome, so a refusal from the dispatcher always matches it.
 
@@ -23,6 +26,8 @@ pub enum Envelope<T> {
         value: T,
         request_id: Option<String>,
         replayed: bool,
+        /// Writes only: whether the call had a request id to replay by.
+        replay_safe: Option<bool>,
         preview: bool,
     },
     Error(OpError),
@@ -35,6 +40,7 @@ impl<T: Serialize> Envelope<T> {
                 value,
                 request_id,
                 replayed,
+                replay_safe,
                 preview,
             } => {
                 let mut body = json!({
@@ -44,6 +50,9 @@ impl<T: Serialize> Envelope<T> {
                 });
                 if let Some(request_id) = request_id {
                     body["requestId"] = request_id.as_str().into();
+                }
+                if let Some(replay_safe) = replay_safe {
+                    body["replaySafe"] = (*replay_safe).into();
                 }
                 if *preview {
                     body["preview"] = true.into();
@@ -75,6 +84,7 @@ pub fn schema(mut output: Value) -> Value {
             "value": output,
             "requestId": { "type": "string" },
             "replayed": { "type": "boolean" },
+            "replaySafe": { "type": "boolean" },
             "preview": { "type": "boolean" },
         },
         "required": ["outcome", "value"],
@@ -122,11 +132,13 @@ mod tests {
             value: json!({"id": 1}),
             request_id: Some("c-1".into()),
             replayed: true,
+            replay_safe: Some(true),
             preview: false,
         }
         .to_json();
         assert_eq!(ok["outcome"], "ok");
         assert_eq!(ok["requestId"], "c-1");
         assert_eq!(ok["replayed"], true);
+        assert_eq!(ok["replaySafe"], true);
     }
 }

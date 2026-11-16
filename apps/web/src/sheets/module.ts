@@ -8,4 +8,5 @@ export default {
   palette: [
     { id: 'p:sheets', space: 'project', rank: 50, label: 'Sheets', icon: 'table', keywords: ['spreadsheet', 'formulas', 'cells', 'budget'], path: '/sheets' },
   ],
+  things: [{ kind: 'sheet', label: 'Sheet', icon: 'table' }],
 } satisfies WebModule

@@ -383,6 +383,14 @@ pub static SPACE_MEMBER_CHANGED: EventType = fact(
 )
 .legacy(&["project.membership.updated"]);
 
+pub static SPACE_MODULES_CHANGED: EventType = fact(
+    "space.modules_changed",
+    "projects",
+    Some("space"),
+    "A space's own module switches changed",
+)
+.legacy(&["project.modules.updated"]);
+
 // --- workspace -------------------------------------------------------------
 pub static FILE_ATTACHED: EventType = fact(
     "file.attached",
@@ -470,6 +478,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &PULL_REQUEST_MERGED,
         &PULL_REQUEST_CLOSED,
         &SPACE_MEMBER_CHANGED,
+        &SPACE_MODULES_CHANGED,
         &FILE_ATTACHED,
         &FILE_REMOVED,
         &NOTIFICATION_CHANGED,

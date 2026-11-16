@@ -16,6 +16,7 @@ import {
   type ReactionUpdates,
 } from '../conversations/liveMessages'
 import { createLiveStore, NO_STREAMS, type Streams } from './liveStore'
+import { modulesChanged } from './moduleSwitches'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
 import {
   durableMessageId,
@@ -332,6 +333,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
             invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
             return
           }
+          if (modulesChanged(queryClient, envelope)) return
           if (
             envelope.type === 'whiteboard.updated' ||
             envelope.type === 'page.updated' ||

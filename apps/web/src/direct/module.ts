@@ -14,5 +14,7 @@ export default {
   palette: [
     { id: 'g:messages', space: 'workspace', rank: 60, label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['dms', 'direct messages', 'groups'], path: '/messages' },
   ],
+  shortcuts: [{ action: 'go-messages', key: 'm', label: 'Messages', path: '/messages', rank: 50 }],
+  things: [{ kind: 'conversation', label: 'Conversation', icon: 'message' }],
   phone: true,
 } satisfies WebModule
