@@ -56,7 +56,7 @@ pub async fn catalog(
     .bind(organization_id)
     .bind(&manifest.kind)
     .bind(i64::try_from(MAX_CATALOG_MODELS).unwrap_or(200))
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let refreshed_at = sqlx::query_scalar::<_, String>(
         r#"
@@ -66,7 +66,7 @@ pub async fn catalog(
     )
     .bind(organization_id)
     .bind(&manifest.kind)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?;
 
     let mut models = Vec::with_capacity(rows.len().max(manifest.default_models.len()));
@@ -297,7 +297,7 @@ pub async fn save_overrides(
     let choose_default = overrides.is_default == Some(true);
     let overrides = serde_json::to_value(overrides)
         .map_err(|_| AppError::Internal("serialize catalog overrides"))?;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     lock_catalog(&mut transaction, organization_id, adapter_kind).await?;
     // Counted under the lock so concurrent additions can't pass the cap.
     let count = sqlx::query_scalar::<_, i64>(
@@ -380,7 +380,7 @@ pub async fn remove_model(
     .bind(organization_id)
     .bind(adapter_kind)
     .bind(model_id)
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?
     .rows_affected();
     let cleared = sqlx::query(
@@ -395,7 +395,7 @@ pub async fn remove_model(
     .bind(organization_id)
     .bind(adapter_kind)
     .bind(model_id)
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?
     .rows_affected();
     Ok(deleted + cleared > 0)
