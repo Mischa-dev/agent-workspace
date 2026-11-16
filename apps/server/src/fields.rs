@@ -33,6 +33,8 @@ use uuid::Uuid;
 
 use crate::{error::AppError, work_item_labels};
 
+pub mod formula;
+
 /// Active fields one record kind of a project can have.
 pub const MAX_ACTIVE_FIELDS: i64 = 50;
 /// Every field row one record kind of a project keeps, archived ones too.
@@ -117,10 +119,13 @@ pub enum FieldType {
     EditedBy,
     /// The record's number (system).
     AutoId,
+    /// Worked out from the record's other fields by a formula (T1.17,
+    /// `formula`); kept in `computed_values`, never written.
+    Formula,
 }
 
 impl FieldType {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Text,
         Self::LongText,
         Self::Number,
@@ -139,12 +144,13 @@ impl FieldType {
         Self::CreatedBy,
         Self::EditedBy,
         Self::AutoId,
+        Self::Formula,
     ];
 
     /// Every type, with the ones only module manifests name: the list the
     /// web app's field registry is checked against (T1.13a,
     /// `apps/web/src/fields/fieldTypes.generated.json`).
-    pub const EVERY: [Self; 20] = [
+    pub const EVERY: [Self; 21] = [
         Self::Text,
         Self::LongText,
         Self::Number,
@@ -163,6 +169,7 @@ impl FieldType {
         Self::CreatedBy,
         Self::EditedBy,
         Self::AutoId,
+        Self::Formula,
         Self::People,
         Self::Labels,
     ];
@@ -232,6 +239,7 @@ impl FieldType {
             Self::CreatedBy => "created_by",
             Self::EditedBy => "edited_by",
             Self::AutoId => "auto_id",
+            Self::Formula => "formula",
         }
     }
 
@@ -266,6 +274,7 @@ impl FieldType {
             "createdby" | "creator" | "maker" => Self::CreatedBy,
             "editedby" | "lasteditedby" | "updatedby" | "modifiedby" => Self::EditedBy,
             "autoid" | "autonumber" | "uniqueid" => Self::AutoId,
+            "formula" | "computed" | "calculated" | "calculation" => Self::Formula,
             _ => return None,
         })
     }
@@ -273,7 +282,15 @@ impl FieldType {
     /// Whether a task field can be of this type: tasks have their own
     /// status and record columns, so not those.
     pub fn suits_tasks(self) -> bool {
-        self.is_stored() && !self.is_system() && self != Self::Status
+        // Formulas are worked out on collection records; task fields get
+        // them when they move onto the Tasks collection (T1.11).
+        self.is_stored() && !self.is_system() && !matches!(self, Self::Status | Self::Formula)
+    }
+
+    /// Whether nobody writes a value of it: the record's own columns, or
+    /// a formula's result.
+    pub fn is_read_only(self) -> bool {
+        self.is_system() || self == Self::Formula
     }
 
     pub fn has_options(self) -> bool {
@@ -314,7 +331,9 @@ impl FieldType {
             | Self::EditedTime
             | Self::CreatedBy
             | Self::EditedBy
-            | Self::AutoId => &[Empty, NotEmpty],
+            | Self::AutoId
+            // A formula filters as its result does (`FieldDefinition::ops`).
+            | Self::Formula => &[Empty, NotEmpty],
         }
     }
 }
@@ -448,6 +467,9 @@ pub struct FieldConfig {
     /// Link fields to records: the collection whose records they name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection: Option<Uuid>,
+    /// Formula fields: the formula, stored with field IDs (T1.17).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<formula::FormulaConfig>,
 }
 
 /// Where a field's value comes from in SQL (T1.5), so stored values, a
@@ -470,6 +492,9 @@ pub enum Accessor {
     /// A set of values: a query giving each as text (one column), such as
     /// a task's labels.
     Elements { sql: String },
+    /// A formula's result: `<record>.computed_values -> '<field id>'`, read
+    /// as a stored value is (T1.17). An error result reads as no value.
+    Computed,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -500,10 +525,28 @@ pub const STATUS_CATEGORIES: [&str; 7] = [
 ];
 
 impl FieldDefinition {
+    /// The type it filters, sorts and groups like: its type's
+    /// (`FieldType::behaves_as`), or for a formula its result's.
+    pub fn behaves_as(&self) -> FieldType {
+        match (&self.field_type, &self.config.formula) {
+            (FieldType::Formula, Some(formula)) => match formula.result {
+                formula::ResultType::Number => FieldType::Number,
+                formula::ResultType::Date => FieldType::Date,
+                formula::ResultType::Boolean => FieldType::Checkbox,
+                formula::ResultType::Text | formula::ResultType::List => FieldType::Text,
+            },
+            (field_type, _) => field_type.behaves_as(),
+        }
+    }
+
     /// The filter operations the field takes: its type's, and
     /// `categoryIs`/`categoryIsNot` wherever a status's category is known.
     pub fn ops(&self) -> Vec<FieldOp> {
-        let mut ops = self.field_type.ops().to_vec();
+        let mut ops = if self.field_type == FieldType::Formula {
+            self.behaves_as().ops().to_vec()
+        } else {
+            self.field_type.ops().to_vec()
+        };
         if matches!(
             &self.accessor,
             Accessor::Column {
@@ -521,9 +564,9 @@ impl FieldDefinition {
     /// several choices (a record in each of its groups) or a date (by
     /// `DateBucket`); or it's a parent field its source groups (a task's).
     pub fn can_group(&self) -> bool {
-        self.field_type.can_group()
+        self.behaves_as().can_group()
             || matches!(
-                self.field_type.behaves_as(),
+                self.behaves_as(),
                 FieldType::MultipleChoice | FieldType::Date
             )
             || (self.accessor != Accessor::Stored && self.field_type == FieldType::Link)
@@ -614,7 +657,11 @@ impl TryFrom<DefinitionRow> for FieldDefinition {
             position: row.position,
             archived: row.archived,
             version: row.version,
-            accessor: field_type.system_accessor().unwrap_or_default(),
+            accessor: if field_type == FieldType::Formula {
+                Accessor::Computed
+            } else {
+                field_type.system_accessor().unwrap_or_default()
+            },
             field_type,
         })
     }
@@ -639,6 +686,9 @@ pub struct FieldView {
     /// Record links: the collection whose records it holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
+    /// Formula fields: the formula and what it gives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<formula::FormulaView>,
     /// 1 is first.
     pub position: i32,
     pub archived: bool,
@@ -679,6 +729,11 @@ impl From<&FieldDefinition> for FieldView {
                 .collect(),
             target: field.config.target,
             collection: field.config.collection.map(|id| id.to_string()),
+            formula: field
+                .config
+                .formula
+                .as_ref()
+                .map(formula::FormulaView::from),
             position: field.position + 1,
             archived: field.archived,
             version: field.version,
@@ -1153,6 +1208,9 @@ pub fn normalize_value_keeping(
         | FieldType::AutoId => Err(format!(
             "\"{name}\" is set by the app from the record itself, so it can't be written."
         )),
+        FieldType::Formula => Err(format!(
+            "\"{name}\" is worked out by its formula, so it can't be written."
+        )),
         FieldType::LongText => {
             let Value::String(text) = input else {
                 return Err(format!("\"{name}\" takes text."));
@@ -1375,12 +1433,9 @@ pub fn display_text(value: &Value) -> String {
 /// The IDs of people and linked records a stored value names, for the
 /// record's module to look up in one go.
 pub fn referenced_id(field: &FieldDefinition, value: &Value) -> Option<Uuid> {
-    matches!(
-        field.field_type.behaves_as(),
-        FieldType::Person | FieldType::Link
-    )
-    .then(|| value.as_str()?.parse().ok())
-    .flatten()
+    matches!(field.behaves_as(), FieldType::Person | FieldType::Link)
+        .then(|| value.as_str()?.parse().ok())
+        .flatten()
 }
 
 // ---------------------------------------------------------------------------
@@ -1505,9 +1560,9 @@ pub fn resolve_me_in(
     reader: Uuid,
 ) {
     for clause in clauses {
-        let person = definitions.iter().any(|field| {
-            field.id == clause.field && field.field_type.behaves_as() == FieldType::Person
-        });
+        let person = definitions
+            .iter()
+            .any(|field| field.id == clause.field && field.behaves_as() == FieldType::Person);
         if !person {
             continue;
         }
@@ -1561,7 +1616,7 @@ pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(),
         _ => {}
     }
     for value in &clause.values {
-        let ok = match field.field_type.behaves_as() {
+        let ok = match field.behaves_as() {
             // A record's number is whole.
             FieldType::Number if field.field_type == FieldType::AutoId => {
                 value.trim().parse::<i64>().is_ok()
@@ -1584,10 +1639,11 @@ pub fn check_clause(field: &FieldDefinition, clause: &FieldClause) -> Result<(),
             | FieldType::EditedTime
             | FieldType::CreatedBy
             | FieldType::EditedBy
-            | FieldType::AutoId => false,
+            | FieldType::AutoId
+            | FieldType::Formula => false,
         };
         if !ok {
-            return Err(match field.field_type.behaves_as() {
+            return Err(match field.behaves_as() {
                 FieldType::Number => format!("\"{name}\" filters by numbers."),
                 FieldType::Date => format!("\"{name}\" filters by dates as YYYY-MM-DD."),
                 FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => format!(
@@ -1621,7 +1677,7 @@ pub fn clause_from_written(
             stored.push(value.trim().to_ascii_lowercase().replace([' ', '-'], "_"));
             continue;
         }
-        match field.field_type.behaves_as() {
+        match field.behaves_as() {
             FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => {
                 let option = field
                     .config
@@ -1689,9 +1745,30 @@ fn text_at(column: &str, field: Uuid) -> String {
     format!("({column} ->> '{field}')")
 }
 
+/// The JSONB column a record's formula results are in, beside its stored
+/// values' (`<alias>.field_values` gives `<alias>.computed_values`).
+pub fn computed_column(column: &str) -> String {
+    match column.strip_suffix("field_values") {
+        Some(alias) => format!("{alias}computed_values"),
+        None => "NULL::jsonb".to_owned(),
+    }
+}
+
+/// A formula's result in `column` (the stored values' column), with an
+/// error result (an object) read as no value.
+fn computed_at(column: &str, field: Uuid) -> String {
+    let value = value_at(&computed_column(column), field);
+    format!("(CASE WHEN jsonb_typeof({value}) = 'object' THEN NULL ELSE {value} END)")
+}
+
 /// The stored value's elements as text: a list's items, or the value alone.
 fn elements(column: &str, field: Uuid) -> String {
     let value = value_at(column, field);
+    elements_of(&value)
+}
+
+/// `value`'s elements as text: a list's items, or the value alone.
+fn elements_of(value: &str) -> String {
     format!(
         "jsonb_array_elements_text(CASE WHEN jsonb_typeof({value}) = 'array' THEN {value} \
          WHEN {value} IS NULL THEN '[]'::jsonb ELSE jsonb_build_array({value}) END)"
@@ -1803,7 +1880,7 @@ pub fn push_condition(
             expr,
             sql_type,
             category,
-        } if *sql_type == "timestamptz" && field.field_type.behaves_as() == FieldType::Date => {
+        } if *sql_type == "timestamptz" && field.behaves_as() == FieldType::Date => {
             // A time filters by its day (UTC), as a date field does.
             let day = format!("(({expr}) AT TIME ZONE 'UTC')::date");
             push_column_condition(builder, &day, "date", category.as_deref(), clause, today);
@@ -1814,6 +1891,9 @@ pub fn push_condition(
             category,
         } => push_column_condition(builder, expr, sql_type, category.as_deref(), clause, today),
         Accessor::Elements { sql } => push_elements_condition(builder, sql, clause),
+        Accessor::Computed => {
+            push_json_condition(builder, &computed_at(column, clause.field), clause, today);
+        }
     }
 }
 
@@ -1850,9 +1930,19 @@ fn push_stored_condition(
     clause: &FieldClause,
     today: NaiveDate,
 ) {
-    let field = clause.field;
-    let value = value_at(column, field);
-    let text = text_at(column, field);
+    push_json_condition(builder, &value_at(column, clause.field), clause, today);
+}
+
+/// One clause over a JSONB `value` expression (a stored value, or a
+/// formula's result): the SQL doesn't need the field's type.
+fn push_json_condition(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    value: &str,
+    clause: &FieldClause,
+    today: NaiveDate,
+) {
+    let value = value.to_owned();
+    let text = format!("({value} #>> '{{}}')");
     match clause.op {
         FieldOp::Empty => {
             builder.push(format!("{value} IS NULL"));
@@ -1868,7 +1958,7 @@ fn push_stored_condition(
             });
             builder.push(format!(
                 "{} AS element(value) WHERE element.value = ANY(",
-                elements(column, field)
+                elements_of(&value)
             ));
             builder.push_bind(written_values(clause));
             // A stored number (a number field) compares as a number, so
@@ -2188,7 +2278,7 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         ty: "integer",
         follows_direction: false,
     };
-    let by_value = match field.field_type.behaves_as() {
+    let by_value = match field.behaves_as() {
         FieldType::Text
         | FieldType::Url
         | FieldType::Email
@@ -2200,7 +2290,8 @@ pub fn sort_keys(field: &FieldDefinition, column: &str, project: &str) -> Vec<So
         | FieldType::EditedTime
         | FieldType::CreatedBy
         | FieldType::EditedBy
-        | FieldType::AutoId => key(
+        | FieldType::AutoId
+        | FieldType::Formula => key(
             format!("left(lower(COALESCE({text}, '')), {SORT_PREFIX_CHARACTERS})"),
             "text",
         ),
@@ -2318,6 +2409,20 @@ struct Reading {
 impl Reading {
     fn of(field: &FieldDefinition, column: &str) -> Self {
         match &field.accessor {
+            Accessor::Computed => {
+                let value = computed_at(column, field.id);
+                let text = format!("({value} #>> '{{}}')");
+                Self {
+                    is_null: format!("{value} IS NULL"),
+                    number: format!(
+                        "CASE WHEN jsonb_typeof({value}) = 'number' THEN ({text})::double precision END"
+                    ),
+                    checked: format!("{value} IS NOT DISTINCT FROM 'true'::jsonb"),
+                    elements: format!("{} AS element(value)", elements_of(&value)),
+                    text,
+                    uuid: None,
+                }
+            }
             Accessor::Stored => {
                 let value = value_at(column, field.id);
                 let text = text_at(column, field.id);
@@ -2393,7 +2498,7 @@ pub fn group_sql(
         elements,
         ..
     } = Reading::of(definition, column);
-    Some(match definition.field_type.behaves_as() {
+    Some(match definition.behaves_as() {
         // Options of fields that aren't stored are their source's to name
         // (`views::source::RecordSource::group_sql`).
         FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status
@@ -2660,6 +2765,8 @@ pub struct NewField {
     pub config: FieldConfig,
     /// 1-based place among the active fields; the end when None.
     pub position: Option<i32>,
+    /// A formula field's formula, as written (fields by name).
+    pub formula: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2669,6 +2776,84 @@ pub enum CreateFieldOutcome {
     NameTaken(FieldDefinition),
     /// MAX_ACTIVE_FIELDS active fields, or MAX_FIELD_ROWS in all.
     ProjectFull,
+    /// The formula can't be saved; the message says what to fix.
+    InvalidFormula(String),
+}
+
+/// Checks a formula written for a field of `kind` (`own` once it exists)
+/// and gives its settings, or what to fix.
+async fn formula_config(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    kind: RecordKind,
+    own: Option<Uuid>,
+    field_type: FieldType,
+    source: Option<&str>,
+) -> Result<Result<formula::FormulaConfig, String>, AppError> {
+    if field_type != FieldType::Formula {
+        return Ok(Err("Only a formula field takes a formula.".to_owned()));
+    }
+    let collection = match kind.collection_id() {
+        Some(collection_id) => {
+            sqlx::query_as::<_, (String, bool, bool)>(
+                "SELECT title_name, acts_like_task, builtin IS NOT NULL FROM collections \
+                 WHERE project_id = $1 AND id = $2",
+            )
+            .bind(project_id)
+            .bind(collection_id)
+            .fetch_optional(&mut *connection)
+            .await?
+        }
+        None => None,
+    };
+    let Some((title_name, false, false)) = collection else {
+        return Ok(Err(
+            "Formula fields are for collections whose records aren't tasks, for now.".to_owned(),
+        ));
+    };
+    let Some(source) = source.map(str::trim).filter(|source| !source.is_empty()) else {
+        return Ok(Err(
+            "Write the formula, such as {Price} * {Quantity}.".to_owned()
+        ));
+    };
+    let definitions = list(&mut *connection, project_id, kind, true).await?;
+    let formulas = definitions
+        .iter()
+        .filter(|field| {
+            field.field_type == FieldType::Formula && !field.archived && Some(field.id) != own
+        })
+        .count();
+    if formulas >= formula::limits::MAX_FORMULA_FIELDS {
+        return Ok(Err(format!(
+            "A collection has at most {} formula fields. Archive one first.",
+            formula::limits::MAX_FORMULA_FIELDS
+        )));
+    }
+    Ok(formula::compile(
+        source,
+        &formula::Scope {
+            fields: &definitions,
+            title_name: &title_name,
+            own,
+        },
+    ))
+}
+
+/// After a change to a collection's fields that changes what its formulas
+/// give, queues their recalculation for every record.
+async fn recompute_after(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    kind: RecordKind,
+) -> Result<(), AppError> {
+    let Some(collection_id) = kind.collection_id() else {
+        return Ok(());
+    };
+    let definitions = list(&mut *connection, project_id, kind, false).await?;
+    if formula::has_formulas(&definitions) {
+        crate::collections::computed::enqueue(connection, project_id, collection_id).await?;
+    }
+    Ok(())
 }
 
 /// Creates a field. The caller holds the project lock
@@ -2723,9 +2908,25 @@ pub async fn create(
     if existing.len() as i64 >= MAX_ACTIVE_FIELDS || total >= MAX_FIELD_ROWS {
         return Ok(CreateFieldOutcome::ProjectFull);
     }
+    let mut config = new.config;
+    if new.field_type == FieldType::Formula || new.formula.is_some() {
+        match formula_config(
+            connection,
+            project_id,
+            kind,
+            None,
+            new.field_type,
+            new.formula.as_deref(),
+        )
+        .await?
+        {
+            Ok(formula) => config.formula = Some(formula),
+            Err(message) => return Ok(CreateFieldOutcome::InvalidFormula(message)),
+        }
+    }
     let id = Uuid::now_v7();
     let config =
-        serde_json::to_value(&new.config).map_err(|_| AppError::Internal("encode field config"))?;
+        serde_json::to_value(&config).map_err(|_| AppError::Internal("encode field config"))?;
     sqlx::query(
         r#"
         INSERT INTO field_definitions (
@@ -2751,6 +2952,9 @@ pub async fn create(
     .await?;
     if let Some(position) = new.position {
         move_to(connection, project_id, kind, id, position).await?;
+    }
+    if new.field_type == FieldType::Formula {
+        recompute_after(connection, project_id, kind).await?;
     }
     let created = definition(connection, project_id, kind, id)
         .await?
@@ -2823,6 +3027,8 @@ pub struct FieldChange {
     /// 1-based place among the active fields.
     pub position: Option<i32>,
     pub archived: Option<bool>,
+    /// A formula field's new formula, as written (fields by name).
+    pub formula: Option<String>,
     /// Checked only when something would change.
     pub expected_version: Option<i64>,
 }
@@ -2835,7 +3041,7 @@ pub enum ChangeFieldOutcome {
     Changed {
         field: FieldDefinition,
         previous: FieldDefinition,
-        /// Any of name, description, options, position, archived.
+        /// Any of name, description, options, formula, position, archived.
         changed: Vec<&'static str>,
     },
     Unchanged(FieldDefinition),
@@ -2845,6 +3051,9 @@ pub enum ChangeFieldOutcome {
     NameTaken(String),
     /// Restoring would pass MAX_ACTIVE_FIELDS.
     ProjectFull,
+    /// The formula can't be saved (or a formula field can't come back);
+    /// the message says what to fix.
+    InvalidFormula(String),
 }
 
 /// Renames, describes, reorders, archives or restores a field, or changes
@@ -2880,11 +3089,38 @@ pub async fn change(
         .description
         .clone()
         .unwrap_or_else(|| current.description.clone());
-    let config = change
+    let mut config = change
         .config
         .clone()
         .unwrap_or_else(|| current.config.clone());
     let archived = change.archived.unwrap_or(current.archived);
+    let restoring_formula =
+        current.field_type == FieldType::Formula && current.archived && !archived;
+    if change.formula.is_some() || restoring_formula {
+        // A restored formula is checked again (as stored, fields by ID): what
+        // it reads may be archived, and the collection may have its fill.
+        let source = match &change.formula {
+            Some(source) => Some(source.clone()),
+            None => current
+                .config
+                .formula
+                .as_ref()
+                .map(|formula| formula.source.clone()),
+        };
+        match formula_config(
+            connection,
+            project_id,
+            kind,
+            Some(field_id),
+            current.field_type,
+            source.as_deref(),
+        )
+        .await?
+        {
+            Ok(formula) => config.formula = Some(formula),
+            Err(message) => return Ok(ChangeFieldOutcome::InvalidFormula(message)),
+        }
+    }
     if normalize_name(&name).as_deref() != Some(name.as_str())
         || normalize_description(&description).as_deref() != Some(description.as_str())
     {
@@ -2908,7 +3144,14 @@ pub async fn change(
     if description != current.description {
         changed.push("description");
     }
-    if config != current.config {
+    if config.formula != current.config.formula {
+        changed.push("formula");
+    }
+    let without_formula = |config: &FieldConfig| FieldConfig {
+        formula: None,
+        ..config.clone()
+    };
+    if without_formula(&config) != without_formula(&current.config) {
         changed.push("options");
     }
     if moves {
@@ -2967,6 +3210,13 @@ pub async fn change(
     } else if restoring {
         // A restored field comes back at the end of the active ones.
         move_to(connection, project_id, kind, field_id, i32::MAX).await?;
+    }
+    // Formulas read option names, and each other.
+    if changed
+        .iter()
+        .any(|part| matches!(*part, "options" | "formula" | "archived"))
+    {
+        recompute_after(connection, project_id, kind).await?;
     }
     let field = definition(connection, project_id, kind, field_id)
         .await?
@@ -3268,7 +3518,7 @@ mod tests {
         );
         assert_eq!(FieldType::parse("boolean"), Some(FieldType::Checkbox));
         assert_eq!(FieldType::parse("relation"), Some(FieldType::Link));
-        assert_eq!(FieldType::parse("formula"), None);
+        assert_eq!(FieldType::parse("formula"), Some(FieldType::Formula));
         for field_type in FieldType::ALL {
             assert_eq!(FieldType::parse(field_type.as_str()), Some(field_type));
         }

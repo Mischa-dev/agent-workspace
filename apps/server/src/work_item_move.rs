@@ -767,6 +767,8 @@ async fn carry_value(
         | FieldType::CreatedBy
         | FieldType::EditedBy
         | FieldType::AutoId => None,
+        // Worked out where it lands, never carried.
+        FieldType::Formula => None,
         FieldType::Text
         | FieldType::LongText
         | FieldType::Number
@@ -2747,6 +2749,7 @@ mod tests {
                     .collect(),
                 target: (field_type == FieldType::Link).then_some(LinkTarget::Task),
                 collection: None,
+                formula: None,
             },
             position: 0,
             archived: false,

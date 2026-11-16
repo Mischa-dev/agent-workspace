@@ -157,6 +157,7 @@ pub(super) async fn create_field(
             field_type,
             config,
             position: request.position,
+            formula: None,
         },
     )
     .await?;
@@ -178,6 +179,7 @@ pub(super) async fn create_field(
                 Value::Null,
             ));
         }
+        CreateFieldOutcome::InvalidFormula(message) => return Ok(invalid("formula", message)),
     };
     record_audit_for(
         &mut write.transaction,
@@ -285,6 +287,7 @@ pub(super) async fn update_field(
             config,
             position: request.position,
             archived: request.archived,
+            formula: None,
             expected_version: Some(request.expected_version),
         },
     )
@@ -339,6 +342,7 @@ pub(super) async fn update_field(
                 Value::Null,
             ));
         }
+        ChangeFieldOutcome::InvalidFormula(message) => return Ok(invalid("formula", message)),
     };
     write.finish(StatusCode::OK, &FieldView::from(&field)).await
 }

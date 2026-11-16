@@ -52,8 +52,9 @@ pub struct FieldWrite {
     pub name: Option<String>,
     /// For a new field: text, long_text, number, date, single_choice,
     /// multiple_choice, status, person, url, email, phone, checkbox or link;
-    /// or created_time, edited_time, created_by, edited_by or auto_id,
-    /// which show the record's own and take no values. It never changes.
+    /// created_time, edited_time, created_by, edited_by or auto_id, which
+    /// show the record's own and take no values; or formula, worked out
+    /// from the record's other fields (give `formula`). It never changes.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub field_type: Option<String>,
     /// What it's for, on one line. "" clears it.
@@ -75,6 +76,10 @@ pub struct FieldWrite {
     /// true archives it (hidden, values kept), false restores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
+    /// A formula field's formula, fields in braces (the title by its
+    /// name): `IF({Due} < TODAY(), "Late", {Price} * {Qty})`. & joins text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
 }
 
 /// A filter by field name, as agents write one.
@@ -222,7 +227,7 @@ fn filter_written(
     let values = clause
         .values
         .iter()
-        .map(|value| match field.field_type.behaves_as() {
+        .map(|value| match field.behaves_as() {
             FieldType::SingleChoice | FieldType::MultipleChoice | FieldType::Status => field
                 .option(value)
                 .map_or_else(|| value.clone(), |option| option.name.clone()),
@@ -358,6 +363,9 @@ pub async fn describe(
                     ),
                     other => other.written(None),
                 }),
+                formula: field.config.formula.as_ref().map(|formula| {
+                    fields::formula::shown(formula, definitions, &collection.title_name)
+                }),
                 ..FieldWrite::default()
             })
             .collect(),
@@ -418,7 +426,7 @@ pub async fn clauses_from_written(
         let mut values = Vec::with_capacity(filter.values.len());
         let mut me = false;
         for value in &filter.values {
-            match field.field_type.behaves_as() {
+            match field.behaves_as() {
                 FieldType::Person if value.trim().eq_ignore_ascii_case(views::ME) => {
                     // Checked as anyone in the project; stored as "me".
                     me = true;
@@ -825,7 +833,7 @@ pub async fn apply(
                     ProblemKind::Invalid,
                     format!("{at}.type"),
                     format!(
-                        "\"{name}\" is a new field: give its type, one of text, long_text, number, date, single_choice, multiple_choice, status, person, url, email, phone, checkbox, link, created_time, edited_time, created_by, edited_by or auto_id."
+                        "\"{name}\" is a new field: give its type, one of text, long_text, number, date, single_choice, multiple_choice, status, person, url, email, phone, checkbox, link, created_time, edited_time, created_by, edited_by, auto_id or formula."
                     ),
                 ));
             };
@@ -878,6 +886,7 @@ pub async fn apply(
                     field_type,
                     config,
                     position: write.position,
+                    formula: write.formula.clone(),
                 },
             )
             .await?
@@ -903,6 +912,9 @@ pub async fn apply(
                             fields::MAX_FIELD_ROWS
                         ),
                     ));
+                }
+                CreateFieldOutcome::InvalidFormula(message) => {
+                    return Ok(stop(ProblemKind::Invalid, format!("{at}.formula"), message));
                 }
             }
             continue;
@@ -978,6 +990,7 @@ pub async fn apply(
                 config,
                 position: write.position,
                 archived: write.archived,
+                formula: write.formula.clone(),
                 expected_version: None,
             },
         )
@@ -1025,6 +1038,9 @@ pub async fn apply(
                         fields::MAX_ACTIVE_FIELDS
                     ),
                 ));
+            }
+            ChangeFieldOutcome::InvalidFormula(message) => {
+                return Ok(stop(ProblemKind::Invalid, format!("{at}.formula"), message));
             }
         }
     }
@@ -1310,6 +1326,7 @@ mod tests {
                 }],
                 target: None,
                 collection: None,
+                formula: None,
             },
             position: 0,
             archived: false,

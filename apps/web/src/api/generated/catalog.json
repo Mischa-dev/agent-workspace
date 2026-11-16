@@ -46,6 +46,20 @@
     "title": "Record decision"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "formula_preview",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Preview a formula"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

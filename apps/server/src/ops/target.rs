@@ -99,6 +99,12 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = item.project_id \
          WHERE item.id = $1 AND $2::uuid IS NOT NULL",
     ),
+    (
+        "collection",
+        "SELECT project.organization_id, project.id FROM collections collection \
+         JOIN projects project ON project.id = collection.project_id \
+         WHERE collection.id = $1 AND $2::uuid IS NOT NULL",
+    ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
 ];

@@ -24,8 +24,10 @@
 //! project row lock first (`work_item_commands::lock_membership`), then the
 //! collection's row, so record numbers, limits and names are exact.
 
+pub mod computed;
 pub mod definition;
 pub mod http;
+pub mod ops;
 pub mod records;
 pub mod task_like;
 pub mod task_writes;

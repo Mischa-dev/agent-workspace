@@ -239,6 +239,33 @@ fn hoist(tool: &str, schema: &Map<String, Value>, components: &mut Map<String, V
     value
 }
 
+/// An operation's refusals (`not_found`, `invalid_request`, ...) are the
+/// same shape for every operation: each is one shared schema that results
+/// reference, which keeps the document small as operations are added. A
+/// refusal shaped differently from the shared one stays inline.
+fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
+    let Some(Value::Array(variants)) = result.get_mut("oneOf") else {
+        return;
+    };
+    for variant in variants {
+        let Some(outcome) = variant["properties"]["outcome"]["const"].as_str() else {
+            continue;
+        };
+        if outcome == "ok" {
+            continue;
+        }
+        let key = format!("Refusal{}", pascal(outcome));
+        match components.get(&key) {
+            Some(shared) if shared != variant => continue,
+            Some(_) => {}
+            None => {
+                components.insert(key.clone(), variant.clone());
+            }
+        }
+        *variant = json!({ "$ref": format!("#/components/schemas/{key}") });
+    }
+}
+
 fn rewrite_refs(value: &mut Value, prefix: &str) {
     match value {
         Value::Object(object) => {
@@ -322,7 +349,8 @@ pub(crate) fn document() -> Value {
                     Some(key) => String::clone(key),
                     None => {
                         let root = format!("{name}_result");
-                        let hoisted = hoist(&root, schema, &mut components);
+                        let mut hoisted = hoist(&root, schema, &mut components);
+                        share_refusals(&mut hoisted, &mut components);
                         let key = pascal(&root);
                         components.insert(key.clone(), hoisted);
                         results.insert(raw, key.clone());

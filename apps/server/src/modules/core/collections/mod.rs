@@ -14,6 +14,7 @@ impl CoreModule for Module {
 
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::collections::http::router);
+        module.operations(crate::collections::ops::register_ops);
         // Forms are bug report links too: these work where Collections is on.
         module.filter(ModuleFilter::AlsoServes(&[
             "bug_report_link_list",

@@ -12,6 +12,7 @@
   "tools": {
     "collection_list": "query",
     "collection_describe": "describe",
+    "formula_preview": "describe",
     "collection_write": "change",
     "record_query": "query",
     "record_write": "change"

@@ -36,11 +36,15 @@ export type Package = { contents: Content[]; description?: string; digest?: stri
 
 export type PackageTarget = "space" | "workspace"
 
+export type PreviewRecord = { number: number; title: string }
+
 export type Publisher = { name: string; url?: string | null }
 
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
 export type Requires = { contract?: string | null; modules?: string[] }
+
+export type ResultType = "number" | "text" | "boolean" | "date" | "list"
 
 export type RunActivityInput = { at?: string | null; id: string; kind: string; parentRef?: string | null; payload?: unknown; stepRef?: string | null; summary?: string | null }
 
@@ -61,6 +65,10 @@ export type DecisionListOutput = { decisions: DecisionView[] }
 export type DecisionRecordInput = { detail?: string | null; pin?: boolean; sourceConversationId?: string | null; sourceMessageId?: string | null; spaceId?: string | null; supersedes?: string | null; title: string }
 
 export type DecisionRecordOutput = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
+
+export type FormulaPreviewInput = { collection: string; field?: string | null; formula: string; record?: number | null }
+
+export type FormulaPreviewOutput = { problem?: string | null; record?: PreviewRecord | null; result?: ResultType | null; value?: unknown }
 
 export type HostAgentBindInput = { accountId: string; hostAgentRef: string; hostId: string }
 
@@ -118,6 +126,7 @@ export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
+  formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
   host_agent_unbind: { input: HostAgentUnbindInput; output: HostAgentUnbindOutput }
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }

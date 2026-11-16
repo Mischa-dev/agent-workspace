@@ -233,6 +233,7 @@ fn builtin(
             options,
             target: None,
             collection: None,
+            formula: None,
         },
         position,
         archived: false,
@@ -438,7 +439,7 @@ pub fn source() -> String {
              '{LABELS}', (SELECT jsonb_agg(label.label_id::text ORDER BY label.label_id) \
                           FROM work_item_labels label \
                           WHERE label.project_id = core.project_id AND label.work_item_id = core.id) \
-           )) AS field_values, \
+           )) AS field_values, record.computed_values, \
            core.created_by_actor_id, core.created_by_actor_id AS updated_by_actor_id, \
            record.archived_at, core.version, record.created_at, core.updated_at \
          FROM collection_records record JOIN work_items core ON core.id = record.id)",

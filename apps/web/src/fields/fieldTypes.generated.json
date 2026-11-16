@@ -90,6 +90,11 @@
     "type": "auto_id"
   },
   {
+    "stored": true,
+    "system": false,
+    "type": "formula"
+  },
+  {
     "stored": false,
     "system": false,
     "type": "people"
