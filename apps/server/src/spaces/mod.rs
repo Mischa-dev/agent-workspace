@@ -10,6 +10,8 @@
 //! - The workspace's own space: `workspace_space` (find, or make).
 
 pub mod access;
+#[cfg(test)]
+mod guards;
 pub mod kind;
 
 pub use access::{Space, SpaceMembership, get, membership, readable, readable_by, readable_sql};

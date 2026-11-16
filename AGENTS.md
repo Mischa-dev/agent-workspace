@@ -212,6 +212,19 @@ raising a number.
     or `requestJson` call in a module that has moved to `callOp`; invalidate
     exactly the things an event names, never a whole project.
 
+Spaces (K4) are the places inside a workspace where work lives: a
+project, a team's space, someone's personal space or the workspace's own
+space. They are stored in `projects` until K4.22 renames it, so new code
+says space: new tables name `workspace_id` and `space_id`, never
+`organization_id` or `project_id` (ruling R1), the kind is read through
+`spaces::SpaceKind`, never compared as a literal, and only the spaces
+module makes a space. Guards in `apps/server/src/spaces/guards.rs` hold
+this: the stored kinds match `SpaceKind`, kind literals only go down, no
+new code inserts a space, new tables use the new names, and every SQL
+string that reads `conversations` or `messages` carries
+`conversation_visible_to` (rule 7) or is listed, with its reason, in
+`spaces/conversation_query_allowlist.txt`, which only shrinks.
+
 Shared test fixtures are in `apps/server/tests/integration/support/`: a test
 database from the run's template, one app builder, a world with people,
 agents and connected apps, two workspaces, and a `Caller` that runs one
