@@ -75,7 +75,7 @@ pub async fn home_for(state: &AppState, viewer: Uuid) -> Result<Home, AppError> 
         "#,
     )
     .bind(viewer)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let working = rows
         .into_iter()

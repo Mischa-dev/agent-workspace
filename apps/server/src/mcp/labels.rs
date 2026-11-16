@@ -291,7 +291,7 @@ pub(super) async fn label_write(
         if !can_write_in(state, principal, project_id, Action::WorkItemEdit).await? {
             return Ok(ToolResult::denied(DENIED_MESSAGE));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let Some(membership) =
             lock_membership(&mut transaction, principal.actor_id, project_id).await?

@@ -83,7 +83,7 @@ pub(super) async fn start_write<T: Serialize>(
     require_authenticated_write(state, headers, principal)?;
     let key = IdempotencyKey::from_headers(headers)?;
     let request_hash = RequestHash::for_value(request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound(if work_item_id.is_some() {
@@ -817,7 +817,7 @@ pub(super) async fn list_milestones(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let milestones = planning::list_milestones(
         &mut connection,
         project_id,
@@ -1070,7 +1070,7 @@ pub(super) async fn get_workflow(
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
     let can_edit = may_change_workflow(&membership)? && membership.project_archived_at.is_none();
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     Ok(Json(
         workflow_view(&mut connection, project_id, can_edit).await?,
     ))

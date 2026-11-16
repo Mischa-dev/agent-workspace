@@ -247,7 +247,7 @@ async fn request_sponsored_execution_inner(
     let connection_id = principal
         .external_agent_connection_id
         .ok_or(AppError::Forbidden)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let external = sqlx::query_as::<_, ExternalAuthorization>(
         r#"
         SELECT membership.role AS membership_role,
@@ -510,7 +510,7 @@ async fn list_sponsored_execution_requests(
     )
     .bind(project_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("project"))?;
     require_policy(
@@ -544,7 +544,7 @@ async fn list_sponsored_execution_requests(
     )
     .bind(project_id)
     .bind(principal.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(SponsoredExecutionList { requests }))
 }
@@ -569,7 +569,7 @@ pub(crate) async fn respond_to_sponsored_execution(
     let response_json = serde_json::json!({"decision": decision});
     let request_hash = RequestHash::for_value(&response)?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let context = sqlx::query_as::<_, SponsoredApprovalContext>(
         r#"
         SELECT request.project_id,
@@ -1006,7 +1006,7 @@ async fn fetch_sponsored_approval(
     )
     .bind(approval_id)
     .bind(project_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("agent_approval"))?;
     Ok(ApprovalView {

@@ -1,6 +1,9 @@
 #!/usr/bin/bash
 set -euo pipefail
 
+# The app's tables have forced row security (H1.21, H1.22): the dump reads
+# every workspace's rows under the server-wide backup scope.
+
 if [[ -z ${PGDATABASE+x} ]]; then
   echo "PGDATABASE is required" >&2
   exit 64
@@ -11,8 +14,10 @@ readonly podman_command=(
   --user postgres
   --env PGDATABASE
   --env PGUSER=agent_workspace
+  --env "PGOPTIONS=-c app.tenancy=s:backup"
   agent-workspace_postgres_1
   pg_dump
+  --enable-row-security
 )
 
 if (( EUID == 0 )); then

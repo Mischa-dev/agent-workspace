@@ -961,11 +961,11 @@ struct WorkItemConflictDetails {
 
 pub async fn provision_missing_default_workflows(pool: &PgPool) -> Result<u64, AppError> {
     let project_ids = sqlx::query_scalar::<_, Uuid>("SELECT id FROM projects ORDER BY id")
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?;
     let mut provisioned = 0;
     for project_id in project_ids {
-        let mut transaction = pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(pool).await?;
         if ensure_default_workflow(&mut transaction, project_id).await? {
             provisioned += 1;
         }
@@ -1096,7 +1096,7 @@ async fn get_work_item_by_key(
     )
     .bind(project_id)
     .bind(key)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("work_item"))?;
     let row = fetch_work_item(&state.pool, project_id, work_item_id, principal.actor_id)
@@ -1176,7 +1176,7 @@ async fn update_work_item(
         );
     }
     let request_hash = RequestHash::for_value(&hashed)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -1366,7 +1366,7 @@ async fn set_work_item_archived(
     let action = if archived { "archive" } else { "restore" };
     let scope = resource_bound_scope("work_items", work_item_id, action)?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -1479,7 +1479,7 @@ async fn work_with_worker(
     }
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -1708,7 +1708,7 @@ async fn work_with_worker(
     let response = WorkWithWorkerResponse { thread_id, run };
     let response_body = serde_json::to_value(&response)
         .map_err(|_| AppError::Internal("serialize Work with Worker response"))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE work_item_worker_invocations
@@ -1801,7 +1801,7 @@ async fn change_work_item_thread_link(
         },
     )?;
     let request_hash = RequestHash::for_value(&(conversation_id, request))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -1950,7 +1950,7 @@ async fn change_work_item_repository_link(
     let key = IdempotencyKey::from_headers(headers)?;
     let scope = resource_bound_scope("work_items", work_item_id, action)?;
     let request_hash = RequestHash::for_value(&(repository_id, expected_version, &desired_role))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -2101,7 +2101,7 @@ async fn change_work_item_pull_request_link(
         },
     )?;
     let request_hash = RequestHash::for_value(&(pull_request_id, expected_version))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -2272,7 +2272,7 @@ async fn named_assignees(
     )
     .bind(project_id)
     .bind(&actor_ids)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -2303,7 +2303,7 @@ async fn assignee_search(
     .bind(project_id)
     .bind(search)
     .bind(limit)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -2345,7 +2345,7 @@ async fn search_work_item_references(
     .bind(project_id)
     .bind(search)
     .bind(limit)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(WorkItemReferenceSearchResponse {
         items: rows
@@ -2374,7 +2374,7 @@ async fn move_work_item(
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("work_items", work_item_id, "move")?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -2530,7 +2530,7 @@ async fn create_work_item(
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("projects", project_id, "work_items_create")?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -2697,7 +2697,7 @@ async fn create_acceptance_criterion(
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("work_items", work_item_id, "criterion_create")?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -2802,7 +2802,7 @@ async fn update_acceptance_criterion(
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("criteria", criterion_id, "update")?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -2906,7 +2906,7 @@ async fn remove_acceptance_criterion(
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("criteria", criterion_id, "remove")?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -3057,7 +3057,7 @@ async fn create_work_item_comment(
         }
         RequestHash::for_value(&hashed)?
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
@@ -3338,7 +3338,7 @@ pub(crate) async fn fetch_timeline_rows(
     .bind(work_item_id)
     .bind(before_sequence)
     .bind(limit + 1)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let page = usize::try_from(limit).unwrap_or(100);
     let has_more = rows.len() > page;
@@ -3363,7 +3363,7 @@ pub(crate) async fn fetch_comment_timeline_row(
     .bind(project_id)
     .bind(work_item_id)
     .bind(comment_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?)
 }
 
@@ -3619,7 +3619,7 @@ async fn timeline_entry_view(
             .bind(project_id)
             .bind(work_item_id)
             .bind(comment_id)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?
             .into_iter()
             .map(|(id, kind, display_name, handle)| ActorView {
@@ -3654,7 +3654,7 @@ async fn timeline_entry_view(
             .bind(project_id)
             .bind(work_item_id)
             .bind(comment_id)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?
             .into_iter()
             .map(|item| work_item_reference_view(project_id, item))
@@ -3735,7 +3735,7 @@ async fn project_membership(
     )
     .bind(project_id)
     .bind(actor_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?)
 }
 
@@ -3791,7 +3791,7 @@ pub(crate) async fn notify_files_changed(
     project_id: Uuid,
     work_item_id: Uuid,
 ) -> Result<(), AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM work_items WHERE project_id = $1 AND id = $2",
     )
@@ -3833,7 +3833,7 @@ pub(crate) async fn authorize_task_view(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?;
     if exists {
         Ok(())
@@ -3900,7 +3900,7 @@ async fn fetch_work_item(
         .bind(project_id)
         .bind(work_item_id)
         .bind(viewer)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?)
 }
 

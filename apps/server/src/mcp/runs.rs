@@ -31,7 +31,7 @@ pub(super) async fn projects_with_module_off(
     actor_id: Uuid,
     module: &str,
 ) -> Result<Vec<Uuid>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let projects = sqlx::query_scalar::<_, Uuid>(
         "SELECT project_id FROM project_memberships WHERE actor_id = $1 AND enabled",
     )
@@ -507,7 +507,7 @@ pub(super) async fn run_dismiss_failure(
         if load_run(state, principal, run_id).await?.is_none() {
             return Err(AppError::NotFound("agent_run"));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         super::common::mark_via(&mut transaction, principal).await?;
         let failure = brief::failure_notice(&mut transaction, run_id).await?;
         let Some((event_id, project_id, conversation_id)) = failure else {

@@ -34,7 +34,7 @@ async fn readable(
     let project =
         sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
             .bind(page_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?;
     let Some(project_id) = project.filter(|project| *project == principal.project_id) else {
         return Ok(None);
@@ -226,7 +226,7 @@ pub(super) async fn page_comment(
                 "You can't comment on pages in that project.",
             ));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
@@ -342,7 +342,7 @@ pub(super) async fn page_comment_update(
                 "You can't comment on pages in that project.",
             ));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
@@ -553,13 +553,13 @@ pub(super) async fn page_suggestion_decide(
         }
         let in_project = sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
             .bind(page_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
             == Some(project_id);
         if !in_project {
             return Ok(ToolResult::not_found("That page"));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let decided = match suggestions::decide(
             &mut transaction,
             writer(principal),

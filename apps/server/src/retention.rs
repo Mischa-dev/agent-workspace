@@ -48,7 +48,7 @@ pub async fn clean_external_events(
     let expired_candidates = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM external_agent_events WHERE expires_at <= now()",
     )
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?
     .try_into()
     .map_err(|_| AppError::Internal("expired external event count"))?;
@@ -68,7 +68,7 @@ pub async fn clean_external_events(
             WHERE event.id = candidates.id
             "#,
         )
-        .execute(pool)
+        .execute(crate::db::scoped(pool))
         .await?
         .rows_affected()
     } else {
@@ -78,7 +78,7 @@ pub async fn clean_external_events(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM external_agent_events WHERE expires_at <= now()",
         )
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?
         .try_into()
         .map_err(|_| AppError::Internal("remaining expired external event count"))?
@@ -116,7 +116,7 @@ pub async fn clean_worktrees(
     let live_worktrees: u64 = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM git_worktrees WHERE state IN ('creating','ready','dirty','missing','failed')",
     )
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?
     .try_into()
     .map_err(|_| AppError::Internal("live worktree count"))?;
@@ -146,7 +146,7 @@ pub async fn clean_worktrees(
             continue;
         }
 
-        let mut transaction = pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(pool).await?;
         lock_repository_retention(&mut transaction, candidate.repository_id).await?;
         if !candidate_is_current(&mut transaction, &candidate).await? {
             transaction.rollback().await?;
@@ -199,7 +199,7 @@ pub async fn clean_worktrees(
 async fn load_candidates(pool: &PgPool) -> Result<Vec<WorktreeCandidate>, AppError> {
     Ok(sqlx::query_as::<_, WorktreeCandidate>(&candidate_query())
         .bind(WORKTREE_RETENTION_DAYS)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?)
 }
 
@@ -338,7 +338,7 @@ pub const DATABASE_WINDOWS_JOB: &str = "retention.database_windows";
 /// true` runs, under the same advisory lock so the two never overlap.
 /// Returns how many rows changed.
 pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(470127786, 1)")
         .execute(&mut *transaction)
         .await?;

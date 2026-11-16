@@ -445,7 +445,7 @@ async fn render(state: &AppState) -> Result<String, AppError> {
                AND updated_at > now() - interval '1 day') AS github_jobs_failing
         "#,
     )
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     out.push_str("# TYPE aw_outbox_pending gauge\n");
     let _ = writeln!(out, "aw_outbox_pending {}", gauges.outbox_pending);
@@ -566,7 +566,7 @@ pub async fn health_check(state: &AppState) -> Result<(), AppError> {
              WHERE delivered_at IS NULL AND attempts >= 3)
         "#,
     )
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     if gauges.0 > 300.0 {
         alert(Alert {

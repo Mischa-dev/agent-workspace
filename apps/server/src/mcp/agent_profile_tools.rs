@@ -167,7 +167,7 @@ pub(super) async fn agent_profile_write(
             Action::SettingsManage,
         )
         .await?;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let existing = match arguments.profile.as_deref() {
             None => None,

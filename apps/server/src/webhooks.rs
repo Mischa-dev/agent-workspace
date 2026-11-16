@@ -84,7 +84,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
         sqlx::query(
             "DELETE FROM webhook_deliveries WHERE state <> 'pending' AND created_at < now() - interval '30 days'",
         )
-        .execute(&context.state.pool)
+        .execute(crate::db::scoped(&context.state.pool))
         .await?;
         Ok(())
     });
@@ -428,7 +428,7 @@ pub(crate) async fn list_in(
     .bind(caller.token_project_id)
     .bind(off_projects)
     .bind(off_workspaces)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let projects = sqlx::query_as::<_, WebhookProject>(
         r#"
@@ -446,7 +446,7 @@ pub(crate) async fn list_in(
     .bind(caller.actor_id)
     .bind(caller.token_project_id)
     .bind(off_projects)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(WebhookList {
         webhooks: rows.into_iter().map(WebhookView::from).collect(),
@@ -479,7 +479,7 @@ pub(crate) async fn default_workspace(
     )
     .bind(actor_id)
     .bind(requested)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?)
 }
 
@@ -498,14 +498,14 @@ pub(crate) async fn create(
                 || !sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, NULL, $2)")
                     .bind(caller.actor_id)
                     .bind(project_id)
-                    .fetch_one(&state.pool)
+                    .fetch_one(crate::db::scoped(&state.pool))
                     .await?
             {
                 return Err(AppError::NotFound("project"));
             }
             sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
                 .bind(project_id)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?
         }
         None => {
@@ -518,7 +518,7 @@ pub(crate) async fn create(
             chosen.ok_or(AppError::NotFound("workspace"))?
         }
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("webhooks:{organization_id}:{}", caller.actor_id))
         .execute(&mut *transaction)
@@ -606,7 +606,7 @@ pub(crate) async fn update(
         Some(value @ ("active" | "paused")) => Some(value.to_owned()),
         Some(_) => return Err(AppError::Validation("state")),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
     if current.version != request.expected_version {
         return Err(AppError::VersionConflict {
@@ -668,7 +668,7 @@ pub(crate) async fn delete(
     webhook_id: Uuid,
 ) -> Result<(), AppError> {
     require_person(caller)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
     sqlx::query("DELETE FROM webhook_subscriptions WHERE id = $1")
         .bind(webhook_id)
@@ -698,7 +698,7 @@ pub(crate) async fn rotate_secret(
     webhook_id: Uuid,
 ) -> Result<CreatedWebhook, AppError> {
     require_person(caller)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
     let (secret_id, secret) = store_secret(
         state,
@@ -740,7 +740,7 @@ pub(crate) async fn send_test(
     webhook_id: Uuid,
 ) -> Result<DeliveryView, AppError> {
     require_person(caller)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
     let id = Uuid::now_v7();
     sqlx::query(
@@ -770,7 +770,7 @@ pub(crate) async fn redeliver(
     delivery_id: Uuid,
 ) -> Result<DeliveryView, AppError> {
     require_person(caller)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
     // Through an app, the app's limit decides as well, whatever the webhook
     // was made through: it may not resend a task without "see tasks", or a
@@ -830,7 +830,7 @@ async fn delivery(
     ))
     .bind(delivery_id)
     .bind(webhook_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     .ok_or(AppError::NotFound("delivery"))
 }
@@ -856,7 +856,7 @@ pub(crate) async fn deliveries(
     .bind(webhook_id)
     .bind(after)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let next_cursor = if rows.len() as i64 > limit {
         rows.truncate(limit as usize);
@@ -903,7 +903,7 @@ pub(crate) async fn fan_out(state: &AppState, event: &Event) -> Result<usize, Ap
     .bind(event.organization_id)
     .bind(event.project_id)
     .bind(&event.event_type)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut queued = 0;
     for subscription in candidates {
@@ -926,7 +926,7 @@ pub(crate) async fn fan_out(state: &AppState, event: &Event) -> Result<usize, Ap
         {
             continue;
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let inserted = sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO webhook_deliveries (
@@ -979,7 +979,7 @@ async fn app_limit_hides(
     {
         return Ok(false);
     }
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let limits = crate::roles::app_access(&mut connection, subscription.owner_actor_id)
         .await?
         .limits;
@@ -1084,7 +1084,7 @@ async fn finish_delivery(
     .bind(delivery_id)
     .bind(state)
     .bind(error)
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?;
     Ok(())
 }
@@ -1099,7 +1099,7 @@ async fn turn_off(pool: &PgPool, subscription_id: Uuid, reason: &str) -> Result<
     )
     .bind(subscription_id)
     .bind(reason)
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?;
     tracing::info!(webhook_id = %subscription_id, "webhook turned off");
     Ok(())
@@ -1131,7 +1131,7 @@ async fn owner_refusal(
     .bind(subscription.organization_id)
     .bind(subscription.project_id)
     .bind(subscription.via_oauth_grant_id)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?;
     Ok(if !in_workspace {
         Some("Turned off because its owner is no longer in this workspace.")
@@ -1156,7 +1156,7 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
         "#,
     )
     .bind(payload.delivery_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     else {
         return Ok(());
@@ -1247,13 +1247,13 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
             .bind(attempts)
             .bind(i32::from(status))
             .bind(elapsed)
-            .execute(pool)
+            .execute(crate::db::scoped(pool))
             .await?;
             sqlx::query(
                 "UPDATE webhook_subscriptions SET consecutive_failures = 0, last_delivery_at = now() WHERE id = $1",
             )
             .bind(subscription.id)
-            .execute(pool)
+            .execute(crate::db::scoped(pool))
             .await?;
             Ok(())
         }
@@ -1273,7 +1273,7 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
             .bind(error)
             .bind(elapsed)
             .bind(last)
-            .execute(pool)
+            .execute(crate::db::scoped(pool))
             .await?;
             if last {
                 let failures = sqlx::query_scalar::<_, i32>(
@@ -1284,7 +1284,7 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
                     "#,
                 )
                 .bind(subscription.id)
-                .fetch_one(pool)
+                .fetch_one(crate::db::scoped(pool))
                 .await?;
                 if failures >= MAX_CONSECUTIVE_FAILURES {
                     turn_off(
@@ -1372,7 +1372,7 @@ pub(crate) async fn task_data(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     else {
         return Ok(None);
@@ -1382,7 +1382,7 @@ pub(crate) async fn task_data(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let origin = events::public_origin(state);
     Ok(Some(json!({
@@ -1410,7 +1410,7 @@ pub(crate) async fn record_data(
     record_id: Uuid,
 ) -> Result<Option<Value>, AppError> {
     use crate::collections::{self, records};
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let Some(collection) = collections::get(&mut *connection, project_id, collection_id).await?
     else {
         return Ok(None);
@@ -1465,7 +1465,7 @@ async fn build_body(
             "SELECT id, project_key, name FROM projects WHERE id = $1",
         )
         .bind(project_id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         .map(|(id, key, name)| json!({ "id": id, "key": key, "name": name })),
         None => None,
@@ -1543,7 +1543,7 @@ async fn build_body(
                 "#,
                 )
                 .bind(pull_request_id)
-                .fetch_optional(pool)
+                .fetch_optional(crate::db::scoped(pool))
                 .await?
             else {
                 return Ok(None);
@@ -1584,7 +1584,7 @@ async fn build_body(
             )
             .bind(message_id)
             .bind(conversation_id)
-            .fetch_optional(pool)
+            .fetch_optional(crate::db::scoped(pool))
             .await?
             else {
                 return Ok(None);

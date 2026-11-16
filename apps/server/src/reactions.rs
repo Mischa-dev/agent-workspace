@@ -516,7 +516,7 @@ async fn change_reaction(
         mcp_credential: None,
         via_grant_id: None,
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let outcome = set_reaction(
         &mut transaction,
         &actor,

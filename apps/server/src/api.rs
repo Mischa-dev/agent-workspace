@@ -106,7 +106,7 @@ async fn development_bootstrap(
         "#,
     )
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("seeded_thread"))?;
     authorize_project_action(
@@ -239,7 +239,7 @@ pub(crate) async fn start_run_in(
     let idempotency_key = idempotency_key?;
     let request_hash = RequestHash::for_value(&request)?;
     let scope = idempotency::resource_bound_scope("thread", conversation_id, "agent_run_start")?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     guard_conversation_mutation(
         &mut transaction,
         principal,
@@ -463,7 +463,7 @@ pub(crate) async fn retry_run_in(
     let conversation_id =
         sqlx::query_scalar::<_, Uuid>("SELECT conversation_id FROM agent_runs WHERE id = $1")
             .bind(predecessor_run_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
             .ok_or(AppError::NotFound("agent_run"))?;
     let conversation =
@@ -478,7 +478,7 @@ pub(crate) async fn retry_run_in(
     let idempotency_key = idempotency_key?;
     let request_hash = RequestHash::for_value(&EmptyCommand {})?;
     let scope = idempotency::resource_bound_scope("agent_run", predecessor_run_id, "retry")?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     guard_conversation_mutation(
         &mut transaction,
         principal,
@@ -641,7 +641,7 @@ async fn acknowledge_run_failure(
     let conversation_id =
         sqlx::query_scalar::<_, Uuid>("SELECT conversation_id FROM agent_runs WHERE id = $1")
             .bind(run_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
             .ok_or(AppError::NotFound("agent_run"))?;
     let conversation =
@@ -650,7 +650,7 @@ async fn acknowledge_run_failure(
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
     let scope = idempotency::resource_bound_scope("agent_run", run_id, "acknowledge_failure")?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     guard_conversation_mutation(
         &mut transaction,
         &principal,
@@ -982,7 +982,7 @@ pub(crate) async fn sponsored_execution_request(
         "SELECT external_execution_request_id FROM agent_approvals WHERE id = $1",
     )
     .bind(approval_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .flatten())
 }
@@ -1018,7 +1018,7 @@ pub(crate) async fn answer_approval(
         current_response: Option<serde_json::Value>,
     }
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let context = sqlx::query_as::<_, ApprovalContext>(
         r#"
         SELECT
@@ -1295,7 +1295,7 @@ pub(crate) async fn interrupt_run_in(
         state: String,
     }
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let context = sqlx::query_as::<_, RunContext>(
         r#"
         SELECT
@@ -1561,7 +1561,7 @@ async fn fetch_run(
     )
     .bind(run_id)
     .bind(project_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("agent_run"))?;
     // The linked pull request only for someone who sees code here.
@@ -1619,7 +1619,7 @@ pub(crate) async fn fetch_approval(
     )
     .bind(approval_id)
     .bind(project_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("agent_approval"))?;
     Ok(ApprovalView {
@@ -1783,7 +1783,7 @@ async fn authorized_conversation(
     )
     .bind(conversation_id)
     .bind(principal.actor_id())
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
     let scope = if conversation.kind == "thread" {

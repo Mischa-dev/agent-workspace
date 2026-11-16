@@ -228,7 +228,7 @@ async fn claim_inner(state: &AppState, code: &str) -> Result<Option<String>, App
     if code.is_empty() || code.len() > 64 {
         return Ok(None);
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     purge_expired(&mut transaction).await?;
     let Some(link) = sqlx::query_as::<_, OpenLink>(
         r#"

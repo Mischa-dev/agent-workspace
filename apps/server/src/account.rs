@@ -290,7 +290,7 @@ async fn list_accounts(
     .bind(project_id)
     .bind(project.organization_id)
     .bind(principal.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut accounts = Vec::with_capacity(rows.len());
     for row in rows {
@@ -359,7 +359,7 @@ async fn fetch_account_view(
     let row = sqlx::query_as::<_, AccountRow>(&account_select("account.id = $2"))
         .bind(project_id)
         .bind(account_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .ok_or(AppError::NotFound("provider_account"))?;
     Ok(account_view(state, row).await)
@@ -401,7 +401,7 @@ async fn create_account(
     }
     let scope =
         idempotency::resource_bound_scope("project", project_id, "provider_account_create")?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
         principal.actor_id,
@@ -569,7 +569,7 @@ async fn update_account(
     // A retried PATCH whose first response was lost replays instead of
     // failing the version check it already passed.
     let scope = idempotency::resource_bound_scope("provider_account", account_id, "update")?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
         principal.actor_id,
@@ -611,7 +611,7 @@ async fn update_account(
         let current_version =
             sqlx::query_scalar::<_, i64>("SELECT version FROM provider_accounts WHERE id = $1")
                 .bind(account_id)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?;
         return Err(AppError::VersionConflict {
             resource: "provider_account",
@@ -650,7 +650,7 @@ async fn delete_account(
 ) -> Result<Json<RemovedAccount>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("SELECT 1 FROM provider_accounts WHERE id = $1 FOR UPDATE")
         .bind(account_id)
         .execute(&mut *transaction)
@@ -697,7 +697,7 @@ async fn delete_account(
         // home below still drops the sign-in kept here.
         tracing::warn!(%account_id, error = %error, "signing out a deleted account failed");
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let deleted = {
         let mut attempt = sqlx::Acquire::begin(&mut transaction).await?;
         match delete_account_rows(&mut attempt, account_id).await {
@@ -770,7 +770,7 @@ async fn use_account(
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
     let project = require_project_manager(&state, &principal, project_id).await?;
     let scope = idempotency::resource_bound_scope("provider_account", account_id, "use")?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
         principal.actor_id,
@@ -1436,7 +1436,7 @@ async fn require_project_manager(
     )
     .bind(project_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("project"))?;
     if may_manage_execution(
@@ -1507,7 +1507,7 @@ pub(crate) async fn require_account_owner(
     .bind(account_id)
     .bind(project.organization_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("provider_account"))
 }
@@ -1560,7 +1560,7 @@ async fn require_profile_owner(
     .bind(profile_id)
     .bind(project_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("execution_profile"))?;
     if may_manage_execution(
@@ -1604,7 +1604,7 @@ async fn persist_account_state(
     .bind(account_id)
     .bind(account_state)
     .bind(account_status)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     if account_status == "available" {
         crate::execution_setup::activate_pending_worker_for_account(&state.pool, account_id)

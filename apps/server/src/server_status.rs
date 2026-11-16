@@ -63,7 +63,7 @@ pub async fn is_operator(
         "#,
     )
     .bind(principal.actor_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -220,7 +220,7 @@ async fn read_http(
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<ServerView>, AppError> {
     {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         if caller_role(&mut connection, &principal, organization_id, false).await?
             != WorkspaceRole::Owner
         {

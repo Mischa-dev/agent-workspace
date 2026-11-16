@@ -501,7 +501,7 @@ async fn create_many(
         "SELECT project_key, kind = 'direct' FROM projects WHERE id = $1",
     )
     .bind(project_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     else {
         return Ok(BatchResult::not_found(
@@ -549,7 +549,7 @@ async fn create_many(
         }
     }
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(refused) = BatchResult::refused_access(
         check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?,
         &project_key,
@@ -1224,7 +1224,7 @@ async fn update_many(
         "#,
     )
     .bind(&found_ids)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?
     .into_iter()
     .collect::<HashMap<_, _>>();
@@ -1234,7 +1234,7 @@ async fn update_many(
             principal.project_id,
             sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
                 .bind(principal.project_id)
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await?
                 .unwrap_or_else(|| "that project".to_owned()),
         ))
@@ -1289,7 +1289,7 @@ async fn update_many(
     // The tool gate can't tell the project from taskIds, so it took Tasks
     // being on anywhere (AWD-75); the batch acts in this one project.
     let tasks_on = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         crate::modules::state::for_project(&mut connection, project_id, principal.actor_id)
             .await?
             .unwrap_or_default()
@@ -1352,7 +1352,7 @@ async fn update_many(
             || "this project".to_owned(),
             |(prefix, _)| prefix.to_owned(),
         );
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // Archiving is its own permission.
     let access = if change.archived.is_some() {
         check_access_for(&mut transaction, &scoped, Action::WorkItemArchive).await?

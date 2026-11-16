@@ -46,7 +46,7 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
            AND scheduler_claim_id IS NOT NULL
         "#,
     )
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     let recovered = reconcile(state, lease::Recover::AtStart).await?;
 
@@ -72,7 +72,7 @@ async fn reconcile(state: &AppState, which: lease::Recover) -> Result<u64, AppEr
     let candidates = lease::recoverable(&state.pool, which).await?;
     let mut recovered = 0;
     for run_id in candidates {
-        let mut transition = state.pool.begin().await?;
+        let mut transition = crate::db::scoped_tx(&state.pool).await?;
         let Some(previous_state) = lease::claim_for_recovery(&mut transition, run_id).await? else {
             // Another process has it, or it finished meanwhile.
             transition.rollback().await?;
@@ -128,7 +128,7 @@ async fn recover_one(state: &AppState, run: &RecoverableRun) -> Result<(), AppEr
         "#,
     )
     .bind(run.id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
 
     let (worktree_path, worktree_state, dirty) = match worktree {
@@ -151,7 +151,7 @@ async fn recover_one(state: &AppState, run: &RecoverableRun) -> Result<(), AppEr
             .bind(worktree_id)
             .bind(worktree_state)
             .bind(dirty)
-            .execute(&state.pool)
+            .execute(crate::db::scoped(&state.pool))
             .await?;
             (Some(PathBuf::from(path)), worktree_state, dirty)
         }
@@ -227,7 +227,7 @@ async fn recover_one(state: &AppState, run: &RecoverableRun) -> Result<(), AppEr
         }
     };
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     crate::hosts::builtin::transition(
         &mut transaction,
         run.id,
@@ -279,7 +279,7 @@ async fn idle_terminal_provider_sessions(pool: &PgPool) -> Result<u64, AppError>
           )
         "#,
     )
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?;
     Ok(result.rows_affected())
 }
@@ -293,7 +293,7 @@ pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, App
         ORDER BY created_at
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
 
     for (worktree_id, path) in &worktrees {
@@ -313,14 +313,14 @@ pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, App
         .bind(worktree_id)
         .bind(worktree_state)
         .bind(dirty)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?;
     }
     Ok(worktrees.len() as u64)
 }
 
 pub async fn cancel_terminal_run_approvals(state: &AppState) -> Result<u64, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let result = sqlx::query(
         r#"
         UPDATE agent_approvals aa
