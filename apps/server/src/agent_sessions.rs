@@ -115,7 +115,7 @@ pub(crate) async fn sessions_in(
     ))
     .bind(conversation_id)
     .bind(actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(rows.into_iter().map(|row| named(state, row)).collect())
 }
@@ -151,7 +151,7 @@ async fn list_sessions(
     )
     .bind(conversation_id)
     .bind(principal.actor_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     if !visible {
         return Err(AppError::NotFound("conversation"));
@@ -283,7 +283,7 @@ pub(crate) async fn record_run_turn(
     if valid_reference(&reference, Some(url)).is_err() {
         return Ok(());
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     bind(
         &mut transaction,
         Binding {

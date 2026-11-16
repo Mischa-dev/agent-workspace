@@ -39,9 +39,7 @@ pub(super) async fn begin_authorized_read<'a>(
     if principal.actor_kind != ActorKind::ExternalAgent || !principal.has_scope(required_scope) {
         return Err(ReadFailure::Authorization);
     }
-    let mut transaction = state
-        .pool
-        .begin()
+    let mut transaction = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(|_| ReadFailure::Database("begin"))?;
     let authorization = sqlx::query_as::<_, ConnectionAuthorization>(
@@ -202,9 +200,7 @@ async fn poll(
     limit: i64,
     wait_seconds: u8,
 ) -> Result<ExternalEventPollResult, PollFailure> {
-    let mut transaction = state
-        .pool
-        .begin()
+    let mut transaction = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(|_| PollFailure::Database("begin"))?;
     let signing_key = revalidate_connection(&mut transaction, principal, connection_id)

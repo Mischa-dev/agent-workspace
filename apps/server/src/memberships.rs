@@ -147,7 +147,7 @@ async fn list_members(
     )?;
     let rows = sqlx::query_as::<_, MemberRow>(member_list_sql())
         .bind(project_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
     Ok(Json(MembersResponse {
         members: rows
@@ -174,7 +174,7 @@ async fn update_member(
         actor_id.simple()
     );
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let reservation = match reserve(
         &mut transaction,
         principal.actor_id,
@@ -590,7 +590,7 @@ async fn load_access(
     Ok(sqlx::query_as::<_, AccessRow>(access_sql(false))
         .bind(actor_id)
         .bind(project_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?)
 }
 

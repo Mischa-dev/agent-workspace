@@ -20,6 +20,7 @@
 //! scoped transaction begun with no scope at all is logged once per call
 //! site (target `agent_workspace::tenancy`) and counted in metrics.
 
+pub mod backfill;
 #[cfg(test)]
 mod ratchet;
 pub mod tables;
@@ -61,10 +62,14 @@ pub enum Tenancy {
 pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // Looking up an account's workspaces, before its scope can be set.
     ("auth.lookup", &["tenancy/mod.rs"]),
+    // A whole-server backup or restore: every workspace's rows.
+    ("backup", &["backup.rs"]),
     // Claiming due jobs of every workspace, and finishing them.
     ("jobs.claim", &["jobs.rs"]),
     // Jobs queued for no workspace (the server's own recurring work).
     ("jobs.server", &["jobs.rs"]),
+    // Pruning finished jobs and counting the queue for the Server page.
+    ("jobs.queue", &["jobs.rs"]),
     // Taking, renewing and releasing a server-wide maintenance lease.
     ("maintenance.lease", &["maintenance_lease.rs"]),
 ];

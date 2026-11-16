@@ -449,7 +449,7 @@ pub(super) async fn task_depend(
     };
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) =
             access_refusal(check_write_access(&mut transaction, principal).await?)
         {
@@ -582,7 +582,7 @@ pub(super) async fn task_relate(
     };
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) =
             access_refusal(check_write_access(&mut transaction, principal).await?)
         {
@@ -671,7 +671,7 @@ pub(super) async fn task_watch(
     };
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // Anyone who can see a task may watch it, as in the app.
         if let Some(refusal) = access_refusal(
             check_access_for(&mut transaction, principal, Action::WorkItemView).await?,
@@ -813,7 +813,7 @@ pub(super) async fn milestone_list(
             crate::policy::Action::WorkItemView,
         )
         .await?;
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let rows = work_item_planning::list_milestones(
             &mut connection,
             principal.project_id,
@@ -927,7 +927,7 @@ pub(super) async fn milestone_write(
             }
         }
         let (add_ids, remove_ids) = task_ids.split_at(add.len());
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) =
             access_refusal(check_write_access(&mut transaction, principal).await?)
         {

@@ -103,7 +103,7 @@ async fn membership(
     )
     .bind(organization_id)
     .bind(actor_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     .ok_or(AppError::NotFound("organization"))
 }
@@ -133,7 +133,7 @@ async fn chosen_project(
     .bind(organization_id)
     .bind(actor_id)
     .bind(stored)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?)
 }
 
@@ -147,7 +147,7 @@ async fn exists(
         sqlx::query_scalar::<_, bool>(&format!("SELECT EXISTS ({query})"))
             .bind(project_id)
             .bind(actor_id)
-            .fetch_one(pool)
+            .fetch_one(crate::db::scoped(pool))
             .await?,
     )
 }
@@ -177,7 +177,7 @@ async fn project_steps(
         .await?
         .is_some();
     let environment = {
-        let mut connection = pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(pool).await?;
         launch::run_defaults(&mut connection, project_id, actor_id)
             .await?
             .environment
@@ -240,7 +240,7 @@ pub async fn onboarding_for(
     )
     .bind(organization_id)
     .bind(actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let can_manage_workspace = matches!(role.as_str(), "owner" | "admin");
     let project = chosen_project(
@@ -280,7 +280,7 @@ pub async fn onboarding_for(
     }
     // AWD-75: steps of modules that are off don't show.
     let modules = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         crate::modules::state::for_member(&mut connection, organization_id, actor_id).await?
     };
     let steps = done
@@ -362,7 +362,7 @@ async fn update_http(
         .bind(project_id)
         .bind(organization_id)
         .bind(actor_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         if !reachable {
             return Err(AppError::NotFound("project"));
@@ -415,7 +415,7 @@ async fn update_http(
     .bind(request.skip.as_deref())
     .bind(request.unskip.as_deref())
     .bind(request.dismissed)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(
         onboarding_for(&state, organization_id, actor_id).await?,

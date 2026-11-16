@@ -549,7 +549,7 @@ async fn event_is_authorized(
     .bind(principal.actor_id)
     .bind(event.project_id())
     .bind(event.conversation_id())
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some(membership) = membership else {
         return Ok(false);
@@ -671,7 +671,7 @@ pub async fn publish_ready_outbox_batch(
     realtime: &RealtimeHub,
     worker_id: &str,
 ) -> Result<usize, AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let claims = outbox::claim_ready(
         &mut transaction,
         worker_id,
@@ -703,7 +703,7 @@ pub async fn publish_ready_outbox_batch(
             continue;
         }
 
-        let mut transaction = match pool.begin().await {
+        let mut transaction = match crate::db::scoped_tx(pool).await {
             Ok(transaction) => transaction,
             Err(error) => {
                 tracing::error!(
@@ -812,7 +812,7 @@ async fn record_outbox_failure(
     worker_id: &str,
     failure: OutboxFailureKind,
 ) {
-    let mut transaction = match pool.begin().await {
+    let mut transaction = match crate::db::scoped_tx(pool).await {
         Ok(transaction) => transaction,
         Err(error) => {
             tracing::error!(
