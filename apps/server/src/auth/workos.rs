@@ -485,8 +485,6 @@ async fn resolve_identity(
             .signup_username
             .as_deref()
             .ok_or(AppError::Validation("choose a username before signing up"))?;
-        let id = Uuid::now_v7();
-        let actor = Uuid::now_v7();
         let org = Uuid::now_v7();
         let name = format!(
             "{} {}",
@@ -498,17 +496,19 @@ async fn resolve_identity(
         if name.chars().count() > 120 || name.chars().any(char::is_control) {
             return Err(AppError::Validation("display name"));
         }
-        sqlx::query("INSERT INTO actors(id,kind) VALUES ($1,'human')")
-            .bind(actor)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("INSERT INTO users(id,actor_id,login_name,display_name) VALUES ($1,$2,$3,$4)")
-            .bind(id)
-            .bind(actor)
-            .bind(username)
-            .bind(name)
-            .execute(&mut **tx)
-            .await?;
+        // One way to create a person (K1.29).
+        let person = crate::accounts::create_person(
+            tx,
+            crate::accounts::NewPerson {
+                login_name: username,
+                display_name: name,
+                default_workspace: None,
+                created_by: None,
+                claimed: true,
+            },
+        )
+        .await?;
+        let (id, actor) = (person.user_id, person.account_id);
         // A readable slug from the name, with a numeric suffix (K4.5).
         let slug = crate::workspace::slug::readable_for_new(tx, "My workspace").await?;
         sqlx::query("INSERT INTO organizations(id,name,slug) VALUES ($1,'My workspace',$2)")

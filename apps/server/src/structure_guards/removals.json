@@ -51,7 +51,6 @@
     "modules/http.rs": "K1.19: a role compared by name in Rust; becomes a permission or the role tier",
     "onboarding.rs": "K1.19: a role compared by name in Rust; becomes a permission or the role tier",
     "roles.rs": "K1.19: a role compared by name in Rust; becomes a permission or the role tier",
-    "workspace.rs": "K1.19: a role compared by name in Rust; becomes a permission or the role tier",
     "workspace_templates.rs": "K1.19: a role compared by name in Rust; becomes a permission or the role tier"
   },
   "access_bypasses": {

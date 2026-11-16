@@ -288,6 +288,11 @@ mod tests {
             Plumbing("accepting an invitation is signing up"),
         ),
         (
+            Post,
+            "/api/v1/account-claims/accept",
+            Plumbing("claiming an account is signing up"),
+        ),
+        (
             Put,
             "/api/v1/account/default-workspace",
             Person("a person's own account"),

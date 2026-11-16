@@ -320,7 +320,6 @@
     "modules/http.rs": 1,
     "onboarding.rs": 1,
     "roles.rs": 13,
-    "workspace.rs": 4,
     "workspace_templates.rs": 1
   },
   "task_core_updates": {

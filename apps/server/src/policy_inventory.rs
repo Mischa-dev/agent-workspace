@@ -385,6 +385,13 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/workspace-invitations/accept-existing",
         InvitationCapability
     ),
+    // K1.29: a claim link for an unclaimed account.
+    boundary_route!(
+        "accounts/claims",
+        Post,
+        "/api/v1/account-claims/accept",
+        InvitationCapability
+    ),
     boundary_route!(
         "workspace",
         Put,

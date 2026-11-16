@@ -5,14 +5,10 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgConnection, Postgres, Transaction};
-use subtle::ConstantTimeEq;
 use uuid::Uuid;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::{
     AppState,
@@ -28,8 +24,8 @@ use crate::{
     },
 };
 
-const INVITATION_TOKEN_BYTES: usize = 32;
-const INVITATION_PREFIX_LENGTH: usize = 16;
+pub mod engine;
+
 const MAX_EXPIRY_HOURS: i32 = 7 * 24;
 
 /// Where people open the app, so invitation links work outside the server host.
@@ -718,21 +714,19 @@ async fn accept_new_user(
         ));
     }
 
-    let actor_id = Uuid::now_v7();
-    let user_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
-        .bind(actor_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(map_join_database_error)?;
-    sqlx::query(
-        "INSERT INTO users (id, actor_id, login_name, display_name) VALUES ($1, $2, $3, $4)",
+    let crate::accounts::Person {
+        account_id: actor_id,
+        user_id,
+    } = crate::accounts::create_person(
+        &mut transaction,
+        crate::accounts::NewPerson {
+            login_name: &login_name,
+            display_name: &display_name,
+            default_workspace: None,
+            created_by: Some(invitation.issued_by_actor_id),
+            claimed: true,
+        },
     )
-    .bind(user_id)
-    .bind(actor_id)
-    .bind(&login_name)
-    .bind(&display_name)
-    .execute(&mut *transaction)
     .await
     .map_err(map_join_database_error)?;
     sqlx::query("INSERT INTO user_password_credentials (user_id, password_phc) VALUES ($1, $2)")
@@ -1046,28 +1040,11 @@ fn consume_invitation_token(
     token: &mut String,
     state: &AppState,
 ) -> Result<(String, [u8; 32]), AppError> {
-    let valid = token.len() == 50
-        && token.starts_with("aw_inv_")
-        && token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
-    let result = valid.then(|| {
-        (
-            token[..INVITATION_PREFIX_LENGTH].to_owned(),
-            Sha256::digest(token.as_bytes()).into(),
-        )
-    });
-    token.zeroize();
-    let Some((prefix, digest)) = result else {
-        state.rate_limits.check_invitation("invalid")?;
-        return Err(AppError::NotFound("project_invitation"));
-    };
-    state.rate_limits.check_invitation(&prefix)?;
-    Ok((prefix, digest))
+    engine::consume(token, engine::Family::Project, state, "project_invitation")
 }
 
 fn digest_matches(stored: &[u8], candidate: &[u8; 32]) -> bool {
-    stored.len() == candidate.len() && bool::from(stored.ct_eq(candidate))
+    engine::digest_matches(stored, candidate)
 }
 
 fn normalize_display_name(value: &str) -> Result<String, AppError> {
@@ -1273,12 +1250,8 @@ fn validate_invitation_role(role: &str) -> Result<(), AppError> {
 }
 
 fn generate_invitation_token() -> (String, String, [u8; 32]) {
-    let mut bytes = [0_u8; INVITATION_TOKEN_BYTES];
-    OsRng.fill_bytes(&mut bytes);
-    let token = format!("aw_inv_{}", URL_SAFE_NO_PAD.encode(bytes));
-    let prefix = token[..INVITATION_PREFIX_LENGTH].to_owned();
-    let digest = Sha256::digest(token.as_bytes()).into();
-    (token, prefix, digest)
+    let issued = engine::issue(engine::Family::Project);
+    (issued.token, issued.prefix, issued.digest)
 }
 
 pub(crate) async fn fetch_invitation(

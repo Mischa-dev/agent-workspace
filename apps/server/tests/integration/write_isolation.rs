@@ -499,6 +499,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "page_edit",
     "page_suggestion_decide",
     "page_write",
+    "person_create",
     "pin_set",
     "plan_import",
     "project_archive",
@@ -5973,6 +5974,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"projectId": a.project, "installationId": 990_003, "repositories": [b.repository]}),
         ]),
+        // K1.29: adding a person who hasn't signed in yet. B's roles aren't
+        // A's.
+        mcp_case(
+            "person_create",
+            json!({"displayName": "Net person", "handle": "net-person"}),
+            vec![json!({"displayName": "Net person b", "handle": "net-person-b", "roleId": b.organization})],
+        ),
         // K1.4: naming an agent's managers. B's agent isn't in A, and B's
         // accounts can't be named in A.
         mcp_case(
