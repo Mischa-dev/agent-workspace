@@ -10,6 +10,9 @@ export type ShortcutAction =
   | 'create-task'
   | 'search'
   | 'mark-all-read'
+  | 'mark-read'
+  | 'all-unreads'
+  | 'all-threads'
   | 'previous-conversation'
   | 'next-conversation'
   | 'previous-unread'
@@ -65,8 +68,8 @@ function inComposer(target: EventTarget | null) {
 
 /**
  * Turns key presses into shortcut actions. Single letters only count outside
- * text fields; ⌘K works everywhere, and the conversation keys (⌥↑, ⇧Esc)
- * work in the message composer too, as in Slack. In any other field ⌥↑ and
+ * text fields; ⌘K, ⌘⇧A and ⌘⇧T work everywhere, and the conversation keys
+ * (⌥↑, Esc, ⇧Esc) work in the message composer too, as in Slack. In any other field ⌥↑ and
  * ⌥↓ keep moving the cursor by paragraph. Call `press` for each keydown.
  */
 export function createShortcutMatcher(now: () => number = Date.now) {
@@ -79,6 +82,10 @@ export function createShortcutMatcher(now: () => number = Date.now) {
       pending = null
       return 'command-menu'
     }
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.shiftKey && (key === 'a' || key === 't')) {
+      pending = null
+      return key === 'a' ? 'all-unreads' : 'all-threads'
+    }
     const conversationKeys = !inOwnKeysRegion(event.target) && (!isTypingTarget(event.target) || inComposer(event.target))
     if (!event.metaKey && !event.ctrlKey && conversationKeys) {
       if (event.altKey && (key === 'ArrowUp' || key === 'ArrowDown')) {
@@ -87,9 +94,9 @@ export function createShortcutMatcher(now: () => number = Date.now) {
         if (event.shiftKey) return up ? 'previous-unread' : 'next-unread'
         return up ? 'previous-conversation' : 'next-conversation'
       }
-      if (!event.altKey && event.shiftKey && key === 'Escape') {
+      if (!event.altKey && key === 'Escape') {
         pending = null
-        return 'mark-all-read'
+        return event.shiftKey ? 'mark-all-read' : 'mark-read'
       }
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return null

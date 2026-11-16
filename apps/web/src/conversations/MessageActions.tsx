@@ -11,6 +11,7 @@ import { MessageHistoryDialog } from './MessageHistoryDialog'
 import { useMessageMemory } from './MessageMemory'
 import { MessageReactions, QuickReactions, ReactionPicker } from './Reactions'
 import { applyReaction, type ReactionChoice } from './reactions'
+import { MessageKeys } from './MessageKeys'
 import { useMessageLater } from './useMessageLater'
 import type {
   ConversationActor,
@@ -257,6 +258,10 @@ export function useMessageActions({
         {canReply(message) ? <IconButton icon={Reply} label="Reply" onClick={() => onReply?.(message)} size="sm" /> : null}
         {primaryFor?.(message, entry)}
         {later.saveButton(message)}
+        <MessageKeys
+          onReply={canReply(message) && onReply ? () => onReply(message) : undefined}
+          onTask={later.openTask ? () => later.openTask?.(message) : undefined}
+        />
         <Menu
           items={menuFor(entry, message)}
           label="More message actions"

@@ -48,6 +48,9 @@ import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, u
 import { usePageTitle } from '../shell/documentTitleModel'
 import { ThreadPanel } from '../threads/ThreadPanel'
 import { uploadFile } from '../files/api'
+import { useHomeWorkspaceId } from '../experience/layout'
+import { shownStatus, useStatuses } from '../status/api'
+import { StatusText } from '../status/StatusText'
 import '../styles/conversation.css'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
@@ -89,6 +92,7 @@ export function DirectConversationPage() {
   const valid = page?.conversation.id === conversationId && (page.conversation.kind === 'dm' || page.conversation.kind === 'group')
   const isGroup = (summary?.kind ?? page?.conversation.kind) === 'group'
   const other = members.find((member) => member.id !== viewerId)
+  const statuses = useStatuses(useHomeWorkspaceId(), other ? [other.id] : [])
 
   const older = useLiveOlderEntries({
     conversationId,
@@ -170,12 +174,14 @@ export function DirectConversationPage() {
     onMarkedUnread: (entry) => unread.markUnreadFrom(entry.sequence),
     primaryFor: (message) => {
       const existing = threadsByMessage.get(message.id)?.[0]
-      if (existing) return <IconButton icon="messages" label="Open thread" onClick={() => openThread(existing.id)} size="sm" />
+      if (existing) return <IconButton data-message-key="r" icon="messages" label="Open thread" shortcut="R" onClick={() => openThread(existing.id)} size="sm" />
       if (!canPost) return null
       return (
         <IconButton
+          data-message-key="r"
           icon="messages"
           label="Start a thread"
+          shortcut="R"
           onClick={() => startThread({ messageId: message.id, text: message.plainText, author: message.author.displayName })}
           size="sm"
         />
@@ -230,6 +236,7 @@ export function DirectConversationPage() {
     />
   )
 
+  const otherStatus = shownStatus(statuses.data ?? [], other?.id ?? '')
   const header = isGroup ? (
     <ConversationHeader
       actions={
@@ -264,7 +271,14 @@ export function DirectConversationPage() {
       actions={threadsButton}
       lead={other ? <Avatar kind={otherKind} name={other.displayName} seed={other.id} size={24} /> : undefined}
       menu={tools.levelMenu}
-      subtitle={other ? `@${other.handle}` : undefined}
+      subtitle={
+        other ? (
+          <>
+            @{other.handle}
+            <StatusText status={otherStatus} />
+          </>
+        ) : undefined
+      }
       tag={
         <>
           <ActorTag kind={otherKind} />
@@ -521,6 +535,7 @@ function GroupMembers({
   const [busy, setBusy] = useState<string | null>(null)
   const memberIds = new Set(members.map((member) => member.id))
   const candidates = people.filter((person) => !memberIds.has(person.id))
+  const statuses = useStatuses(useHomeWorkspaceId(), [...memberIds])
   const refresh = () => queryClient.invalidateQueries({ queryKey: directQueryKey })
 
   const add = (person: ConversationActor, quiet = false) => {
@@ -562,6 +577,7 @@ function GroupMembers({
               <span className="aw-members__name">
                 {member.displayName}
                 {you ? <span className="aw-members__you"> (you)</span> : null}
+                <StatusText status={shownStatus(statuses.data ?? [], member.id)} />
               </span>
               <ActorTag kind={kind} />
               <Button

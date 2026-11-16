@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { MARK_READ_EVENT } from '../conversations/markReadEvent'
 import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { useProjects } from '../projects/hooks'
 import { projectSettingsHref } from '../settings/paths'
@@ -75,6 +76,9 @@ export function CommandCenter() {
       },
       search: () => go('/search'),
       'mark-all-read': openMarkAllRead,
+      'mark-read': () => window.dispatchEvent(new Event(MARK_READ_EVENT)),
+      'all-unreads': () => go('/inbox?view=unread'),
+      'all-threads': () => go('/inbox?category=threads'),
       'previous-conversation': () => moveInSidebar(-1, false),
       'next-conversation': () => moveInSidebar(1, false),
       'previous-unread': () => moveInSidebar(-1, true),
