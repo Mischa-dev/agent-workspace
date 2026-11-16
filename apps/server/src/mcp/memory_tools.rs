@@ -227,6 +227,9 @@ pub(super) struct PageLineValue {
     pub id: String,
     pub title: String,
     pub is_guide: bool,
+    /// A template: page_write fromTemplateId starts a page from it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_template: bool,
     /// Set when the page is a skill: when to use it. skill_get loads it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_description: Option<String>,
@@ -278,6 +281,7 @@ pub(super) async fn page_list(
                     id: page.id.to_string(),
                     title: page.title,
                     is_guide: page.is_guide,
+                    is_template: page.is_template,
                     skill_description: page.skill_description,
                     version: page.version,
                     updated_at: page.updated_at,
@@ -310,6 +314,8 @@ pub(super) struct PageValue {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
     pub is_guide: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_template: bool,
     /// Set when the page is a skill: the line that says when to use it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_description: Option<String>,
@@ -423,6 +429,7 @@ pub(super) async fn page_get(
             body,
             truncated,
             is_guide: page.is_guide,
+            is_template: page.is_template,
             skill_description: page.skill_description,
             version: page.version,
             updated_at: page.updated_at,
@@ -461,6 +468,15 @@ pub(super) struct PageWriteArguments {
     pub body: Option<String>,
     /// Make this the project's guide page, the one everyone reads first.
     pub is_guide: Option<bool>,
+    /// Make the page a template (true), offered when anyone starts a page
+    /// from a template, or an ordinary page again (false).
+    pub is_template: Option<bool>,
+    /// Start the new page from a template: a template page's ID, or a
+    /// built-in one (meeting-notes, decision, retrospective, project-brief).
+    /// Its title and text are copied with {{date}}, {{author}} and
+    /// {{project}} filled in; leave body out, and title too to keep the
+    /// template's.
+    pub from_template_id: Option<String>,
     /// Make the page a skill: one line saying when an agent should use it
     /// ("Use when deploying the web app"). An empty string makes it a plain
     /// page again.
@@ -522,6 +538,8 @@ pub(super) async fn page_write(
         title: arguments.title,
         body: arguments.body,
         is_guide: arguments.is_guide,
+        is_template: arguments.is_template,
+        from_template_id: arguments.from_template_id,
         skill_description: arguments.skill_description,
         expected_version: arguments.expected_version,
         restore_version: arguments.restore_version,
@@ -609,6 +627,8 @@ pub(super) async fn page_write(
                 }
                 let more = input.title.is_some()
                     || input.is_guide.is_some()
+                    || input.is_template.is_some()
+                    || input.from_template_id.is_some()
                     || input.skill_description.is_some()
                     || input.archived.is_some()
                     || input.body.is_some()

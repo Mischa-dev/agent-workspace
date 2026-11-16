@@ -5,6 +5,8 @@ export type PageSummary = {
   id: string
   title: string
   isGuide: boolean
+  /** A template: offered in "New page" as something to start from. */
+  isTemplate: boolean
   /** Set when the page is a skill agents load: when to use it. */
   skillDescription: string | null
   version: number
@@ -35,6 +37,7 @@ export type Page = {
   title: string
   body: string
   isGuide: boolean
+  isTemplate: boolean
   skillDescription: string | null
   version: number
   createdAt: string
@@ -49,6 +52,9 @@ export type PageInput = {
   title?: string
   body?: string
   isGuide?: boolean
+  isTemplate?: boolean
+  /** Start the new page from this template (a template page's id or a built-in's name). */
+  fromTemplateId?: string
   /** One line saying when agents should use it; an empty string stops it being a skill. */
   skillDescription?: string
   expectedVersion?: number
@@ -87,6 +93,7 @@ const project = (projectId: string) => `/api/v1/projects/${encodeURIComponent(pr
 // Project first, so a project's refresh and reset reach them.
 export const memoryKeys = {
   pages: (projectId: string) => ['project', projectId, 'memory', 'pages'] as const,
+  pageTemplates: (projectId: string) => ['project', projectId, 'memory', 'page-templates'] as const,
   page: (projectId: string, pageId: string) => ['project', projectId, 'memory', 'page', pageId] as const,
   decisions: (projectId: string) => ['project', projectId, 'memory', 'decisions'] as const,
   pins: (projectId: string, conversationId: string) =>
@@ -106,6 +113,20 @@ export function createPage(projectId: string, input: PageInput) {
   return requestJson<Page>(`${project(projectId)}/pages`, { method: 'POST', json: input })
 }
 
+/** Something a new page can start from: a built-in template, or a page marked as one. */
+export type PageTemplate = {
+  id: string
+  title: string
+  excerpt: string
+  builtIn: boolean
+  projectName?: string
+}
+
+/** The templates a new page in this project can start from. */
+export function listPageTemplates(projectId: string) {
+  return requestJson<{ templates: PageTemplate[] }>(`${project(projectId)}/page-templates`)
+}
+
 /** A page made from a file: what the file held that a page can't, left out. */
 export type PageImport = { page: Page; setAside: string[] }
 
@@ -121,8 +142,8 @@ export function importPage(projectId: string, file: File) {
   })
 }
 
-/** Where a page downloads as Markdown or a Word document. */
-export function pageExportHref(pageId: string, format: 'markdown' | 'docx') {
+/** Where a page downloads as Markdown, a Word document or a PDF. */
+export function pageExportHref(pageId: string, format: 'markdown' | 'docx' | 'pdf') {
   return `/api/v1/pages/${encodeURIComponent(pageId)}/export?format=${format}`
 }
 

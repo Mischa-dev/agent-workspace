@@ -20,6 +20,8 @@ export type Whiteboard = {
   updatedByKind: string | null
   deleted: boolean
   linkCount: number
+  /** A template: offered in "New whiteboard" as something to start from. */
+  isTemplate: boolean
 }
 
 export type WhiteboardLink = {
@@ -80,6 +82,7 @@ export const whiteboardKeys = {
   list: (filters: Record<string, unknown>) => ['whiteboards', 'list', filters] as const,
   detail: (id: string) => ['whiteboards', 'detail', id] as const,
   linked: (kind: LinkTargetKind, targetId: string) => ['whiteboards', 'linked', kind, targetId] as const,
+  templates: (place: string) => ['whiteboards', 'templates', place] as const,
 }
 
 const base = '/api/v1/whiteboards'
@@ -99,8 +102,21 @@ export function createWhiteboard(input: {
   organizationId?: string
   projectId?: string
   link?: { targetKind: LinkTargetKind; targetId: string }
+  /** Start from this template: a template board's id or a built-in's name. */
+  fromTemplateId?: string
 }) {
   return requestJson<WhiteboardDetail>(base, { method: 'POST', json: input })
+}
+
+/** Something a new board can start from: a built-in template, or a board marked as one. */
+export type WhiteboardTemplate = { id: string; title: string; builtIn: boolean; projectName?: string }
+
+/** The templates a new board in this workspace or project can start from. */
+export function listWhiteboardTemplates(place: { organizationId?: string; projectId?: string }) {
+  const query = new URLSearchParams()
+  if (place.projectId) query.set('projectId', place.projectId)
+  else if (place.organizationId) query.set('organizationId', place.organizationId)
+  return requestJson<{ templates: WhiteboardTemplate[] }>(`/api/v1/whiteboard-templates?${query.toString()}`)
 }
 
 export function getWhiteboard(id: string) {
@@ -109,7 +125,7 @@ export function getWhiteboard(id: string) {
 
 export function updateWhiteboard(
   id: string,
-  change: { title?: string; projectId?: string | null; deleted?: boolean; expectedVersion?: number },
+  change: { title?: string; projectId?: string | null; deleted?: boolean; isTemplate?: boolean; expectedVersion?: number },
 ) {
   return requestJson<WhiteboardDetail>(board(id), { method: 'PATCH', json: change })
 }

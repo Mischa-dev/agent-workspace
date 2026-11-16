@@ -33,6 +33,7 @@ use crate::{
 };
 
 pub mod ops;
+pub mod templates;
 
 pub const MAX_PAGE_TITLE: usize = 200;
 pub const MAX_PAGE_BODY: usize = 200_000;
@@ -47,6 +48,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{id}/pages",
             get(list_pages_http).post(create_page_http),
+        )
+        .route(
+            "/api/v1/projects/{id}/page-templates",
+            get(list_page_templates_http),
         )
         .route(
             "/api/v1/pages/{id}",
@@ -135,6 +140,8 @@ pub struct PageSummary {
     pub id: Uuid,
     pub title: String,
     pub is_guide: bool,
+    /// A template: it shows in "New page from template" (C1.24).
+    pub is_template: bool,
     /// Set when the page is a skill: the line that says when to use it.
     pub skill_description: Option<String>,
     pub version: i64,
@@ -152,6 +159,7 @@ pub struct PageView {
     pub title: String,
     pub body: String,
     pub is_guide: bool,
+    pub is_template: bool,
     pub skill_description: Option<String>,
     pub version: i64,
     pub created_at: String,
@@ -366,7 +374,8 @@ pub async fn list_pages(
 ) -> Result<Vec<PageSummary>, AppError> {
     Ok(sqlx::query_as::<_, PageSummary>(
         r#"
-        SELECT page.id, page.title, page.is_guide, page.skill_description, page.version,
+        SELECT page.id, page.title, page.is_guide, page.is_template, page.skill_description,
+               page.version,
                page.updated_at::text AS updated_at,
                editor.display_name AS updated_by,
                page.updated_at < now() - make_interval(days => $3) AS stale,
@@ -388,7 +397,7 @@ pub async fn list_pages(
 
 const PAGE_SELECT: &str = r#"
     SELECT page.id, page.project_id, page.title, page.body, page.is_guide,
-           page.skill_description, page.version,
+           page.is_template, page.skill_description, page.version,
            page.created_at::text AS created_at, page.updated_at::text AS updated_at,
            editor.display_name AS updated_by,
            page.archived_at IS NOT NULL AS archived,
@@ -464,7 +473,8 @@ pub async fn guide_page(
 pub async fn list_skills(pool: &PgPool, project_id: Uuid) -> Result<Vec<PageSummary>, AppError> {
     Ok(sqlx::query_as::<_, PageSummary>(
         r#"
-        SELECT page.id, page.title, page.is_guide, page.skill_description, page.version,
+        SELECT page.id, page.title, page.is_guide, page.is_template, page.skill_description,
+               page.version,
                page.updated_at::text AS updated_at,
                editor.display_name AS updated_by,
                page.updated_at < now() - make_interval(days => $2) AS stale,
@@ -521,6 +531,12 @@ pub struct PageInput {
     pub title: Option<String>,
     pub body: Option<String>,
     pub is_guide: Option<bool>,
+    /// Make the page a template (true) or an ordinary page again (false).
+    pub is_template: Option<bool>,
+    /// Start a new page from this template: a template page's ID, or a
+    /// built-in one's name. Its title and text are copied with `{{date}}`,
+    /// `{{author}}` and `{{project}}` filled in; a title given here wins.
+    pub from_template_id: Option<String>,
     /// Make the page a skill with this one-line description of when to use
     /// it; an empty string makes it a plain page again.
     pub skill_description: Option<String>,
@@ -616,14 +632,27 @@ pub async fn create_page(
     project_id: Uuid,
     input: &PageInput,
 ) -> Result<Uuid, AppError> {
-    let title = normalize_title(
-        input
-            .title
-            .as_deref()
-            .ok_or(AppError::Validation("title"))?,
-        MAX_PAGE_TITLE,
-    )?;
-    let body = normalize_body(input.body.as_deref().unwrap_or_default(), MAX_PAGE_BODY)?;
+    let template = match input.from_template_id.as_deref() {
+        Some(_) if input.body.is_some() => {
+            return Err(AppError::Refused {
+                field: "body",
+                message: "A page from a template takes the template's text; leave body out.",
+            });
+        }
+        Some(reference) => Some(templates::fill(transaction, writer, project_id, reference).await?),
+        None => None,
+    };
+    let title = match (input.title.as_deref(), &template) {
+        (Some(title), _) => normalize_title(title, MAX_PAGE_TITLE)?,
+        // The template's own title, numbered when another page has it.
+        (None, Some(template)) => free_page_title(transaction, project_id, &template.title).await?,
+        (None, None) => return Err(AppError::Validation("title")),
+    };
+    let body = match &template {
+        Some(template) => normalize_body(&template.body, MAX_PAGE_BODY)?,
+        None => normalize_body(input.body.as_deref().unwrap_or_default(), MAX_PAGE_BODY)?,
+    };
+    let is_template = input.is_template.unwrap_or(false);
     let note = normalize_note(input.note.as_deref())?;
     let is_guide = input.is_guide.unwrap_or(false);
     let skill_description =
@@ -636,8 +665,8 @@ pub async fn create_page(
         r#"
         INSERT INTO project_pages (
             id, project_id, title, body, is_guide, skill_description,
-            created_by_actor_id, updated_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+            created_by_actor_id, updated_by_actor_id, is_template
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)
         "#,
     )
     .bind(page_id)
@@ -647,6 +676,7 @@ pub async fn create_page(
     .bind(is_guide)
     .bind(&skill_description)
     .bind(writer.actor_id)
+    .bind(is_template)
     .execute(&mut **transaction)
     .await
     .map_err(map_page_title_conflict)?;
@@ -672,11 +702,17 @@ pub async fn update_page(
     page_id: Uuid,
     input: &PageInput,
 ) -> Result<Uuid, AppError> {
-    let (project_id, title, body, version, is_guide, skill_description, archived) =
-        sqlx::query_as::<_, (Uuid, String, String, i64, bool, Option<String>, bool)>(
+    if input.from_template_id.is_some() {
+        return Err(AppError::Refused {
+            field: "fromTemplateId",
+            message: "Templates start new pages; leave pageId out to make one.",
+        });
+    }
+    let (project_id, title, body, version, is_guide, skill_description, archived, is_template) =
+        sqlx::query_as::<_, (Uuid, String, String, i64, bool, Option<String>, bool, bool)>(
             r#"
             SELECT project_id, title, body, version, is_guide, skill_description,
-                   archived_at IS NOT NULL
+                   archived_at IS NOT NULL, is_template
             FROM project_pages WHERE id = $1 FOR UPDATE
             "#,
         )
@@ -728,13 +764,25 @@ pub async fn update_page(
     let new_skill = normalize_skill_description(input.skill_description.as_deref())?
         .unwrap_or_else(|| skill_description.clone());
     let new_archived = input.archived.unwrap_or(archived);
+    let new_template = input.is_template.unwrap_or(is_template);
     if new_title == title
         && new_body == body
         && new_guide == is_guide
         && new_skill == skill_description
         && new_archived == archived
+        && new_template == is_template
     {
         return Ok(project_id);
+    }
+    if new_template != is_template {
+        note.get_or_insert_with(|| {
+            if new_template {
+                "Made a template"
+            } else {
+                "No longer a template"
+            }
+            .to_owned()
+        });
     }
     if new_skill.is_some() != skill_description.is_some() {
         note.get_or_insert_with(|| {
@@ -759,7 +807,7 @@ pub async fn update_page(
         SET title = $2, body = $3, is_guide = $4,
             archived_at = CASE WHEN $5 THEN COALESCE(archived_at, now()) ELSE NULL END,
             version = $6, updated_by_actor_id = $7, updated_at = now(),
-            skill_description = $8
+            skill_description = $8, is_template = $9
         WHERE id = $1
         "#,
     )
@@ -771,6 +819,7 @@ pub async fn update_page(
     .bind(next_version)
     .bind(writer.actor_id)
     .bind(&new_skill)
+    .bind(new_template)
     .execute(&mut **transaction)
     .await
     .map_err(map_page_title_conflict)?;
@@ -1376,6 +1425,65 @@ async fn create_page_http(
         .await?
         .map(Json)
         .ok_or(AppError::NotFound("page"))
+}
+
+/// `title`, or `title (2)` and on when another active page in the project
+/// has it: an import or a page from a template never fails over a name.
+pub(crate) async fn free_page_title(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    title: &str,
+) -> Result<String, AppError> {
+    let base = normalize_title(
+        &title.chars().take(MAX_PAGE_TITLE - 6).collect::<String>(),
+        MAX_PAGE_TITLE,
+    )?;
+    let taken: std::collections::HashSet<String> = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT lower(title) FROM project_pages
+        WHERE project_id = $1 AND archived_at IS NULL
+          AND left(lower(title), char_length($2)) = lower($2)
+        "#,
+    )
+    .bind(project_id)
+    .bind(&base)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect();
+    Ok((1..=1000)
+        .map(|number| match number {
+            1 => base.clone(),
+            number => format!("{base} ({number})"),
+        })
+        .find(|candidate| !taken.contains(&candidate.to_lowercase()))
+        .unwrap_or(base))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PageTemplatesResponse {
+    templates: Vec<templates::TemplateSummary>,
+}
+
+/// The gallery for "New page from template" in a project.
+async fn list_page_templates_http(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+) -> Result<Json<PageTemplatesResponse>, AppError> {
+    let mut transaction = state.pool.begin().await?;
+    project_access(
+        &mut *transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        project_id,
+        Action::ProjectView,
+    )
+    .await?;
+    let templates = templates::list(&mut transaction, principal.actor_id, project_id).await?;
+    transaction.commit().await?;
+    Ok(Json(PageTemplatesResponse { templates }))
 }
 
 pub(crate) async fn page_project(pool: &PgPool, page_id: Uuid) -> Result<Uuid, AppError> {

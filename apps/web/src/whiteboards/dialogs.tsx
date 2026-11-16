@@ -1,11 +1,12 @@
 import { useState, type FormEvent } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { useProjects } from '../projects/hooks'
 import { Banner, Button, Dialog, SelectField, TextField, describeError } from '../ui'
 import {
   createWhiteboard,
+  listWhiteboardTemplates,
   updateWhiteboard,
   whiteboardKeys,
   whiteboardPath,
@@ -38,18 +39,26 @@ export function NewWhiteboardDialog({
   const [place, setPlace] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [template, setTemplate] = useState('')
   const fallback = workspaces[0] ? `workspace:${workspaces[0].id}` : ''
   const chosen = place || fallback
+  const [kind, id] = chosen.split(':')
+  const where = projectId ? { projectId } : kind === 'project' ? { projectId: id } : { organizationId: id }
+  const templates = useQuery({
+    queryKey: whiteboardKeys.templates(projectId ? `project:${projectId}` : chosen),
+    queryFn: () => listWhiteboardTemplates(where),
+    enabled: open && Boolean(projectId || chosen),
+  })
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!title.trim() || busy) return
-    const [kind, id] = chosen.split(':')
     setBusy(true)
     setError(null)
     void createWhiteboard({
       title: title.trim(),
-      ...(projectId ? { projectId } : kind === 'project' ? { projectId: id } : { organizationId: id }),
+      ...where,
       ...(link ? { link } : {}),
+      ...(template ? { fromTemplateId: template } : {}),
     })
       .then((created) => {
         void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
@@ -88,6 +97,16 @@ export function NewWhiteboardDialog({
         value={title}
       />
       {projectId ? null : <PlacePicker onChange={setPlace} value={chosen} workspaces={workspaces} />}
+      {templates.data && templates.data.templates.length > 0 ? (
+        <SelectField label="Start from" onChange={(event) => setTemplate(event.target.value)} value={template}>
+          <option value="">A blank board</option>
+          {templates.data.templates.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.projectName ? `${option.title} · ${option.projectName}` : option.title}
+            </option>
+          ))}
+        </SelectField>
+      ) : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
     </Dialog>
   )

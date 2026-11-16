@@ -116,6 +116,13 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
       .catch((reason: unknown) =>
         toastError(deleted ? 'The whiteboard wasn’t moved to the trash' : 'The whiteboard wasn’t restored', reason),
       )
+  const setTemplate = (isTemplate: boolean) =>
+    updateWhiteboard(whiteboard.id, { isTemplate })
+      .then(() => {
+        void refresh()
+        showToast({ tone: 'success', title: isTemplate ? 'New whiteboards can start from this one' : 'No longer a template' })
+      })
+      .catch((reason: unknown) => toastError('The whiteboard wasn’t changed', reason))
   const duplicate = () =>
     duplicateWhiteboard(whiteboard.id)
       .then((copy) => {
@@ -163,6 +170,12 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             { label: 'Rename', icon: 'pencil', disabled: !editable, onSelect: () => setPanel('rename') },
             { label: 'History', icon: 'clock', onSelect: () => setPanel('history') },
             { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate() },
+            {
+              label: whiteboard.isTemplate ? 'Stop using as a template' : 'Use as a template',
+              icon: 'copy',
+              disabled: !editable,
+              onSelect: () => void setTemplate(!whiteboard.isTemplate),
+            },
             { separator: true },
             ...(whiteboard.deleted
               ? [

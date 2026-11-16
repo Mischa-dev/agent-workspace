@@ -59,6 +59,7 @@ fn whiteboard_id(value: &str) -> Option<Uuid> {
 fn refused<T>(error: AppError, operation: &'static str) -> ToolResult<T> {
     match error {
         AppError::NotFound("whiteboard") => ToolResult::not_found("That whiteboard"),
+        AppError::NotFound("template") => ToolResult::not_found("That template"),
         AppError::NotFound("link target") => ToolResult::not_found("That task, project or page"),
         AppError::Forbidden => {
             ToolResult::denied("You can look at this whiteboard but not change it.")
@@ -541,6 +542,10 @@ pub(super) struct WhiteboardCreateArguments {
     pub workspace_id: Option<String>,
     /// Link the new board to a task, project or page.
     pub link_to: Option<LinkArgument>,
+    /// Start from a template: a template board's ID, or a built-in one
+    /// (retrospective, user-journey, flowchart, two-by-two). Its drawing is
+    /// copied in before any operations.
+    pub from_template_id: Option<String>,
     /// Draw something straight away: the same operations as whiteboard_edit.
     pub operations: Option<Vec<Operation>>,
     /// Makes creating safe to retry: send the same one again and you get
@@ -677,8 +682,21 @@ pub(super) async fn whiteboard_create(
                 return Ok((id, edit, true));
             }
         };
-        let id =
-            whiteboards::create(&mut transaction, &caller, placement, &arguments.title).await?;
+        let id = match arguments.from_template_id.as_deref() {
+            Some(template) => {
+                whiteboards::templates::create_from(
+                    &mut transaction,
+                    &caller,
+                    template,
+                    placement,
+                    Some(&arguments.title),
+                )
+                .await?
+            }
+            None => {
+                whiteboards::create(&mut transaction, &caller, placement, &arguments.title).await?
+            }
+        };
         if let Some((kind, target_id)) = link {
             whiteboards::set_link(&mut transaction, &caller, id, kind, target_id, true).await?;
         }
@@ -889,6 +907,9 @@ pub(super) struct WhiteboardUpdateArguments {
     /// Move the board to the trash (true) or bring it back (false). Its
     /// drawing and links are kept either way.
     pub deleted: Option<bool>,
+    /// Make the board a template (true), offered when anyone starts a board
+    /// from one, or an ordinary board again (false).
+    pub is_template: Option<bool>,
     /// Put the drawing back the way this saved revision had it. The
     /// current drawing is saved first.
     pub restore_revision: Option<i32>,
@@ -925,6 +946,7 @@ pub(super) async fn whiteboard_update(
         title: arguments.title.clone(),
         project_id,
         deleted: arguments.deleted,
+        is_template: arguments.is_template,
         expected_version: arguments.expected_version,
     };
     let caller = caller(principal);

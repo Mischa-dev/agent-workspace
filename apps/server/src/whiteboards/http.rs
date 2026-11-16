@@ -38,6 +38,7 @@ pub fn router() -> Router<AppState> {
             get(get_http).patch(change_http).delete(purge_http),
         )
         .route("/api/v1/whiteboard-trash/empty", post(empty_trash_http))
+        .route("/api/v1/whiteboard-templates", get(templates_http))
         .route("/api/v1/whiteboards/{id}/duplicate", post(duplicate_http))
         .route(
             "/api/v1/whiteboards/{id}/scene",
@@ -167,6 +168,8 @@ struct CreateRequest {
     project_id: Option<Uuid>,
     /// Link the new board to this task, project or page straight away.
     link: Option<LinkTarget>,
+    /// Start from a template: a template board's ID or a built-in's name.
+    from_template_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,7 +215,21 @@ async fn create_http(
         (None, None) => return Err(AppError::Validation("organizationId")),
     };
     let mut transaction = state.pool.begin().await?;
-    let id = super::create(&mut transaction, &caller, placement, &request.title).await?;
+    let id = match request.from_template_id.as_deref() {
+        Some(template) => super::templates::create_from(
+            &mut transaction,
+            &caller,
+            template,
+            placement,
+            Some(&request.title),
+        )
+        .await
+        .map_err(|error| match error {
+            EditError::App(error) => error,
+            EditError::Invalid(_) | EditError::Conflict(_) => AppError::NotFound("template"),
+        })?,
+        None => super::create(&mut transaction, &caller, placement, &request.title).await?,
+    };
     if let Some(link) = request.link {
         super::set_link(
             &mut transaction,
@@ -663,6 +680,64 @@ struct LinkedQuery {
 #[serde(rename_all = "camelCase")]
 struct LinkedResponse {
     whiteboards: Vec<BoardSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TemplatesQuery {
+    /// The workspace the new board goes in, or the project (its workspace).
+    organization_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TemplatesResponse {
+    templates: Vec<super::templates::TemplateSummary>,
+}
+
+/// The gallery for "New board from template" in a workspace.
+async fn templates_http(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiQuery(query): ApiQuery<TemplatesQuery>,
+) -> Result<Json<TemplatesResponse>, AppError> {
+    let caller = Caller::browser(&principal)?;
+    let mut connection = state.pool.acquire().await?;
+    let organization_id = match (query.organization_id, query.project_id) {
+        (Some(organization_id), _) => organization_id,
+        (None, Some(project_id)) => {
+            crate::memory::project_access(
+                &mut *connection,
+                caller.actor_id,
+                caller.actor_kind,
+                project_id,
+                crate::policy::Action::ProjectView,
+            )
+            .await
+            .map_err(|_| AppError::NotFound("project"))?;
+            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                .bind(project_id)
+                .fetch_one(&mut *connection)
+                .await?
+        }
+        (None, None) => return Err(AppError::Validation("organizationId")),
+    };
+    // Only a workspace the caller is in has a gallery for them.
+    let member = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM organization_memberships \
+         WHERE organization_id = $1 AND actor_id = $2 AND enabled)",
+    )
+    .bind(organization_id)
+    .bind(caller.actor_id)
+    .fetch_one(&mut *connection)
+    .await?;
+    if !member {
+        return Err(AppError::NotFound("organization"));
+    }
+    Ok(Json(TemplatesResponse {
+        templates: super::templates::list(&mut connection, &caller, organization_id).await?,
+    }))
 }
 
 async fn linked_http(

@@ -29,6 +29,7 @@
     "/api/v1/pages/*",
     "/api/v1/projects/{id}/pages",
     "/api/v1/projects/{id}/pages/import",
+    "/api/v1/projects/{id}/page-templates",
     "/api/v1/projects/{id}/decisions",
     "/api/v1/organizations/{organization_id}/pages-space"
   ],

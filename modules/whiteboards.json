@@ -20,7 +20,7 @@
     "whiteboard_duplicate": "create",
     "whiteboard_link": "change"
   },
-  "routes": ["/api/v1/whiteboards*", "/api/v1/whiteboard-links", "/api/v1/whiteboard-trash/*"],
+  "routes": ["/api/v1/whiteboards*", "/api/v1/whiteboard-links", "/api/v1/whiteboard-templates", "/api/v1/whiteboard-trash/*"],
   "events": { "emits": [], "listens": [] },
   "notifications": [],
   "search": [],
