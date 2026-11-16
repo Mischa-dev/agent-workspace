@@ -453,7 +453,10 @@ async fn membership_matrix() {
     let (membership, readable) = ask(workspace_space, workspace_only).await;
     assert!(readable);
     assert!(membership.is_some());
-    assert_eq!(ask(workspace_space, workspace_disabled).await, (None, false));
+    assert_eq!(
+        ask(workspace_space, workspace_disabled).await,
+        (None, false)
+    );
 
     // Another workspace's member reads nothing here.
     let other = Uuid::now_v7();
@@ -481,8 +484,9 @@ async fn membership_matrix() {
     assert_eq!(ask(workspace_space, stranger).await, (None, false));
 
     // An archived space is read by nobody.
-    sqlx::query("UPDATE projects SET archived_at = now() WHERE id = $1")
+    sqlx::query("UPDATE projects SET archived_at = now(), archived_by_actor_id = $2 WHERE id = $1")
         .bind(space)
+        .bind(explicit)
         .execute(pool)
         .await
         .expect("archive");
