@@ -1181,6 +1181,36 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
         finish_delivery(pool, due.id, "skipped", Some(reason)).await?;
         return Ok(());
     }
+    // A module switched off since the event was routed (in the workspace,
+    // or in the event's space) stops what is still waiting (AWD-186).
+    if let Some(project_id) = due.project_id
+        && due.event_type != "ping"
+    {
+        let organization_id = due.organization_id;
+        let (modules, direct) = crate::db::scoped_one(pool, async |connection| {
+            let modules =
+                crate::modules::state::in_space(connection, organization_id, project_id).await?;
+            let direct = sqlx::query_scalar::<_, bool>(
+                "SELECT kind = 'direct' FROM projects WHERE id = $1",
+            )
+            .bind(project_id)
+            .fetch_optional(&mut *connection)
+            .await?
+            .unwrap_or(false);
+            Ok::<_, AppError>((modules, direct))
+        })
+        .await?;
+        if crate::events::shut_out(modules, &due.event_type, direct) {
+            finish_delivery(
+                pool,
+                due.id,
+                "skipped",
+                Some("Automations, or what the event is about, is turned off there."),
+            )
+            .await?;
+            return Ok(());
+        }
+    }
     let subject: Subject = serde_json::from_value(due.subject.clone()).unwrap_or_default();
     if let Some(project_id) = due.project_id
         && due.event_type != "ping"

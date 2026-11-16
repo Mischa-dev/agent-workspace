@@ -89,6 +89,7 @@ mod migrations_guard;
 mod modules;
 mod modules_ids;
 mod modules_lists;
+mod modules_space_events;
 mod modules_targets;
 mod notifications;
 mod oauth_agent;
