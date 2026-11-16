@@ -14,9 +14,11 @@ export const storageStatePath = path.join(outputRoot, 'state', 'signed-in.json')
 const serverPort = Number(process.env.E2E_SERVER_PORT ?? 3190)
 const webPort = Number(process.env.E2E_WEB_PORT ?? 5190)
 
-export const ports = { server: serverPort, webhook: serverPort + 1, workos: serverPort + 2, web: webPort }
+export const ports = { server: serverPort, webhook: serverPort + 1, workos: serverPort + 2, web: webPort, static: webPort + 1 }
 export const serverOrigin = `http://127.0.0.1:${serverPort}`
 export const webOrigin = `http://127.0.0.1:${webPort}`
+/** The built app served as plain files, the API on another origin (W1.38). */
+export const staticOrigin = `http://127.0.0.1:${webPort + 1}`
 
 export const serverBinary =
   process.env.E2E_SERVER_BINARY ??

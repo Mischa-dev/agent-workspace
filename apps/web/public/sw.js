@@ -1,6 +1,8 @@
 // Agent Workspace service worker. It makes the app installable and lets it open
 // offline from the last app shell it loaded. It stores only the built app
-// (index.html and the hashed files under /assets/), never API responses, so no
+// (index.html and the hashed files under /assets/) and the app's start-up
+// configuration (/client-config: where the API answers and which ways in it
+// offers, nothing about any account), never API responses, so no
 // conversation or account data is kept by it. Everything else goes straight to
 // the network: API calls, sign-in callbacks, OAuth and MCP pages, health checks.
 // It also shows push notifications (the server sends only the notification's
@@ -17,6 +19,7 @@ const ASSET_CACHE = 'aw-assets-v1'
 const SHARE_CACHE = 'aw-share-v1'
 const MAX_SHARED_FILES = 10
 const SHELL_URL = '/index.html'
+const CONFIG_URL = '/client-config'
 const MAX_ASSETS = 120
 // Client-side routes that the server answers with index.html, and a task's
 // short link (/AW-12). Keep in step with the routes in app/routes.tsx.
@@ -56,6 +59,7 @@ self.addEventListener('fetch', (event) => {
     return
   }
   if (url.pathname.startsWith('/assets/')) event.respondWith(asset(event))
+  else if (url.pathname === CONFIG_URL) event.respondWith(config(event))
 })
 
 // Push: {id, kind, title, body, place, url, tag, actions, actionToken}. Every
@@ -250,6 +254,20 @@ async function openApp(event) {
   }
 }
 
+// The configuration is kept with the shell (W1.38), so an app opened offline
+// from a static host still knows where its API is. Network first, like the shell.
+async function config(event) {
+  try {
+    const response = await fetch(event.request)
+    if (response.ok) event.waitUntil(save(SHELL_CACHE, CONFIG_URL, response.clone()))
+    return response
+  } catch (error) {
+    const saved = await caches.match(CONFIG_URL, { cacheName: SHELL_CACHE }).catch(() => undefined)
+    if (saved) return saved
+    throw error
+  }
+}
+
 // Asset names carry a content hash, so a saved copy never goes stale. A hit is
 // saved again, which moves it to the end of the cache's order, so trimming
 // drops the files no page has asked for in longest, not the oldest in use.
@@ -269,6 +287,8 @@ async function cacheShell() {
   if (!response.ok) return
   const html = await response.clone().text()
   await save(SHELL_CACHE, SHELL_URL, response)
+  const configuration = await fetch(CONFIG_URL, { cache: 'no-cache' }).catch(() => null)
+  if (configuration?.ok) await save(SHELL_CACHE, CONFIG_URL, configuration)
   const assets = [...new Set(html.match(/\/assets\/[\w.-]+/g) || [])]
   const cache = await caches.open(ASSET_CACHE)
   await Promise.all(assets.map((path) => cache.add(path).catch(() => undefined)))

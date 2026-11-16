@@ -51,6 +51,8 @@ describe('service worker', () => {
     expect(handles(`${origin}/projects/p1/threads/t1`, { mode: 'navigate' })).toBe(true)
     expect(handles(`${origin}/join?token=abc`, { mode: 'navigate' })).toBe(true)
     expect(handles(`${origin}/assets/index-Cx1.js`)).toBe(true)
+    // The start-up configuration is kept with the shell (W1.38).
+    expect(handles(`${origin}/client-config`)).toBe(true)
   })
 
   it('opens every app page offline, including task links, but not server files', () => {
