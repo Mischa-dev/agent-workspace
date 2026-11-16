@@ -598,7 +598,7 @@ pub(crate) async fn repository_git_token_with(
     )
     .bind(project_id)
     .bind(repository_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?
     .ok_or(AppError::Conflict(
         "github_integration",
@@ -676,7 +676,7 @@ pub(crate) async fn repository_issues(
     )
     .bind(project_id)
     .bind(repository_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some((installation_id, github_repository_id, owner, name)) = scope else {
         return Ok(Err(IssuesUnavailable::NoAccess));
@@ -1264,7 +1264,7 @@ async fn github_status(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<GitHubStatusResponse>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let role = require_project_access(
         &mut transaction,
         &principal,
@@ -1296,7 +1296,7 @@ async fn github_automation_settings(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<GitHubAutomationSettingsView>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access(
         &mut transaction,
         &principal,
@@ -1323,7 +1323,7 @@ async fn update_github_automation_settings(
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("projects", project_id, "github_automation")?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access(
         &mut transaction,
         &principal,
@@ -1490,7 +1490,7 @@ pub(crate) async fn sync_installation_as(
         .as_ref()
         .ok_or(AppError::Conflict("github_integration", "not_configured"))?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let role = require_project_access_as(
         &mut transaction,
         actor_id,
@@ -1549,7 +1549,7 @@ pub(crate) async fn sync_installation_as(
     validate_repository_access(&repositories, &accessible).map_err(map_github_error)?;
     drop(token);
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access_as(
         &mut transaction,
         actor_id,
@@ -1916,7 +1916,7 @@ async fn publish_agent_run(
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("agent_runs", run_id, "publish")?;
     let request_hash = RequestHash::for_value(&json!({ "agentRunId": run_id }))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access(
         &mut transaction,
         &principal,
@@ -2189,7 +2189,7 @@ async fn create_pull_request(
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("agent_runs", run_id, "pull_request")?;
     let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access(
         &mut transaction,
         &principal,
@@ -2365,7 +2365,7 @@ async fn refresh_pull_request(
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("github_pull_requests", pull_request_id, "refresh")?;
     let request_hash = RequestHash::for_value(&json!({}))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access(
         &mut transaction,
         &principal,
@@ -2545,7 +2545,7 @@ async fn extend_github_lease(
     .bind(job_id)
     .bind(claim_id)
     .bind(GITHUB_JOB_LEASE.as_secs_f64())
-    .execute(pool)
+    .execute(crate::db::scoped(pool))
     .await?
     .rows_affected()
         == 1)
@@ -2587,7 +2587,7 @@ where
 }
 
 async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
         UPDATE github_jobs
@@ -2698,7 +2698,7 @@ async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>
 async fn claim_pull_request_job(
     state: &AppState,
 ) -> Result<Option<ClaimedPullRequestJob>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
         UPDATE github_pull_request_requests request
@@ -2803,7 +2803,7 @@ async fn claim_pull_request_job(
 async fn claim_pull_request_sync_job(
     state: &AppState,
 ) -> Result<Option<ClaimedPullRequestSyncJob>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let unresolved = sqlx::query_as::<_, (Option<Uuid>, String)>(
         r#"
         WITH candidate AS (
@@ -3108,7 +3108,7 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
 }
 
 async fn complete_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Result<(), AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE github_jobs
@@ -3161,7 +3161,7 @@ async fn fail_publish_job(
     let exhausted = terminal || job.attempts >= job.max_attempts;
     let next_state = if exhausted { "exhausted" } else { "failed" };
     let backoff_seconds = i64::from(job.attempts.clamp(1, 6)).pow(2).min(60);
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE github_jobs
@@ -3293,7 +3293,7 @@ async fn process_pull_request_job(
     .bind(job.request_id)
     .bind(job.job_id)
     .bind(job.claim_id)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     if marked.rows_affected() != 1 {
         drop(token);
@@ -3412,7 +3412,7 @@ async fn complete_pull_request_job(
             "merged commit unavailable",
         ));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE github_jobs
@@ -3603,7 +3603,7 @@ async fn fail_pull_request_job(
     let exhausted = terminal || job.attempts >= job.max_attempts;
     let next_state = if exhausted { "exhausted" } else { "failed" };
     let backoff_seconds = i64::from(job.attempts.clamp(1, 6)).pow(2).min(60);
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE github_jobs
@@ -3668,7 +3668,7 @@ async fn fail_pull_request_job(
 async fn claim_pull_request_adoption_job(
     state: &AppState,
 ) -> Result<Option<ClaimedPullRequestAdoptionJob>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let claim_id = Uuid::now_v7();
     let job = sqlx::query_as::<_, ClaimedPullRequestAdoptionJob>(
         r#"
@@ -3866,7 +3866,7 @@ async fn process_pull_request_adoption_job(
         pull_request.state.as_str()
     };
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // Back to the queue, where the usual sync finds the pull request now
     // tracked and reads its checks and reviews. The sync gets a fresh attempt
     // budget: pickup happens once per pull request, so this can't loop, and a
@@ -3974,7 +3974,7 @@ async fn fail_pull_request_adoption_job(
     let exhausted = terminal || job.attempts >= job.max_attempts;
     let next_state = if exhausted { "exhausted" } else { "failed" };
     let backoff_seconds = i64::from(job.attempts.clamp(1, 6)).pow(2).min(60);
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE github_jobs
@@ -4374,7 +4374,7 @@ async fn complete_pull_request_sync_job(
     };
     let requested_reviewers = serde_json::to_value(&projection.requested_reviewers)
         .map_err(|_| AppError::Internal("serialize requested reviewers"))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // The automation below changes task statuses, so it takes its turn on the
     // project row before anything else, as every task write does
     // (work_item_commands::lock_membership) before it locks tasks and the
@@ -4588,7 +4588,7 @@ pub async fn apply_pull_request_automation(
     pull_request_state: &str,
     draft: bool,
 ) -> Result<(), AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query("SELECT 1 FROM projects WHERE id = $1 FOR NO KEY UPDATE")
         .bind(job.project_id)
         .fetch_optional(&mut *transaction)
@@ -4992,7 +4992,7 @@ async fn fail_pull_request_sync_job(
     let exhausted = terminal || job.attempts >= job.max_attempts;
     let next_state = if exhausted { "exhausted" } else { "failed" };
     let backoff_seconds = i64::from(job.attempts.clamp(1, 6)).pow(2).min(60);
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE github_jobs
@@ -5484,9 +5484,7 @@ async fn receive_webhook_inner(
     let parsed = parse_webhook(headers, body)?;
     let checksum = Sha256::digest(body).to_vec();
 
-    let mut transaction = state
-        .pool
-        .begin()
+    let mut transaction = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(|_| WebhookError::Database)?;
     let registration = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, String)>(
@@ -5979,7 +5977,7 @@ pub(crate) async fn merge_pull_request_as(
         return Err(AppError::Invalid("expected head sha"));
     }
     let project_id = actor.project_id;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     require_project_access_as(
         &mut transaction,
         actor.actor_id,
@@ -6125,7 +6123,7 @@ pub(crate) async fn merge_pull_request_as(
         (merge_commit_sha, already_merged)
     };
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if !recorded {
         record_audit_for(
             &mut transaction,

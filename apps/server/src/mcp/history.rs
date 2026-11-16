@@ -257,7 +257,7 @@ async fn look_up(
         )
         .bind(project_id)
         .bind(ids(&found.statuses))
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .collect();
@@ -273,7 +273,7 @@ async fn look_up(
         .bind(task_id)
         .bind(ids(&found.criteria))
         .bind(CRITERION_CHARACTERS)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .map(|(id, text, position)| (id, (text, position)))
@@ -292,7 +292,7 @@ async fn look_up(
         .bind(project_id)
         .bind(ids(&found.conversations))
         .bind(viewer)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .collect();
@@ -311,7 +311,7 @@ async fn look_up(
         .bind(project_id)
         .bind(ids(&found.messages))
         .bind(viewer)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .collect();
@@ -328,7 +328,7 @@ async fn look_up(
         .bind(project_id)
         .bind(ids(&found.decisions))
         .bind(viewer)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .collect();
@@ -339,7 +339,7 @@ async fn look_up(
         )
         .bind(project_id)
         .bind(ids(&found.pages))
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .collect();
@@ -360,7 +360,7 @@ async fn look_up(
         )
         .bind(project_id)
         .bind(ids(&found.repositories))
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .collect();
@@ -376,7 +376,7 @@ async fn look_up(
         .bind(project_id)
         .bind(ids(&found.pull_requests))
         .bind(viewer)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .map(|(id, number, title)| (id, (number, title)))
@@ -391,7 +391,7 @@ async fn look_up(
         )
         .bind(project_id)
         .bind(ids(&found.labels))
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .collect();
@@ -406,7 +406,7 @@ async fn look_up(
         )
         .bind(project_id)
         .bind(ids(&found.tasks))
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .collect();
@@ -425,7 +425,7 @@ async fn look_up(
         .bind(ids(&found.linked_tasks))
         .bind(project_id)
         .bind(&reachable)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
         .collect();
@@ -456,7 +456,7 @@ async fn look_up(
             .bind(task_id)
             .bind(key)
             .bind(&reachable)
-            .fetch_optional(pool)
+            .fetch_optional(crate::db::scoped(pool))
             .await?;
         }
         if found.moved_to {
@@ -471,7 +471,7 @@ async fn look_up(
             )
             .bind(task_id)
             .bind(&reachable)
-            .fetch_optional(pool)
+            .fetch_optional(crate::db::scoped(pool))
             .await?;
         }
     }
@@ -501,7 +501,7 @@ pub(super) async fn task_history(
     )
     .bind(project_id)
     .bind(task_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let older_cursor = match page.rows.last() {
         Some(oldest) if page.has_more => Some(encode_work_item_timeline_cursor(

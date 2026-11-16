@@ -163,7 +163,7 @@ async fn direct_overview(
     principal: AuthenticatedActor,
 ) -> Result<Json<DirectOverview>, AppError> {
     // The first visit creates the space, so this read runs in a transaction.
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let space = ensure_direct_space(&mut transaction, &Person::from(&principal)).await?;
     require(&principal, &space, Action::ProjectView)?;
     let rows = sqlx::query_as::<_, DirectConversationRow>(
@@ -326,7 +326,7 @@ async fn open_dm(
     if request.actor_id == principal.actor_id {
         return Err(AppError::Validation("DM recipient"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let space = ensure_direct_space(&mut transaction, &Person::from(&principal)).await?;
     require(&principal, &space, Action::ChannelCreate)?;
     let (conversation_id, created) = open_dm_in(
@@ -389,7 +389,7 @@ async fn create_group(
         member_ids: others.clone(),
     })?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let space = ensure_direct_space(&mut transaction, &Person::from(&principal)).await?;
     require(&principal, &space, Action::ChannelCreate)?;
     let scope = idempotency::resource_bound_scope("project", space.project_id, "group_create")?;
@@ -477,7 +477,7 @@ async fn change_members_from_web(
     remove: &[Uuid],
 ) -> Result<Json<MembersResponse>, AppError> {
     require_authenticated_write(state, headers, principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let change = change_group_members(
         &mut transaction,
         GroupEditor {
@@ -967,7 +967,7 @@ pub async fn space_for_login(
     pool: &sqlx::PgPool,
     login_name: &str,
 ) -> Result<(Uuid, Uuid), AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let (actor_id, login_name, display_name) = sqlx::query_as::<_, (Uuid, String, String)>(
         "SELECT actor_id, login_name, display_name FROM users WHERE login_name = $1 AND status = 'active'",
     )

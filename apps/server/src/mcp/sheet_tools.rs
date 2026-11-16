@@ -62,7 +62,7 @@ fn sheet_url(state: &AppState, project_id: Uuid, sheet_id: Uuid) -> String {
 /// AWD-75: whether Sheets is off in the project, for its workspace or the
 /// caller's role there.
 async fn module_off(state: &AppState, principal: &McpPrincipal) -> Result<bool, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let projects = [principal.project_id];
     Ok(
         crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &projects)
@@ -109,7 +109,7 @@ async fn begin_write<T>(
     if !can_write_in(state, principal, project_id, Action::SheetEdit).await? {
         return Ok(Err(ToolResult::denied(EDIT_MESSAGE)));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     mark_via(&mut transaction, principal).await?;
     let membership = if project_lock {
         lock_membership(&mut transaction, principal.actor_id, project_id).await?
@@ -232,7 +232,7 @@ pub(super) async fn sheet_list(
         let project_open =
             sqlx::query_scalar::<_, bool>("SELECT archived_at IS NULL FROM projects WHERE id = $1")
                 .bind(principal.project_id)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?;
         let can_edit = project_open
             && can_write_in(state, principal, principal.project_id, Action::SheetEdit).await?;
@@ -412,7 +412,7 @@ pub(super) async fn sheet_read(
         if module_off(state, principal).await? {
             return Ok(ToolResult::module_off("sheet_read", "Sheets"));
         }
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let sheet =
             match find_sheet(&mut connection, principal.project_id, &arguments.sheet).await? {
                 Ok(sheet) => sheet,

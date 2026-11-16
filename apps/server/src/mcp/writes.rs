@@ -560,7 +560,7 @@ async fn create_task(
     let Some(key) = parse_request_id(task.client_request_id) else {
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(result) =
         authorize_write_for(&mut transaction, principal, Action::WorkItemCreate).await?
     {
@@ -840,7 +840,7 @@ async fn set_status_inner(
     let Some(key) = parse_request_id(&arguments.client_request_id) else {
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(result) = authorize_write(&mut transaction, principal).await? {
         return Ok(result);
     }
@@ -1061,7 +1061,7 @@ async fn update_work_item_inner(
     let Some(key) = parse_request_id(&arguments.client_request_id) else {
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(result) = authorize_write(&mut transaction, principal).await? {
         return Ok(result);
     }
@@ -1317,7 +1317,7 @@ async fn post_update_inner(
             None => return Ok(WriteResult::invalid("replyToCommentId", REPLY_MESSAGE)),
         },
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(result) = authorize_write(&mut transaction, principal).await? {
         return Ok(result);
     }
@@ -1446,7 +1446,7 @@ pub async fn link_pull_request(
         let Some(key) = parse_request_id(&arguments.client_request_id) else {
             return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(result) = authorize_write(&mut transaction, principal).await? {
             return Ok(result);
         }
@@ -1571,7 +1571,7 @@ pub async fn mark_blocked(
         let Some(key) = parse_request_id(&arguments.client_request_id) else {
             return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(result) = authorize_write(&mut transaction, principal).await? {
             return Ok(result);
         }
@@ -1672,7 +1672,7 @@ pub async fn mark_ready_for_review(
         let Some(key) = parse_request_id(&arguments.client_request_id) else {
             return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(result) = authorize_write(&mut transaction, principal).await? {
             return Ok(result);
         }
@@ -1804,7 +1804,7 @@ async fn set_archived_inner(
     let Some(key) = parse_request_id(&arguments.client_request_id) else {
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // Archiving takes "Archive tasks", not "Edit tasks".
     if let Some(result) =
         authorize_write_for(&mut transaction, principal, Action::WorkItemArchive).await?

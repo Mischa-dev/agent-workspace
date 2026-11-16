@@ -133,7 +133,7 @@ pub(super) async fn message_attachments(
         "#,
     )
     .bind(message_ids)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut found: HashMap<Uuid, Vec<FileSummary>> = HashMap::new();
     for row in rows {
@@ -236,7 +236,7 @@ async fn list_message(
     )
     .bind(message_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some(project_id) = project_id else {
         return Ok(None);
@@ -490,7 +490,7 @@ pub(super) async fn file_upload(
         // The retry key, the file and its row in one transaction on one
         // connection: a retry waits for this one and answers with its file,
         // and a crash leaves neither.
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let reservation = match reserve_create(
             &mut transaction,
             principal,
@@ -586,7 +586,7 @@ pub(super) async fn file_delete(
             Err(error) => return Err(error),
         };
         let task = row.attached_at.as_ref().and(row.work_item_id);
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // Decided under the project lock check_access_for takes, as the web
         // decides it under authorize_task_change's.
         let may_edit_task = match task {
@@ -637,7 +637,7 @@ async fn conversation_destination(
     conversation_id: Uuid,
 ) -> Result<(Destination, usize), AppError> {
     let actor = message_actor(principal).map_err(|_| AppError::Forbidden)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let conversation = lock_message_conversation(
         &mut transaction,
         &actor,
@@ -687,13 +687,13 @@ async fn task_destination(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("work_item"))?;
     if !open {
         return Err(AppError::Conflict("work_item", "archived"));
     }
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let limit = files::upload_limit(&mut connection, project_id).await?;
     Ok((
         Destination::Task {

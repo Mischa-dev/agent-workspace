@@ -73,7 +73,7 @@ fn refused<T>(error: AppError, operation: &'static str) -> ToolResult<T> {
 /// boards across one.
 async fn whiteboards_on(state: &AppState, principal: &McpPrincipal) -> Result<OnIn, AppError> {
     let projects = super::common::accessible_project_ids(state, principal).await?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     crate::whiteboards::on_for(&mut connection, principal.actor_id, &projects).await
 }
 
@@ -89,7 +89,7 @@ pub(super) async fn board_module_off(
     caller: &Caller,
     id: Uuid,
 ) -> Result<bool, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     // A board the caller can't reach is left to the tool's own refusal, so
     // the answer says nothing more about it; any other failure (the database)
     // stops here instead of skipping the module check.
@@ -317,7 +317,7 @@ async fn read(
     raw: bool,
 ) -> Result<WhiteboardValue, AppError> {
     let board = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         whiteboards::access(&mut connection, caller, id, false).await?
     };
     let view = store::scene(&state.pool, id, None).await?;
@@ -451,7 +451,7 @@ pub(super) async fn whiteboard_render(
         Err(error) => return render_result(refused(error, "whiteboard_render"), None),
     }
     let drawn = async {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         whiteboards::access(&mut connection, &caller, id, false).await?;
         drop(connection);
         let view = store::scene(&state.pool, id, None).await?;
@@ -615,7 +615,7 @@ pub(super) async fn whiteboard_create(
                 "SELECT organization_id FROM projects WHERE id = $1",
             )
             .bind(principal.project_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await
             {
                 Ok(Some(organization_id)) => Placement::Workspace(organization_id),
@@ -645,7 +645,7 @@ pub(super) async fn whiteboard_create(
         && caller.confined_project.is_none()
     {
         let modules: Result<_, AppError> = async {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             crate::modules::state::by_workspace(&mut connection, caller.actor_id).await
         }
         .await;
@@ -662,7 +662,7 @@ pub(super) async fn whiteboard_create(
         }
     }
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let reservation = match reserve_create(
             &mut transaction,
             principal,
@@ -772,7 +772,7 @@ pub(super) async fn whiteboard_edit(
         Err(error) => return refused(error, "whiteboard_edit"),
     }
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let board = whiteboards::access(&mut transaction, &caller, id, true).await?;
         if board.deleted {
             return Err(EditError::Conflict(
@@ -956,7 +956,7 @@ pub(super) async fn whiteboard_update(
         Err(error) => return refused(error, "whiteboard_update"),
     }
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         whiteboards::change(&mut transaction, &caller, id, &change).await?;
         if let Some(revision) = arguments.restore_revision {
             let board = whiteboards::access(&mut transaction, &caller, id, true).await?;
@@ -1032,7 +1032,7 @@ pub(super) async fn whiteboard_trash_empty(
         // Only where Whiteboards is on for the caller, as whiteboard_list
         // shows: a trashed board elsewhere stays.
         let on = whiteboards_on(state, principal).await?;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let deleted = whiteboards::empty_trash(
             &mut transaction,
             &caller,
@@ -1090,7 +1090,7 @@ pub(super) async fn whiteboard_duplicate(
         Err(error) => return refused(error, "whiteboard_duplicate"),
     }
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let (copy, replayed) = match reserve_create(
             &mut transaction,
             principal,
@@ -1196,7 +1196,7 @@ pub(super) async fn set_link(
     linked: bool,
 ) -> Result<WhiteboardLinkValue, AppError> {
     let caller = caller(principal);
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let changed = whiteboards::set_link(
         &mut transaction,
         &caller,

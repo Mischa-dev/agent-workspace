@@ -126,7 +126,7 @@ pub(super) async fn repository_write(
     }
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let role = repositories::require_project_access_as(
             &mut transaction,
@@ -228,7 +228,7 @@ pub(super) async fn repository_write(
         .await?;
         transaction.commit().await?;
         repositories::prepare_in(state, project_id, repository_id).await?;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let repository =
             repositories::repository_json(&mut transaction, project_id, repository_id, manage)
                 .await?;

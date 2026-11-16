@@ -665,7 +665,7 @@ pub(super) async fn reply_send(
     .bind(request_id)
     .bind(principal.project_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await
     {
         Ok(Some(id)) => id,
@@ -734,7 +734,7 @@ pub(super) async fn reply_send(
 /// A1.4: the final reply finishes the request's launched run, after the
 /// reply itself committed. Best effort: the reply stands either way.
 async fn follow_answer(state: &AppState, account_id: Uuid, request_id: Uuid, generation: i32) {
-    let Ok(mut transaction) = state.pool.begin().await else {
+    let Ok(mut transaction) = crate::db::scoped_tx(&state.pool).await else {
         return;
     };
     let followed = launch_paths::follow_reply_best_effort(
@@ -1101,7 +1101,7 @@ pub(super) async fn reply_stop(
         return ReplyToolResult::invalid("requestId");
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let outcome = stop_request_in(
             &mut transaction,
             principal.actor_id,
@@ -1162,7 +1162,7 @@ pub(super) async fn reply_retry(
         return ReplyToolResult::invalid("requestId");
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let outcome = retry_request_in(
             &mut transaction,
             principal.actor_id,

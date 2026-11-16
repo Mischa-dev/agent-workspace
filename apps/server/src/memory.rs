@@ -387,7 +387,7 @@ pub async fn list_pages(
     .bind(project_id)
     .bind(include_archived)
     .bind(STALE_AFTER_DAYS)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -414,7 +414,7 @@ pub async fn get_page(
     let Some(mut page) = sqlx::query_as::<_, PageView>(PAGE_SELECT)
         .bind(page_id)
         .bind(STALE_AFTER_DAYS)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
     else {
         return Ok(None);
@@ -441,7 +441,7 @@ pub async fn get_page(
     ))
     .bind(page_id)
     .bind(viewer)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     Ok(Some(page))
 }
@@ -456,7 +456,7 @@ pub async fn guide_page(
         "SELECT id FROM project_pages WHERE project_id = $1 AND is_guide AND archived_at IS NULL",
     )
     .bind(project_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?;
     match id {
         Some(id) => get_page(pool, id, viewer).await,
@@ -486,7 +486,7 @@ pub async fn list_skills(pool: &PgPool, project_id: Uuid) -> Result<Vec<PageSumm
     )
     .bind(project_id)
     .bind(STALE_AFTER_DAYS)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -517,7 +517,7 @@ pub async fn get_revision(
     .bind(page_id)
     .bind(version)
     .bind(viewer)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?)
 }
 
@@ -1000,7 +1000,7 @@ pub async fn list_decisions(
     .bind(viewer)
     .bind(include_superseded)
     .bind(limit)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -1180,7 +1180,7 @@ pub async fn list_pins(
     )
     .bind(conversation_id)
     .bind(viewer)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -1341,7 +1341,7 @@ async fn workspace_pages_space_http(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<PagesSpaceResponse>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project_id =
         crate::workspace_space::join(&mut transaction, organization_id, principal.actor_id)
             .await?
@@ -1394,7 +1394,7 @@ async fn create_page_http(
 ) -> Result<Json<PageView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let writer = browser_writer(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let direct = project_access(
         &mut *transaction,
         writer.actor_id,
@@ -1459,7 +1459,7 @@ pub(crate) async fn free_page_title(
 pub(crate) async fn page_project(pool: &PgPool, page_id: Uuid) -> Result<Uuid, AppError> {
     sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
         .bind(page_id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         .ok_or(AppError::NotFound("page"))
 }
@@ -1495,7 +1495,7 @@ async fn update_page_http(
     require_authenticated_write(&state, &headers, &principal)?;
     let writer = browser_writer(&principal)?;
     let project_id = page_project(&state.pool, page_id).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     project_access(
         &mut *transaction,
         writer.actor_id,
@@ -1664,7 +1664,7 @@ async fn pin_http(
 ) -> Result<Json<PinsResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let writer = browser_writer(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project_id = set_pin(
         &mut transaction,
         writer,
@@ -1697,7 +1697,7 @@ async fn unpin_http(
 ) -> Result<Json<PinsResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let writer = browser_writer(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project_id = set_pin(
         &mut transaction,
         writer,
@@ -1766,7 +1766,7 @@ async fn get_claim_http(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(ClaimResponse { claim }))
 }

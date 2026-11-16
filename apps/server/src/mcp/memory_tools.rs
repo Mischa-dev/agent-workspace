@@ -153,7 +153,7 @@ pub(super) async fn search_tool(
                 )
                 .bind(&projects)
                 .bind(person.trim_start_matches('@'))
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await?
                 {
                     Some(id) => Some(id),
@@ -412,7 +412,7 @@ pub(super) async fn page_get(
             "#,
         )
         .bind(page_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         Ok::<_, AppError>(ToolResult::ok(PageValue {
             open_comments,
@@ -551,7 +551,7 @@ pub(super) async fn page_write(
         if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
             return Ok(ToolResult::denied("You can't edit pages in that project."));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let direct = memory::project_access(
             &mut *transaction,
             principal.actor_id,
@@ -1304,7 +1304,7 @@ pub(super) async fn page_edit(
         if !can_write_in(state, principal, project_id, Action::PageEdit).await? {
             return Ok(ToolResult::denied("You can't edit pages in that project."));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };

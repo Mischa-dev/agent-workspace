@@ -240,7 +240,7 @@ pub async fn import_page(
         })
         .take(memory::MAX_PAGE_TITLE)
         .collect();
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let title = memory::free_page_title(&mut transaction, project_id, &title).await?;
     let page_id = create_page(
         &mut transaction,

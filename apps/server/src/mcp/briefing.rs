@@ -134,7 +134,7 @@ pub(super) async fn briefing(
         };
         // AWD-75: each section reads only where its module is on.
         let modules = {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             ProjectModules::load(&mut connection, principal.actor_id, &projects).await?
         };
         let talk_projects = modules.with_conversations(&projects);
@@ -144,7 +144,7 @@ pub(super) async fn briefing(
         )
         .bind(principal.project_id)
         .bind(principal.actor_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .unwrap_or_else(|| (principal.client_name.clone(), String::new()));
         let reply_requests = if principal.actor_kind == ActorKind::ExternalAgent {
@@ -189,7 +189,7 @@ pub(super) async fn briefing(
         )
         .bind(principal.actor_id)
         .bind(&talk_projects)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let unread = list_rows(
             state,
@@ -238,7 +238,7 @@ pub(super) async fn briefing(
         )
         .bind(principal.actor_id)
         .bind(&talk_projects)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         Ok::<_, AppError>(ToolResult::ok(Briefing {
             you: You {
@@ -311,7 +311,7 @@ pub(super) async fn task_lines(
     ))
     .bind(&projects)
     .bind(actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -380,14 +380,14 @@ pub(super) async fn projects_list(
                     "#,
                 )
                 .bind(principal.actor_id)
-                .fetch_all(&state.pool)
+                .fetch_all(crate::db::scoped(&state.pool))
                 .await?,
             );
         }
         // AWD-75: a project shows only where Projects is on for the caller;
         // the Messages space stays, as it always has.
         let projects = {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             ProjectModules::load(&mut connection, principal.actor_id, &projects)
                 .await?
                 .keep(&projects, |set, direct| direct || set.contains("projects"))
@@ -422,7 +422,7 @@ pub(super) async fn projects_list(
         )
         .bind(principal.actor_id)
         .bind(&projects)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         for row in &mut rows {
             row.url = if row.messages_space {
@@ -628,7 +628,7 @@ pub(super) async fn project_open(
             "SELECT project_key, name, kind FROM projects WHERE id = $1",
         )
         .bind(project_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         let guide = memory::guide_page(&state.pool, project_id, principal.actor_id)
             .await?
@@ -681,7 +681,7 @@ pub(super) async fn project_open(
             "#,
         )
         .bind(project_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         // Tasks only for those whose role (and limit) lets them see tasks.
         let sees_tasks = !crate::search::projects_showing_tasks(
@@ -752,21 +752,21 @@ pub(super) async fn project_open(
                 "#,
             )
             .bind(project_id)
-            .fetch_all(&state.pool)
+            .fetch_all(crate::db::scoped(&state.pool))
             .await?
         } else {
             Vec::new()
         };
         let labels = work_item_labels::project_names(&state.pool, project_id, PROJECT_LABELS).await?;
         let layout = {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             layouts::project_tone(&mut connection, project_id)
                 .await?
                 .map(LayoutLine::from)
         };
         // AWD-75: leave out what belongs to modules that are off here.
         let modules = {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             crate::modules::state::for_project(&mut connection, project_id, principal.actor_id)
                 .await?
                 .unwrap_or_default()
@@ -788,7 +788,7 @@ pub(super) async fn project_open(
              ORDER BY position, id",
         )
         .bind(project_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let (by_status, next, blocked, claimed, labels, task_fields) = if on("tasks") {
             (by_status, next, blocked, claimed, labels, task_fields)
@@ -897,6 +897,6 @@ async fn project_tasks(
         "#
     ))
     .bind(project_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?)
 }

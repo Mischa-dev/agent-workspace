@@ -1908,7 +1908,7 @@ pub async fn list(
         .bind(cursor.map(|(micros, _)| micros))
         .bind(cursor.map(|(_, id)| id))
         .bind(limit + 1)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?;
     let next_cursor = if rows.len() > usize::try_from(limit).unwrap_or(usize::MAX) {
         rows.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
@@ -1955,7 +1955,7 @@ pub async fn get_many(
         .bind(None::<Uuid>)
         .bind(None::<Vec<Uuid>>)
         .bind(ids)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?;
     Ok(rows
         .into_iter()
@@ -1998,7 +1998,7 @@ pub async fn unread_count(
     ))
     .bind(viewer)
     .bind(within)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?)
 }
 
@@ -2469,7 +2469,7 @@ pub async fn update(
         RETURNING n.id, n.project_id
         "#
     );
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let changed = sqlx::query_as::<_, (Uuid, Uuid)>(&sql)
         .bind(viewer)
         .bind(ids)

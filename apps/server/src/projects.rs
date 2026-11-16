@@ -338,7 +338,7 @@ async fn list_projects(
     .bind(limit)
     .bind(search)
     .bind(query.archived.unwrap_or(false))
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let attention = crate::notifications::attention_counts(&state.pool, principal.actor_id).await?;
     let mut projects = rows
@@ -352,7 +352,7 @@ async fn list_projects(
     // AWD-75: each project says which modules are off for the caller there.
     let ids = projects.iter().map(|view| view.id).collect::<Vec<_>>();
     let modules = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &ids)
             .await?
     };
@@ -383,7 +383,7 @@ async fn create_project(
     )
     .into();
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!(
             "{}:{PROJECT_CREATE_SCOPE}:{idempotency_key}",
@@ -674,7 +674,7 @@ async fn update_project(
 ) -> Result<Json<ProjectView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let name = normalize_project_name(&request.name)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -731,7 +731,7 @@ async fn archive_project(
     ApiJson(request): ApiJson<ArchiveProjectRequest>,
 ) -> Result<Json<ProjectView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -788,7 +788,7 @@ async fn restore_project(
     ApiJson(request): ApiJson<ArchiveProjectRequest>,
 ) -> Result<Json<ProjectView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -853,7 +853,7 @@ async fn update_navigation(
     ApiJson(request): ApiJson<UpdateNavigationRequest>,
 ) -> Result<Json<NavigationView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -983,7 +983,7 @@ async fn switch_project(
     ApiJson(request): ApiJson<SwitchProjectRequest>,
 ) -> Result<Json<SwitchProjectResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -1064,7 +1064,7 @@ async fn set_rail_order(
     {
         return Err(AppError::Validation("project_ids"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let memberships = sqlx::query_as::<_, ProjectMembershipRow>(
         r#"
         SELECT
@@ -1161,7 +1161,7 @@ async fn fetch_project(
         .unwrap_or(0);
     // AWD-75: as the list says it, so a project opened or switched to keeps
     // what's off for the caller there (its rail tile too, with Projects off).
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     view.modules_off =
         crate::modules::state::for_project(&mut connection, project_id, principal.actor_id)
             .await?
@@ -1243,7 +1243,7 @@ async fn fetch_project_row(
     )
     .bind(project_id)
     .bind(actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?)
 }
 

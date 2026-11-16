@@ -202,7 +202,7 @@ async fn resolve_person(
     )
     .bind(project_id)
     .bind(actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await
     .map(|name| name.map(|name| (actor_id, name)))
     .map_err(AppError::from)
@@ -282,7 +282,7 @@ pub(super) async fn ask_person(
                 .bind(principal.actor_id)
                 .bind(person_id)
                 .bind(project_id)
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await?
                 .unwrap_or((false, false));
                 if !asker_sees {
@@ -310,7 +310,7 @@ pub(super) async fn ask_person(
             )
             .bind(project_id)
             .bind(person_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
             if !person_sees_tasks {
                 return Ok(ToolResult::invalid(
@@ -320,7 +320,7 @@ pub(super) async fn ask_person(
             }
         }
 
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let scope = resource_bound_scope("mcp_questions", project_id, "ask_person")?;
         let request_hash = RequestHash::for_value(&arguments)?;
@@ -507,7 +507,7 @@ pub(super) async fn question_list(
         .bind(status)
         .bind(question_id)
         .bind(limit)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let questions = rows
             .into_iter()
@@ -619,9 +619,9 @@ pub(super) async fn question_answer(
                 "SELECT project_id FROM person_questions WHERE id = $1",
             )
             .bind(question_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
-            let mut transaction = state.pool.begin().await?;
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
             insert_audit(
                 &mut transaction,
                 principal,

@@ -980,7 +980,7 @@ pub async fn delete<'e, E: PgExecutor<'e>>(executor: E, secret_id: Uuid) -> Resu
 pub async fn rewrap_all(pool: &PgPool, keys: &dyn KeyEncryption) -> Result<u64, AppError> {
     let mut rewrapped = rewrap_totp_factors(pool, keys).await?;
     loop {
-        let mut transaction = pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(pool).await?;
         let batch = sqlx::query_as::<_, StoredSecret>(
             r#"
             SELECT id, organization_id, ciphertext, nonce, wrapped_key, wrap_nonce, master_key_id
@@ -1039,7 +1039,7 @@ const KEYS_IN_USE_SQL: &str = "SELECT master_key_id FROM secrets \
 /// The master key ids secrets still use.
 pub async fn master_keys_in_use(pool: &PgPool) -> Result<Vec<String>, AppError> {
     Ok(sqlx::query_scalar::<_, String>(KEYS_IN_USE_SQL)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?)
 }
 
@@ -1095,7 +1095,7 @@ async fn rewrap_totp_rows(
 }
 
 async fn rewrap_totp_factors(pool: &PgPool, keys: &dyn KeyEncryption) -> Result<u64, AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let rewrapped = rewrap_totp_rows(&mut transaction, keys).await?;
     transaction.commit().await?;
     Ok(rewrapped)
@@ -1137,7 +1137,7 @@ async fn rotate_keyring(pool: &PgPool, path: &Path) -> Result<RotationResult, Ap
     // Writers that read the keyring before it changed may still be sealing
     // under an old key. Wait for them, re-seal what they stored, and mark
     // the old keys retired so a later write under one is refused.
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
         .bind(ROTATION_LOCK.0)
         .bind(ROTATION_LOCK.1)
@@ -1201,7 +1201,7 @@ pub async fn migrate_plaintext_webhook_secrets(
     let pending = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM external_agent_connections WHERE webhook_secret IS NOT NULL",
     )
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?;
     if pending == 0 {
         return Ok(0);
@@ -1219,7 +1219,7 @@ pub async fn migrate_plaintext_webhook_secrets(
     };
     let mut moved = 0;
     loop {
-        let mut transaction = pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(pool).await?;
         let rows = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String)>(
             r#"
             SELECT connection.id, project.organization_id, connection.project_id,
@@ -1559,7 +1559,7 @@ async fn store_from_request(
     name: &str,
     mut request: PutSecretRequest,
 ) -> Result<Json<SecretMetadata>, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let owner = authorize_owner(&mut transaction, principal, owner).await?;
     validate_name(name)?;
     if name.starts_with("webhook:") {
@@ -1662,7 +1662,7 @@ async fn delete_from_request(
     owner: OwnerRequest,
     name: &str,
 ) -> Result<StatusCode, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let owner = authorize_owner(&mut transaction, principal, owner).await?;
     validate_name(name)?;
     let id = sqlx::query_scalar::<_, Uuid>(

@@ -103,7 +103,7 @@ async fn list_http(
     // Boards where Whiteboards is off (for the workspace or the person's
     // role) are left out, as MCP's whiteboard_list leaves them out (P0.7).
     let on_in = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let projects = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT project.id
@@ -142,7 +142,7 @@ async fn list_http(
         "#,
     )
     .bind(caller.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(ListResponse {
         whiteboards,
@@ -185,7 +185,7 @@ async fn detail(
     caller: &Caller,
     whiteboard_id: Uuid,
 ) -> Result<BoardDetail, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut connection, caller, whiteboard_id, false).await?;
     drop(connection);
     Ok(BoardDetail {
@@ -213,7 +213,7 @@ async fn create_http(
         (None, Some(organization_id)) => Placement::Workspace(organization_id),
         (None, None) => return Err(AppError::Validation("organizationId")),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let id = match request.from_template_id.as_deref() {
         Some(template) => super::templates::create_from(
             &mut transaction,
@@ -262,7 +262,7 @@ async fn change_http(
 ) -> Result<Json<BoardDetail>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     super::change(&mut transaction, &caller, id, &change).await?;
     transaction.commit().await?;
     Ok(Json(detail(&state, &caller, id).await?))
@@ -277,7 +277,7 @@ async fn purge_http(
 ) -> Result<axum::http::StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     super::purge(&mut transaction, &caller, id).await?;
     transaction.commit().await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
@@ -304,7 +304,7 @@ async fn empty_trash_http(
 ) -> Result<Json<EmptyTrashResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let deleted = super::empty_trash(
         &mut transaction,
         &caller,
@@ -332,7 +332,7 @@ async fn duplicate_http(
 ) -> Result<Json<BoardDetail>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let copy = super::duplicate(&mut transaction, &caller, id, request.title.as_deref()).await?;
     transaction.commit().await?;
     Ok(Json(detail(&state, &caller, copy).await?))
@@ -351,7 +351,7 @@ async fn scene_http(
     ApiQuery(query): ApiQuery<SceneQuery>,
 ) -> Result<Json<store::SceneView>, AppError> {
     let caller = Caller::browser(&principal)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     access(&mut connection, &caller, id, false).await?;
     drop(connection);
     Ok(Json(store::scene(&state.pool, id, query.since).await?))
@@ -399,7 +399,7 @@ async fn write_scene_http(
             return Ok((axum::http::StatusCode::BAD_REQUEST, Json(body)).into_response());
         }
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut transaction, &caller, id, true).await?;
     if board.deleted {
         return Err(AppError::Conflict(
@@ -446,7 +446,7 @@ async fn operations_http(
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut transaction, &caller, id, true).await?;
     if board.deleted {
         return Err(AppError::Conflict(
@@ -515,7 +515,7 @@ async fn put_file_http(
         return Err(AppError::Validation("mimeType"));
     }
     let data = store::decode_data_url(&upload.data_url, &upload.mime_type)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     access(&mut transaction, &caller, id, true).await?;
     let stored = store::put_file(
         &mut transaction,
@@ -542,7 +542,7 @@ async fn get_file_http(
     if !elements::valid_id(&file_id) {
         return Err(AppError::NotFound("whiteboard file"));
     }
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     access(&mut connection, &caller, id, false).await?;
     drop(connection);
     Ok(Json(store::get_file(&state.pool, id, &file_id).await?))
@@ -566,7 +566,7 @@ async fn preview_http(
     ApiQuery(query): ApiQuery<PreviewQuery>,
 ) -> Result<Response, AppError> {
     let caller = Caller::browser(&principal)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     access(&mut connection, &caller, id, false).await?;
     drop(connection);
     let elements = store::live_elements(&state.pool, id).await?;
@@ -607,7 +607,7 @@ async fn restore_http(
 ) -> Result<Json<store::WriteOutcome>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut transaction, &caller, id, true).await?;
     let outcome = store::restore_revision(&mut transaction, &caller, id, revision).await?;
     super::audit(
@@ -632,7 +632,7 @@ async fn link_http(
 ) -> Result<Json<BoardDetail>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     super::set_link(
         &mut transaction,
         &caller,
@@ -654,7 +654,7 @@ async fn unlink_http(
 ) -> Result<Json<BoardDetail>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     super::set_link(
         &mut transaction,
         &caller,

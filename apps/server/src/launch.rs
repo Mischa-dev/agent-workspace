@@ -221,7 +221,7 @@ pub(crate) async fn task_fields(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let labels = sqlx::query_scalar::<_, String>(
         r#"
@@ -232,7 +232,7 @@ pub(crate) async fn task_fields(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let pages = sqlx::query_as::<_, (Uuid, String)>(
         r#"
@@ -248,7 +248,7 @@ pub(crate) async fn task_fields(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let guide = sqlx::query_scalar::<_, String>(
         r#"
@@ -259,7 +259,7 @@ pub(crate) async fn task_fields(
         "#,
     )
     .bind(project_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .unwrap_or_default();
     let origin = public_origin(state);
@@ -312,7 +312,7 @@ pub(crate) async fn task_fields(
         "#,
     )
     .bind(project_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     fields.insert(
         "project.skills",
@@ -918,7 +918,7 @@ async fn views_by_id(
     ))
     .bind(project_id)
     .bind(ids)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(rows
         .into_iter()
@@ -1211,7 +1211,7 @@ async fn plan_for(
     .await?;
     let task = load_task(&state.pool, project_id, work_item_id).await?;
     let defaults = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         run_defaults(&mut connection, project_id, caller.actor_id).await?
     };
     let list =
@@ -1246,7 +1246,7 @@ async fn plan_for(
                 )
                 .bind(project_id)
                 .bind(actor_id)
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await?
             }
             None => None,
@@ -1323,7 +1323,7 @@ async fn plan_for(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut launches = views_by_id(state, caller, project_id, &launch_ids).await?;
     launches.sort_by_key(|launch| std::cmp::Reverse(launch.created_at));
@@ -1482,7 +1482,7 @@ pub(crate) async fn launch_tasks(
     // Everything a launch starts with is checked now, so a bad choice is
     // refused here rather than failing later in the queue.
     let defaults = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         run_defaults(&mut connection, project_id, caller.actor_id).await?
     };
     let profile = match request.agent_profile_id {
@@ -1496,7 +1496,7 @@ pub(crate) async fn launch_tasks(
     if let Some(profile) = &profile
         && sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM agent_profiles WHERE id = $1")
             .bind(profile.id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?
             != project_id
     {
@@ -1580,7 +1580,7 @@ pub(crate) async fn launch_tasks(
         return Err(AppError::NotFound("provider_account"));
     }
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
         caller.actor_id,
@@ -1793,7 +1793,7 @@ async fn task_thread(
         Action::ThreadCreate,
     )
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let task = load_task(&mut *transaction, project_id, work_item_id).await?;
     let channel_id = sqlx::query_scalar::<_, Uuid>(
         r#"
@@ -2000,7 +2000,7 @@ async fn start_launch(
         (Some(prompt), _) => prompt.clone(),
         (None, Some(work_item_id)) => {
             let template = {
-                let mut connection = state.pool.acquire().await?;
+                let mut connection = crate::db::scoped_tx(&state.pool).await?;
                 run_defaults(&mut connection, launch.project_id, caller.actor_id)
                     .await?
                     .template
@@ -2078,7 +2078,7 @@ async fn start_launch(
         // A thread that's busy gets a thread of its own next time.
         Err(error) => return Err(error),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
         UPDATE launches
@@ -2159,7 +2159,7 @@ async fn hand_off(
     )
     .await?;
     let message_id = outcome.body.message.id;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
         UPDATE launches
@@ -2277,7 +2277,7 @@ fn actor_kind(value: &str) -> Option<ActorKind> {
 pub async fn drain(state: &AppState) -> Result<usize, AppError> {
     // One drain at a time; the lock goes with the transaction, so a crash
     // can't leave it held.
-    let mut guard = state.pool.begin().await?;
+    let mut guard = crate::db::scoped_tx(&state.pool).await?;
     let locked = sqlx::query_scalar::<_, bool>(
         "SELECT pg_try_advisory_xact_lock(hashtextextended('launch.drain', 0))",
     )
@@ -2303,7 +2303,7 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         LIMIT 500
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut started = 0;
     for queued in due {
@@ -2318,7 +2318,7 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         // rows queued before the flag was set on every insert.
         let limits =
             if (queued.source == "mcp" || queued.made_through_app) && kind == ActorKind::Human {
-                let mut connection = state.pool.acquire().await?;
+                let mut connection = crate::db::scoped_tx(&state.pool).await?;
                 Some(
                     crate::roles::app_access(&mut connection, queued.requested_by_actor_id)
                         .await?
@@ -2437,7 +2437,7 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         {
             Some(harness) => Some(harness),
             None => {
-                let mut connection = state.pool.acquire().await?;
+                let mut connection = crate::db::scoped_tx(&state.pool).await?;
                 run_defaults(
                     &mut connection,
                     queued.project_id,
@@ -2528,7 +2528,7 @@ async fn cancel_from_queue(
     launch: &LaunchRow,
     reason: &str,
 ) -> Result<(), AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if finish_launch(&mut *transaction, launch.id, "cancelled", reason, None).await? {
         let caller = LaunchCaller {
             actor_id: launch.requested_by_actor_id,
@@ -2587,7 +2587,7 @@ pub(crate) async fn list_for(
     ))
     .bind(project_id)
     .bind(caller.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let recent = sqlx::query_as::<_, LaunchViewRow>(&format!(
         "{LAUNCH_VIEW_SELECT} WHERE launch.project_id = $1 AND launch.state <> 'queued' AND {visible} \
@@ -2595,7 +2595,7 @@ pub(crate) async fn list_for(
     ))
     .bind(project_id)
     .bind(caller.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     // The launched task's key and title only for someone whose role (and an
     // app's limit) lets them see tasks here; the launch itself stays listed.
@@ -2645,7 +2645,7 @@ pub(crate) async fn cancel(
     ))
     .bind(project_id)
     .bind(launch_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("launch"))?;
     if launch.requested_by_actor_id != caller.actor_id
@@ -2653,7 +2653,7 @@ pub(crate) async fn cancel(
     {
         return Err(AppError::Forbidden);
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if !finish_launch(
         &mut *transaction,
         launch.id,
@@ -2807,7 +2807,7 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         "#,
     )
     .bind(payload.message_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     else {
         return Ok(());
@@ -2828,11 +2828,11 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
     let visible = sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
         .bind(message.conversation_id)
         .bind(caller.actor_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
     // A message an app sent launches only within that app's current limit.
     let limits = if payload.made_through_app {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         Some(
             crate::roles::app_access(&mut connection, caller.actor_id)
                 .await?
@@ -2871,11 +2871,11 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
     let profile =
         crate::agent_profiles::profile_for_actor(&state.pool, payload.worker_actor_id).await?;
     let defaults = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         run_defaults(&mut connection, message.project_id, caller.actor_id).await?
     };
     let launch_id = Uuid::now_v7();
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("launches:{}", message.project_id))
         .execute(&mut *transaction)
@@ -2962,7 +2962,7 @@ async fn thread_under(
     message: &TagMessage,
     message_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // `threads::create` locks the channel, checks the caller may still see
     // it and start a thread there, and returns the one already started from
     // the message when there is one.

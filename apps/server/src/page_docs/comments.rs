@@ -223,7 +223,7 @@ pub async fn list(
     )
     .bind(page_id)
     .bind(include_resolved)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let mut threads: Vec<ThreadView> = Vec::new();
     for row in rows {

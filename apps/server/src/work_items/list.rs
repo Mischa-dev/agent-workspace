@@ -1459,7 +1459,10 @@ pub(super) async fn page(
         ));
     }
     builder.push(" LIMIT ").push_bind(limit + 1);
-    let mut rows = builder.build_query_as::<PageRow>().fetch_all(pool).await?;
+    let mut rows = builder
+        .build_query_as::<PageRow>()
+        .fetch_all(crate::db::scoped(pool))
+        .await?;
     let has_more = rows.len() > limit as usize;
     rows.truncate(limit as usize);
     let next_cursor = match (has_more, rows.last()) {
@@ -1523,7 +1526,7 @@ async fn first_pages(
     builder.push(" ORDER BY group_key, rank");
     let rows = builder
         .build_query_as::<(Uuid, Option<String>, Vec<String>)>()
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?;
     let mut ranked: HashMap<String, Vec<(Uuid, Vec<String>)>> = HashMap::new();
     for (id, key, keys) in rows {
@@ -1612,7 +1615,10 @@ pub(crate) async fn matching_tasks(
     spec.filters.push_where(&mut builder);
     builder.push(" ORDER BY item.created_at, item.id LIMIT ");
     builder.push_bind(limit.clamp(1, 500));
-    Ok(builder.build_query_scalar::<Uuid>().fetch_all(pool).await?)
+    Ok(builder
+        .build_query_scalar::<Uuid>()
+        .fetch_all(crate::db::scoped(pool))
+        .await?)
 }
 
 pub(super) async fn total(
@@ -1625,7 +1631,10 @@ pub(super) async fn total(
     ));
     builder.push_bind(project_id);
     filters.push_where(&mut builder);
-    Ok(builder.build_query_scalar::<i64>().fetch_one(pool).await?)
+    Ok(builder
+        .build_query_scalar::<i64>()
+        .fetch_one(crate::db::scoped(pool))
+        .await?)
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -1662,7 +1671,7 @@ pub(super) async fn group_counts(
     builder.push(format!(" GROUP BY {key} ORDER BY {order}, {key}"));
     Ok(builder
         .build_query_as::<GroupCount>()
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?)
 }
 
@@ -1728,7 +1737,7 @@ async fn column_values(
     } else {
         query
     };
-    Ok(query.fetch_all(pool).await?)
+    Ok(query.fetch_all(crate::db::scoped(pool)).await?)
 }
 
 /// A task as list rows and board cards show it.
@@ -2166,7 +2175,7 @@ pub(super) async fn validate_filter_ids(
         ))
         .bind(project_id)
         .bind(&ids)
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?;
         if found != ids.len() as i64 {
             return Err(AppError::Validation(field));
@@ -2356,7 +2365,7 @@ pub(super) async fn get_work_item_board(
             "SELECT id, name, semantic_category, position, is_default, enabled FROM work_item_statuses WHERE project_id = $1 AND enabled ORDER BY position, id",
         )
         .bind(project_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let count_of = counts
             .iter()
