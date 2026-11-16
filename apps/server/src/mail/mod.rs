@@ -189,9 +189,10 @@ impl Provider {
     }
 }
 
-/// How one workspace sends mail.
+/// How one workspace, or the server itself, sends mail.
 pub struct Transport {
-    pub organization_id: Uuid,
+    /// The workspace whose settings these are; None for the server's own.
+    pub organization_id: Option<Uuid>,
     pub from_address: String,
     pub from_name: Option<String>,
     pub provider: Provider,
@@ -241,14 +242,36 @@ pub async fn configured<'e, E: PgExecutor<'e>>(
     .await?)
 }
 
-/// Whether any workspace on this server can send mail, so sign-in can
-/// offer to email a reset link.
-pub async fn any_configured<'e, E: PgExecutor<'e>>(executor: E) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM workspace_mail_settings WHERE enabled)",
-    )
-    .fetch_one(executor)
+/// Whether this server can send account mail, so sign-in can offer to
+/// email a reset link: its own transport, or any workspace's.
+pub async fn any_configured(state: &AppState) -> Result<bool, AppError> {
+    if state.config.server_mail.is_some() {
+        return Ok(true);
+    }
+    Ok(crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM workspace_mail_settings WHERE enabled)",
+        )
+        .fetch_one(connection)
+        .await
+    })
     .await?)
+}
+
+/// The server's own transport (`AGENT_WORKSPACE_MAIL_URL`, H1.17), if the
+/// operator set one.
+pub fn server_transport(state: &AppState) -> Option<Transport> {
+    let mail = state.config.server_mail.as_ref()?;
+    Some(Transport {
+        organization_id: None,
+        from_address: mail.from_address.clone(),
+        from_name: mail.from_name.clone(),
+        provider: Provider::Smtp(mail.smtp.clone()),
+        password: mail
+            .password
+            .as_ref()
+            .map(|password| SecretValue::new(password.expose())),
+    })
 }
 
 /// The workspace's transport, with its password, or None when mail isn't
@@ -286,7 +309,7 @@ pub(crate) async fn load(state: &AppState, row: SettingsRow) -> Result<Transport
         None => None,
     };
     Ok(Transport {
-        organization_id: row.organization_id,
+        organization_id: Some(row.organization_id),
         from_address: row.from_address,
         from_name: row.from_name,
         provider,
@@ -302,12 +325,16 @@ pub(crate) async fn load(state: &AppState, row: SettingsRow) -> Result<Transport
 /// link. A stored default doesn't count on its own (P0.37), because before
 /// P0.37 accepting an invitation set it, so it isn't proof of a choice. A
 /// person whose only mail-sending workspaces are someone else's gets no
-/// account mail until server-wide mail (H1.17) replaces this.
+/// account mail, unless the server has its own transport (H1.17), which is
+/// always used first when it's set.
 pub async fn transport_for_actor(
     state: &AppState,
     actor_id: Uuid,
 ) -> Result<Option<Transport>, AppError> {
-    let organization_id = sqlx::query_scalar::<_, Uuid>(
+    if let Some(transport) = server_transport(state) {
+        return Ok(Some(transport));
+    }
+    let organization_id = crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT membership.organization_id
         FROM organization_memberships membership

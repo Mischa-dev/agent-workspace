@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -122,7 +122,11 @@ struct AddressRow {
     verification_sent_at: Option<DateTime<Utc>>,
 }
 
-async fn mail_available_for(pool: &PgPool, actor_id: Uuid) -> Result<bool, AppError> {
+async fn mail_available_for(state: &AppState, actor_id: Uuid) -> Result<bool, AppError> {
+    if state.config.server_mail.is_some() {
+        return Ok(true);
+    }
+    let pool = &state.pool;
     Ok(sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
@@ -138,14 +142,18 @@ async fn mail_available_for(pool: &PgPool, actor_id: Uuid) -> Result<bool, AppEr
     .await?)
 }
 
-async fn email_view(pool: &PgPool, principal: &AuthenticatedActor) -> Result<EmailView, AppError> {
+async fn email_view(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+) -> Result<EmailView, AppError> {
+    let pool = &state.pool;
     let row = sqlx::query_as::<_, AddressRow>(
         "SELECT address, verified_at, verification_sent_at FROM user_email_addresses WHERE user_id = $1",
     )
     .bind(principal.user_id)
     .fetch_optional(pool)
     .await?;
-    let mail_available = mail_available_for(pool, principal.actor_id).await?;
+    let mail_available = mail_available_for(state, principal.actor_id).await?;
     Ok(match row {
         Some(row) => EmailView {
             address: Some(row.address),
@@ -170,7 +178,7 @@ async fn read_email_http(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
 ) -> Result<Json<EmailView>, AppError> {
-    Ok(Json(email_view(&state.pool, &principal).await?))
+    Ok(Json(email_view(&state, &principal).await?))
 }
 
 #[derive(Deserialize)]
@@ -203,7 +211,7 @@ async fn set_email_http(
     require_authenticated_write(&state, &headers, &principal)?;
     let address =
         mail::normalize_address(&request.address).ok_or(AppError::Validation("address"))?;
-    if !mail_available_for(&state.pool, principal.actor_id).await? {
+    if !mail_available_for(&state, principal.actor_id).await? {
         return Err(AppError::Conflict("email", "mail isn't set up"));
     }
     let mut transaction = state.pool.begin().await?;
@@ -218,7 +226,7 @@ async fn set_email_http(
         .is_some_and(|row| row.address == address && row.verified_at.is_some())
     {
         transaction.commit().await?;
-        return Ok(Json(email_view(&state.pool, &principal).await?));
+        return Ok(Json(email_view(&state, &principal).await?));
     }
     if current
         .as_ref()
@@ -251,7 +259,7 @@ async fn set_email_http(
     )
     .await?;
     transaction.commit().await?;
-    Ok(Json(email_view(&state.pool, &principal).await?))
+    Ok(Json(email_view(&state, &principal).await?))
 }
 
 async fn remove_email_http(
@@ -312,7 +320,7 @@ async fn resend_http(
         .await?;
     queue_confirmation(&mut transaction, principal.user_id).await?;
     transaction.commit().await?;
-    Ok(Json(email_view(&state.pool, &principal).await?))
+    Ok(Json(email_view(&state, &principal).await?))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -479,7 +487,7 @@ async fn reset_available_http(
     State(state): State<AppState>,
 ) -> Result<Json<ResetAvailability>, AppError> {
     Ok(Json(ResetAvailability {
-        available: mail::any_configured(&state.pool).await?,
+        available: mail::any_configured(&state).await?,
     }))
 }
 
