@@ -823,6 +823,9 @@ fn create_database_dump(program: &Path, database_url: &str, output: &Path) -> Re
         OsString::from("--format=custom"),
         OsString::from("--no-owner"),
         OsString::from("--no-privileges"),
+        // Forced row security on the app's tables: read every row under
+        // the server-wide backup scope (`PGOPTIONS` below).
+        OsString::from("--enable-row-security"),
     ];
     for table in EXCLUDED_TABLE_DATA {
         args.push(OsString::from(format!("--exclude-table-data={table}")));
@@ -1116,6 +1119,7 @@ fn run_to_file(
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
         .env("PGDATABASE", database_url)
+        .env("PGOPTIONS", "-c app.tenancy=s:backup")
         .stdout(Stdio::from(destination_file))
         .stderr(Stdio::piped())
         .spawn()
