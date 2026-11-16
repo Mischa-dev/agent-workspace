@@ -343,14 +343,13 @@ impl Operation for DirectorySourceRemove {
         let workspace = call.ctx.workspace_id;
         let tx = call.tx().await?;
         // Only the workspace's own lists; the server's stay.
-        let removed = sqlx::query(
-            "DELETE FROM directory_sources WHERE id = $1 AND workspace_id = $2",
-        )
-        .bind(id)
-        .bind(workspace)
-        .execute(&mut **tx)
-        .await
-        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
+        let removed =
+            sqlx::query("DELETE FROM directory_sources WHERE id = $1 AND workspace_id = $2")
+                .bind(id)
+                .bind(workspace)
+                .execute(&mut **tx)
+                .await
+                .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
         if removed.rows_affected() == 0 {
             return Err(OpError::not_found("That list"));
         }
@@ -410,7 +409,10 @@ impl Operation for WorkspaceShapeSet {
     type Input = WorkspaceShapeSetInput;
     type Output = ShapeSet;
 
-    async fn run(call: &mut OpCall<'_>, input: WorkspaceShapeSetInput) -> Result<ShapeSet, OpError> {
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: WorkspaceShapeSetInput,
+    ) -> Result<ShapeSet, OpError> {
         let Some(shape) = builtin::shape(&input.shape) else {
             let known = builtin::shapes()
                 .map(|shape| shape.package.id.trim_start_matches("shapes."))
@@ -418,8 +420,11 @@ impl Operation for WorkspaceShapeSet {
                 .join(", ");
             return Err(OpError::Invalid {
                 field: "shape".into(),
-                message: format!("There's no shape {}. Use one of {known}.", input.shape.trim())
-                    .into(),
+                message: format!(
+                    "There's no shape {}. Use one of {known}.",
+                    input.shape.trim()
+                )
+                .into(),
             });
         };
         let place = Place::of(&shape.package, None, None)?;

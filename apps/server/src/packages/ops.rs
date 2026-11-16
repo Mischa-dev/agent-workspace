@@ -12,12 +12,12 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::{
+    apply::{self, Installed, Installer},
     export::{self, Include, Source},
     format::Package,
-    apply::{self, Installed, Installer},
-    source::{self, Origin},
     install::{self, AgentTemplateView, InstallView, NewSpace, Place, Plan},
     secrets_check,
+    source::{self, Origin},
 };
 use crate::ops::{
     Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted, access_shim,
@@ -369,7 +369,7 @@ pub(super) async fn install_planned(
         .any(|line| line.kind == "role")
     {
         access_shim::check(
-            &mut **tx,
+            tx,
             &ctx.caller,
             &ctx.target,
             &located,
@@ -386,7 +386,7 @@ pub(super) async fn install_planned(
         .any(|line| line.needs_admin && line.kind != "role")
     {
         access_shim::check(
-            &mut **tx,
+            tx,
             &ctx.caller,
             &ctx.target,
             &located,
@@ -396,7 +396,7 @@ pub(super) async fn install_planned(
         )
         .await?;
     }
-    let standing = crate::roles::standing(&mut **tx, workspace, actor).await?;
+    let standing = crate::roles::standing(tx, workspace, actor).await?;
     let auditor = crate::roles::Auditor::App(&principal);
     let who = Installer {
         workspace,

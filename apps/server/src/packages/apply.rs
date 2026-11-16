@@ -242,9 +242,8 @@ pub(crate) async fn install(
                 definition.default_role = body["name"].as_str().map(str::to_owned);
             }
             ContentKind::Role => {
-                let (role, default) = install::template_role(&body).map_err(|message| {
-                    invalid_at(format!("package.role:{}", part.key), message)
-                })?;
+                let (role, default) = install::template_role(&body)
+                    .map_err(|message| invalid_at(format!("package.role:{}", part.key), message))?;
                 if default {
                     definition.default_role = Some(role.name.clone());
                 }
@@ -292,15 +291,9 @@ pub(crate) async fn install(
         saved_by: None,
         saved_at: None,
     };
-    let applied = templates::apply(
-        tx,
-        who.auditor,
-        who.standing,
-        workspace,
-        &view,
-    )
-    .await
-    .map_err(apply_error)?;
+    let applied = templates::apply(tx, who.auditor, who.standing, workspace, &view)
+        .await
+        .map_err(apply_error)?;
     let mut changes = applied.changes;
     let space = match &place {
         Place::Space(id) => {
@@ -473,9 +466,8 @@ pub(crate) async fn install(
         let made = match part.kind {
             ContentKind::Form => {
                 let space = space.ok_or(OpError::Unavailable)?;
-                let name =
-                    crate::bug_reports::normalize_name(body["name"].as_str().unwrap_or(""))
-                        .map_err(|_| invalid_at(field(".name"), "Name the form.".to_owned()))?;
+                let name = crate::bug_reports::normalize_name(body["name"].as_str().unwrap_or(""))
+                    .map_err(|_| invalid_at(field(".name"), "Name the form.".to_owned()))?;
                 let collection_id = body["collection"]
                     .as_str()
                     .and_then(|id| Uuid::parse_str(id).ok())
@@ -485,13 +477,8 @@ pub(crate) async fn install(
                             "A form names its collection as @<key>.".to_owned(),
                         )
                     })?;
-                let definitions = crate::collections::field_definitions(
-                    &mut **tx,
-                    space,
-                    collection_id,
-                    false,
-                )
-                .await?;
+                let definitions =
+                    crate::collections::field_definitions(tx, space, collection_id, false).await?;
                 let mut questions = Vec::new();
                 for asked in body["fields"].as_array().cloned().unwrap_or_default() {
                     let wanted = asked["field"].as_str().unwrap_or("").trim();
@@ -521,7 +508,7 @@ pub(crate) async fn install(
                 // settings make one to share.
                 let (id, _token) = crate::bug_reports::insert_link(
                     tx,
-                    &maker,
+                    maker,
                     space,
                     &name,
                     Some((collection_id, form)),
@@ -538,8 +525,8 @@ pub(crate) async fn install(
                     "actions": body.get("actions").cloned().unwrap_or_else(|| json!([])),
                     "enabled": body.get("enabled").cloned().unwrap_or(Value::Bool(true)),
                 });
-                let rule = serde_json::from_value::<crate::automations::CreateRule>(rule)
-                    .map_err(|error| {
+                let rule = serde_json::from_value::<crate::automations::CreateRule>(rule).map_err(
+                    |error| {
                         invalid_at(
                             field(""),
                             error
@@ -549,10 +536,11 @@ pub(crate) async fn install(
                                 .unwrap_or("This rule can't be read.")
                                 .to_owned(),
                         )
-                    })?;
+                    },
+                )?;
                 let prepared =
-                    crate::automations::prepare_in(tx, &maker, space, rule, &fresh).await?;
-                crate::automations::insert(tx, &maker, workspace, space, &prepared).await?
+                    crate::automations::prepare_in(tx, maker, space, rule, &fresh).await?;
+                crate::automations::insert(tx, maker, workspace, space, &prepared).await?
             }
             ContentKind::Page | ContentKind::Skill => {
                 let space = space.ok_or(OpError::Unavailable)?;
@@ -809,10 +797,7 @@ pub(crate) async fn use_template(
 fn op_to_apply(error: OpError) -> ApplyError {
     match error {
         OpError::Invalid { field, message } => ApplyError::Problem(Problem {
-            field: field
-                .strip_prefix("package.")
-                .unwrap_or(&field)
-                .to_owned(),
+            field: field.strip_prefix("package.").unwrap_or(&field).to_owned(),
             message: message.into_owned(),
         }),
         OpError::Denied { .. } | OpError::Unauthenticated => ApplyError::App(AppError::Forbidden),

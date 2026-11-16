@@ -158,8 +158,7 @@ pub(super) async fn workspace_template_apply(
             source_ref: None,
         };
         // M1.11: a template is used by installing it as a package.
-        match crate::packages::apply::use_template(&mut transaction, installer, &template).await
-        {
+        match crate::packages::apply::use_template(&mut transaction, installer, &template).await {
             Ok(applied) => {
                 transaction.commit().await?;
                 Ok(ToolResult::ok(applied))

@@ -648,12 +648,8 @@ pub async fn find(
         else {
             return Ok(Err("No saved template has that id or name.".to_owned()));
         };
-        let package = super::format::from_template(
-            &view.id,
-            &view.name,
-            &view.description,
-            &view.definition,
-        );
+        let package =
+            super::format::from_template(&view.id, &view.name, &view.description, &view.definition);
         let document = serde_json::to_value(&package).unwrap_or(Value::Null);
         return Ok(Ok(Found {
             package,
@@ -726,7 +722,10 @@ mod tests {
     #[tokio::test]
     async fn a_folder_lists_its_packages_and_its_broken_files() {
         let folder = tempfile::tempdir().expect("folder");
-        let good = builtin::find("personal").expect("personal").document.clone();
+        let good = builtin::find("personal")
+            .expect("personal")
+            .document
+            .clone();
         let mut renamed = good.clone();
         renamed["id"] = Value::String("studio.personal_plus".into());
         renamed["name"] = Value::String("Personal plus".into());
@@ -741,8 +740,16 @@ mod tests {
         std::fs::write(folder.path().join("notes.txt"), "ignored").expect("write");
         let read = read_folder(folder.path()).await.expect("reads");
         assert_eq!(read.len(), 3, "{read:?}");
-        let broken = read.iter().find(|entry| entry.key == "broken").expect("broken");
-        assert!(broken.result.as_ref().is_err_and(|error| error.contains("JSON")));
+        let broken = read
+            .iter()
+            .find(|entry| entry.key == "broken")
+            .expect("broken");
+        assert!(
+            broken
+                .result
+                .as_ref()
+                .is_err_and(|error| error.contains("JSON"))
+        );
         assert!(
             read.iter()
                 .any(|entry| entry.key == "studio.personal_plus" && entry.result.is_ok())

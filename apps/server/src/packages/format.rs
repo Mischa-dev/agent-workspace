@@ -554,9 +554,7 @@ pub fn to_template(package: &Package) -> Option<TemplateDefinition> {
             }
             ContentKind::Collection => {
                 let starter = project.get_or_insert_with(TemplateProject::default);
-                starter
-                    .collections
-                    .push(serde_json::from_value(body).ok()?);
+                starter.collections.push(serde_json::from_value(body).ok()?);
             }
             _ => return None,
         }

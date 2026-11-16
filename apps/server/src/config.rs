@@ -600,7 +600,10 @@ impl AppConfig {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
-        if directory_dir.as_ref().is_some_and(|path| !path.is_absolute()) {
+        if directory_dir
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
             return Err(ConfigError::Invalid {
                 key: format!("{PREFIX}DIRECTORY_DIR"),
                 reason: "name an absolute directory".into(),

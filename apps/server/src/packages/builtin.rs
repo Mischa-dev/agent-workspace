@@ -26,9 +26,7 @@ pub struct Builtin {
 impl Builtin {
     /// The template this package was, for the template list and routes.
     pub fn template(&self) -> Option<TemplateDefinition> {
-        (!self.shape)
-            .then(|| to_template(&self.package))
-            .flatten()
+        (!self.shape).then(|| to_template(&self.package)).flatten()
     }
 }
 
@@ -174,7 +172,10 @@ mod tests {
             .map(|(folder, _)| (*folder).to_owned())
             .collect::<Vec<_>>();
         listed.sort();
-        assert_eq!(found, listed, "list every modules/packages folder in SOURCES");
+        assert_eq!(
+            found, listed,
+            "list every modules/packages folder in SOURCES"
+        );
     }
 
     #[test]
@@ -203,7 +204,11 @@ mod tests {
                 &builtin.package.description,
                 &definition,
             );
-            assert_eq!(again.contents, builtin.package.contents, "{}", builtin.folder);
+            assert_eq!(
+                again.contents, builtin.package.contents,
+                "{}",
+                builtin.folder
+            );
         }
     }
 }

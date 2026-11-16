@@ -80,10 +80,7 @@ pub fn inline(bytes: &[u8]) -> Result<Value, String> {
     let manifest = read("package.json")?;
     let mut document = serde_json::from_str::<Value>(&manifest)
         .map_err(|error| format!("package.json isn't JSON: {error}"))?;
-    let Some(contents) = document
-        .get_mut("contents")
-        .and_then(Value::as_array_mut)
-    else {
+    let Some(contents) = document.get_mut("contents").and_then(Value::as_array_mut) else {
         return Err("package.json lists no contents.".to_owned());
     };
     for part in contents.iter_mut() {
@@ -251,11 +248,19 @@ mod tests {
     fn a_broken_zip_says_why() {
         assert!(inline(b"PK\x03\x04 nope").is_err());
         let no_manifest = zip_of(&[("readme.txt", "hi")]);
-        assert!(inline(&no_manifest).unwrap_err().contains("package.json"));
+        assert!(
+            inline(&no_manifest)
+                .expect_err("no manifest")
+                .contains("package.json")
+        );
         let escaping = zip_of(&[(
             "package.json",
             r#"{"contents": [{"kind": "page", "key": "x", "path": "../x.md"}]}"#,
         )]);
-        assert!(inline(&escaping).unwrap_err().contains("inside the package"));
+        assert!(
+            inline(&escaping)
+                .expect_err("escapes")
+                .contains("inside the package")
+        );
     }
 }

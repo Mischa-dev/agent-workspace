@@ -105,21 +105,19 @@ async fn uploaded(call: &mut OpCall<'_>, file_id: &str) -> Result<Origin, OpErro
         .await
         .map_err(|error| OpError::logged("package_file", &error))?;
     let tx = call.tx().await?;
-    let workspace = sqlx::query_scalar::<_, uuid::Uuid>(
-        "SELECT organization_id FROM projects WHERE id = $1",
-    )
-    .bind(row.project_id)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(|error| OpError::logged("package_file", &error.into()))?;
+    let workspace =
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(row.project_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|error| OpError::logged("package_file", &error.into()))?;
     if workspace != ctx.workspace_id {
         return Err(not_found());
     }
-    let document =
-        directory::document_of(&bytes).map_err(|message| OpError::Invalid {
-            field: "fileId".into(),
-            message: message.into(),
-        })?;
+    let document = directory::document_of(&bytes).map_err(|message| OpError::Invalid {
+        field: "fileId".into(),
+        message: message.into(),
+    })?;
     Ok(Origin {
         package: install::read(&document)?,
         document,
