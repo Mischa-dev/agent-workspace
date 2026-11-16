@@ -108,11 +108,11 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
         && sqlx::query_scalar::<_, bool>(
             "SELECT to_regclass('workspace_mail_settings') IS NOT NULL",
         )
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?
     {
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM workspace_mail_settings WHERE enabled")
-            .fetch_one(pool)
+            .fetch_one(crate::db::scoped(pool))
             .await?
     } else {
         0
@@ -163,7 +163,7 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
         sqlx::query_as(
             "SELECT version, checksum FROM _sqlx_migrations WHERE success ORDER BY version",
         )
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?
     } else {
         Vec::new()
@@ -206,7 +206,7 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
 
 async fn migrations_table_exists(pool: &PgPool) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await
 }
 
