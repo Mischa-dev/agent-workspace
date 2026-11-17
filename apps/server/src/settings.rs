@@ -287,6 +287,17 @@ pub const REGISTRY: &[SettingDef] = &[
         default: "true",
     },
     SettingDef {
+        key: "messages.direct_messages",
+        label: "Direct messages",
+        description: "Personal: DMs belong to the people in them and show in every workspace they share. Kept: DMs between members that start here belong to this workspace and end when someone leaves it.",
+        kind: SettingType::Choice {
+            options: &["personal", "kept"],
+        },
+        scopes: &[Scope::Workspace],
+        launch_override: false,
+        default: "\"personal\"",
+    },
+    SettingDef {
         key: "notifications.paused_until",
         label: "Notifications paused until",
         description: "Hold pushes and skip emails until then, as seconds since 1970. 0, not paused.",
@@ -623,6 +634,26 @@ struct StoredRow {
     version: i64,
     updated_at: DateTime<Utc>,
     updated_by_actor_id: Option<Uuid>,
+}
+
+/// One workspace-level value as stored, or the built-in default when none
+/// is (or the stored one no longer fits the type).
+pub(crate) async fn workspace_value<'e, E: PgExecutor<'e>>(
+    executor: E,
+    workspace_id: Uuid,
+    key: &str,
+) -> Result<Value, AppError> {
+    let definition = definition(key).ok_or(AppError::Internal("unknown setting key"))?;
+    let stored = sqlx::query_scalar::<_, Value>(
+        "SELECT value FROM settings WHERE organization_id = $1 AND scope = 'workspace' AND key = $2",
+    )
+    .bind(workspace_id)
+    .bind(key)
+    .fetch_optional(executor)
+    .await?;
+    Ok(stored
+        .filter(|value| definition.validate(value).is_ok())
+        .unwrap_or_else(|| definition.default_value()))
 }
 
 /// Resolve every setting for `context`, with `launch` overrides (keys that

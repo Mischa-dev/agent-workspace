@@ -19,6 +19,10 @@ export type DirectConversation = {
   /** Set to tell you nothing: still unread, but never bold or counted. */
   muted: boolean
   lastActivityAt: string
+  /** Kept by the current workspace rather than the people's own. */
+  kept: boolean
+  /** Tells apart a pair's DMs when there is more than one in the list. */
+  label?: string
 }
 
 export type DirectOverview = {
@@ -70,6 +74,8 @@ function normalizeConversation(value: unknown): DirectConversation | null {
     muted: record.muted === true,
     lastActivityAt:
       typeof record.lastActivityAt === 'string' ? record.lastActivityAt : '',
+    kept: record.kept === true,
+    ...(typeof record.label === 'string' && record.label ? { label: record.label } : {}),
   }
 }
 
@@ -153,12 +159,16 @@ export function useDirectOverview() {
   })
 }
 
-/** DMs are named after the other person; groups keep their own name. */
+/**
+ * DMs are named after the other person; groups keep their own name. A pair
+ * with more than one DM in the list says whose each is.
+ */
 export function conversationTitle(
-  conversation: Pick<DirectConversation, 'kind' | 'name' | 'members'>,
+  conversation: Pick<DirectConversation, 'kind' | 'name' | 'members'> & { label?: string },
   viewerId: string,
 ) {
-  if (conversation.kind === 'group') return conversation.name
+  const suffix = conversation.label ? ` (${conversation.label})` : ''
+  if (conversation.kind === 'group') return conversation.name + suffix
   const other = conversation.members.find((member) => member.id !== viewerId)
-  return other?.displayName ?? conversation.name
+  return (other?.displayName ?? conversation.name) + suffix
 }

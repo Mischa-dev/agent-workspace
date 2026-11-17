@@ -62,6 +62,9 @@ pub fn router() -> Router<AppState> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OpenDmRequest {
     actor_id: Uuid,
+    /// The workspace it's started in; the caller's current one if left out.
+    #[serde(default)]
+    workspace_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -69,6 +72,9 @@ struct OpenDmRequest {
 struct CreateGroupRequest {
     name: Option<String>,
     member_ids: Vec<Uuid>,
+    /// The workspace it's started in; the caller's current one if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +109,12 @@ struct DirectConversationItem {
     #[serde(flatten)]
     counts: crate::conversations::UnreadCounts,
     last_activity_at: String,
+    /// Kept in this workspace (R20), rather than the people's own.
+    kept: bool,
+    /// Tells apart a pair's DMs when the list has more than one (R31): the
+    /// personal one beside a kept one, or DMs from before R20.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,6 +143,10 @@ struct DirectConversationRow {
     read_version: i64,
     last_activity_at: String,
     members: serde_json::Value,
+    dm_key: Option<String>,
+    kept: bool,
+    workspace_id: Uuid,
+    workspace_name: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -173,9 +189,14 @@ async fn direct_overview(
             COALESCE(read_state.highest_seen_sequence, 0) AS highest_seen_sequence,
             COALESCE(read_state.version, 0) AS read_version,
             COALESCE(last_entry.created_at, conversation.created_at)::text AS last_activity_at,
-            COALESCE(members.actors, '[]'::jsonb) AS members
+            COALESCE(members.actors, '[]'::jsonb) AS members,
+            conversation.dm_key,
+            conversation.kept,
+            conversation.workspace_id,
+            home.name AS workspace_name
         FROM conversation_members me
         JOIN conversations conversation ON conversation.id = me.conversation_id
+        LEFT JOIN organizations home ON home.id = conversation.workspace_id
         LEFT JOIN conversation_read_states read_state
           ON read_state.conversation_id = conversation.id
          AND read_state.actor_id = me.actor_id
@@ -206,6 +227,9 @@ async fn direct_overview(
           AND conversation.project_id IS NULL
           AND conversation.kind IN ('dm', 'group')
           AND conversation.archived_at IS NULL
+          -- One list everywhere (R20): the person's own DMs, plus the ones
+          -- this workspace keeps.
+          AND (NOT conversation.kept OR conversation.workspace_id = $3)
           AND conversation_visible_to(conversation.id, $1)
         ORDER BY COALESCE(last_entry.created_at, conversation.created_at) DESC, conversation.id
         LIMIT $2
@@ -213,8 +237,33 @@ async fn direct_overview(
     )
     .bind(principal.actor_id)
     .bind(MAX_LISTED_CONVERSATIONS)
+    .bind(organization_id)
     .fetch_all(&mut *transaction)
     .await?;
+    // How many DMs each pair has in the list: more than one, and each
+    // personal one says whose it is.
+    let mut per_pair = std::collections::HashMap::<&str, usize>::new();
+    for row in &rows {
+        if let Some(key) = row.dm_key.as_deref() {
+            *per_pair.entry(key).or_default() += 1;
+        }
+    }
+    let labels = rows
+        .iter()
+        .map(|row| {
+            let shared = row
+                .dm_key
+                .as_deref()
+                .is_some_and(|key| per_pair.get(key).copied().unwrap_or(0) > 1);
+            (shared && !row.kept).then(|| {
+                if row.workspace_id == DIRECT {
+                    "Personal".to_owned()
+                } else {
+                    row.workspace_name.clone().unwrap_or_default()
+                }
+            })
+        })
+        .collect::<Vec<_>>();
     let summary = crate::read_state::unread_by_conversation(
         &mut transaction,
         principal.actor_id,
@@ -223,7 +272,8 @@ async fn direct_overview(
     .await?;
     let conversations = rows
         .into_iter()
-        .map(|row| {
+        .zip(labels)
+        .map(|(row, label)| {
             let (unread, counts) = crate::conversations::UnreadCounts::of(&summary, row.id);
             let read_state = ReadStateView {
                 highest_seen_sequence: row.highest_seen_sequence,
@@ -250,6 +300,8 @@ async fn direct_overview(
                 counts,
                 read_state,
                 last_activity_at: row.last_activity_at,
+                kept: row.kept,
+                label,
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
@@ -323,6 +375,23 @@ pub(crate) async fn may_start_any(
     .await?)
 }
 
+/// The workspace a person starts a DM or group in: the one they name, else
+/// their current one.
+pub(crate) async fn started_inside(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    named: Option<Uuid>,
+) -> Result<Option<Uuid>, AppError> {
+    if named.is_some() {
+        return Ok(named);
+    }
+    Ok(
+        crate::workspace::default_workspace(&mut **transaction, actor_id)
+            .await?
+            .map(|(workspace, _)| workspace),
+    )
+}
+
 async fn open_dm(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -334,8 +403,14 @@ async fn open_dm(
         return Err(AppError::Validation("DM recipient"));
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (conversation_id, created) =
-        open_dm_in(&mut transaction, principal.actor_id, request.actor_id).await?;
+    let inside = started_inside(&mut transaction, principal.actor_id, request.workspace_id).await?;
+    let (conversation_id, created) = open_dm_in(
+        &mut transaction,
+        principal.actor_id,
+        request.actor_id,
+        inside,
+    )
+    .await?;
     if created {
         announce_created(
             &mut transaction,
@@ -386,6 +461,7 @@ async fn create_group(
     let request_hash = RequestHash::for_value(&CreateGroupRequest {
         name: name.clone(),
         member_ids: others.clone(),
+        workspace_id: request.workspace_id,
     })?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
@@ -406,8 +482,9 @@ async fn create_group(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    let inside = started_inside(&mut transaction, principal.actor_id, request.workspace_id).await?;
     let conversation_id =
-        create_group_in(&mut transaction, principal.actor_id, &others, name).await?;
+        create_group_in(&mut transaction, principal.actor_id, &others, name, inside).await?;
     announce_created(
         &mut transaction,
         &headers,
@@ -779,10 +856,15 @@ async fn member_views(
 /// and whether it was just created. An existing DM is found whoever may
 /// start one now (it stays readable); making one needs `direct.start` in a
 /// workspace both are in.
+///
+/// `inside` is the workspace the person is in as they start it: when that
+/// workspace keeps its DMs (R20's `kept`) and both are its members, the
+/// pair's kept DM there is found or made instead of their personal one.
 pub(crate) async fn open_dm_in(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     other_actor_id: Uuid,
+    inside: Option<Uuid>,
 ) -> Result<(Uuid, bool), AppError> {
     if other_actor_id == actor_id {
         return Err(AppError::Validation("DM recipient"));
@@ -793,6 +875,9 @@ pub(crate) async fn open_dm_in(
         (other_actor_id, actor_id)
     };
     let dm_key = format!("{first}:{second}");
+    if let Some(workspace) = kept_in(transaction, inside, actor_id, &[other_actor_id]).await? {
+        return open_kept_dm(transaction, workspace, actor_id, other_actor_id, &dm_key).await;
+    }
     // One DM per pair (R20): the pair's personal DM, else the newest from
     // before R20, when DMs lived in a workspace.
     if let Some(id) = sqlx::query_scalar::<_, Uuid>(
@@ -852,17 +937,23 @@ pub(crate) async fn open_dm_in(
 }
 
 /// Create a group of the caller and others they may start a conversation
-/// with.
+/// with. Started `inside` a workspace that keeps its DMs, among its
+/// members only, the group is kept there (R20).
 pub(crate) async fn create_group_in(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     others: &[Uuid],
     name: Option<String>,
+    inside: Option<Uuid>,
 ) -> Result<Uuid, AppError> {
     if others.is_empty() || others.len() >= MAX_GROUP_MEMBERS || others.contains(&actor_id) {
         return Err(AppError::Validation("group members"));
     }
-    let people = lock_startable(transaction, actor_id, DIRECT, others).await?;
+    let kept = kept_in(transaction, inside, actor_id, others).await?;
+    if let Some(workspace) = kept {
+        require_start_in(transaction, workspace, actor_id).await?;
+    }
+    let people = lock_startable(transaction, actor_id, kept.unwrap_or(DIRECT), others).await?;
     let name = match name {
         Some(name) => name,
         None => default_group_name(&people),
@@ -870,18 +961,152 @@ pub(crate) async fn create_group_in(
     let conversation_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility)
-        VALUES ($1, NULL, direct_scope_id(), 'group', $2, 'members')
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, kept)
+        VALUES ($1, NULL, COALESCE($3, direct_scope_id()), 'group', $2, 'members', $3 IS NOT NULL)
         "#,
     )
     .bind(conversation_id)
     .bind(&name)
+    .bind(kept)
     .execute(&mut **transaction)
     .await?;
     let mut members = others.to_vec();
     members.push(actor_id);
     insert_members(transaction, conversation_id, actor_id, &members).await?;
     Ok(conversation_id)
+}
+
+/// The workspace a new DM or group is kept in (R20): `inside`, when it is
+/// active, its `messages.direct_messages` setting is `kept`, and the
+/// starter and everyone else are enabled members of it.
+async fn kept_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    inside: Option<Uuid>,
+    actor_id: Uuid,
+    others: &[Uuid],
+) -> Result<Option<Uuid>, AppError> {
+    let Some(workspace) = inside.filter(|workspace| *workspace != DIRECT) else {
+        return Ok(None);
+    };
+    let setting =
+        crate::settings::workspace_value(&mut **transaction, workspace, "messages.direct_messages")
+            .await?;
+    if setting != serde_json::json!("kept") {
+        return Ok(None);
+    }
+    let mut members = others.to_vec();
+    members.push(actor_id);
+    members.sort();
+    members.dedup();
+    let all_in = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT count(DISTINCT membership.actor_id) = cardinality($2::uuid[])
+        FROM organization_memberships membership
+        JOIN organizations workspace
+          ON workspace.id = membership.organization_id AND workspace.lifecycle = 'active'
+        JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
+        WHERE membership.organization_id = $1 AND membership.enabled
+          AND membership.actor_id = ANY($2)
+        "#,
+    )
+    .bind(workspace)
+    .bind(&members)
+    .fetch_one(&mut **transaction)
+    .await?;
+    Ok(all_in.then_some(workspace))
+}
+
+/// A kept DM or group answers to its own workspace's role only, so
+/// starting one needs `direct.start` there.
+async fn require_start_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    workspace: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    let allowed = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM organization_memberships mine
+            WHERE mine.organization_id = $1 AND mine.actor_id = $2 AND mine.enabled
+              AND role_allows(mine.role, mine.role_id, $3))
+        "#,
+    )
+    .bind(workspace)
+    .bind(actor_id)
+    .bind(crate::policy::Permission::DirectStart.key())
+    .fetch_one(&mut **transaction)
+    .await?;
+    if allowed {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+/// The pair's kept DM in `workspace`, made if there is none. The pair's
+/// personal DM stays as it is, listed beside it.
+async fn open_kept_dm(
+    transaction: &mut Transaction<'_, Postgres>,
+    workspace: Uuid,
+    actor_id: Uuid,
+    other_actor_id: Uuid,
+    dm_key: &str,
+) -> Result<(Uuid, bool), AppError> {
+    if let Some(id) = kept_dm(transaction, workspace, actor_id, dm_key).await? {
+        return Ok((id, false));
+    }
+    require_start_in(transaction, workspace, actor_id).await?;
+    lock_startable(transaction, actor_id, workspace, &[other_actor_id]).await?;
+    let inserted = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, dm_key, kept)
+        VALUES ($1, NULL, $2, 'dm', $3, 'members', $4, true)
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(workspace)
+    .bind(DM_NAME)
+    .bind(dm_key)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(conversation_id) = inserted else {
+        // Someone else made it just now.
+        let id = kept_dm(transaction, workspace, actor_id, dm_key)
+            .await?
+            .ok_or(AppError::Conflict("conversation", "try again"))?;
+        return Ok((id, false));
+    };
+    insert_members(
+        transaction,
+        conversation_id,
+        actor_id,
+        &[actor_id, other_actor_id],
+    )
+    .await?;
+    Ok((conversation_id, true))
+}
+
+/// The pair's kept DM in `workspace`, if `actor_id` sees it.
+async fn kept_dm(
+    transaction: &mut Transaction<'_, Postgres>,
+    workspace: Uuid,
+    actor_id: Uuid,
+    dm_key: &str,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM conversations
+        WHERE kind = 'dm' AND dm_key = $1 AND kept AND workspace_id = $3
+          AND project_id IS NULL AND conversation_visible_to(id, $2)
+        "#,
+    )
+    .bind(dm_key)
+    .bind(actor_id)
+    .bind(workspace)
+    .fetch_optional(&mut **transaction)
+    .await?)
 }
 
 /// Lock these accounts and confirm `actor_id` may start a conversation

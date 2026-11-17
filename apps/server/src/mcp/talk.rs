@@ -1896,9 +1896,20 @@ pub(super) async fn conversation_start(
                 "Name someone other than yourself.",
             ));
         }
+        // Started in the connection's own workspace, or the person's current
+        // one for an app acting across their account (R20's kept DMs).
+        let anchored =
+            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                .bind(principal.project_id)
+                .fetch_optional(&mut *transaction)
+                .await?
+                .filter(|_| !principal.account_wide);
+        let inside =
+            crate::direct::started_inside(&mut transaction, principal.actor_id, anchored).await?;
         let (conversation_id, created, kind) = if people.len() == 1 && name.is_none() {
             let (id, created) =
-                crate::direct::open_dm_in(&mut transaction, principal.actor_id, people[0]).await?;
+                crate::direct::open_dm_in(&mut transaction, principal.actor_id, people[0], inside)
+                    .await?;
             (id, created, OutboxConversationKind::Dm)
         } else {
             let id = crate::direct::create_group_in(
@@ -1906,6 +1917,7 @@ pub(super) async fn conversation_start(
                 principal.actor_id,
                 &people,
                 name.clone(),
+                inside,
             )
             .await?;
             (id, true, OutboxConversationKind::Group)

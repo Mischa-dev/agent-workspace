@@ -1189,6 +1189,216 @@ async fn a_kept_dm_ends_with_workspace_membership_and_no_role_reads_a_dm() {
     world.finish().await;
 }
 
+/// One list everywhere (R20, K4.24): a pair has one personal DM on the
+/// server, started from any workspace they share, and every workspace's
+/// sidebar shows it. A workspace that keeps its DMs gets its own DM for the
+/// pair, listed only there and ending with membership; the personal one
+/// stays listed beside it, labelled. A DM from before R20 is personal.
+#[tokio::test]
+async fn one_dm_per_pair_and_kept_dms_stay_in_their_workspace() {
+    use super::support::{app::send, world::WorldBuilder};
+
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("ben", "member")
+        .person("cal", "member")
+        .build("one_dm_per_pair")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let (ana, ben, cal) = (
+        &world.people["ana"],
+        &world.people["ben"],
+        &world.people["cal"],
+    );
+    let first = world.organization;
+    let second = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Harbour', $2)")
+        .bind(second)
+        .bind(format!("harbour-{}", second.simple()))
+        .execute(pool)
+        .await
+        .expect("second workspace");
+    for actor in [ana.actor, ben.actor] {
+        sqlx::query(
+            "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(second)
+        .bind(actor)
+        .execute(pool)
+        .await
+        .expect("joins the second workspace");
+    }
+    let current = |actor: Uuid, workspace: Uuid| async move {
+        sqlx::query("UPDATE users SET default_organization_id = $2 WHERE actor_id = $1")
+            .bind(actor)
+            .bind(workspace)
+            .execute(pool)
+            .await
+            .expect("switch workspace");
+    };
+    let open = |browser: &super::support::app::Browser, body: Value| {
+        let request = browser.request("POST", "/api/v1/direct/dms", None, body);
+        let app = world.app.clone();
+        async move {
+            let (status, body) = send(&app, request).await;
+            assert!(status.is_success(), "{status} {body}");
+            (
+                status,
+                body["conversation"]["id"].as_str().expect("id").to_owned(),
+            )
+        }
+    };
+    let listed = |browser: &super::support::app::Browser| {
+        let request = browser.request("GET", "/api/v1/direct", None, Value::Null);
+        let app = world.app.clone();
+        async move {
+            let (status, body) = send(&app, request).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            body["conversations"]
+                .as_array()
+                .expect("conversations")
+                .iter()
+                .map(|item| {
+                    (
+                        item["id"].as_str().expect("id").to_owned(),
+                        item["label"].as_str().map(str::to_owned),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        }
+    };
+
+    // From either shared workspace, the same personal DM.
+    current(ana.actor, first).await;
+    let (status, personal) = open(&ana.browser, json!({"actorId": ben.actor})).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, again) = open(
+        &ana.browser,
+        json!({"actorId": ben.actor, "workspaceId": second}),
+    )
+    .await;
+    assert_eq!((status, &again), (StatusCode::OK, &personal));
+    for workspace in [first, second] {
+        current(ben.actor, workspace).await;
+        assert_eq!(
+            listed(&ben.browser).await.get(&personal),
+            Some(&None),
+            "ben sees the DM in every workspace"
+        );
+    }
+
+    // The second workspace keeps its DMs: a DM started there is its own.
+    sqlx::query(
+        "INSERT INTO settings (id, organization_id, scope, key, value) VALUES ($1, $2, 'workspace', 'messages.direct_messages', '\"kept\"')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(second)
+    .execute(pool)
+    .await
+    .expect("keep DMs");
+    let (status, kept) = open(
+        &ana.browser,
+        json!({"actorId": ben.actor, "workspaceId": second}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_ne!(kept, personal);
+    let (status, kept_again) = open(
+        &ana.browser,
+        json!({"actorId": ben.actor, "workspaceId": second}),
+    )
+    .await;
+    assert_eq!((status, &kept_again), (StatusCode::OK, &kept));
+    let (workspace, is_kept) = sqlx::query_as::<_, (Uuid, bool)>(
+        "SELECT workspace_id, kept FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&kept)
+    .fetch_one(pool)
+    .await
+    .expect("kept DM");
+    assert_eq!((workspace, is_kept), (second, true));
+    // Started from the first workspace, which doesn't keep DMs: the personal one.
+    let (_, from_first) = open(
+        &ana.browser,
+        json!({"actorId": ben.actor, "workspaceId": first}),
+    )
+    .await;
+    assert_eq!(from_first, personal);
+
+    // Listed only there, with the personal one beside it, labelled.
+    current(ana.actor, second).await;
+    let there = listed(&ana.browser).await;
+    assert_eq!(there.get(&kept), Some(&None), "{there:?}");
+    assert_eq!(
+        there.get(&personal),
+        Some(&Some("Personal".to_owned())),
+        "{there:?}"
+    );
+    current(ana.actor, first).await;
+    let elsewhere = listed(&ana.browser).await;
+    assert!(!elsewhere.contains_key(&kept), "{elsewhere:?}");
+    assert_eq!(elsewhere.get(&personal), Some(&None), "{elsewhere:?}");
+
+    // A DM from before R20 (it carries a workspace, not the direct scope)
+    // is personal: listed in every workspace, and it is the pair's DM.
+    let old = Uuid::now_v7();
+    let (low, high) = if ana.actor < cal.actor {
+        (ana.actor, cal.actor)
+    } else {
+        (cal.actor, ana.actor)
+    };
+    sqlx::query(
+        "INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, dm_key) VALUES ($1, NULL, $2, 'dm', 'Direct message', 'members', $3)",
+    )
+    .bind(old)
+    .bind(first)
+    .bind(format!("{low}:{high}"))
+    .execute(pool)
+    .await
+    .expect("pre-R20 DM");
+    for actor in [ana.actor, cal.actor] {
+        sqlx::query(
+            "INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id) VALUES (NULL, $1, $2, $2)",
+        )
+        .bind(old)
+        .bind(actor)
+        .execute(pool)
+        .await
+        .expect("pre-R20 member");
+    }
+    for workspace in [first, second] {
+        current(ana.actor, workspace).await;
+        assert!(listed(&ana.browser).await.contains_key(&old.to_string()));
+    }
+    let (status, found) = open(&ana.browser, json!({"actorId": cal.actor})).await;
+    assert_eq!((status, found), (StatusCode::OK, old.to_string()));
+
+    // The kept DM ends with ben's membership; the personal one doesn't.
+    current(ben.actor, second).await;
+    assert!(listed(&ben.browser).await.contains_key(&kept));
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = false WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(second)
+    .bind(ben.actor)
+    .execute(pool)
+    .await
+    .expect("ben leaves");
+    let kept_id = kept.parse::<Uuid>().expect("kept id");
+    assert!(
+        !visible(pool, kept_id, ben.actor).await,
+        "ben, after leaving"
+    );
+    let after = listed(&ben.browser).await;
+    assert!(!after.contains_key(&kept), "{after:?}");
+    assert_eq!(after.get(&personal), Some(&None), "{after:?}");
+    world.finish().await;
+}
+
 /// The timings in the K4.4 migration's header: the conversation list and
 /// message search, with the rule as it was and as K4.4 made it whole.
 /// 50,000 messages over 200 channels and 200 DMs, one viewer. Run by hand:
