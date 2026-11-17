@@ -13,6 +13,19 @@ pub(crate) mod test_host;
 pub(crate) mod two_workspaces;
 pub(crate) mod world;
 
+/// Moves every agent holding a role with `pages.edit` to a "suggests" copy
+/// of it (`sql/agents_suggest.sql`). Tests that set an agent up and
+/// then expect its edits to others' pages to be suggestions call this after
+/// the setup.
+pub(crate) async fn agents_suggest(pool: &sqlx::PgPool) {
+    let mut transaction = pool.begin().await.expect("begin");
+    sqlx::raw_sql(include_str!("sql/agents_suggest.sql"))
+        .execute(&mut *transaction)
+        .await
+        .expect("suggest roles");
+    transaction.commit().await.expect("commit");
+}
+
 /// Every change notice `outbox::enqueue` staged in the log, whether the
 /// sequencer has given it a position yet or not, with the columns tests ask
 /// about. Staged notices are numbered after the log's head in staging

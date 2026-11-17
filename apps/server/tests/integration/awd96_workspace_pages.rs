@@ -81,9 +81,9 @@ async fn workspace_pages_reach_the_whole_workspace_and_nobody_else() {
 
     // Opened, it says it's the workspace's space; a project doesn't.
     let (_, opened) = get(&setup, &bea_browser, &format!("/api/v1/projects/{space}")).await;
-    assert_eq!(opened["workspaceSpace"], true, "{opened}");
+    assert_eq!(opened["kind"], "workspace", "{opened}");
     let (_, opened) = get(&setup, &bea_browser, &format!("/api/v1/projects/{work}")).await;
-    assert!(opened.get("workspaceSpace").is_none(), "{opened}");
+    assert_eq!(opened["kind"], "project", "{opened}");
 
     // The space holds pages and nothing else.
     let (status, body) = get(

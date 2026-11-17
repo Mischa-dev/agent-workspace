@@ -253,14 +253,22 @@ async fn grant(
         JOIN workos_organizations o USING (client_id, organization_id)
         JOIN mcp_client_credentials c ON c.id = b.credential_id
         JOIN external_agent_connections connection ON connection.id = b.connection_id
-        JOIN projects p ON p.id = connection.project_id AND p.organization_id = b.organization_id
-        WHERE b.client_id = $1 AND b.subject_id = $2 AND b.kind = $3 AND b.revoked_at IS NULL
+                WHERE b.client_id = $1 AND b.subject_id = $2 AND b.kind = $3 AND b.revoked_at IS NULL
           AND o.workos_organization_id = $4
           AND c.external_agent_connection_id = connection.id
           AND c.actor_id = connection.actor_id AND c.project_id = connection.project_id
           AND c.status = 'active' AND c.revoked_at IS NULL AND c.expires_at > now()
           AND c.scopes = connection.scopes
-          AND agent_connection_can_access(connection.id, connection.project_id)
+          -- K1.6: the agent belongs to the workspace, not to the project it
+          -- was first added to; each call is checked against its target.
+          AND connection.status = 'active'
+          AND connection.workspace_id = b.organization_id
+          AND EXISTS (
+              SELECT 1 FROM actors account
+              JOIN organization_memberships om
+                ON om.actor_id = account.id AND om.organization_id = connection.workspace_id
+              WHERE account.id = connection.actor_id AND account.status = 'active' AND om.enabled
+          )
     "#,
         )
         .bind(&config.client_id)
@@ -957,7 +965,25 @@ mod tests {
             .execute(&pool)
             .await
             .expect("WorkOS agent test operation");
+        // K1.6: leaving the project it was first added to doesn't cut the
+        // agent off; leaving the workspace does.
         sqlx::query("UPDATE project_memberships SET enabled=false WHERE actor_id=$1")
+            .bind(agent.actor_id)
+            .execute(&pool)
+            .await
+            .expect("WorkOS agent test operation");
+        assert!(
+            grant(&state, &config, &token)
+                .await
+                .expect("WorkOS agent test operation")
+                .is_some()
+        );
+        sqlx::query("UPDATE project_memberships SET enabled=true WHERE actor_id=$1")
+            .bind(agent.actor_id)
+            .execute(&pool)
+            .await
+            .expect("WorkOS agent test operation");
+        sqlx::query("UPDATE organization_memberships SET enabled=false WHERE actor_id=$1")
             .bind(agent.actor_id)
             .execute(&pool)
             .await
@@ -968,7 +994,7 @@ mod tests {
                 .expect("WorkOS agent test operation")
                 .is_none()
         );
-        sqlx::query("UPDATE project_memberships SET enabled=true WHERE actor_id=$1")
+        sqlx::query("UPDATE organization_memberships SET enabled=true WHERE actor_id=$1")
             .bind(agent.actor_id)
             .execute(&pool)
             .await

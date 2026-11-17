@@ -18,6 +18,7 @@ use crate::{
         Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
+    spaces::SpaceKind,
 };
 
 const MAX_PROJECT_NAME_BYTES: usize = 120;
@@ -51,6 +52,7 @@ struct ProjectRow {
     organization_id: Uuid,
     project_key: String,
     name: String,
+    kind: String,
     role: String,
     role_permissions: Option<Vec<String>>,
     version: i64,
@@ -91,9 +93,14 @@ pub struct ProjectView {
     /// they'd lead to without a request per project.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     modules_off: Vec<String>,
-    /// AWD-96: this is the workspace's own space for pages, not a project.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    workspace_space: bool,
+    /// The kind of space (K4.10): `project`, or `workspace` for the
+    /// workspace's own space, which is never listed as a project.
+    #[serde(default = "project_kind")]
+    kind: SpaceKind,
+}
+
+fn project_kind() -> SpaceKind {
+    SpaceKind::Project
 }
 
 /// AWD-75: a module set's off modules, by id.
@@ -260,6 +267,7 @@ async fn list_projects(
             p.organization_id,
             p.project_key,
             p.name,
+            p.kind,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
             p.version,
@@ -316,6 +324,9 @@ async fn list_projects(
           AND pm.enabled
           AND (p.archived_at IS NOT NULL) = $5
           AND p.kind = 'standard'
+          -- K4.2: the one readability rule (archived projects stay listed
+          -- for their members, to be restored).
+          AND (p.archived_at IS NOT NULL OR space_readable_by(p.id, $1))
           AND (
               $2::text IS NULL
               OR p.name ILIKE $2
@@ -535,7 +546,7 @@ async fn create_project(
         },
         attention_count: 0,
         modules_off: Vec::new(),
-        workspace_space: false,
+        kind: SpaceKind::Project,
     };
     insert_audit_event(
         &mut transaction,
@@ -945,6 +956,7 @@ async fn update_navigation(
             (SELECT organization_id FROM projects WHERE id = $1) AS organization_id,
             (SELECT project_key FROM projects WHERE id = $1) AS project_key,
             (SELECT name FROM projects WHERE id = $1) AS name,
+            (SELECT kind FROM projects WHERE id = $1) AS kind,
             (SELECT role FROM project_memberships WHERE project_id = $1 AND actor_id = $2) AS role,
             (SELECT workspace_role_permissions(role_id) FROM project_memberships
               WHERE project_id = $1 AND actor_id = $2) AS role_permissions,
@@ -1172,9 +1184,6 @@ async fn fetch_project(
             .await?
             .map(off_ids)
             .unwrap_or_default();
-    view.workspace_space = crate::workspace_space::find(&mut connection, view.organization_id)
-        .await?
-        == Some(project_id);
     Ok(view)
 }
 
@@ -1190,6 +1199,7 @@ async fn fetch_project_row(
             p.organization_id,
             p.project_key,
             p.name,
+            p.kind,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
             p.version,
@@ -1244,6 +1254,9 @@ async fn fetch_project_row(
                AND nav_parent.archived_at IS NOT NULL
          )
         WHERE p.id = $1
+          -- K4.2: the one readability rule (an archived project stays
+          -- readable to its members, to be restored).
+          AND (p.archived_at IS NOT NULL OR space_readable_by(p.id, $2))
         "#,
     )
     .bind(project_id)
@@ -1264,6 +1277,7 @@ async fn fetch_project_row_in_transaction(
             p.organization_id,
             p.project_key,
             p.name,
+            p.kind,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
             p.version,
@@ -1376,7 +1390,7 @@ fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
         navigation,
         attention_count: 0,
         modules_off: Vec::new(),
-        workspace_space: false,
+        kind: SpaceKind::from_stored(&row.kind).unwrap_or(SpaceKind::Project),
     })
 }
 

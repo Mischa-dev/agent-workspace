@@ -222,7 +222,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     assert_eq!(replay.status(), StatusCode::CREATED);
     assert_eq!(response_json(replay).await["id"], first_project_id);
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects WHERE project_key = 'ONE'")
             .fetch_one(&pool)
             .await
             .expect("count Projects"),
@@ -254,10 +254,12 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         "project_key_conflict"
     );
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects")
-            .fetch_one(&pool)
-            .await
-            .expect("count Projects after duplicate-key conflict"),
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM projects WHERE lower(project_key) = 'one'"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count Projects after duplicate-key conflict"),
         1,
         "a duplicate-key HTTP conflict must roll back its Project transaction"
     );

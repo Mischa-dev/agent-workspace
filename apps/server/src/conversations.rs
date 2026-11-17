@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::Target,
     auth::{AuthenticatedActor, require_authenticated_write},
     domain::allocate_conversation_sequence,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
@@ -396,7 +397,40 @@ pub struct ConversationWorkItemReferenceView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_category: Option<String>,
     pub archived_at: Option<String>,
+    /// In today's shape: a chip's link stays inside the app, which reads
+    /// both shapes (a stopgap until timeline views are built with the
+    /// server's addresses, C1). Read rows leave it out and name the task's
+    /// project instead; [`ConversationWorkItemReferenceView::linked`] fills
+    /// it in.
+    #[serde(default)]
     pub href: String,
+    #[serde(default, skip_serializing)]
+    pub project_id: Option<Uuid>,
+}
+
+impl ConversationWorkItemReferenceView {
+    fn linked(mut self) -> Self {
+        if let Some(project_id) = self.project_id
+            && self.href.is_empty()
+        {
+            self.href = Target::task(project_id, self.id).legacy_path();
+        }
+        self
+    }
+}
+
+/// Task chips read from a JSON column, with their links filled in.
+fn work_item_references(
+    value: serde_json::Value,
+    invalid: &'static str,
+) -> Result<Vec<ConversationWorkItemReferenceView>, AppError> {
+    Ok(
+        serde_json::from_value::<Vec<ConversationWorkItemReferenceView>>(value)
+            .map_err(|_| AppError::Internal(invalid))?
+            .into_iter()
+            .map(ConversationWorkItemReferenceView::linked)
+            .collect(),
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -927,8 +961,8 @@ pub(crate) async fn insert_channel(
     let conversation_id = Uuid::now_v7();
     let inserted = sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, kind, name)
-        VALUES ($1, $2, 'channel', $3)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'channel', $3)
         "#,
     )
     .bind(conversation_id)
@@ -1049,9 +1083,10 @@ async fn create_thread(
     let inserted = sqlx::query(
         r#"
         INSERT INTO conversations (
-            id, project_id, kind, parent_channel_id, origin_message_id, name, auto_named
+            id, project_id, workspace_id, kind, parent_channel_id, origin_message_id, name,
+            auto_named
         )
-        VALUES ($1, $2, 'thread', $3, $4, $5, $6)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4, $5, $6)
         "#,
     )
     .bind(thread_id)
@@ -1918,7 +1953,8 @@ pub(crate) async fn append_message_command_with(
                 title: Some(title),
                 status_category: Some(status_category),
                 archived_at,
-                href: format!("/projects/{}/work-items/{id}", conversation.project_id),
+                href: Target::task(conversation.project_id, id).legacy_path(),
+                project_id: Some(conversation.project_id),
             },
         )
         .collect();
@@ -2375,11 +2411,16 @@ pub(crate) async fn enqueue_external_message_events(
     .bind(conversation.id)
     .fetch_all(&mut **transaction)
     .await?;
-    let kind = match conversation.kind.as_str() {
-        "thread" => "threads",
-        "channel" => "channels",
-        _ => "messages",
-    };
+    // Stored with the event: today's shape, which the web and resolve read.
+    let path = Target::conversation(
+        conversation.project_id,
+        &conversation.kind,
+        conversation.id,
+        None,
+        !matches!(conversation.kind.as_str(), "thread" | "channel"),
+        true,
+    )
+    .legacy_path();
     for (connection_id, _) in connections {
         enqueue_external_event(
             transaction,
@@ -2389,14 +2430,7 @@ pub(crate) async fn enqueue_external_message_events(
             "You were mentioned in a Message",
             "message",
             message_id,
-            &if kind == "messages" {
-                format!("/messages/{}", conversation.id)
-            } else {
-                format!(
-                    "/projects/{}/{kind}/{}",
-                    conversation.project_id, conversation.id
-                )
-            },
+            &path,
         )
         .await?;
     }
@@ -2471,7 +2505,7 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
                     'title', item.title,
                     'statusCategory', status.semantic_category,
                     'archivedAt', item.archived_at::text,
-                    'href', '/projects/' || item.project_id::text || '/work-items/' || item.id::text
+                    'projectId', item.project_id
                 ) ORDER BY min_reference.first_node_index, item.id
             ) AS items
             FROM (
@@ -2632,7 +2666,7 @@ async fn conversation_timeline(
                     'title', item.title,
                     'statusCategory', status.semantic_category,
                     'archivedAt', item.archived_at::text,
-                    'href', '/projects/' || item.project_id::text || '/work-items/' || item.id::text
+                    'projectId', item.project_id
                 ) ORDER BY item.number, item.id
             ), '[]'::jsonb)
             FROM work_item_conversation_links link
@@ -2648,8 +2682,7 @@ async fn conversation_timeline(
             .bind(conversation.id)
             .fetch_one(crate::db::scoped(&state.pool))
             .await?;
-            serde_json::from_value(value)
-                .map_err(|_| AppError::Internal("invalid linked Work Item projection"))?
+            work_item_references(value, "invalid linked Work Item projection")?
         } else {
             Vec::new()
         };
@@ -4251,10 +4284,10 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
             let mentioned_actors =
                 serde_json::from_value::<Vec<ActorView>>(row.mentioned_actors)
                     .map_err(|_| AppError::Internal("decode timeline Message mentions"))?;
-            let referenced_work_items = serde_json::from_value::<
-                Vec<ConversationWorkItemReferenceView>,
-            >(row.referenced_work_items)
-            .map_err(|_| AppError::Internal("decode timeline Work Item references"))?;
+            let referenced_work_items = work_item_references(
+                row.referenced_work_items,
+                "decode timeline Work Item references",
+            )?;
             let attachments =
                 serde_json::from_value::<Vec<crate::files::FileView>>(row.attachments)
                     .map_err(|_| AppError::Internal("decode timeline Message files"))?;

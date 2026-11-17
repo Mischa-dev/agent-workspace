@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": [],
   "worksWith": ["agents", "inbox"],
-  "permissions": [],
+  "permissions": ["direct.start"],
   "tools": {
     "conversation_list": "query",
     "conversation_open": "describe",

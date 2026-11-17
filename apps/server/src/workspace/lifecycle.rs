@@ -401,7 +401,7 @@ const OTHER_ID_FAMILIES: &[(&str, &str)] = &[
         "SELECT COALESCE(webhook.project_id, ( \
              SELECT space.id FROM projects space \
              WHERE space.organization_id = webhook.organization_id \
-             ORDER BY (space.kind = 'workspace') DESC, space.created_at LIMIT 1)) \
+             ORDER BY space.created_at LIMIT 1)) \
          FROM webhook_subscriptions webhook \
          -- visibility: the space only, to refuse a write; the handler checks access\n \
          WHERE webhook.id = $1",
@@ -496,9 +496,10 @@ async fn announce(
 ) -> Result<(), AppError> {
     let Some(space) = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM projects WHERE organization_id = $1 \
-         ORDER BY (kind = 'workspace') DESC, created_at LIMIT 1",
+         ORDER BY (kind = $2) DESC, created_at LIMIT 1",
     )
     .bind(workspace)
+    .bind(crate::spaces::SpaceKind::Workspace.stored())
     .fetch_optional(&mut *connection)
     .await?
     else {

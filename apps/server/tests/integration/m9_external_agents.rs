@@ -1972,12 +1972,13 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
             &format!("/api/v1/projects/{second}/members/{actor}"),
             &cookie,
             &csrf,
-            "no-agent-admin",
+            "agent-admin",
             json!({"expectedVersion":1,"role":"admin"}),
         ))
         .await
         .expect("account fixture operation");
-    assert_eq!(elevated.status(), StatusCode::FORBIDDEN);
+    // An agent holds any role a person can (K1.14a).
+    assert_eq!(elevated.status(), StatusCode::OK);
     let removed = application
         .clone()
         .oneshot(write_request_with_idempotency(
@@ -1986,7 +1987,7 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
             &cookie,
             &csrf,
             "remove-agent",
-            json!({"expectedVersion":1,"enabled":false}),
+            json!({"expectedVersion":2,"enabled":false}),
         ))
         .await
         .expect("account fixture operation");
@@ -2139,6 +2140,8 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         .await
         .expect("remove approver from seed project");
     assert_eq!(removed.status(), StatusCode::OK);
+    // K1.6: leaving a project no longer signs the agent out; the request in
+    // that project is refused, as anything there is.
     let denied = mcp_request(&application,&approver_token,Some(&approver_session),json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"request_respond","arguments":{"requestId":approval_id.to_string(),"text":"main","clientRequestId":"cross-project-denied"}}})).await;
     drop(denied);
     assert_eq!(

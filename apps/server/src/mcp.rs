@@ -3769,6 +3769,9 @@ const SPANNING_LISTS: &[&str] = &[
     "task_list",
     "my_work",
     "conversation_list",
+    // K1.6: an agent made at workspace level is anchored in the workspace's
+    // own space, where Projects isn't a module; its projects are elsewhere.
+    "projects_list",
     "agent_list",
     "repository_list",
     "pull_request_list",
@@ -4949,7 +4952,7 @@ pub(crate) async fn resolve_bearer_principal(
         LEFT JOIN external_agent_connections connection
           ON connection.id = c.external_agent_connection_id
         JOIN projects p ON p.id = c.project_id
-        JOIN project_memberships pm
+        LEFT JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
         JOIN organization_memberships om
           ON om.organization_id = p.organization_id
@@ -4960,16 +4963,17 @@ pub(crate) async fn resolve_bearer_principal(
           AND c.revoked_at IS NULL
           AND c.expires_at > now()
           AND a.status = 'active'
-          AND p.archived_at IS NULL
-          AND pm.enabled
           AND (
-              (a.kind = 'human'
-               AND u.status = 'active'
-               AND c.external_agent_connection_id IS NULL)
+              (u.status = 'active'
+               AND c.external_agent_connection_id IS NULL
+               AND p.archived_at IS NULL
+               AND pm.enabled)
               OR
-              (a.kind = 'external_agent'
-               AND connection.status = 'active'
-               AND connection.project_id = c.project_id
+              -- K1.6: a connection belongs to the workspace, not to the
+              -- project it was first added to; each call is checked against
+              -- the target space (`agent_connection_can_access`).
+              (connection.status = 'active'
+               AND connection.workspace_id = p.organization_id
                AND connection.actor_id = c.actor_id
                AND connection.scopes = c.scopes)
           )
@@ -5394,17 +5398,13 @@ async fn validate_issue_command(
         ) && (!wants_write
             || RoleGrant::stored(&role, role_permissions.as_deref()).is_ok_and(|grant| {
                 grant.permissions().iter().any(|permission| {
-                    !matches!(
-                        permission,
-                        Permission::ProjectsView
-                            | Permission::TasksView
-                            | Permission::CodeView
-                            | Permission::MembersView
-                            | Permission::DirectoryView
-                            | Permission::RunsReport
-                            | Permission::RequestsRaise
-                            | Permission::RequestsAnswer
-                    )
+                    !permission.only_sees()
+                        && !matches!(
+                            permission,
+                            Permission::RunsReport
+                                | Permission::RequestsRaise
+                                | Permission::RequestsAnswer
+                        )
                 })
             }))
     }) {
@@ -5767,7 +5767,8 @@ async fn workspace_space_of(
         return Ok(None);
     };
     let project_id =
-        crate::workspace_space::join(&mut transaction, organization_id, principal.actor_id).await?;
+        crate::spaces::workspace::join(&mut transaction, organization_id, principal.actor_id)
+            .await?;
     transaction.commit().await?;
     Ok(project_id)
 }

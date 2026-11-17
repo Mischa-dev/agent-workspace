@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::{Addresses, Target},
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
         ActorView, MessageCommandActor, MessageMcpCredential, append_message_command,
@@ -33,7 +34,7 @@ use crate::{
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     idempotency::IdempotencyKey,
     jobs::{self, JobError, JobRegistry, NewJob},
-    later::{message_href, timestamp},
+    later::{message_href, message_target, timestamp},
     message_content::MessageContent,
     notifications::{self, NewNotification, kind},
     policy::Action,
@@ -94,6 +95,7 @@ struct ScheduledRow {
     conversation_name: String,
     parent_conversation_id: Option<Uuid>,
     project_id: Uuid,
+    workspace_id: Uuid,
     project_name: String,
     direct_space: bool,
     content: serde_json::Value,
@@ -114,7 +116,7 @@ fn select_sql(extra: &str) -> String {
         SELECT scheduled.id, scheduled.conversation_id,
                conversation.kind AS conversation_kind, conversation.name AS conversation_name,
                conversation.parent_channel_id AS parent_conversation_id,
-               scheduled.project_id,
+               scheduled.project_id, project.organization_id AS workspace_id,
                CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
                    AS project_name,
                project.kind = 'direct' AS direct_space,
@@ -144,40 +146,24 @@ fn place(kind: &str, name: &str) -> String {
     }
 }
 
-fn conversation_href(row: &ScheduledRow) -> String {
-    if row.direct_space {
-        let id = row.parent_conversation_id.unwrap_or(row.conversation_id);
-        return format!("/messages/{id}");
-    }
-    let segment = if row.conversation_kind == "thread" {
-        "threads"
-    } else {
-        "channels"
-    };
-    format!(
-        "/projects/{}/{segment}/{}",
-        row.project_id, row.conversation_id
-    )
-}
-
-fn view(row: ScheduledRow) -> ScheduledMessageView {
+fn view(addresses: Addresses, row: ScheduledRow) -> ScheduledMessageView {
+    let conversation = message_target(
+        row.project_id,
+        row.direct_space,
+        row.conversation_id,
+        Some(&row.conversation_kind),
+        row.parent_conversation_id,
+    );
     ScheduledMessageView {
         id: row.id,
         conversation_id: row.conversation_id,
         place: place(&row.conversation_kind, &row.conversation_name),
         project_id: row.project_id,
         project_name: row.project_name.clone(),
-        href: conversation_href(&row),
-        message_href: row.message_id.map(|message_id| {
-            message_href(
-                row.project_id,
-                row.direct_space,
-                row.conversation_id,
-                Some(&row.conversation_kind),
-                row.parent_conversation_id,
-                message_id,
-            )
-        }),
+        href: addresses.in_workspace(row.workspace_id, &conversation),
+        message_href: row
+            .message_id
+            .map(|message_id| message_href(addresses, row.workspace_id, &conversation, message_id)),
         content: row.content,
         plain_text: row.plain_text,
         mentioned_actors: row.mentioned_actors,
@@ -196,6 +182,7 @@ fn view(row: ScheduledRow) -> ScheduledMessageView {
 /// `conversation_id` when given, and within `within` when given.
 pub async fn list(
     pool: &PgPool,
+    addresses: Addresses,
     viewer: Uuid,
     conversation_id: Option<Uuid>,
     within: Option<&[Uuid]>,
@@ -219,12 +206,13 @@ pub async fn list(
         .fetch_all(crate::db::scoped(pool))
         .await?
         .into_iter()
-        .map(view)
+        .map(|row| view(addresses, row))
         .collect())
 }
 
 pub async fn get_scheduled(
     pool: &PgPool,
+    addresses: Addresses,
     viewer: Uuid,
     id: Uuid,
 ) -> Result<ScheduledMessageView, AppError> {
@@ -233,7 +221,7 @@ pub async fn get_scheduled(
         .bind(id)
         .fetch_optional(crate::db::scoped(pool))
         .await?
-        .map(view)
+        .map(|row| view(addresses, row))
         .ok_or(AppError::NotFound("scheduled_message"))
 }
 
@@ -290,7 +278,7 @@ async fn check(
                     "title": title,
                     "statusCategory": status_category,
                     "archivedAt": archived_at,
-                    "href": format!("/projects/{}/work-items/{id}", conversation.project_id),
+                    "href": Target::task(conversation.project_id, *id).legacy_path(),
                 })
             })
             .collect(),
@@ -331,7 +319,7 @@ pub(crate) async fn schedule(
     )
     .await?;
     transaction.commit().await?;
-    get_scheduled(&state.pool, actor.actor_id, id).await
+    get_scheduled(&state.pool, Addresses::of(state), actor.actor_id, id).await
 }
 
 /// [`schedule`] in the caller's transaction, which commits it (with a
@@ -428,7 +416,7 @@ pub(crate) async fn update(
     send_at: Option<&str>,
     through_app: bool,
 ) -> Result<ScheduledMessageView, AppError> {
-    get_scheduled(&state.pool, actor.actor_id, id).await?;
+    get_scheduled(&state.pool, Addresses::of(state), actor.actor_id, id).await?;
     let send_at = send_at.map(parse_send_at).transpose()?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let locked = lock_own(&mut transaction, actor.actor_id, id).await?;
@@ -474,7 +462,7 @@ pub(crate) async fn update(
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
-        return get_scheduled(&state.pool, actor.actor_id, id).await;
+        return get_scheduled(&state.pool, Addresses::of(state), actor.actor_id, id).await;
     }
     let next = send_at.unwrap_or(locked.send_at).max(Utc::now());
     sqlx::query(
@@ -503,7 +491,7 @@ pub(crate) async fn update(
         enqueue(&mut *transaction, locked.organization_id, id, next).await?;
     }
     transaction.commit().await?;
-    get_scheduled(&state.pool, actor.actor_id, id).await
+    get_scheduled(&state.pool, Addresses::of(state), actor.actor_id, id).await
 }
 
 /// Send one waiting message now.
@@ -512,7 +500,7 @@ pub async fn send_now(
     actor_id: Uuid,
     id: Uuid,
 ) -> Result<ScheduledMessageView, AppError> {
-    get_scheduled(&state.pool, actor_id, id).await?;
+    get_scheduled(&state.pool, Addresses::of(state), actor_id, id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let locked = lock_own(&mut transaction, actor_id, id).await?;
     if locked.status != "scheduled" {
@@ -540,7 +528,7 @@ pub async fn send_now(
         false,
     )
     .await;
-    get_scheduled(&state.pool, actor_id, id).await
+    get_scheduled(&state.pool, Addresses::of(state), actor_id, id).await
 }
 
 /// Cancel one waiting (or failed) message. It isn't sent.
@@ -845,7 +833,7 @@ async fn fail(
         detail: serde_json::json!({
             "title": "Your scheduled message wasn't sent",
             "preview": reason,
-            "href": "/later?view=scheduled",
+            "href": Target::LaterScheduled.legacy_path(),
         }),
         group_key: format!("scheduled_failed:{}", row.id),
         dedupe_key: format!(
@@ -907,8 +895,14 @@ async fn list_http(
     ApiQuery(query): ApiQuery<ListQuery>,
 ) -> Result<Json<ListResponse>, AppError> {
     Ok(Json(ListResponse {
-        scheduled_messages: list(&state.pool, principal.actor_id, query.conversation_id, None)
-            .await?,
+        scheduled_messages: list(
+            &state.pool,
+            Addresses::of(&state),
+            principal.actor_id,
+            query.conversation_id,
+            None,
+        )
+        .await?,
     }))
 }
 

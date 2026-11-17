@@ -340,12 +340,17 @@ async fn a_due_reminder_notifies_once_and_done_or_snooze_work_from_the_push() {
     .fetch_one(pool)
     .await
     .expect("reminder");
-    let view = notifications::get_many(pool, mara, &[notification])
-        .await
-        .expect("notification")
-        .into_iter()
-        .next()
-        .expect("visible reminder");
+    let view = notifications::get_many(
+        pool,
+        agent_workspace_server::addresses::Addresses::LEGACY,
+        mara,
+        &[notification],
+    )
+    .await
+    .expect("notification")
+    .into_iter()
+    .next()
+    .expect("visible reminder");
     assert_eq!(view.title, "Reminder: Call the printer");
     // Nobody else hears about it.
     assert_eq!(

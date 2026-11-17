@@ -16,9 +16,9 @@
 
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
-    CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesEdit, ProjectsCreate,
-    ProjectsManage, RolesManage, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit,
-    TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesComment, PagesSuggest,
+    ProjectsCreate, ProjectsManage, RolesManage, RunsInterrupt, RunsLaunch, SettingsManage,
+    SheetsEdit, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -138,13 +138,13 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("page_blocks", None),
     ("skill_list", None),
     ("skill_get", None),
-    ("page_write", Some(PagesEdit)),
-    ("page_edit", Some(PagesEdit)),
+    ("page_write", Some(PagesSuggest)),
+    ("page_edit", Some(PagesSuggest)),
     ("page_comments", None),
     ("page_suggestions", None),
-    ("page_comment", Some(PagesEdit)),
-    ("page_comment_update", Some(PagesEdit)),
-    ("page_suggestion_decide", Some(PagesEdit)),
+    ("page_comment", Some(PagesComment)),
+    ("page_comment_update", Some(PagesComment)),
+    ("page_suggestion_decide", Some(PagesSuggest)),
     ("whiteboard_list", None),
     ("whiteboard_read", None),
     ("whiteboard_render", None),
