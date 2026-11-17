@@ -293,7 +293,19 @@ async fn pipeline<O: Operation>(
     if let Some(old) = old {
         old?;
     }
+    // H1.24: a suspended workspace, or one being deleted, refuses every
+    // call but the ones that still work then (keeping it).
+    crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)
+        .await?;
     drop(connection);
+    // H1.1: an agent's or app's call spends its workspace's shared budget.
+    // After the connection goes back: the shared counter takes its own.
+    if matches!(request.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) {
+        state
+            .rate_limits
+            .check_workspace_call(located.workspace_id)
+            .await?;
+    }
 
     let key = request_id_for::<O>(&request)?;
     let ctx = OpContext {
