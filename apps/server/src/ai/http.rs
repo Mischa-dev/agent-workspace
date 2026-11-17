@@ -104,6 +104,7 @@ struct Member {
     organization_id: Uuid,
     actor: CommandActor,
     can_edit: bool,
+    addresses: crate::addresses::Addresses,
 }
 
 impl Member {
@@ -111,6 +112,7 @@ impl Member {
         Reader {
             actor_id: self.actor.actor_id,
             connection_id: None,
+            addresses: self.addresses,
         }
     }
 
@@ -189,6 +191,7 @@ async fn member(
         organization_id,
         actor,
         can_edit,
+        addresses: crate::addresses::Addresses::of(state),
     })
 }
 

@@ -85,26 +85,11 @@ CREATE INDEX conversations_anchored_threads
     ON conversations (parent_channel_id, created_at)
     WHERE anchor IS NOT NULL;
 
--- 2. Ruling R3: conversation_visible_to is split into named helpers, each
--- owned by one workstream, without changing behaviour. Its body is K1's;
--- conversation_member_visible is K4's (today's rule, moved unchanged);
--- subject_visible_to is C1's. A later migration replaces only the helper it
--- owns, never conversation_visible_to itself.
-
--- K4's helper: today's rule for project-wide and members-only conversations.
--- `target` is the conversation whose member list decides (a thread's parent).
-CREATE FUNCTION conversation_member_visible(target UUID, viewer UUID)
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-AS $$
-    SELECT EXISTS (
-        SELECT 1
-        FROM conversation_members member
-        WHERE member.conversation_id = target
-          AND member.actor_id = viewer
-    )
-$$;
+-- 2. Ruling R3: conversation_visible_to gains C1's 'subject' arm,
+-- subject_visible_to, without changing behaviour for anything else. Its
+-- body is K1's; the member rule is K4's (K4.4 moves it into
+-- conversation_member_visible, and migration 20261117120000 puts this arm
+-- back beside it). A later migration replaces only the helper it owns.
 
 -- C1's helper: may `viewer` see the thing a comments conversation is about?
 -- It checks membership itself (unlike the 'project' arm, which callers pair
@@ -225,8 +210,12 @@ AS $$
         WHERE conversation.id = target
           AND CASE COALESCE(parent.visibility, conversation.visibility)
                 WHEN 'project' THEN true
-                WHEN 'members' THEN conversation_member_visible(
-                    COALESCE(conversation.parent_channel_id, conversation.id), viewer)
+                WHEN 'members' THEN EXISTS (
+                    SELECT 1
+                    FROM conversation_members member
+                    WHERE member.conversation_id
+                            = COALESCE(conversation.parent_channel_id, conversation.id)
+                      AND member.actor_id = viewer)
                 WHEN 'subject' THEN subject_visible_to(
                     COALESCE(parent.subject_kind, conversation.subject_kind),
                     COALESCE(parent.subject_id, conversation.subject_id),

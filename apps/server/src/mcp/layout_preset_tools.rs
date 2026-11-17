@@ -18,11 +18,11 @@ use crate::{
     AppState,
     error::AppError,
     layouts::{self, Layout, SavedPreset, Word},
-    policy::ActorKind,
     settings,
 };
 
-const MANAGERS_ONLY: &str = "Only the workspace's owners and admins save or change its layout presets, as people, on the web or through an app connected as themselves.";
+const MANAGERS_ONLY: &str =
+    "Saving or changing layout presets takes a role that manages the workspace's settings.";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -140,9 +140,6 @@ pub(super) async fn layout_preset_write(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(MANAGERS_ONLY);
-    }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
     }
@@ -199,7 +196,7 @@ pub(super) async fn layout_preset_write(
         settings::authorize_workspace_manage_as(
             &mut *transaction,
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             organization_id,
         )
         .await?;

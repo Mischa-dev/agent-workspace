@@ -35,6 +35,7 @@ use crate::{
     error::AppError,
     memory,
     policy::{Action, ActorKind},
+    spaces::SpaceKind,
 };
 
 pub const MAX_TITLE: usize = 200;
@@ -80,10 +81,15 @@ pub struct BoardSummary {
     #[schemars(with = "String")]
     pub organization_id: Uuid,
     pub organization_name: String,
-    /// The project whose members see it; empty for the whole workspace.
+    /// The project whose members see it; empty for the whole workspace
+    /// (a board in the workspace's own space).
     #[schemars(with = "Option<String>")]
     pub project_id: Option<Uuid>,
     pub project_name: Option<String>,
+    /// The kind of space the board lives in, read to present it.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub space_kind: String,
     pub title: String,
     /// The scene's change counter: it goes up with every change.
     pub scene_seq: i64,
@@ -103,9 +109,26 @@ pub struct BoardSummary {
     pub is_template: bool,
 }
 
+impl BoardSummary {
+    /// A board in the workspace's own space is shown as the whole
+    /// workspace's (no project), as it always was.
+    fn presented(mut self) -> Self {
+        if SpaceKind::from_stored(&self.space_kind) == Some(SpaceKind::Workspace) {
+            self.project_id = None;
+            self.project_name = None;
+        }
+        self
+    }
+}
+
+fn presented(boards: Vec<BoardSummary>) -> Vec<BoardSummary> {
+    boards.into_iter().map(BoardSummary::presented).collect()
+}
+
 const SUMMARY_SELECT: &str = r#"
     SELECT board.id, board.organization_id, organization.name AS organization_name,
-           board.project_id, project.name AS project_name, board.title, board.scene_seq,
+           board.project_id, project.name AS project_name, project.kind AS space_kind,
+           board.title, board.scene_seq,
            board.version, board.element_count, board.created_at::text AS created_at,
            (SELECT COALESCE(profile.display_name, account.display_name)
               FROM actors author
@@ -129,7 +152,7 @@ const SUMMARY_SELECT: &str = r#"
            board.is_template
     FROM whiteboards board
     JOIN organizations organization ON organization.id = board.organization_id
-    LEFT JOIN projects project ON project.id = board.project_id
+    JOIN projects project ON project.id = board.project_id
 "#;
 
 /// What lists may filter on.
@@ -189,13 +212,12 @@ pub async fn list(
     Ok(sqlx::query_as::<_, BoardSummary>(&format!(
         r#"{SUMMARY_SELECT}
         WHERE whiteboard_visible_to(board.id, $1)
-          AND (board.project_id IS NULL OR actor_can_access_project($1, $2, board.project_id))
+          AND actor_can_access_project($1, $2, board.project_id)
           AND ($3::uuid IS NULL OR board.project_id = $3)
           AND ($4::uuid IS NULL OR board.organization_id = $4)
           AND ($5::uuid IS NULL OR board.project_id = $5)
           AND ((board.deleted_at IS NOT NULL) = $6)
-          AND (NOT $9 OR (board.project_id IS NOT NULL AND board.project_id = ANY($10))
-               OR (board.project_id IS NULL AND board.organization_id = ANY($11)))
+          AND (NOT $9 OR board.project_id = ANY($10))
           AND ($7::text IS NULL
                OR board.search_vector @@ plainto_tsquery('simple', $7)
                OR board.title ILIKE '%' || replace(replace(replace($7, '\', '\\'), '%', '\%'), '_', '\_') || '%')
@@ -213,16 +235,17 @@ pub async fn list(
     .bind(filter.limit.clamp(1, 200))
     .bind(filter.on_in.is_some())
     .bind(filter.on_in.as_ref().map(|on| on.projects.clone()).unwrap_or_default())
-    .bind(filter.on_in.as_ref().map(|on| on.workspaces.clone()).unwrap_or_default())
     .fetch_all(crate::db::scoped(pool))
-    .await?)
+    .await
+    .map(presented)?)
 }
 
 #[derive(Clone, Copy, Debug, FromRow)]
 pub struct BoardAccess {
     pub id: Uuid,
     pub organization_id: Uuid,
-    pub project_id: Option<Uuid>,
+    /// The space it lives in: a project, or the workspace's own space.
+    pub project_id: Uuid,
     pub deleted: bool,
     pub can_edit: bool,
 }
@@ -235,11 +258,11 @@ pub async fn access(
     whiteboard_id: Uuid,
     need_edit: bool,
 ) -> Result<BoardAccess, AppError> {
-    let row = sqlx::query_as::<_, (Uuid, Option<Uuid>, bool, bool, bool)>(
+    let row = sqlx::query_as::<_, (Uuid, Uuid, bool, bool, bool)>(
         r#"
         SELECT board.organization_id, board.project_id, board.deleted_at IS NOT NULL,
                whiteboard_visible_to(board.id, $2),
-               board.project_id IS NULL OR actor_can_access_project($2, $3, board.project_id)
+               actor_can_access_project($2, $3, board.project_id)
         FROM whiteboards board
         WHERE board.id = $1
         "#,
@@ -255,24 +278,21 @@ pub async fn access(
         || !reachable
         || caller
             .confined_project
-            .is_some_and(|confined| project_id != Some(confined))
+            .is_some_and(|confined| project_id != confined)
     {
         return Err(AppError::NotFound("whiteboard"));
     }
-    // A workspace board is for everyone in the workspace to draw on; a
-    // project's board follows the project's roles (viewers only look).
-    let can_edit = match project_id {
-        None => true,
-        Some(project_id) => memory::project_access(
-            &mut *connection,
-            caller.actor_id,
-            caller.actor_kind,
-            project_id,
-            Action::WhiteboardEdit,
-        )
-        .await
-        .is_ok(),
-    };
+    // A board follows the roles of the space it lives in (viewers only
+    // look), the workspace's own space included (K4.10).
+    let can_edit = memory::project_access(
+        &mut *connection,
+        caller.actor_id,
+        caller.actor_kind,
+        project_id,
+        Action::WhiteboardEdit,
+    )
+    .await
+    .is_ok();
     if need_edit && !can_edit {
         return Err(AppError::Forbidden);
     }
@@ -305,6 +325,7 @@ pub async fn summary(pool: &PgPool, whiteboard_id: Uuid) -> Result<BoardSummary,
         .bind(whiteboard_id)
         .fetch_optional(crate::db::scoped(pool))
         .await?
+        .map(BoardSummary::presented)
         .ok_or(AppError::NotFound("whiteboard"))
 }
 
@@ -352,33 +373,24 @@ async fn project_for_board(
     Ok(organization_id)
 }
 
-/// Checks the caller is an active, enabled member of a workspace.
-async fn require_workspace_member(
-    executor: impl sqlx::PgExecutor<'_>,
+/// The workspace's own space, for a board across the whole workspace: the
+/// caller must be an active, enabled member of the workspace, on a
+/// connection not confined to one project.
+async fn workspace_space_for_board(
+    transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     organization_id: Uuid,
-) -> Result<(), AppError> {
-    let member = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM organization_memberships membership
-            JOIN actors actor ON actor.id = membership.actor_id AND actor.status = 'active'
-            WHERE membership.organization_id = $1 AND membership.actor_id = $2 AND membership.enabled
-        )
-        "#,
-    )
-    .bind(organization_id)
-    .bind(caller.actor_id)
-    .fetch_one(executor)
-    .await?;
-    if !member || caller.confined_project.is_some() {
+) -> Result<Uuid, AppError> {
+    if caller.confined_project.is_some() {
         return Err(AppError::NotFound("organization"));
     }
-    Ok(())
+    crate::spaces::workspace::join(transaction, organization_id, caller.actor_id)
+        .await?
+        .ok_or(AppError::NotFound("organization"))
 }
 
 /// Where a new board goes: a project (its members see it) or a workspace
-/// (everyone there does).
+/// (everyone there does: it goes in the workspace's own space).
 #[derive(Clone, Copy, Debug)]
 pub enum Placement {
     Project(Uuid),
@@ -393,16 +405,13 @@ pub async fn create(
     title: &str,
 ) -> Result<Uuid, AppError> {
     let title = normalize_title(title)?;
-    let (organization_id, project_id) = match placement {
-        Placement::Project(project_id) => (
-            project_for_board(transaction, caller, project_id).await?,
-            Some(project_id),
-        ),
+    let project_id = match placement {
+        Placement::Project(project_id) => project_id,
         Placement::Workspace(organization_id) => {
-            require_workspace_member(&mut **transaction, caller, organization_id).await?;
-            (organization_id, None)
+            workspace_space_for_board(transaction, caller, organization_id).await?
         }
     };
+    let organization_id = project_for_board(transaction, caller, project_id).await?;
     let id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -451,11 +460,14 @@ pub async fn duplicate(
             original.chars().take(MAX_TITLE - 8).collect::<String>()
         ))?,
     };
-    let placement = match source.project_id {
-        Some(project_id) => Placement::Project(project_id),
-        None => Placement::Workspace(source.organization_id),
-    };
-    copy_into(transaction, caller, whiteboard_id, placement, &title).await
+    copy_into(
+        transaction,
+        caller,
+        whiteboard_id,
+        Placement::Project(source.project_id),
+        &title,
+    )
+    .await
 }
 
 /// Makes a board at `placement` with a copy of another board's scene and
@@ -549,7 +561,7 @@ pub async fn change(
 ) -> Result<(), AppError> {
     let board = access(transaction, caller, whiteboard_id, true).await?;
     let (version, title, project_id, deleted, is_template) =
-        sqlx::query_as::<_, (i64, String, Option<Uuid>, bool, bool)>(
+        sqlx::query_as::<_, (i64, String, Uuid, bool, bool)>(
             "SELECT version, title, project_id, deleted_at IS NOT NULL, is_template \
              FROM whiteboards WHERE id = $1 FOR UPDATE",
         )
@@ -568,11 +580,14 @@ pub async fn change(
         Some(title) => normalize_title(title)?,
         None => title.clone(),
     };
-    let new_project = change.project_id.unwrap_or(project_id);
-    if new_project != project_id
-        && let Some(target) = new_project
-    {
-        let organization_id = project_for_board(transaction, caller, target).await?;
+    // Moved to the whole workspace (null): into the workspace's own space.
+    let new_project = match change.project_id {
+        None => project_id,
+        Some(Some(target)) => target,
+        Some(None) => workspace_space_for_board(transaction, caller, board.organization_id).await?,
+    };
+    if new_project != project_id {
+        let organization_id = project_for_board(transaction, caller, new_project).await?;
         if organization_id != board.organization_id {
             return Err(AppError::NotFound("project"));
         }
@@ -667,7 +682,7 @@ pub async fn purge(
 const TRASH_IN_SCOPE: &str = r#"
     board.deleted_at IS NOT NULL
     AND whiteboard_visible_to(board.id, $1)
-    AND (board.project_id IS NULL OR actor_can_access_project($1, $2, board.project_id))
+    AND actor_can_access_project($1, $2, board.project_id)
     AND ($3::uuid IS NULL OR board.project_id = $3)
     AND ($4::uuid IS NULL OR board.organization_id = $4)
     AND ($5::uuid IS NULL OR board.project_id = $5)
@@ -689,8 +704,7 @@ pub async fn empty_trash(
     // picking 200 boards and skipping the ones they can't change would let
     // a viewer's boards fill every batch.
     let projects = sqlx::query_scalar::<_, Uuid>(&format!(
-        "SELECT DISTINCT board.project_id FROM whiteboards board \
-         WHERE board.project_id IS NOT NULL AND {TRASH_IN_SCOPE}"
+        "SELECT DISTINCT board.project_id FROM whiteboards board WHERE {TRASH_IN_SCOPE}"
     ))
     .bind(caller.actor_id)
     .bind(caller.connection_id)
@@ -721,9 +735,7 @@ pub async fn empty_trash(
         r#"
         SELECT board.id FROM whiteboards board
         WHERE {TRASH_IN_SCOPE}
-          AND (board.project_id IS NULL OR board.project_id = ANY($6))
-          AND ($7::uuid[] IS NULL OR board.project_id IS NOT NULL
-               OR board.organization_id = ANY($7))
+          AND board.project_id = ANY($6)
         ORDER BY board.deleted_at, board.id
         LIMIT 200
         "#
@@ -734,7 +746,6 @@ pub async fn empty_trash(
     .bind(organization_id)
     .bind(project_id)
     .bind(&editable)
-    .bind(on.map(|on| on.workspaces.clone()))
     .fetch_all(&mut **transaction)
     .await?;
     for whiteboard_id in &trashed {
@@ -864,7 +875,7 @@ pub async fn set_link(
             transaction,
             caller,
             board.organization_id,
-            Some(project_id),
+            project_id,
             if linked {
                 "whiteboard.linked"
             } else {
@@ -997,7 +1008,7 @@ pub async fn linked_to(
           ON target_link.whiteboard_id = board.id
          AND target_link.target_kind = $3 AND target_link.target_id = $4
         WHERE whiteboard_visible_to(board.id, $1)
-          AND (board.project_id IS NULL OR actor_can_access_project($1, $2, board.project_id))
+          AND actor_can_access_project($1, $2, board.project_id)
           AND board.deleted_at IS NULL
         ORDER BY target_link.created_at, board.id
         LIMIT 100
@@ -1015,7 +1026,7 @@ pub(crate) async fn audit(
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     organization_id: Uuid,
-    project_id: Option<Uuid>,
+    project_id: Uuid,
     action: &str,
     whiteboard_id: Uuid,
 ) -> Result<(), AppError> {

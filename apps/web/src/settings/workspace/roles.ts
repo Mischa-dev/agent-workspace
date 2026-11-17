@@ -41,6 +41,37 @@ export const PERMISSION_KEYS = [
   'members.manage',
   'roles.manage',
   'settings.manage',
+  // K1.9: levels and capabilities of the catalogue's new shape.
+  'spaces.browse',
+  'tasks.comment',
+  'tasks.suggest',
+  'tasks.edit_own',
+  'views.share',
+  'dashboards.view',
+  'dashboards.edit',
+  'conversations.see',
+  'conversations.members',
+  'direct.start',
+  'replies.steer',
+  'pages.see',
+  'pages.comment',
+  'pages.suggest',
+  'pages.edit_own',
+  'whiteboards.comment',
+  'whiteboards.suggest',
+  'whiteboards.edit_own',
+  'collections.comment',
+  'collections.suggest',
+  'data.connect',
+  'data.share',
+  'sheets.comment',
+  'sheets.suggest',
+  'sheets.edit_own',
+  'runs.environments',
+  'requests.answer_sensitive',
+  'agents.create',
+  'webhooks.manage',
+  'automations.manage',
   'workspace.delete',
 ] as const
 
@@ -83,7 +114,10 @@ export type PermissionInfo = {
   meaning: string
   scope: 'project' | 'workspace' | 'both'
   builtIn: BaseRole[]
-  peopleOnly: boolean
+  /** For a level: the kind of thing it is on. Null for a capability. */
+  thingKind: string | null
+  /** see < comment < suggest < edit_own < edit < manage; a level holds the lower ones. */
+  level: 'see' | 'comment' | 'suggest' | 'edit_own' | 'edit' | 'manage' | null
   required: boolean
 }
 

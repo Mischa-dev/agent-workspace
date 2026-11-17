@@ -24,6 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use axum::http::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -1558,6 +1559,354 @@ async fn chat_writes_keep_to_what_the_writer_may_see() {
     world.finish().await;
 }
 
+/// K4.26: an invitation link admits up to its number of people with its
+/// role, and the space it names; a revoked or expired link gets the same
+/// answer as an unknown one; someone who may invite but holds less than
+/// admin can't make a link that gives admin; the token is in the answer
+/// that made the link and nowhere else.
+#[tokio::test]
+async fn invitation_links_admit_up_to_their_uses_within_their_makers_role() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("privacy_invite_tokens")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let role = |key: &'static str| {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM workspace_roles WHERE organization_id = $1 AND built_in AND key = $2",
+        )
+        .bind(world.organization)
+        .bind(key)
+        .fetch_one(pool)
+    };
+    let member_role = role("member").await.expect("member role");
+    let admin_role = role("admin").await.expect("admin role");
+    let space = Uuid::parse_str(&world.projects["WORK"]).expect("space id");
+
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("invite_link_create"),
+            Some("link-1"),
+            json!({ "roleId": member_role, "space": space, "maxUses": 2 }),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let token = made["value"]["token"].as_str().expect("token").to_owned();
+    let link = made["value"]["link"]["id"].as_str().expect("id").to_owned();
+    assert!(
+        made["value"]["url"]
+            .as_str()
+            .expect("url")
+            .ends_with(&token)
+    );
+
+    // A retry finds the link without its token.
+    let (_, again) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("invite_link_create"),
+            Some("link-1"),
+            json!({ "roleId": member_role, "space": space, "maxUses": 2 }),
+        ),
+    )
+    .await;
+    assert_eq!(again["value"]["link"]["id"], link.as_str(), "{again}");
+    assert!(again["value"].get("token").is_none(), "{again}");
+    let (_, listed) = send(
+        &world.app,
+        world
+            .owner
+            .browser
+            .request("POST", &route("invite_link_list"), None, json!({})),
+    )
+    .await;
+    assert_eq!(listed["value"]["links"][0]["id"], link.as_str(), "{listed}");
+    for answer in [&again, &listed] {
+        assert!(!answer.to_string().contains(&token[7..]), "{answer}");
+    }
+
+    let anonymous = Browser {
+        cookie: String::new(),
+        csrf: String::new(),
+    };
+    let join = |token: &str, who: &str| {
+        anonymous.request(
+            "POST",
+            "/api/v1/invite-links/accept-new",
+            None,
+            json!({
+                "token": token,
+                "loginName": who,
+                "displayName": who,
+                "handle": who,
+                "password": "a long enough password",
+            }),
+        )
+    };
+    let (status, resolved) = send(
+        &world.app,
+        anonymous.request(
+            "POST",
+            "/api/v1/invite-links/resolve",
+            None,
+            json!({ "token": token }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert_eq!(resolved["role"], "member");
+    assert!(resolved["projectName"].is_string(), "{resolved}");
+    for who in ["nia", "omar"] {
+        let (status, body) = send(&world.app, join(&token, who)).await;
+        assert_eq!(status, StatusCode::OK, "{who}: {body}");
+    }
+    let (status, _) = send(&world.app, join(&token, "pia")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a link admits two people");
+    let admitted = sqlx::query_as::<_, (String, bool, bool)>(
+        r#"
+        SELECT users.login_name, membership.enabled,
+               EXISTS (SELECT 1 FROM project_memberships space
+                       WHERE space.project_id = $2 AND space.actor_id = users.actor_id
+                         AND space.enabled)
+        FROM users
+        JOIN organization_memberships membership
+          ON membership.actor_id = users.actor_id AND membership.organization_id = $1
+        WHERE users.login_name IN ('nia', 'omar', 'pia')
+        ORDER BY users.login_name
+        "#,
+    )
+    .bind(world.organization)
+    .bind(space)
+    .fetch_all(pool)
+    .await
+    .expect("admitted");
+    assert_eq!(
+        admitted,
+        vec![
+            ("nia".to_owned(), true, true),
+            ("omar".to_owned(), true, true)
+        ]
+    );
+
+    // Revoked and expired links answer like unknown ones.
+    let make = |key: &'static str, body: Value| {
+        world
+            .owner
+            .browser
+            .request("POST", &route("invite_link_create"), Some(key), body)
+    };
+    let (_, revoked) = send(&world.app, make("link-2", json!({}))).await;
+    let revoked_token = revoked["value"]["token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let (_, done) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("invite_link_revoke"),
+            Some("revoke-2"),
+            json!({ "link": revoked["value"]["link"]["id"] }),
+        ),
+    )
+    .await;
+    assert_eq!(done["value"]["active"], false, "{done}");
+    let (_, expired) = send(&world.app, make("link-3", json!({}))).await;
+    let expired_token = expired["value"]["token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    sqlx::query(
+        "UPDATE invite_tokens SET created_at = now() - interval '2 days', \
+         expires_at = now() - interval '1 day' WHERE id = $1",
+    )
+    .bind(Uuid::parse_str(expired["value"]["link"]["id"].as_str().expect("id")).expect("uuid"))
+    .execute(pool)
+    .await
+    .expect("expire");
+    let mut unknown = revoked_token.clone();
+    unknown.replace_range(20..24, "AAAA");
+    let mut answers = Vec::new();
+    for token in [&revoked_token, &expired_token, &unknown] {
+        answers.push(send(&world.app, join(token, "quinn")).await);
+    }
+    assert!(
+        answers.windows(2).all(|pair| pair[0] == pair[1]),
+        "{answers:?}"
+    );
+    assert_eq!(answers[0].0, StatusCode::NOT_FOUND);
+
+    // Lena may invite with a role below admin: she can't give admin.
+    let inviter = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO workspace_roles (id, organization_id, key, base_role, name, permissions)
+        VALUES (gen_random_uuid(), $1, 'inviter', 'admin', 'Inviter',
+                ARRAY['projects.view', 'members.invite'])
+        RETURNING id
+        "#,
+    )
+    .bind(world.organization)
+    .fetch_one(pool)
+    .await
+    .expect("inviter role");
+    sqlx::query(
+        "UPDATE organization_memberships SET role_id = $3, role_explicit = true \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(world.people["lena"].actor)
+    .bind(inviter)
+    .execute(pool)
+    .await
+    .expect("lena invites");
+    let lena = |key: &'static str, body: Value| {
+        world.people["lena"]
+            .browser
+            .request("POST", &route("invite_link_create"), Some(key), body)
+    };
+    let (status, refused) = send(
+        &world.app,
+        lena("lena-admin", json!({ "roleId": admin_role })),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{status} {refused}");
+    let (status, refused) = send(
+        &world.app,
+        lena("lena-member", json!({ "roleId": member_role })),
+    )
+    .await;
+    assert_ne!(
+        refused["outcome"], "ok",
+        "a member's role holds more than Inviter: {status} {refused}"
+    );
+    // Inviter is based on Admin: only an owner lets someone in with it,
+    // even though it is her own role.
+    let (status, own) = send(&world.app, lena("lena-own", json!({ "roleId": inviter }))).await;
+    assert_ne!(
+        own["outcome"], "ok",
+        "an Admin-tier role comes from an owner: {status} {own}"
+    );
+
+    // The token is in no row.
+    for (table, column) in [
+        ("invite_tokens", "invite_tokens::text"),
+        ("audit_events", "audit_events::text"),
+        ("idempotency_keys", "idempotency_keys::text"),
+    ] {
+        let leaked = sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT count(*) FROM {table} WHERE {column} LIKE '%' || $1 || '%'"
+        ))
+        .bind(&token[16..])
+        .fetch_one(pool)
+        .await
+        .expect("leak check");
+        assert_eq!(leaked, 0, "{table} holds the token");
+    }
+    world.finish().await;
+}
+
+/// `history_restore` picks its edit permission from the thing it resolves,
+/// so a caller who can read a page but not edit it must be refused and the
+/// page left as it was: an agent and a person, each on a viewer role. A
+/// member restores it, which shows the refusals are about the role and not
+/// a broken call.
+#[tokio::test]
+async fn history_restore_needs_the_things_edit_permission() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("REST")
+        .person("vera", "viewer")
+        .agent("rook", "viewer")
+        .agent("mara", "member")
+        .build("privacy_history_restore")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let (rook, mara) = (&world.agents["rook"], &world.agents["mara"]);
+    let as_mara = |name: &'static str, arguments: Value| async move {
+        structured(
+            &call_tool(app, &mara.token, &mara.session, name, arguments)
+                .await
+                .1,
+        )
+    };
+    let as_rook = |name: &'static str, arguments: Value| async move {
+        structured(
+            &call_tool(app, &rook.token, &rook.session, name, arguments)
+                .await
+                .1,
+        )
+    };
+
+    let written = as_mara(
+        "page_write",
+        json!({"projectId": "REST", "title": "Gate", "body": "Paint it red."}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let page = written["value"]["id"].as_str().expect("page").to_owned();
+    let edited = as_mara(
+        "page_write",
+        json!({"pageId": page, "body": "Paint it blue.", "expectedVersion": 1}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let body = || async {
+        sqlx::query_scalar::<_, String>("SELECT body FROM project_pages WHERE id = $1::uuid")
+            .bind(&page)
+            .fetch_one(world.pool())
+            .await
+            .expect("page body")
+    };
+    let arguments = json!({"thing": page, "version": 1, "expectedVersion": 2});
+
+    // The viewer agent reads the history but can't restore.
+    let listed = as_rook("history_list", json!({"thing": page})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let refused = as_rook("history_restore", arguments.clone()).await;
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "viewer agent: {refused}"
+    );
+    assert_eq!(body().await, "Paint it blue.");
+
+    // The viewer person, through the web, is refused the same way.
+    let (status, refused) = send(
+        app,
+        world.people["vera"].browser.request(
+            "POST",
+            "/api/v2/ops/history_restore",
+            Some("privacy-restore-vera"),
+            arguments.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "viewer person: {status} {refused}"
+    );
+    assert_eq!(body().await, "Paint it blue.");
+
+    // A member restores it.
+    let restored = as_mara("history_restore", arguments).await;
+    assert!(
+        matches!(restored["outcome"].as_str(), Some("ok" | "applied")),
+        "member: {restored}"
+    );
+    assert_eq!(body().await, "Paint it red.");
+    world.finish().await;
+}
+
 /// H1.24: deleting the workspace needs "Delete the workspace"
 /// (`workspace.delete`), which only owners start with. A member and an
 /// admin are refused; the owner schedules it and keeps it again.
@@ -1657,97 +2006,4 @@ async fn only_holders_of_workspace_delete_may_delete_or_keep_it() {
     .await;
     assert_eq!(body["outcome"], "ok", "the owner keeps it: {status} {body}");
     assert_eq!(lifecycle().await, "active");
-}
-
-/// `history_restore` picks its edit permission from the thing it resolves,
-/// so a caller who can read a page but not edit it must be refused and the
-/// page left as it was: an agent and a person, each on a viewer role. A
-/// member restores it, which shows the refusals are about the role and not
-/// a broken call.
-#[tokio::test]
-async fn history_restore_needs_the_things_edit_permission() {
-    let Some(world) = super::support::world::WorldBuilder::default()
-        .project("REST")
-        .person("vera", "viewer")
-        .agent("rook", "viewer")
-        .agent("mara", "member")
-        .build("privacy_history_restore")
-        .await
-    else {
-        return;
-    };
-    let app = &world.app;
-    let (rook, mara) = (&world.agents["rook"], &world.agents["mara"]);
-    let as_mara = |name: &'static str, arguments: Value| async move {
-        structured(
-            &call_tool(app, &mara.token, &mara.session, name, arguments)
-                .await
-                .1,
-        )
-    };
-    let as_rook = |name: &'static str, arguments: Value| async move {
-        structured(
-            &call_tool(app, &rook.token, &rook.session, name, arguments)
-                .await
-                .1,
-        )
-    };
-
-    let written = as_mara(
-        "page_write",
-        json!({"projectId": "REST", "title": "Gate", "body": "Paint it red."}),
-    )
-    .await;
-    assert_eq!(written["outcome"], "ok", "{written}");
-    let page = written["value"]["id"].as_str().expect("page").to_owned();
-    let edited = as_mara(
-        "page_write",
-        json!({"pageId": page, "body": "Paint it blue.", "expectedVersion": 1}),
-    )
-    .await;
-    assert_eq!(edited["outcome"], "ok", "{edited}");
-    let body = || async {
-        sqlx::query_scalar::<_, String>("SELECT body FROM project_pages WHERE id = $1::uuid")
-            .bind(&page)
-            .fetch_one(world.pool())
-            .await
-            .expect("page body")
-    };
-    let arguments = json!({"thing": page, "version": 1, "expectedVersion": 2});
-
-    // The viewer agent reads the history but can't restore.
-    let listed = as_rook("history_list", json!({"thing": page})).await;
-    assert_eq!(listed["outcome"], "ok", "{listed}");
-    let refused = as_rook("history_restore", arguments.clone()).await;
-    assert_eq!(
-        refused["outcome"], "permission_denied",
-        "viewer agent: {refused}"
-    );
-    assert_eq!(body().await, "Paint it blue.");
-
-    // The viewer person, through the web, is refused the same way.
-    let (status, refused) = send(
-        app,
-        world.people["vera"].browser.request(
-            "POST",
-            "/api/v2/ops/history_restore",
-            Some("privacy-restore-vera"),
-            arguments.clone(),
-        ),
-    )
-    .await;
-    assert_eq!(
-        refused["outcome"], "permission_denied",
-        "viewer person: {status} {refused}"
-    );
-    assert_eq!(body().await, "Paint it blue.");
-
-    // A member restores it.
-    let restored = as_mara("history_restore", arguments).await;
-    assert!(
-        matches!(restored["outcome"].as_str(), Some("ok" | "applied")),
-        "member: {restored}"
-    );
-    assert_eq!(body().await, "Paint it red.");
-    world.finish().await;
 }

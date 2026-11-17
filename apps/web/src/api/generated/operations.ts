@@ -48,6 +48,8 @@ export type HostOwnerChoice = "person" | "workspace"
 
 export type HostView = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
+export type InviteLinkView = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
+
 export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
 
 export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
@@ -95,6 +97,10 @@ export type ThingInput = { id: string; kind: SubjectKind }
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
 export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName?: string | null; title: string }
+
+export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
+
+export type AgentCreateOutput = { accountId: string; connectionId: string; credential?: string | null; credentialExpiresAt?: string | null; spaceId: string }
 
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
@@ -172,6 +178,18 @@ export type HostUnlinkInput = { hostId: string }
 
 export type HostUnlinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
+export type InviteLinkCreateInput = { expiresInDays?: number | null; maxUses?: number | null; roleId?: string | null; space?: string | null }
+
+export type InviteLinkCreateOutput = { link: InviteLinkView; token?: string | null; url?: string | null }
+
+export type InviteLinkListInput = { includeInactive?: boolean }
+
+export type InviteLinkListOutput = { links: InviteLinkView[] }
+
+export type InviteLinkRevokeInput = { link: string }
+
+export type InviteLinkRevokeOutput = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
+
 export type MessageDraftListInput = { conversationId?: string | null }
 
 export type MessageDraftListOutput = { drafts: DraftView[] }
@@ -195,6 +213,10 @@ export type PackageExportOutput = { digest: string; package: Package }
 export type PageTemplateListInput = { spaceId: string }
 
 export type PageTemplateListOutput = { templates: PageTemplateView[] }
+
+export type PersonCreateInput = { displayName: string; handle: string; roleId?: string | null }
+
+export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken?: string | null }
 
 export type RequestCancelInput = { requestId: string }
 
@@ -281,6 +303,7 @@ export type WorkspaceDeleteCancelInput = Record<string, never>
 export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
 
 export type Operations = {
+  agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
@@ -300,12 +323,16 @@ export type Operations = {
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
+  invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
+  invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
+  invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }
   message_draft_list: { input: MessageDraftListInput; output: MessageDraftListOutput }
   message_draft_set: { input: MessageDraftSetInput; output: MessageDraftSetOutput }
   notification_keyword_list: { input: NotificationKeywordListInput; output: NotificationKeywordListOutput }
   notification_keyword_set: { input: NotificationKeywordSetInput; output: NotificationKeywordSetOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
+  person_create: { input: PersonCreateInput; output: PersonCreateOutput }
   request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
   request_create: { input: RequestCreateInput; output: RequestCreateOutput }
   request_get: { input: RequestGetInput; output: RequestGetOutput }

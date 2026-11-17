@@ -107,6 +107,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/inbox/summary",
     "/api/v1/link-previews/{id}/image",
     "/api/v1/later",
+    "/api/v1/links/resolve",
     "/api/v1/my-work",
     "/api/v1/notification-settings",
     "/api/v1/organizations/{organization_id}",
@@ -129,7 +130,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/secrets",
     "/api/v1/organizations/{organization_id}/workspace-templates",
     "/api/v1/organizations/{organization_id}/server",
-    "/api/v1/organizations/{organization_id}/server/access-disagreements",
     "/api/v1/pages/{id}",
     "/api/v1/pages/{id}/discussion",
     "/api/v1/pages/{id}/document",
@@ -989,21 +989,27 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
-            "/api/v1/organizations/{organization_id}/server/access-disagreements",
-            vec![format!(
-                "/api/v1/organizations/{}/server/access-disagreements",
-                a.organization
-            )],
-            vec![format!(
-                "/api/v1/organizations/{}/server/access-disagreements",
-                b.organization
-            )],
-            vec![],
-        ),
-        case(
             "/api/v1/workspaces/by-slug/{slug}",
             vec![format!("/api/v1/workspaces/by-slug/{}", a.slug)],
             vec![format!("/api/v1/workspaces/by-slug/{}", b.slug)],
+            vec![],
+        ),
+        // K4.18: an old address of B's never resolves for A, not even to
+        // B's workspace slug.
+        case(
+            "/api/v1/links/resolve",
+            vec![format!(
+                "/api/v1/links/resolve?path=/projects/{}/work-items/{}",
+                a.project, a.task
+            )],
+            vec![
+                format!(
+                    "/api/v1/links/resolve?path=/projects/{}/work-items/{}",
+                    b.project, b.task
+                ),
+                format!("/api/v1/links/resolve?path=/w/{}/inbox", b.slug),
+                format!("/api/v1/links/resolve?path=/messages/{}", b.channel),
+            ],
             vec![],
         ),
         case(
@@ -2019,6 +2025,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "file_read",
     "history_list",
     "history_show",
+    "invite_link_list",
     "collection_list",
     "collection_describe",
     "record_query",
@@ -2326,6 +2333,16 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case("webhook_list", vec![json!({})], vec![], vec![]),
+        // K4.26: another workspace's invitation links are out of reach.
+        case(
+            "invite_link_list",
+            vec![
+                json!({}),
+                json!({"workspace": a.organization, "includeInactive": true}),
+            ],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         // A1.11: another workspace's hosts are out of reach.
         case(
             "host_list",

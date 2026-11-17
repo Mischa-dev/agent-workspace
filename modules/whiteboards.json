@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": ["projects"],
   "worksWith": ["tasks", "pages"],
-  "permissions": ["whiteboards.edit"],
+  "permissions": ["whiteboards.edit", "whiteboards.comment", "whiteboards.suggest", "whiteboards.edit_own"],
   "tools": {
     "whiteboard_list": "query",
     "whiteboard_template_list": "query",

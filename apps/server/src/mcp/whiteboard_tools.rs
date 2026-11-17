@@ -78,8 +78,8 @@ async fn whiteboards_on(state: &AppState, principal: &McpPrincipal) -> Result<On
 }
 
 /// AWD-75: whether Whiteboards is off for the caller where whiteboard `id`
-/// lives: its project, their role there narrowing it, or for a board across
-/// the workspace, the workspace and their workspace role. Asked only once
+/// lives: its space (a project, or the workspace's own space), their role
+/// there narrowing it. Asked only once
 /// `whiteboards::access` lets them at the board, so it says nothing about
 /// boards they can't reach: when access is refused it answers false and
 /// leaves that answer to the tool, which checks access itself. A failed
@@ -98,18 +98,11 @@ pub(super) async fn board_module_off(
         Err(AppError::NotFound(_) | AppError::Forbidden) => return Ok(false),
         Err(error) => return Err(error),
     };
-    let modules = match board.project_id {
-        Some(project) => {
-            crate::modules::state::for_project(&mut connection, project, caller.actor_id)
-                .await?
-                .unwrap_or_default()
-        }
-        None => crate::modules::state::by_workspace(&mut connection, caller.actor_id)
+    // Every board lives in a space, the workspace's own included (K4.10).
+    let modules =
+        crate::modules::state::for_project(&mut connection, board.project_id, caller.actor_id)
             .await?
-            .get(&board.organization_id)
-            .copied()
-            .unwrap_or_default(),
-    };
+            .unwrap_or_default();
     Ok(!modules.contains("whiteboards"))
 }
 
