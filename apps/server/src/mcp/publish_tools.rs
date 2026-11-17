@@ -108,7 +108,7 @@ async fn run_project(
 ) -> Result<Uuid, AppError> {
     load_run(state, principal, run_id)
         .await?
-        .and_then(|run| parse_id(&run.project_id))
+        .and_then(|run| run.project_id.as_deref().and_then(parse_id))
         .ok_or(AppError::NotFound("agent_run"))
 }
 

@@ -50,7 +50,7 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root
                 .join("codex/profiles")
                 .to_string_lossy()
@@ -65,7 +65,7 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
             "true".to_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
             "1".to_owned(),
         ),
     ]))
@@ -841,7 +841,7 @@ async fn admission_fixture(name: &str) -> Option<AdmissionFixture> {
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root
                 .join("codex/profiles")
                 .to_string_lossy()
@@ -856,7 +856,7 @@ async fn admission_fixture(name: &str) -> Option<AdmissionFixture> {
             "true".to_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
             "1".to_owned(),
         ),
     ]))

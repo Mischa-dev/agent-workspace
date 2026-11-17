@@ -32,7 +32,7 @@ import {
   isExternalHref,
   postUpdate,
   needsYou,
-  answerQuestion,
+  answerRequest,
   respondToApproval,
   sectionsByNeed,
   snoozeChoices,
@@ -351,11 +351,11 @@ export function InboxPage() {
     }
   }
 
-  /** Answers a question card; the toast says it went back to whoever asked. */
+  /** Answers a request card; the toast says it went back to whoever asked. */
   const answerAsked = async (item: InboxNotification, reply: { optionId?: string; text?: string }) => {
-    if (!item.question) return
+    if (!item.request) return
     try {
-      await answerQuestion(item.question.id, reply)
+      await answerRequest(item.request.id, reply)
       showToast({ tone: 'success', title: item.actor ? `Sent to ${item.actor.name}` : 'Answer sent' })
       invalidateInbox(queryClient)
     } catch (reason) {
@@ -542,7 +542,7 @@ export function InboxPage() {
                   busyApproval={busyApproval}
                   item={selected}
                   onAnswer={(decision) => void answer(selected, decision)}
-                  onAnswerQuestion={(reply) => answerAsked(selected, reply)}
+                  onAnswerRequest={(reply) => answerAsked(selected, reply)}
                   onArchive={() => archive(selected)}
                   onBack={() => setDetailOpen(false)}
                   onOpen={() => open(selected)}

@@ -2562,8 +2562,13 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
          AND removed_via_grant.show_via
         LEFT JOIN mcp_oauth_clients removed_via_client
           ON removed_via_client.id = removed_via_grant.client_id
-        LEFT JOIN agent_run_events event ON event.id = entry.agent_run_event_id
+        {RUN_EVENT_JOIN}
 "#;
+
+/// [`TIMELINE_ENTRY_SELECT`] with each entry's run step beside it.
+fn timeline_entry_select() -> String {
+    TIMELINE_ENTRY_SELECT.replace("{RUN_EVENT_JOIN}", crate::runs::sql::ENTRY_EVENT_JOIN)
+}
 
 async fn conversation_timeline(
     State(state): State<AppState>,
@@ -2596,11 +2601,12 @@ async fn conversation_timeline(
         .transpose()?
         .unwrap_or(conversation.next_entry_sequence);
     let mut rows = sqlx::query_as::<_, TimelineEntryRow>(&format!(
-        "{TIMELINE_ENTRY_SELECT}
+        "{}
         WHERE entry.conversation_id = $1
           AND entry.sequence < $3
         ORDER BY entry.sequence DESC
-        LIMIT $4"
+        LIMIT $4",
+        timeline_entry_select()
     ))
     .bind(conversation.id)
     .bind(conversation.project_id)
@@ -3407,7 +3413,7 @@ async fn project_conversation_sidebar(
     .bind(MAX_CHANNELS_PER_PROJECT)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let threads = sqlx::query_as::<_, SidebarThreadRow>(
+    let threads = sqlx::query_as::<_, SidebarThreadRow>(&format!(
         r#"
         SELECT
             thread.id,
@@ -3446,12 +3452,7 @@ async fn project_conversation_sidebar(
             SELECT
                 run.id,
                 run.state,
-                (
-                    SELECT max(entry.sequence)
-                    FROM conversation_entries entry
-                    JOIN agent_run_events event ON event.id = entry.agent_run_event_id
-                    WHERE event.agent_run_id = run.id
-                ) AS entry_sequence,
+                {last_entry} AS entry_sequence,
                 EXISTS (
                     SELECT 1
                     FROM agent_approvals approval
@@ -3467,10 +3468,7 @@ async fn project_conversation_sidebar(
                     WHERE acknowledgement.agent_run_id = run.id
                       AND acknowledgement.actor_id = $2
                 ) AS failure_acknowledged
-            FROM agent_runs run
-            WHERE run.conversation_id = thread.id
-            ORDER BY run.created_at DESC, run.id DESC
-            LIMIT 1
+            FROM ({newest_run}) run
         ) latest_run ON true
         WHERE thread.project_id = $1
           AND thread.kind = 'thread'
@@ -3479,7 +3477,9 @@ async fn project_conversation_sidebar(
         ORDER BY latest_activity_sequence DESC, thread.id DESC
         LIMIT $6
         "#,
-    )
+        last_entry = crate::runs::sql::last_entry_sequence("run.id"),
+        newest_run = crate::runs::sql::newest_in("thread.id"),
+    ))
     .bind(project_id)
     .bind(principal.actor_id)
     .bind(&access.membership_role)
@@ -4260,8 +4260,9 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let sql = format!(
-        "{TIMELINE_ENTRY_SELECT}
-        WHERE entry.conversation_id = $1 AND entry.message_id = $3"
+        "{}
+        WHERE entry.conversation_id = $1 AND entry.message_id = $3",
+        timeline_entry_select()
     );
     sqlx::query_as::<_, TimelineEntryRow>(&sql)
         .bind(conversation.id)
@@ -4385,7 +4386,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
 
 /// Leaves out a run's code, for a reader without "see code": its branch,
 /// base and published commits, and its linked pull request, as the run pages
-/// do (run_views::redact). The request to open one (its state) stays: it
+/// do (runs::views::redact). The request to open one (its state) stays: it
 /// names no code.
 pub(crate) fn hide_pull_request(run: &mut RunRow) {
     run.branch = None;
@@ -4414,102 +4415,14 @@ async fn fetch_run_projection(
     if conversation.kind != "thread" {
         return Ok((None, None, Vec::new()));
     }
-    let active_run = sqlx::query_as::<_, RunRow>(
-        r#"
-        SELECT
-            run.id, run.state, run.repository_id, run.repository_workspace_id,
-            run.provider_session_id, run.provider_turn_id,
-            workspace.branch_name AS branch,
-            run.config,
-            workspace.base_commit,
-            workspace.published_commit,
-            workspace.published_at::text AS published_at,
-            workspace.publish_failure_category,
-            pull_request_request.state AS pull_request_request_state,
-            pull_request_request.failure_category AS pull_request_failure_category,
-            pull_request.pull_request_number,
-            pull_request.id AS pull_request_id,
-            pull_request.html_url AS pull_request_url,
-            pull_request.title AS pull_request_title,
-            pull_request.state AS pull_request_state,
-            pull_request.draft AS pull_request_draft,
-            pull_request.checks_state AS pull_request_checks_state,
-            pull_request.review_state AS pull_request_review_state,
-            pull_request.mergeability_state AS pull_request_mergeability_state,
-            pull_request.sync_state AS pull_request_sync_state,
-            pull_request.sync_failure_category AS pull_request_sync_failure_category,
-            pull_request.automation_state AS pull_request_automation_state,
-            pull_request.automation_reason AS pull_request_automation_reason,
-            CASE WHEN run.state = 'queued' THEN (
-                SELECT count(*) FROM agent_runs queued
-                WHERE queued.state = 'queued'
-                  AND (queued.created_at, queued.id) <= (run.created_at, run.id)
-            ) END AS queue_position,
-            run.failure_reason,
-            run.created_at::text AS created_at,
-            run.updated_at::text AS updated_at
-        FROM agent_runs run
-        LEFT JOIN repository_workspaces workspace
-          ON workspace.id = run.repository_workspace_id
-        LEFT JOIN github_pull_request_requests pull_request_request
-          ON pull_request_request.agent_run_id = run.id
-        LEFT JOIN github_pull_requests pull_request
-          ON pull_request.id = pull_request_request.github_pull_request_id
-        WHERE run.conversation_id = $1
-          AND run.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        ORDER BY run.created_at DESC, run.id DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(conversation.id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?;
-    let latest_terminal_run = sqlx::query_as::<_, RunRow>(
-        r#"
-        SELECT
-            run.id, run.state, run.repository_id, run.repository_workspace_id,
-            run.provider_session_id, run.provider_turn_id,
-            workspace.branch_name AS branch,
-            run.config,
-            workspace.base_commit,
-            workspace.published_commit,
-            workspace.published_at::text AS published_at,
-            workspace.publish_failure_category,
-            pull_request_request.state AS pull_request_request_state,
-            pull_request_request.failure_category AS pull_request_failure_category,
-            pull_request.pull_request_number,
-            pull_request.id AS pull_request_id,
-            pull_request.html_url AS pull_request_url,
-            pull_request.title AS pull_request_title,
-            pull_request.state AS pull_request_state,
-            pull_request.draft AS pull_request_draft,
-            pull_request.checks_state AS pull_request_checks_state,
-            pull_request.review_state AS pull_request_review_state,
-            pull_request.mergeability_state AS pull_request_mergeability_state,
-            pull_request.sync_state AS pull_request_sync_state,
-            pull_request.sync_failure_category AS pull_request_sync_failure_category,
-            pull_request.automation_state AS pull_request_automation_state,
-            pull_request.automation_reason AS pull_request_automation_reason,
-            NULL::bigint AS queue_position,
-            run.failure_reason,
-            run.created_at::text AS created_at,
-            run.updated_at::text AS updated_at
-        FROM agent_runs run
-        LEFT JOIN repository_workspaces workspace
-          ON workspace.id = run.repository_workspace_id
-        LEFT JOIN github_pull_request_requests pull_request_request
-          ON pull_request_request.agent_run_id = run.id
-        LEFT JOIN github_pull_requests pull_request
-          ON pull_request.id = pull_request_request.github_pull_request_id
-        WHERE run.conversation_id = $1
-          AND run.state IN ('completed', 'failed', 'canceled', 'interrupted')
-        ORDER BY run.created_at DESC, run.id DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(conversation.id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?;
+    let active_run = sqlx::query_as::<_, RunRow>(&crate::runs::sql::thread_card(true))
+        .bind(conversation.id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
+    let latest_terminal_run = sqlx::query_as::<_, RunRow>(&crate::runs::sql::thread_card(false))
+        .bind(conversation.id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
     // Whether the latest run published, for what may be done next, read
     // before its code is left out below.
     let latest_published = latest_terminal_run
