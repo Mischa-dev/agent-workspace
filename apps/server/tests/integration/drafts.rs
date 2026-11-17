@@ -176,5 +176,43 @@ async fn drafts_follow_their_writer_and_stay_theirs() {
     .await;
     assert_eq!(listed["value"]["drafts"], json!([]), "{listed}");
 
+    // A slower device's save from before the clear doesn't bring the sent
+    // draft back.
+    let late = tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "message_draft_set",
+        json!({"conversationId": channel, "draft": {"text": "Already sent"},
+               "savedAt": "2020-01-01T00:00:02Z"}),
+    )
+    .await;
+    assert_eq!(late["outcome"], "ok", "{late}");
+    assert_eq!(late["value"]["keptNewer"], true, "{late}");
+    assert!(late["value"].get("draft").is_none(), "{late}");
+    let listed = tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "message_draft_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(listed["value"]["drafts"], json!([]), "{listed}");
+    // A new draft after the clear is kept as usual.
+    let fresh = tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "message_draft_set",
+        json!({"conversationId": channel, "draft": {"text": "Next thought"}}),
+    )
+    .await;
+    assert_eq!(fresh["value"]["keptNewer"], false, "{fresh}");
+    assert_eq!(
+        fresh["value"]["draft"]["draft"]["text"], "Next thought",
+        "{fresh}"
+    );
+
     world.finish().await;
 }
