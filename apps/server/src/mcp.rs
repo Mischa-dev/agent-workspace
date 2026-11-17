@@ -65,7 +65,6 @@ mod agent_profile_tools;
 mod agents;
 pub(crate) mod ai_tools;
 mod approvals;
-mod automation_tools;
 mod batch_tools;
 pub(crate) mod briefing;
 pub(crate) mod bug_report_tools;
@@ -78,7 +77,7 @@ mod common;
 mod criteria;
 #[cfg(test)]
 mod description_words;
-mod environment_tools;
+pub(crate) mod environment_tools;
 pub(crate) mod field_tools;
 mod file_tools;
 mod github_tools;
@@ -87,7 +86,7 @@ mod history;
 mod invitation_tools;
 pub(crate) mod labels;
 mod later_tools;
-mod launch_tools;
+pub(crate) mod launch_tools;
 mod layout_preset_tools;
 pub(crate) mod memory_tools;
 mod message_edits;
@@ -1496,59 +1495,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Your outgoing webhooks: each one's URL, the events it hears, whether it's on, and its last delivery; plus every event type and how receivers check a delivery's signature. Secrets are never shown again after they're made.",
-        annotations(
-            title = "List webhooks",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn webhook_list(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::WebhookListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::webhook_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Make, change or remove an outgoing webhook that POSTs signed JSON to a URL when tasks, runs, pull requests or messages change. It hears what you can see, in one project or the whole workspace, and stops if you lose access. create and rotate_secret return the signing secret once; test sends a ping; redeliver sends one delivery again with the same id.",
-        annotations(
-            title = "Change webhook",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn webhook_write(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::WebhookWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::webhook_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A webhook's delivery log, newest first: each delivery's id (the same on every retry), event, state, attempts, last status code and error.",
-        annotations(
-            title = "Webhook deliveries",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn webhook_deliveries(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::WebhookDeliveriesArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::webhook_deliveries(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "The AI's suggestions for a project's tasks, most confident first: dependencies, related tasks and duplicates, a parent, a blocked reason, labels, priority, type, and acceptance criteria, each with a one-line reason and its sources. Only suggestions whose every source you can see are listed. Accept or dismiss them with ai_suggestion_decide.",
         annotations(
             title = "List AI suggestions",
@@ -1904,42 +1850,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<launch_tools::LaunchValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(launch_tools::launch_cancel(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A project's environments: where its runs execute (this server, or a provider's cloud), with the harness, the provider's environment ID, repository, branch, setup notes and which one is the default. They are set up in project settings.",
-        annotations(
-            title = "List environments",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn environment_list(
-        &self,
-        Parameters(arguments): Parameters<launch_tools::ProjectArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<launch_tools::EnvironmentListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(launch_tools::environment_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "People: add an environment where a project's runs execute (name and harness), change one, make it the default, archive it, or check it with your own signed-in account. The project's owners and admins, through an app connected as themselves; agents read environments with environment_list. Audited.",
-        annotations(
-            title = "Change environment",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn environment_write(
-        &self,
-        Parameters(arguments): Parameters<environment_tools::EnvironmentWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<environment_tools::EnvironmentWriteValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(environment_tools::environment_write(&self.state, principal, arguments).await)
     }
 
     #[tool(

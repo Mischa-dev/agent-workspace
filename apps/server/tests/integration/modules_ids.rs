@@ -232,7 +232,7 @@ async fn webhook_tools_follow_automations_where_each_webhook_acts() {
     let log = call("webhook_deliveries", json!({"webhookId": in_work})).await;
     assert_eq!(log["outcome"], "ok", "{log}");
 
-    // A webhook across a workspace goes to the owner's first workspace: with
+    // A webhook across a workspace goes to the workspace it names: with
     // Automations off there (and on in their second), it's refused.
     second_workspace(&setup).await;
     let (status, changed) = switch(
@@ -249,7 +249,7 @@ async fn webhook_tools_follow_automations_where_each_webhook_acts() {
         &token,
         &owner_session,
         "webhook_write",
-        json!({"operation": "create", "name": "Everything", "url": "https://example.com/all", "eventTypes": ["task.updated"]}),
+        json!({"operation": "create", "workspace": setup.organization_id, "name": "Everything", "url": "https://example.com/all", "eventTypes": ["task.updated"]}),
     )
     .await;
     assert_module_off(&created, "Automations");

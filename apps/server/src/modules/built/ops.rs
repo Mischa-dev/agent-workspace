@@ -227,7 +227,7 @@ pub struct InlineForm {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InlineAutomation {
-    /// The rule as automation_write's create takes it: name, trigger,
+    /// The rule as automation_create takes it: name, trigger,
     /// conditions, actions, enabled.
     pub rule: Value,
     /// For a record trigger: the collection, by a new collection's name

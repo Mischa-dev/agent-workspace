@@ -17,8 +17,13 @@
     "automation_run_start": "create",
     "automation_history": "query",
     "webhook_list": "query",
-    "webhook_write": "change",
-    "webhook_deliveries": "query"
+    "webhook_create": "create",
+    "webhook_update": "change",
+    "webhook_delete": "change",
+    "webhook_secret_rotate": "change",
+    "webhook_ping_send": "create",
+    "webhook_delivery_list": "query",
+    "webhook_delivery_retry": "change"
   },
   "routes": ["/api/v1/projects/{project_id}/automations*", "/api/v1/webhooks*"],
   "events": {

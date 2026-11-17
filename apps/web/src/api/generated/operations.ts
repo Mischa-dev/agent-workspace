@@ -90,6 +90,8 @@ export type EditOutcome = { changed: string[]; results: OperationResult[]; saved
 
 export type EntryView = { description: string; entry: string; error?: string | null; id: string; kind: string; name: string; parts: number; shape: boolean; source: string; sourceId?: string | null; target?: string | null; version: string }
 
+export type EnvironmentValue = { branch?: string | null; harness: string; harnessName: string; id: string; isDefault: boolean; lastCheckMessage?: string | null; lastCheckOk?: boolean | null; name: string; providerEnvironmentId?: string | null; repositoryId?: string | null; runsOn?: string | null; setupNotes: string; version: number }
+
 export type FieldFilterArgument = { field: string; op: FieldOp; values?: string[] }
 
 export type FieldOp = "is" | "isNot" | "empty" | "notEmpty" | "contains" | "gt" | "gte" | "lt" | "lte" | "within" | "categoryIs" | "categoryIsNot"
@@ -429,6 +431,26 @@ export type DirectorySourceCreateOutput = { error?: string | null; fetchedAt?: s
 export type DirectorySourceRemoveInput = { sourceId: string }
 
 export type DirectorySourceRemoveOutput = { id: string }
+
+export type EnvironmentArchiveInput = { environment: string; projectId: string }
+
+export type EnvironmentArchiveOutput = { checkMessage?: string | null; checkOk?: boolean | null; done: string; environment?: EnvironmentValue | null }
+
+export type EnvironmentCheckInput = { environment: string; projectId: string }
+
+export type EnvironmentCheckOutput = { checkMessage?: string | null; checkOk?: boolean | null; done: string; environment?: EnvironmentValue | null }
+
+export type EnvironmentCreateInput = { branch?: string | null; harness: string; makeDefault?: boolean | null; name: string; projectId: string; providerEnvironmentId?: string | null; repositoryId?: string | null; setupNotes?: string | null }
+
+export type EnvironmentCreateOutput = { checkMessage?: string | null; checkOk?: boolean | null; done: string; environment?: EnvironmentValue | null }
+
+export type EnvironmentListInput = { projectId: string }
+
+export type EnvironmentListOutput = { defaultEnvironmentId?: string | null; environments: EnvironmentValue[] }
+
+export type EnvironmentUpdateInput = { branch?: string | null; environment: string; expectedVersion?: number | null; harness?: string | null; makeDefault?: boolean | null; name?: string | null; projectId: string; providerEnvironmentId?: string | null; repositoryId?: string | null; setupNotes?: string | null }
+
+export type EnvironmentUpdateOutput = { checkMessage?: string | null; checkOk?: boolean | null; done: string; environment?: EnvironmentValue | null }
 
 export type FieldCreateInput = { archived?: boolean | null; description?: string | null; expectedVersion?: number | null; field?: string | null; name?: string | null; options?: OptionInput[] | null; position?: number | null; projectId: string; target?: string | null; type?: string | null }
 
@@ -830,6 +852,38 @@ export type ViewUpdateInput = { delete?: boolean | null; expectedVersion?: numbe
 
 export type ViewUpdateOutput = { created: boolean; deleted: boolean; view?: unknown }
 
+export type WebhookCreateInput = { eventTypes: string[]; name: string; projectId?: string | null; url: string }
+
+export type WebhookCreateOutput = unknown
+
+export type WebhookDeleteInput = { webhookId: string }
+
+export type WebhookDeleteOutput = unknown
+
+export type WebhookDeliveryListInput = { cursor?: string | null; limit?: number | null; webhookId: string }
+
+export type WebhookDeliveryListOutput = unknown
+
+export type WebhookDeliveryRetryInput = { deliveryId: string; webhookId: string }
+
+export type WebhookDeliveryRetryOutput = unknown
+
+export type WebhookListInput = Record<string, never>
+
+export type WebhookListOutput = unknown
+
+export type WebhookPingSendInput = { webhookId: string }
+
+export type WebhookPingSendOutput = unknown
+
+export type WebhookSecretRotateInput = { webhookId: string }
+
+export type WebhookSecretRotateOutput = unknown
+
+export type WebhookUpdateInput = { eventTypes?: string[] | null; expectedVersion: number; name?: string | null; state?: string | null; url?: string | null; webhookId: string }
+
+export type WebhookUpdateOutput = unknown
+
 export type WhiteboardCreateInput = { linkTo?: LinkArgument | null; operations?: Operation[] | null; projectId?: string | null; title: string; workspaceId?: string | null }
 
 export type WhiteboardCreateOutput = { edit?: EditOutcome | null; idempotentReplay?: boolean; whiteboard: WhiteboardLine }
@@ -892,6 +946,11 @@ export type Operations = {
   directory_list: { input: DirectoryListInput; output: DirectoryListOutput }
   directory_source_create: { input: DirectorySourceCreateInput; output: DirectorySourceCreateOutput }
   directory_source_remove: { input: DirectorySourceRemoveInput; output: DirectorySourceRemoveOutput }
+  environment_archive: { input: EnvironmentArchiveInput; output: EnvironmentArchiveOutput }
+  environment_check: { input: EnvironmentCheckInput; output: EnvironmentCheckOutput }
+  environment_create: { input: EnvironmentCreateInput; output: EnvironmentCreateOutput }
+  environment_list: { input: EnvironmentListInput; output: EnvironmentListOutput }
+  environment_update: { input: EnvironmentUpdateInput; output: EnvironmentUpdateOutput }
   field_create: { input: FieldCreateInput; output: FieldCreateOutput }
   field_list: { input: FieldListInput; output: FieldListOutput }
   field_update: { input: FieldUpdateInput; output: FieldUpdateOutput }
@@ -992,6 +1051,14 @@ export type Operations = {
   view_create: { input: ViewCreateInput; output: ViewCreateOutput }
   view_list: { input: ViewListInput; output: ViewListOutput }
   view_update: { input: ViewUpdateInput; output: ViewUpdateOutput }
+  webhook_create: { input: WebhookCreateInput; output: WebhookCreateOutput }
+  webhook_delete: { input: WebhookDeleteInput; output: WebhookDeleteOutput }
+  webhook_delivery_list: { input: WebhookDeliveryListInput; output: WebhookDeliveryListOutput }
+  webhook_delivery_retry: { input: WebhookDeliveryRetryInput; output: WebhookDeliveryRetryOutput }
+  webhook_list: { input: WebhookListInput; output: WebhookListOutput }
+  webhook_ping_send: { input: WebhookPingSendInput; output: WebhookPingSendOutput }
+  webhook_secret_rotate: { input: WebhookSecretRotateInput; output: WebhookSecretRotateOutput }
+  webhook_update: { input: WebhookUpdateInput; output: WebhookUpdateOutput }
   whiteboard_create: { input: WhiteboardCreateInput; output: WhiteboardCreateOutput }
   whiteboard_duplicate: { input: WhiteboardDuplicateInput; output: WhiteboardDuplicateOutput }
   whiteboard_link: { input: WhiteboardLinkInput; output: WhiteboardLinkOutput }

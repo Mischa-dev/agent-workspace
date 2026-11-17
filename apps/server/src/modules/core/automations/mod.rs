@@ -16,6 +16,7 @@ impl CoreModule for Module {
         module.routes(crate::webhooks::router);
         module.routes(crate::automations::router);
         module.operations(crate::automations::ops::register_ops);
+        module.operations(crate::webhooks::ops::register_ops);
         module.export(ExportPart {
             name: "automations",
             describe: "Automation rules and webhooks (no secrets).",

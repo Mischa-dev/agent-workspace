@@ -383,6 +383,84 @@
   },
   {
     "automation": true,
+    "destructive": true,
+    "emits": [
+      "environment.archived"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "environment_archive",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Archive environment"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "environment.checked"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "environment_check",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Check environment"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "environment.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "environment_create",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Add environment"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "environment_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List environments"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "environment.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "environment_update",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Update environment"
+  },
+  {
+    "automation": true,
     "destructive": false,
     "emits": [
       "field.created"
@@ -1935,6 +2013,130 @@
     "preview": false,
     "proposable": false,
     "title": "Update view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "webhook.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "automations",
+    "name": "webhook_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Create webhook"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "webhook.removed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "automations",
+    "name": "webhook_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Remove webhook"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "automations",
+    "name": "webhook_delivery_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Webhook deliveries"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "webhook.delivery_queued"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "automations",
+    "name": "webhook_delivery_retry",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Send delivery again"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "automations",
+    "name": "webhook_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List webhooks"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "webhook.delivery_queued"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "automations",
+    "name": "webhook_ping_send",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Test webhook"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "webhook.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "automations",
+    "name": "webhook_secret_rotate",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Rotate webhook secret"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "webhook.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "automations",
+    "name": "webhook_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update webhook"
   },
   {
     "automation": true,

@@ -19,6 +19,8 @@
 //! client pins the checked address. Failed deliveries retry with the job
 //! queue's backoff; twenty failed deliveries in a row turn it off.
 
+pub mod ops;
+
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -384,17 +386,6 @@ async fn owned(
         return Err(AppError::NotFound("webhook"));
     }
     Ok(row)
-}
-
-/// AWD-75: where the caller's own webhook acts: its workspace, and the
-/// project it's limited to. Not found exactly as `owned` says.
-pub(crate) async fn scope(
-    state: &AppState,
-    caller: &Caller,
-    webhook_id: Uuid,
-) -> Result<(Uuid, Option<Uuid>), AppError> {
-    let row = owned(&state.pool, caller, webhook_id).await?;
-    Ok((row.organization_id, row.project_id))
 }
 
 pub(crate) async fn list(state: &AppState, caller: &Caller) -> Result<WebhookList, AppError> {

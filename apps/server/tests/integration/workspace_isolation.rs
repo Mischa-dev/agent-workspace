@@ -2045,7 +2045,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "usage_batch",
     "usage_windows",
     "view_list",
-    "webhook_deliveries",
+    "webhook_delivery_list",
     "webhook_list",
     "whiteboard_list",
     "whiteboard_read",
@@ -2312,7 +2312,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "webhook_deliveries",
+            "webhook_delivery_list",
             vec![json!({"webhookId": a.webhook.to_string()})],
             vec![json!({"webhookId": b.webhook.to_string()})],
             vec![],

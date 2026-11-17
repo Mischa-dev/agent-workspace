@@ -310,7 +310,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     for operation in [
         "/task_create",
         "/task_list",
-        "/webhook_write",
+        "/webhook_create",
         "/automation_create",
     ] {
         assert!(

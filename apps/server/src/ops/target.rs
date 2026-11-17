@@ -190,6 +190,13 @@ const KINDS: &[(&str, &str)] = &[
              WHERE membership.project_id = project.id AND membership.actor_id = $2 \
                AND membership.enabled)",
     ),
+    // K2.18: a webhook, for its owner only, in the space it's limited to
+    // or (space NULL) its workspace.
+    (
+        "webhook",
+        "SELECT organization_id, project_id FROM webhook_subscriptions \
+         WHERE id = $1 AND owner_actor_id = $2",
+    ),
     // A1.8: a request goes by request_visible_to, which holds its
     // conversation's and run's visibility.
     (
@@ -300,6 +307,7 @@ fn what_of(kind: &str) -> &'static str {
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",
         "request" => "That request",
+        "webhook" => "That webhook",
         _ => "That",
     }
 }

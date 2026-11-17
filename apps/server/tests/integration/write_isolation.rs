@@ -475,7 +475,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "conversation_start",
     "conversation_update",
     "decision_record",
-    "environment_write",
+    "environment_archive",
+    "environment_check",
+    "environment_create",
+    "environment_update",
     "file_delete",
     "file_upload",
     "github_integration_write",
@@ -596,7 +599,12 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "thread_start",
     "thread_update",
     "usage_batch_launch",
-    "webhook_write",
+    "webhook_create",
+    "webhook_delete",
+    "webhook_delivery_retry",
+    "webhook_ping_send",
+    "webhook_secret_rotate",
+    "webhook_update",
     "whiteboard_create",
     "whiteboard_duplicate",
     "whiteboard_update_elements",
@@ -1948,6 +1956,10 @@ struct Spares {
     bug_link: Uuid,
     /// A rule A's own automation_delete removes.
     rule: Uuid,
+    /// A webhook A's own webhook_delete removes.
+    webhook: Uuid,
+    /// An environment A's own environment_archive archives.
+    environment: Uuid,
     project_invitation: Uuid,
     /// An agent in the project to change, rotate and remove.
     agent_connection: Uuid,
@@ -2195,6 +2207,37 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .as_str()
         .and_then(|id| id.parse().ok())
         .expect("spare rule");
+    let spare_webhook = ok(
+        app,
+        browser,
+        "POST",
+        "/api/v1/webhooks",
+        json!({
+            "name": "Net spare hook",
+            "url": "https://hooks.example.com/net-spare",
+            "eventTypes": ["run.finished"],
+            "projectId": project,
+        }),
+    )
+    .await;
+    let spare_webhook = spare_webhook["webhook"]["id"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .expect("spare webhook");
+    ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/environments"),
+        json!({"name": "Net spare cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-spare"}),
+    )
+    .await;
+    let spare_environment = scalar(
+        pool,
+        "SELECT id FROM project_environments WHERE name = $1",
+        "Net spare cloud",
+    )
+    .await;
     ok(
         app,
         browser,
@@ -2635,6 +2678,8 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         harness,
         bug_link,
         rule: spare_rule,
+        webhook: spare_webhook,
+        environment: spare_environment,
         project_invitation,
         agent_connection,
         approvals: [approvals[0], approvals[1]],
@@ -6218,15 +6263,34 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp b", "environmentId": bx.environment}),
         ]),
         mcp_case(
-            "environment_write",
+            "environment_create",
             json!({"projectId": a.project, "name": "Net mcp cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-mcp"}),
             vec![json!({"projectId": b.project, "name": "Net mcp cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-mcp"})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "environment": bx.environment, "name": "Net"}),
-            json!({"projectId": a.project, "environment": bx.environment, "archive": true}),
             json!({"projectId": a.project, "name": "Net mcp b", "harness": "codex_cloud", "providerEnvironmentId": "env-b", "repositoryId": b.repository}),
         ]),
+        mcp_case(
+            "environment_update",
+            json!({"projectId": a.project, "environment": ax.environment, "setupNotes": "Net mcp notes"}),
+            vec![json!({"projectId": b.project, "environment": bx.environment, "name": "Net"})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "environment": bx.environment, "name": "Net"}),
+            json!({"projectId": a.project, "environment": ax.environment, "repositoryId": b.repository}),
+        ]),
+        mcp_case(
+            "environment_check",
+            json!({"projectId": a.project, "environment": ax.environment}),
+            vec![json!({"projectId": b.project, "environment": bx.environment})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "environment": bx.environment})]),
+        mcp_case(
+            "environment_archive",
+            json!({"projectId": a.project, "environment": sp.environment}),
+            vec![json!({"projectId": b.project, "environment": bx.environment})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "environment": bx.environment})]),
         mcp_case(
             "model_catalog_write",
             json!({"projectId": a.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
@@ -7245,29 +7309,45 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .last(),
         mcp_case(
-            "webhook_write",
+            "webhook_create",
             json!({
-                "operation": "create",
                 "name": "Net mcp hook",
                 "url": "https://hooks.example.com/net-mcp",
                 "eventTypes": ["run.finished"],
             }),
-            vec![
-                json!({"operation": "update", "webhookId": b.webhook, "name": "Net", "expectedVersion": version("webhook_subscriptions", b.webhook)}),
-                json!({"operation": "delete", "webhookId": b.webhook}),
-                json!({"operation": "rotate_secret", "webhookId": b.webhook}),
-                json!({"operation": "test", "webhookId": b.webhook}),
-                json!({"operation": "redeliver", "webhookId": b.webhook, "deliveryId": bx.delivery}),
-                json!({
-                    "operation": "create",
-                    "name": "Net mcp hook",
-                    "url": "https://hooks.example.com/net-mcp",
-                    "eventTypes": ["run.finished"],
-                    "projectId": b.project,
-                }),
-            ],
+            vec![json!({
+                "name": "Net mcp hook",
+                "url": "https://hooks.example.com/net-mcp",
+                "eventTypes": ["run.finished"],
+                "projectId": b.project,
+            })],
+        ),
+        mcp_case(
+            "webhook_update",
+            json!({"webhookId": a.webhook, "name": "Net mcp hook renamed", "expectedVersion": version("webhook_subscriptions", a.webhook)}),
+            vec![json!({"webhookId": b.webhook, "name": "Net", "expectedVersion": version("webhook_subscriptions", b.webhook)})],
+        ),
+        mcp_case(
+            "webhook_secret_rotate",
+            json!({"webhookId": a.webhook}),
+            vec![json!({"webhookId": b.webhook})],
+        ),
+        mcp_case(
+            "webhook_ping_send",
+            json!({"webhookId": a.webhook}),
+            vec![json!({"webhookId": b.webhook})],
+        ),
+        mcp_case(
+            "webhook_delivery_retry",
+            json!({"webhookId": a.webhook, "deliveryId": ax.delivery}),
+            vec![json!({"webhookId": b.webhook, "deliveryId": bx.delivery})],
         )
-        .rejecting(vec![json!({"operation": "redeliver", "webhookId": a.webhook, "deliveryId": bx.delivery})]),
+        .rejecting(vec![json!({"webhookId": a.webhook, "deliveryId": bx.delivery})]),
+        mcp_case(
+            "webhook_delete",
+            json!({"webhookId": sp.webhook}),
+            vec![json!({"webhookId": b.webhook})],
+        ),
         mcp_case(
             "bug_report_link_create",
             json!({"projectId": a.project, "name": "Net mcp link"}),

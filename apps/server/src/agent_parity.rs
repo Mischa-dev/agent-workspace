@@ -89,27 +89,27 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/environments",
-            Tool("environment_write"),
+            Tool("environment_create"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/environments/{environment_id}",
-            Tool("environment_write"),
+            Tool("environment_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
-            Tool("environment_write"),
+            Tool("environment_archive"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/default",
-            Tool("environment_write"),
+            Tool("environment_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/environments/{environment_id}/check",
-            Tool("environment_write"),
+            Tool("environment_check"),
         ),
         (
             Post,
@@ -387,31 +387,31 @@ mod tests {
             "/api/v1/account/api-tokens/{credential_id}/revoke",
             Person("credentials are made and revoked by people"),
         ),
-        (Post, "/api/v1/webhooks", Tool("webhook_write")),
+        (Post, "/api/v1/webhooks", Tool("webhook_create")),
         (
             Patch,
             "/api/v1/webhooks/{webhook_id}",
-            Tool("webhook_write"),
+            Tool("webhook_update"),
         ),
         (
             Delete,
             "/api/v1/webhooks/{webhook_id}",
-            Tool("webhook_write"),
+            Tool("webhook_delete"),
         ),
         (
             Post,
             "/api/v1/webhooks/{webhook_id}/rotate-secret",
-            Tool("webhook_write"),
+            Tool("webhook_secret_rotate"),
         ),
         (
             Post,
             "/api/v1/webhooks/{webhook_id}/test",
-            Tool("webhook_write"),
+            Tool("webhook_ping_send"),
         ),
         (
             Post,
             "/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-            Tool("webhook_write"),
+            Tool("webhook_delivery_retry"),
         ),
         (
             Post,

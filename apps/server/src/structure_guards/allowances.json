@@ -65,7 +65,6 @@
     "mcp/agent_profile_tools.rs": 2,
     "mcp/agents.rs": 3,
     "mcp/approvals.rs": 3,
-    "mcp/automation_tools.rs": 1,
     "mcp/batch_tools.rs": 4,
     "mcp/briefing.rs": 4,
     "mcp/bug_report_tools.rs": 1,

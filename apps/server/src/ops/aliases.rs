@@ -155,6 +155,9 @@ fn link_pull_request_out(_canonical: &str, value: Value, replayed: bool) -> Valu
     })
 }
 
+/// The argument a call names its workspace with (not the module).
+const NAMED_WORKSPACE: &str = "workspace";
+
 /// `automation_write`'s `operation` names the automation operation it runs.
 fn automation_write_runs(arguments: &JsonObject) -> &'static str {
     match arguments.get("operation").and_then(Value::as_str) {
@@ -190,7 +193,71 @@ fn automation_write_in(mut arguments: JsonObject) -> JsonObject {
             "enabled",
         ],
     };
-    arguments.retain(|key, value| keep.contains(&key.as_str()) && !value.is_null());
+    // The workspace the call names stays for the dispatcher.
+    arguments.retain(|key, value| {
+        (keep.contains(&key.as_str()) || key == NAMED_WORKSPACE) && !value.is_null()
+    });
+    arguments
+}
+
+/// `webhook_write`'s `operation` names the webhook operation it runs.
+fn webhook_write_runs(arguments: &JsonObject) -> &'static str {
+    match arguments.get("operation").and_then(Value::as_str) {
+        Some("update") => "webhook_update",
+        Some("delete") => "webhook_delete",
+        Some("rotate_secret") => "webhook_secret_rotate",
+        Some("test") => "webhook_ping_send",
+        Some("redeliver") => "webhook_delivery_retry",
+        _ => "webhook_create",
+    }
+}
+
+/// `webhook_write` took every field for every operation; each operation
+/// takes only its own.
+fn webhook_write_in(mut arguments: JsonObject) -> JsonObject {
+    let keep: &[&str] = match webhook_write_runs(&arguments) {
+        "webhook_update" => &[
+            "webhookId",
+            "expectedVersion",
+            "name",
+            "url",
+            "eventTypes",
+            "state",
+        ],
+        "webhook_delivery_retry" => &["webhookId", "deliveryId"],
+        "webhook_create" => &["name", "url", "eventTypes", "projectId"],
+        _ => &["webhookId"],
+    };
+    // The workspace the call names stays for the dispatcher.
+    arguments.retain(|key, value| {
+        (keep.contains(&key.as_str()) || key == NAMED_WORKSPACE) && !value.is_null()
+    });
+    arguments
+}
+
+/// `environment_write` archived or checked with a flag, changed with an
+/// `environment` and added without one.
+fn environment_write_runs(arguments: &JsonObject) -> &'static str {
+    let flag = |name: &str| arguments.get(name).and_then(Value::as_bool) == Some(true);
+    if flag("archive") {
+        "environment_archive"
+    } else if flag("check") {
+        "environment_check"
+    } else if arguments.contains_key("environment") {
+        "environment_update"
+    } else {
+        "environment_create"
+    }
+}
+
+/// `environment_write`'s flags name the operation; archive and check took
+/// nothing else (the operations refuse what they don't take).
+fn environment_write_in(mut arguments: JsonObject) -> JsonObject {
+    let canonical = environment_write_runs(&arguments);
+    arguments.retain(|key, value| !value.is_null() && key != "archive" && key != "check");
+    if canonical == "environment_create" {
+        arguments.remove("expectedVersion");
+    }
     arguments
 }
 
@@ -233,8 +300,39 @@ pub const ALIASES: &[Alias] = &[
         sunset: None,
     },
     run_renamed!("automation_runs" => "automation_history"),
-    written!("webhook_write", "webhookId" => "webhook_create", "webhook_update"),
-    written!("environment_write", "environmentId" => "environment_create", "environment_update"),
+    // K2.18: webhook_write chose by `operation`; webhook_deliveries is
+    // webhook_delivery_list. Both answered in the envelope already.
+    Alias {
+        name: "webhook_write",
+        canonical: webhook_write_runs,
+        runs: &[
+            "webhook_create",
+            "webhook_update",
+            "webhook_delete",
+            "webhook_secret_rotate",
+            "webhook_ping_send",
+            "webhook_delivery_retry",
+        ],
+        adapt_in: webhook_write_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
+    run_renamed!("webhook_deliveries" => "webhook_delivery_list"),
+    // K2.18: environment_write chose by its fields; it answered in the
+    // envelope already.
+    Alias {
+        name: "environment_write",
+        canonical: environment_write_runs,
+        runs: &[
+            "environment_create",
+            "environment_update",
+            "environment_archive",
+            "environment_check",
+        ],
+        adapt_in: environment_write_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
     written!("bug_report_link_write", "linkId" => "bug_report_link_create", "bug_report_link_update"),
     // K2.12: whiteboard_edit answered in the envelope already.
     run_renamed!("whiteboard_edit" => "whiteboard_update_elements"),
