@@ -258,12 +258,9 @@ pub struct ViewEntry {
 fn entry(
     view: &View,
     definitions: &[FieldDefinition],
-    pins: &std::collections::HashMap<Uuid, (bool, i32)>,
+    pins: &views::Pins,
 ) -> Result<ViewEntry, OpError> {
-    let (pinned, pin_position) = match pins.get(&view.id) {
-        Some((pinned, position)) => (*pinned, pinned.then_some(*position)),
-        None => (views::pinned_unless_unpinned(view), None),
-    };
+    let (pinned, pin_position) = pins.of(view);
     Ok(ViewEntry {
         id: view.id,
         collection_id: view.collection_id,

@@ -11,15 +11,17 @@
 
 use std::collections::BTreeMap;
 
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use super::tasks;
 use crate::{
+    error::AppError,
     fields::{FieldClause, FieldOp},
     views::{
-        definition::{Direction, SortRule, ViewConfig},
+        definition::{self as views, Direction, SortRule, ViewConfig},
         filter::Filter,
-        query::Archived,
+        query::{self, Archived, Spec},
     },
 };
 
@@ -429,6 +431,74 @@ pub fn from_params(params: &BTreeMap<String, String>) -> Result<TaskQuery, Probl
     }
     query.config.filters = Filter::And(all);
     Ok(query)
+}
+
+/// A space's Tasks collection, if it has one yet.
+pub async fn tasks_collection(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM collections WHERE project_id = $1 AND builtin = 'tasks'",
+    )
+    .bind(project_id)
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
+/// Checks a query against the Tasks collection's fields: each filter suits
+/// its field, and the ids it names are this space's. The message says what
+/// would work.
+pub async fn check(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    query: &TaskQuery,
+) -> Result<Result<(), String>, AppError> {
+    let Some(collection_id) = tasks_collection(connection, project_id).await? else {
+        return Ok(Ok(()));
+    };
+    let definitions =
+        super::field_definitions(connection, project_id, collection_id, false).await?;
+    if let Err(message) = views::check(&query.config, &definitions) {
+        return Ok(Err(message));
+    }
+    views::check_references(connection, project_id, &query.config, &definitions).await
+}
+
+/// The tasks a filter finds as `reader` reads it ("me" is them), oldest
+/// first, at most `limit`; with `only`, just those of them. Automations'
+/// conditions read tasks this way.
+pub async fn matching(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    filter: &Filter,
+    reader: Uuid,
+    only: Option<&[Uuid]>,
+    limit: i64,
+) -> Result<Vec<Uuid>, AppError> {
+    let Some(collection_id) = tasks_collection(connection, project_id).await? else {
+        return Ok(Vec::new());
+    };
+    let definitions =
+        super::field_definitions(connection, project_id, collection_id, false).await?;
+    let config = ViewConfig {
+        filters: filter.clone(),
+        sort: vec![SortRule {
+            field: "number".to_owned(),
+            direction: Direction::Asc,
+        }],
+        ..ViewConfig::default()
+    };
+    let mut spec = Spec::from_config(&config, &definitions, reader);
+    spec.only = only.map(<[Uuid]>::to_vec);
+    let source = tasks::TasksSource {
+        project_id,
+        collection_id,
+    };
+    let page = query::page(connection, &source, &spec, None, limit)
+        .await?
+        .map_err(|()| AppError::Internal("matching tasks cursor"))?;
+    Ok(page.rows.into_iter().map(|(id, _)| id).collect())
 }
 
 #[cfg(test)]

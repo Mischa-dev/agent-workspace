@@ -965,22 +965,44 @@ async fn move_to(
 // ---------------------------------------------------------------------------
 // Pins and defaults (T1.6)
 
-/// Built-in views that start in everyone's sidebar until they unpin them.
-pub fn pinned_unless_unpinned(view: &View) -> bool {
-    matches!(
-        view.builtin.as_deref(),
-        Some("my_tasks") | Some("ready_for_agents")
-    )
+/// Which views `reader` keeps in their sidebar: the ones they pinned or
+/// unpinned themselves, and which built-in views start pinned for them.
+#[derive(Clone, Debug, Default)]
+pub struct Pins {
+    /// By view: pinned or not, and the place among their pinned views.
+    pub own: std::collections::HashMap<Uuid, (bool, i32)>,
+    /// Their role's defaults (built-in view keys); without any, My tasks
+    /// and Ready for agents start pinned.
+    pub role_defaults: Option<Vec<String>>,
 }
 
-/// Whether `reader` keeps each view in their sidebar, and where: the views
-/// they pinned or unpinned themselves, by ID.
+impl Pins {
+    /// Whether the view is in their sidebar, and where.
+    pub fn of(&self, view: &View) -> (bool, Option<i32>) {
+        if let Some((pinned, position)) = self.own.get(&view.id) {
+            return (*pinned, pinned.then_some(*position));
+        }
+        let Some(builtin) = view.builtin.as_deref() else {
+            return (false, None);
+        };
+        let pinned = match &self.role_defaults {
+            Some(keys) => keys.iter().any(|key| key == builtin),
+            None => matches!(builtin, "my_tasks" | "ready_for_agents"),
+        };
+        (pinned, None)
+    }
+}
+
+/// The views every Tasks collection starts with (`collection_views.builtin`).
+pub const BUILTIN_VIEW_KEYS: [&str; 4] = ["my_tasks", "ready_for_agents", "blocked", "recently_changed"];
+
+/// `reader`'s pins in a collection.
 pub async fn pins(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
     reader: Uuid,
-) -> Result<std::collections::HashMap<Uuid, (bool, i32)>, AppError> {
+) -> Result<Pins, AppError> {
     let rows = sqlx::query_as::<_, (Uuid, bool, i32)>(
         "SELECT pin.view_id, pin.pinned, pin.position FROM collection_view_pins pin \
          JOIN collection_views view ON view.project_id = pin.project_id AND view.id = pin.view_id \
@@ -991,10 +1013,20 @@ pub async fn pins(
     .bind(reader)
     .fetch_all(&mut *connection)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(view, pinned, position)| (view, (pinned, position)))
-        .collect())
+    let role_defaults = sqlx::query_scalar::<_, Option<Vec<String>>>(
+        "SELECT role_default_pinned_views($1, $2)",
+    )
+    .bind(project_id)
+    .bind(reader)
+    .fetch_one(&mut *connection)
+    .await?;
+    Ok(Pins {
+        own: rows
+            .into_iter()
+            .map(|(view, pinned, position)| (view, (pinned, position)))
+            .collect(),
+        role_defaults,
+    })
 }
 
 /// Pins or unpins a view for one account. A pinned view goes to the end
@@ -1055,8 +1087,13 @@ pub async fn default_view(
         WHERE preference.project_id = $1 AND preference.collection_id = $2
           AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $3)
           AND (preference.actor_id = $3
-               OR preference.role_id = (SELECT membership.role_id FROM project_memberships membership
-                                        WHERE membership.project_id = $1 AND membership.actor_id = $3))
+               OR preference.role_id IN (
+                   SELECT held.id FROM project_memberships membership
+                   JOIN projects project ON project.id = membership.project_id
+                   JOIN workspace_roles held ON held.organization_id = project.organization_id
+                    AND (held.id = membership.role_id
+                         OR (membership.role_id IS NULL AND held.key = membership.role))
+                   WHERE membership.project_id = $1 AND membership.actor_id = $3))
         ORDER BY (preference.actor_id IS NULL), preference.updated_at DESC
         LIMIT 1
         "#,
