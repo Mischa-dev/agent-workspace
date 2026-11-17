@@ -7,7 +7,7 @@ import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, ErrorState, ListSkeleton, PageHeader, SegmentedControl } from '../ui'
 import { BoardSkeleton } from './BoardSkeleton'
@@ -97,18 +97,34 @@ export function WorkItemsPage() {
   )
   const closeTask = useCallback(() => update((current) => ({ ...current, task: null })), [update])
 
+  // Until the page can draw, the shell keeps the space the address names.
+  useShellPage(
+    project.data
+      ? {
+          context: state.task ? (
+            <TaskPanel
+              onClose={closeTask}
+              onOpenTask={(task) => openTask(task.id)}
+              projectArchived={Boolean(project.data.archivedAt)}
+              projectId={projectId}
+              taskId={state.task}
+            />
+          ) : undefined,
+          contextKey: state.task ?? undefined,
+          onContextDismiss: closeTask,
+          project: project.data,
+        }
+      : {},
+  )
+
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading tasks" />
-      </AppShell>
+      <ProjectPageLoading label="Loading tasks" />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
@@ -142,12 +158,8 @@ export function WorkItemsPage() {
       {newButton}
     </>
   )
-  const panel = state.task ? (
-    <TaskPanel onClose={closeTask} onOpenTask={(task) => openTask(task.id)} projectArchived={archived} projectId={projectId} taskId={state.task} />
-  ) : undefined
-
   return (
-    <AppShell context={panel} contextKey={state.task ?? undefined} onContextDismiss={closeTask} project={project.data} user={session.user}>
+    <>
       <div className={view === 'board' ? 'aw-page aw-page--full aw-workpage aw-workpage--board' : 'aw-page aw-page--full aw-workpage'}>
         <NavigationSyncAlert {...navigationSync} />
         <PageHeader actions={headerActions} icon="work" title={experience.label('task', 'many')} />
@@ -211,6 +223,6 @@ export function WorkItemsPage() {
           <LabelManager onClose={() => setManagingLabels(false)} projectId={projectId} />
         </Suspense>
       ) : null}
-    </AppShell>
+    </>
   )
 }

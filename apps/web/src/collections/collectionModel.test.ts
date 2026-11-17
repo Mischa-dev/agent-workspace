@@ -13,7 +13,7 @@ import {
   groupableFields,
   columnOrder,
   historyValue,
-  recordsByDay,
+  recordDay,
   sameConfig,
   sortText,
   tableItems,
@@ -223,11 +223,9 @@ describe('a calendar', () => {
 
   it('puts each record on its date’s day and leaves undated ones out', () => {
     const dated = (id: string, day?: string): CollectionRecord => ({ ...record(id), values: day ? { due: day } : {} })
-    const days = recordsByDay([dated('a', '2026-11-02'), dated('b'), dated('c', '2026-11-02'), dated('d', '2026-11-05')], 'due')
-    expect([...days.entries()].map(([day, records]) => [day, records.map((entry) => entry.id)])).toEqual([
-      ['2026-11-02', ['a', 'c']],
-      ['2026-11-05', ['d']],
-    ])
+    expect(recordDay(dated('a', '2026-11-02'), 'due')).toBe('2026-11-02')
+    expect(recordDay(dated('c', '2026-11-02T09:30:00Z'), 'due')).toBe('2026-11-02')
+    expect(recordDay(dated('b'), 'due')).toBeNull()
   })
 })
 

@@ -19,7 +19,7 @@ import {
 } from './api'
 
 /** Launch's own query keys, under the project like every other so a project switch drops them. */
-const launchKeys = {
+export const launchKeys = {
   environments: (projectId: string) => ['project', projectId, 'environments'] as const,
   launches: (projectId: string) => ['project', projectId, 'launches'] as const,
   launchPlan: (projectId: string, workItemId: string, choice: Record<string, unknown> = {}) =>

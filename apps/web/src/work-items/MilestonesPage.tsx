@@ -2,11 +2,10 @@ import { useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, Dialog, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, TextArea, TextField, countLabel, describeError, showToast } from '../ui'
 import { DatePicker, formatDateLabel } from '../ui/pickers'
@@ -31,7 +30,6 @@ function saveMessage(error: unknown) {
 
 /** A project's milestones: how far along each is, when it's due, and its tasks one click away. */
 export function MilestonesPage() {
-  const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
   const milestones = useMilestoneList(projectId, true)
@@ -39,18 +37,15 @@ export function MilestonesPage() {
   const [shown, setShown] = useState<Shown>('open')
   const [editing, setEditing] = useState<Milestone | 'new' | null>(null)
 
+  useShellPage({ project: project.data })
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading milestones" />
-      </AppShell>
+      <ProjectPageLoading label="Loading milestones" />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
@@ -82,7 +77,7 @@ export function MilestonesPage() {
   )
 
   return (
-    <AppShell project={project.data} user={session.user}>
+    <>
       <div className="aw-page aw-page--full aw-milestones">
         <PageHeader actions={newMilestone} icon="checklist" title="Milestones" />
         <WorkTabs current="milestones" projectId={project.data.id} />
@@ -124,7 +119,7 @@ export function MilestonesPage() {
       {editing ? (
         <MilestoneDialog milestone={editing === 'new' ? null : editing} onClose={() => setEditing(null)} projectId={projectId} />
       ) : null}
-    </AppShell>
+    </>
   )
 }
 

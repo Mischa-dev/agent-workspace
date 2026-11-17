@@ -4,6 +4,7 @@ import paletteSource from '../shell/CommandPalette.tsx?raw'
 import homeSource from '../projects/HomePage.tsx?raw'
 import homeSidebarSource from '../shell/HomeSidebar.tsx?raw'
 import railSource from '../shell/ProjectRail.tsx?raw'
+import { legacyPathOf } from '../app/href'
 import { routePaths } from '../app/routes'
 import { SLASH_COMMANDS } from '../later/slashCommands'
 import { SETTINGS_PAGES } from '../settings/registry'
@@ -43,7 +44,8 @@ describe('every entry point names its module', () => {
   })
 
   it('routes', () => {
-    const paths = routePaths()
+    // A workspace page under /w/:ws (W1.14a) is claimed by its old root address.
+    const paths = [...new Set(routePaths().map(legacyPathOf))]
     expect(paths.length).toBeGreaterThan(30)
     // Pages name routes exactly as the route table (app/routes.tsx) writes them.
     const pages = claims('pages')

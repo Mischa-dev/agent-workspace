@@ -69,7 +69,7 @@ function filled(piece: Piece, things: Thing[]): Piece {
 
 function ThingEmbed({ decl, href, id, kind, label, piece }: { decl: ThingDecl; href: string; id: string; kind: string; label: string; piece: Piece }) {
   const query = useQuery({
-    queryKey: ['things', kind, id],
+    queryKey: queryKeys.thing(kind, id),
     queryFn: () => requestJson<{ thing: Thing }>(`/api/v1/things/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
     retry: (count, error) => !(isApiError(error) && error.status < 500) && count < 2,
   })
@@ -115,7 +115,7 @@ function TasksEmbed({
 }) {
   const query = useQuery({
     // Under the project's task queries, so task changes refetch it.
-    queryKey: [...queryKeys.workItemsRoot(projectId), 'embed', filters],
+    queryKey: queryKeys.workItemEmbed(projectId, filters),
     queryFn: () => listWorkItems(projectId, { ...filters, limit: TASKS }),
     retry: (count, error) => !(isApiError(error) && error.status < 500) && count < 2,
   })

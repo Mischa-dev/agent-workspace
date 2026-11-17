@@ -11,7 +11,6 @@ import {
   useSession,
 } from './session'
 import { RealtimeProvider } from '../realtime/RealtimeProvider'
-import { CommandCenter } from '../shell/CommandCenter'
 import { DocumentTitle } from '../shell/DocumentTitle'
 import { Button } from '../ui'
 
@@ -89,7 +88,6 @@ export function SessionBoundary() {
     <AuthenticatedSessionProvider session={session.data}>
       <RealtimeProvider>
         <Outlet />
-        <CommandCenter />
         <DocumentTitle />
         <Suspense fallback={null}>
           <AppearanceSync />

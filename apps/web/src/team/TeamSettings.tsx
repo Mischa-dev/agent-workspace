@@ -38,6 +38,7 @@ import {
   type IssuedInvitation,
   type Member,
   type TeamRole,
+  teamKeys,
 } from './api'
 import { listRoles, roleKeys, type WorkspaceRoleView } from '../settings/workspace/roles'
 import '../styles/pages.css'
@@ -446,7 +447,7 @@ function ExistingMemberForm({
   projectId: string
   onAdded: () => Promise<void>
 }) {
-  const candidates = useQuery({ queryKey: ['member-candidates', projectId], queryFn: () => listMemberCandidates(projectId) })
+  const candidates = useQuery({ queryKey: teamKeys.memberCandidates(projectId), queryFn: () => listMemberCandidates(projectId) })
   const [actorId, setActorId] = useState('')
   const [role, setRole] = useState<string>('member')
   const chosen = (candidates.data ?? []).find((member) => member.actorId === actorId)

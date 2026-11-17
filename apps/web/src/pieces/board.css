@@ -1,0 +1,167 @@
+/* The board piece (W1.19): columns that scroll sideways inside the board,
+   never the page; narrow, one column at a time with a switcher. */
+
+.aw-pboard-wrap {
+  min-width: 0;
+}
+
+.aw-pboard__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.aw-pboard__switcher {
+  min-width: 12rem;
+}
+
+.aw-pboard {
+  display: grid;
+  grid-template-columns: repeat(var(--aw-board-columns), minmax(260px, 1fr));
+  align-items: start;
+  gap: var(--space-3);
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: var(--space-3);
+  overscroll-behavior-x: contain;
+}
+
+.aw-pboard-wrap.is-narrow .aw-pboard {
+  grid-template-columns: repeat(var(--aw-board-columns), 100%);
+  scroll-snap-type: x mandatory;
+}
+
+.aw-pboard-wrap.is-narrow .aw-pboard__column {
+  scroll-snap-align: start;
+}
+
+.aw-pboard__column {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-height: 120px;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.aw-pboard__column.is-target {
+  border-color: var(--accent);
+}
+
+.aw-pboard__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  padding: var(--space-1) var(--space-1) 0;
+  font: var(--t-label);
+  color: var(--content-fg);
+}
+
+.aw-pboard__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-pboard__count {
+  margin-left: auto;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-pboard__cards {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-pboard__card {
+  display: grid;
+  gap: var(--space-1-5);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+  color: var(--content-fg);
+  font: var(--t-ui);
+}
+
+.aw-pboard__card.is-movable {
+  cursor: grab;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.aw-pboard__card[aria-current='true'] {
+  border-color: var(--accent);
+}
+
+/* Picked up with the keyboard. */
+.aw-pboard__card.is-held {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-popover);
+}
+
+.aw-pboard.is-dragging,
+.aw-pboard.is-dragging * {
+  cursor: grabbing;
+}
+
+.aw-pboard__cardhead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-pboard__title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+  text-decoration: none;
+}
+
+.aw-pboard__title:hover {
+  text-decoration: underline;
+}
+
+.aw-pboard__badge {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-pboard__menu {
+  align-self: center;
+  margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-1-5)) calc(-1 * var(--space-1)) 0;
+  color: var(--content-fg-muted);
+}
+
+.aw-pboard__ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--layer-tooltip);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-popover);
+  font: var(--t-ui-strong);
+  pointer-events: none;
+}
