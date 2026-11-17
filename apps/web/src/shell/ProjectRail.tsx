@@ -19,7 +19,7 @@ import { inHomeSpace, useInboxUnread } from './homeSpace'
 import { loadShellLazy } from './loadShellLazy'
 import { isMobileWidth } from './mobileNavigation'
 import { usePausedUntil } from './pauseStatus'
-import { railOrderAfterDrop, railProjects } from './railProjects'
+import { railOrderAfterDrop, railOrderKeepingOthers, railProjects } from './railProjects'
 
 // Loaded after the first paint: whether you've paused notifications.
 const PausedMark = lazy(() => loadShellLazy().then((module) => ({ default: module.PausedMark })))
@@ -211,7 +211,7 @@ export function ProjectRail({
     event.preventDefault()
     const order = drag.over ? railOrderAfterDrop(visibleProjects, drag.id, drag.over) : null
     setDrag(null)
-    if (order) setRailOrder.mutate(order, { onError: (reason) => toastError('The rail’s order wasn’t saved', reason) })
+    if (order) setRailOrder.mutate(railOrderKeepingOthers(order, openProjects), { onError: (reason) => toastError('The rail’s order wasn’t saved', reason) })
   }
 
   // Opens the project at once from what's cached, then records the visit
@@ -254,6 +254,8 @@ export function ProjectRail({
   return (
     <>
       <nav aria-label="Spaces" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
+        {/* The switcher belongs to the account, not to a workspace's layout: a
+            layout can't hide the way out of its own workspace. */}
         {several && workspace ? (
           <>
             <WorkspaceSwitcher current={workspace} onNavigate={onSpaceSelected} projects={openProjects} workspaces={session.organizations} />

@@ -6,6 +6,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { useHomeExperience } from '../experience/layout'
 import { ownerOf } from '../modules/ownership'
 import { useShellPage } from '../shell/shellStore'
+import { useWorkspace } from '../app/workspace'
 import { defaultWorkspace } from '../settings/workspaceChoice'
 import { Badge, Banner, ButtonLink, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, relativeDay } from '../ui'
 import { firstName, homeGreeting } from './greeting'
@@ -33,7 +34,8 @@ function openedAt(project: Project) {
 /** Home (P3): what needs you, agents working now, capacity, your tasks and recent projects, in one look. */
 export function HomePage() {
   const session = useAuthenticatedSession()
-  const workspace = defaultWorkspace(session)
+  // The workspace in the address; the person's default only outside one.
+  const workspace = useWorkspace() ?? defaultWorkspace(session)
   const experience = useHomeExperience()
   const projects = useProjects()
   const switchProject = useSwitchProject()

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Project } from '../projects/types'
-import { railOrderAfterDrop, railOrderAfterStep, railProjects } from './railProjects'
+import { railOrderAfterDrop, railOrderAfterStep, railOrderKeepingOthers, railProjects } from './railProjects'
 
 function project(name: string, lastOpenedAt: string | null, pinned = false, railPosition: number | null = null): Project {
   return {
@@ -89,5 +89,13 @@ describe('reordering the rail', () => {
     expect(railOrderAfterStep(rail, 'birch', -1)).toEqual(['birch', 'alder', 'cedar'])
     expect(railOrderAfterStep(rail, 'cedar', 1)).toBeNull()
     expect(railOrderAfterStep(rail, 'elm', -1)).toBeNull()
+  })
+})
+
+describe('railOrderKeepingOthers', () => {
+  it('keeps another workspace’s pins, in their order, when one workspace’s rail is reordered', () => {
+    const elsewhere = (name: string, place: number) => ({ ...project(name, null, true, place), organizationId: 'organization-b' })
+    const all = [project('Alder', null, true, 0), project('Birch', null, true, 1), elsewhere('Yew', 3), elsewhere('Oak', 2), project('Elm', null)]
+    expect(railOrderKeepingOthers(['birch', 'alder'], all)).toEqual(['birch', 'alder', 'oak', 'yew'])
   })
 })

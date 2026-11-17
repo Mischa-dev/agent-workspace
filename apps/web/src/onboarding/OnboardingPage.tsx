@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
+import { useWorkspace } from '../app/workspace'
 import { defaultWorkspace } from '../settings/workspaceChoice'
 import { AppShell } from '../shell/AppShell'
 import { ButtonLink, EmptyState, ErrorState, Icon, PageHeader, SettingsSkeleton } from '../ui'
@@ -19,7 +20,8 @@ import './onboarding.css'
  */
 export function OnboardingPage() {
   const session = useAuthenticatedSession()
-  const workspace = defaultWorkspace(session)
+  // The workspace in the address; the person's default only outside one.
+  const workspace = useWorkspace() ?? defaultWorkspace(session)
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-onboarding">
