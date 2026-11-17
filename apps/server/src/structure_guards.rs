@@ -862,8 +862,8 @@ pub(crate) fn new_table_offences() -> Vec<String> {
             if let Some(rule) = table_rule(&table) {
                 offences.push(format!(
                     "{rule}: {name} creates {table}. AGENTS.md, \"{AGENTS_HEADING}\", rule 6, \
-                     \"Links and events are shared pieces\": add a kind to work_item_links or \
-                     thing_references instead"
+                     \"Links and events are shared pieces\": add a kind to the link store \
+                     (`links`) instead"
                 ));
             }
         }

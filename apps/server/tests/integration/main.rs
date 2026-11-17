@@ -52,6 +52,7 @@ mod hosting_limits;
 mod incoming_hooks;
 mod journey;
 mod layouts;
+mod links_from_text;
 mod links_store;
 mod log_side_effects;
 mod m0_database;

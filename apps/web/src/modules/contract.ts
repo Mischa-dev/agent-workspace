@@ -6,7 +6,7 @@
 export type ToolVerb = 'describe' | 'query' | 'create' | 'change' | 'suggest'
 
 /** How one thing relates to another; every link reads both ways. */
-export type LinkKind = 'part_of' | 'blocks' | 'about' | 'made_from' | 'relates_to' | 'duplicates'
+export type LinkKind = 'part_of' | 'blocks' | 'about' | 'made_from' | 'relates_to' | 'duplicates' | 'embeds'
 
 /** A field's type: the one list, in fields/fieldModel.ts (T1.2). */
 export type { FieldType } from '../fields/fieldModel'

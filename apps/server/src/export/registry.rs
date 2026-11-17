@@ -214,10 +214,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "secret values never leave the server; their names go to needs/secrets.jsonl (H1.9)",
             ),
             (
-                "thing_references",
-                "a cache or index derived from other rows, rebuilt on import",
-            ),
-            (
                 "workos_agent_bindings",
                 "a connection to an outside service, reconnected after import (needs/connections.jsonl)",
             ),
