@@ -3,9 +3,9 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
-import { useAuthenticatedSession } from '../auth/session'
+import { queryKeys } from '../api/queryKeys'
 import { useProjects } from '../projects/hooks'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import {
   Banner,
   Button,
@@ -81,7 +81,6 @@ function Snippet({ text }: { text: string }) {
 
 /** Search everything you can see: messages, threads, tasks, pages, decisions and files by name. */
 export function SearchPage() {
-  const session = useAuthenticatedSession()
   const [params, setParams] = useSearchParams()
   const query = params.get('q') ?? ''
   const projectId = params.get('projectId') ?? ''
@@ -95,7 +94,7 @@ export function SearchPage() {
     setDraft(query)
   }
   const results = useQuery({
-    queryKey: ['search', query, projectId],
+    queryKey: queryKeys.search(query, projectId),
     queryFn: () => {
       const search = new URLSearchParams({ q: query })
       if (projectId) search.set('projectId', projectId)
@@ -112,13 +111,14 @@ export function SearchPage() {
   // Down and Up (or J and K) step through the results once you leave the box.
   const resultsRef = useRef<HTMLDivElement>(null)
   useListKeys(resultsRef, '.aw-row__link')
+  useShellPage({ mainClassName: 'aw-main--page', project: scope })
   const searchEverything = () => {
     const next = new URLSearchParams(params)
     next.delete('projectId')
     setParams(next)
   }
   return (
-    <AppShell mainClassName="aw-main--page" project={scope} user={session.user}>
+    <>
       <div className="aw-page aw-page--reading">
         <PageHeader icon="search" title="Search" />
         <form className="aw-inline-form aw-search__form" onSubmit={submit} role="search">
@@ -203,6 +203,6 @@ export function SearchPage() {
           ) : null}
         </div>
       </div>
-    </AppShell>
+    </>
   )
 }

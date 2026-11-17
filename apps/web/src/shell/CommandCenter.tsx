@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { useWorkspaceHref } from '../app/workspace'
 import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { moduleShortcuts } from '../modules/registry'
 import { useProjects } from '../projects/hooks'
@@ -42,9 +43,13 @@ export function CommandCenter() {
   const homeExperience = useHomeExperience()
   const experiences = { project: current ? projectExperience : null, home: homeExperience }
   const experienceRef = useRef(experiences)
+  // The keys open the workspace's pages in the workspace the person is in.
+  const href = useWorkspaceHref()
+  const hrefRef = useRef(href)
   useEffect(() => {
     currentRef.current = current
     experienceRef.current = experiences
+    hrefRef.current = href
   })
 
   useEffect(() => {
@@ -74,13 +79,13 @@ export function CommandCenter() {
         if (project) go(createTaskHref(project.id, window.location))
         else openCommandMenu('Create task in')
       },
-      search: () => go('/search'),
+      search: () => go(hrefRef.current('/search')),
       'mark-all-read': openMarkAllRead,
       'previous-conversation': () => moveInSidebar(-1, false),
       'next-conversation': () => moveInSidebar(1, false),
       'previous-unread': () => moveInSidebar(-1, true),
       'next-unread': () => moveInSidebar(1, true),
-      'go-home': () => go('/home'),
+      'go-home': () => go(hrefRef.current('/home')),
       'go-settings': () => {
         const project = currentRef.current
         go(project ? projectSettingsHref(project.id) : '/settings')
@@ -93,7 +98,7 @@ export function CommandCenter() {
       const shortcut = registered.get(action)
       if (shortcut) {
         if (shortcut.inProject) inProject(shortcut.path)
-        else go(shortcut.path)
+        else go(hrefRef.current(shortcut.path))
         return
       }
       if (action in handlers) handlers[action as ShellAction]()

@@ -1,4 +1,5 @@
 import { apiUrl, requestJson } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 
 /**
  * Saved views, My work, the timeline, templates, imports and export. The
@@ -8,11 +9,15 @@ import { apiUrl, requestJson } from '../api/client'
  */
 export const viewKeys = {
   views: (projectId: string) => ['project', projectId, 'saved-views'] as const,
-  myWork: ['my-work'] as const,
+  /** The project's views as a picker lists them (automations). */
+  viewChoices: (projectId: string) => ['project', projectId, 'views'] as const,
+  myWork: queryKeys.myWork,
   timeline: (projectId: string, query: Record<string, string>) => ['project', projectId, 'work-items', 'timeline-chart', query] as const,
   templates: (projectId: string) => ['project', projectId, 'task-templates'] as const,
   imports: (projectId: string) => ['project', projectId, 'task-imports'] as const,
   taskImport: (projectId: string, importId: string) => ['project', projectId, 'task-imports', importId] as const,
+  /** Every cached list of a workspace's project templates. */
+  projectTemplateLists: (organizationId: string) => ['organization', organizationId, 'project-templates'] as const,
   projectTemplates: (organizationId: string, includeArchived = false) =>
     ['organization', organizationId, 'project-templates', includeArchived ? 'all' : 'active'] as const,
 }

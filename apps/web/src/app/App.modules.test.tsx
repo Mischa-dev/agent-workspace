@@ -420,7 +420,7 @@ describe('modules that are off', () => {
     window.history.replaceState({}, '', `/whiteboards/${boardId}`)
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Whiteboards is turned off' })).toBeVisible()
-    expect(window.location.pathname).toBe(`/whiteboards/${boardId}`)
+    expect(window.location.pathname).toBe(`/w/mischa/whiteboards/${boardId}`)
   })
 
   it('a whiteboard across another workspace follows that workspace’s modules', async () => {

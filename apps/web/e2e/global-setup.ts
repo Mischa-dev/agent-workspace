@@ -12,6 +12,7 @@ import {
   seeded,
   serverBinary,
   serverOrigin,
+  staticOrigin,
   storageStatePath,
   webOrigin,
 } from './environment'
@@ -69,7 +70,8 @@ export default async function globalSetup() {
     AGENT_WORKSPACE_DATABASE_URL: `${databaseBase}/${databaseName}`,
     AGENT_WORKSPACE_SERVER_ADDR: `127.0.0.1:${ports.server}`,
     AGENT_WORKSPACE_WEBHOOK_ADDR: `127.0.0.1:${ports.webhook}`,
-    AGENT_WORKSPACE_ALLOWED_ORIGINS: webOrigin,
+    // The static-host spec serves the built app from its own origin (W1.38).
+    AGENT_WORKSPACE_ALLOWED_ORIGINS: `${webOrigin},${staticOrigin}`,
     AGENT_WORKSPACE_PUBLIC_ORIGIN: webOrigin,
     AGENT_WORKSPACE_DATA_ROOT: path.join(runtimeRoot, 'data'),
     AGENT_WORKSPACE_WEB_ROOT: path.join(runtimeRoot, 'web'),
@@ -129,6 +131,8 @@ export default async function globalSetup() {
     process.env.E2E_PASSWORD = password
     process.env.E2E_PROJECT_ID = seededIds.projectId
     process.env.E2E_CHANNEL_ID = seededIds.channelId
+    // For specs that set up what the API can't yet, such as a second workspace.
+    process.env.E2E_DATABASE_URL = `${databaseBase}/${databaseName}`
   } catch (error) {
     await teardown()
     throw error

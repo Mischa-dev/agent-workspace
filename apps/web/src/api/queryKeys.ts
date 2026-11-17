@@ -1,7 +1,30 @@
 export const queryKeys = {
   session: ['session'] as const,
   projects: ['projects', 'rail'] as const,
+  /** Every project list: the rail, search and the archived list. */
+  projectLists: ['projects'] as const,
+  projectSearch: (query: string) => ['projects', 'search', query] as const,
+  projectsArchived: ['projects', 'archived'] as const,
   project: (projectId: string) => ['project', projectId] as const,
+  /** One thing and its links (`GET /api/v1/things/{kind}/{id}`), shared by embeds and chips. */
+  things: ['things'] as const,
+  thing: (kind: string, id: string) => ['things', kind, id] as const,
+  /** Where a thing is referenced from ("Referenced in"). */
+  thingReferences: (kind: string, id: string) => ['things', kind, id, 'references'] as const,
+  /** DMs and groups (the Messages overview). */
+  direct: ['direct'] as const,
+  inbox: ['inbox'] as const,
+  myWork: ['my-work'] as const,
+  /** Search results, by query and the project they're narrowed to. */
+  searchAll: ['search'] as const,
+  search: (query: string, projectId: string | undefined) => ['search', query, projectId] as const,
+  /** A workspace's module switches (Settings › Modules). */
+  workspaceModules: (organizationId: string) => ['organization', organizationId, 'modules'] as const,
+  /** Which project a task key opens. */
+  taskKey: (projectId: string, key: string) => ['project', projectId, 'task-key', key] as const,
+  /** The command menu's task results for one project. */
+  commandMenuTasks: (projectId: string, query: string) =>
+    ['project', projectId, 'command-menu', 'tasks', query] as const,
   navigation: (projectId: string) =>
     ['project', projectId, 'navigation'] as const,
   executionProfiles: (projectId: string) =>
@@ -36,6 +59,14 @@ export const queryKeys = {
     ['project', projectId, 'work-items', 'workflow'] as const,
   workItemAssignees: (projectId: string, query: string) =>
     ['project', projectId, 'work-items', 'assignees', query] as const,
+  workItemAssigneesByIds: (projectId: string, ids: readonly string[]) =>
+    ['project', projectId, 'work-items', 'assignees', '', 'ids', ids.join(',')] as const,
+  workItemEmbed: (projectId: string, filters: Record<string, unknown>) =>
+    ['project', projectId, 'work-items', 'embed', filters] as const,
+  taskMoveDestinations: (actorId: string, projectId: string, taskId: string) =>
+    ['task-move-destinations', actorId, projectId, taskId] as const,
+  /** Repositories a task can link to, for the task's picker. */
+  repositoryPicker: (projectId: string) => ['projects', projectId, 'repositories', 'work-item-picker'] as const,
   workItemTimeline: (projectId: string, workItemId: string) =>
     ['project', projectId, 'work-items', 'timeline', workItemId] as const,
   workItemCommentRevisions: (projectId: string, workItemId: string, commentId: string) =>
@@ -87,8 +118,25 @@ export const queryKeys = {
       selectedChannelId,
       mode,
     ] as const,
+  /** Everything cached about one conversation in a project. */
+  conversation: (projectId: string, conversationId: string) =>
+    ['project', projectId, 'conversation', conversationId] as const,
+  /** A thread's origin message, shown above its replies. */
+  originMessage: (projectId: string, parentId: string, originId: string) =>
+    ['project', projectId, 'conversation', parentId, 'timeline', 'origin', originId] as const,
+  conversationRestorable: (projectId: string, conversationId: string) =>
+    ['project', projectId, 'conversation', conversationId, 'restorable'] as const,
   conversationSidebarRoot: (projectId: string) =>
     ['project', projectId, 'conversation-sidebar'] as const,
   mentionableActors: (projectId: string, query: string) =>
     ['project', projectId, 'mentionable-actors', query] as const,
+}
+
+/** Whether a cached key is one thing's (`queryKeys.thing`), or any "Referenced in" list. */
+export function isThingKey(key: readonly unknown[], kind: string, id: string) {
+  return key[0] === queryKeys.things[0] && key[1] === kind && key[2] === id
+}
+
+export function isThingReferencesKey(key: readonly unknown[]) {
+  return key[0] === queryKeys.things[0] && key[3] === 'references'
 }

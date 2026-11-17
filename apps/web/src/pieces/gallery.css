@@ -1,0 +1,64 @@
+/* The gallery piece (W1.20): cards in as many columns as fit. */
+
+.aw-gallery {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-gallery__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-gallery__card {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1-5);
+  min-width: 0;
+  min-height: 112px;
+  padding: var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+  color: var(--content-fg);
+  font: var(--t-ui);
+}
+
+.aw-gallery__card[aria-current='true'] {
+  border-color: var(--accent);
+}
+
+.aw-gallery__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-gallery__title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+  text-decoration: none;
+}
+
+.aw-gallery__title:hover {
+  text-decoration: underline;
+}
+
+.aw-gallery__badge {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-gallery__more {
+  justify-self: center;
+}

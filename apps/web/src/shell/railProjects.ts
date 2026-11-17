@@ -54,3 +54,15 @@ export function railOrderAfterStep(visible: Project[], projectId: string, step: 
   order.splice(to, 0, projectId)
   return order
 }
+
+/**
+ * The whole pinned order to save after reordering one workspace's rail: its
+ * new order, then every other pin in the order it had. The server clears
+ * the place of a pin the order leaves out, so leaving another workspace's
+ * pins out would lose their order.
+ */
+export function railOrderKeepingOthers(order: string[], projects: Project[]): string[] {
+  const placed = new Set(order)
+  const others = projects.filter((project) => project.navigation.pinned && !placed.has(project.id)).sort(byPlace)
+  return [...order, ...others.map((project) => project.id)]
+}
