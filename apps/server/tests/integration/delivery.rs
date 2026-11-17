@@ -258,6 +258,122 @@ async fn a_read_without_a_cursor_recovers_once_its_place_is_gone() {
 }
 
 #[tokio::test]
+async fn a_narrowed_role_hears_no_task_and_a_secret_is_shown_once() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .agent("mara", "member")
+        .custom_role(
+            "No tasks",
+            &["projects.view", "channels.post", "directory.view"],
+        )
+        .build("delivery_narrowed")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let mara = &world.agents["mara"];
+    // Mara holds a role without tasks.view in WORK.
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2::uuid AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["No tasks"]).expect("role id"))
+    .bind(world.project("WORK"))
+    .bind(mara.actor)
+    .execute(world.pool())
+    .await
+    .expect("narrow Mara");
+    // Both ask to hear everything they can see.
+    let mut starts = Vec::new();
+    for agent in [rook, mara] {
+        let start = read(&world, agent, None).await["nextCursor"].clone();
+        let (_, listed) = agent
+            .call(
+                &world.app,
+                Call::Tool {
+                    name: "connection_list",
+                    arguments: json!({}),
+                },
+            )
+            .await;
+        let (_, widened) = agent
+            .call(
+                &world.app,
+                Call::Tool {
+                    name: "connection_update",
+                    arguments: json!({
+                        "connectionId": listed["value"]["connections"][0]["id"],
+                        "subscriptions": [{ "kinds": ["*"], "minReason": "visible" }],
+                    }),
+                },
+            )
+            .await;
+        assert_eq!(widened["outcome"], "ok", "{widened}");
+        starts.push(start);
+    }
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/task_create", world.organization),
+            Some(&Uuid::now_v7().to_string()),
+            json!({ "projectId": world.project("WORK"), "title": "Ship the release" }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{made}");
+    let rook_heard = read(&world, rook, Some(&starts[0])).await;
+    assert!(
+        !of_type(&rook_heard, "task.created").is_empty(),
+        "{rook_heard}"
+    );
+    let mara_heard = read(&world, mara, Some(&starts[1])).await;
+    assert!(
+        of_type(&mara_heard, "task.created").is_empty(),
+        "a role without tasks.view hears no task: {mara_heard}"
+    );
+
+    // A webhook's secret is shown once: a retry of the same call answers
+    // without it, and no copy is kept for the retry.
+    let create = || {
+        rook.call(
+            &world.app,
+            Call::Tool {
+                name: "connection_create",
+                arguments: json!({
+                    "name": "Runner",
+                    "webhookUrl": "https://hooks.example.test/once",
+                    "clientRequestId": "shown-once",
+                }),
+            },
+        )
+    };
+    let (_, first) = create().await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    let secret = first["value"]["webhookSecret"]
+        .as_str()
+        .expect("secret shown")
+        .to_owned();
+    let (_, again) = create().await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(
+        again["value"]["connection"]["id"],
+        first["value"]["connection"]["id"]
+    );
+    assert!(again["value"]["webhookSecret"].is_null(), "{again}");
+    let kept = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM idempotency_keys WHERE strpos(response_body::text, $1) > 0",
+    )
+    .bind(&secret)
+    .fetch_one(world.pool())
+    .await
+    .expect("idempotency keys");
+    assert_eq!(kept, 0, "the secret is kept for a replay");
+    world.finish().await;
+}
+
+#[tokio::test]
 async fn pushes_are_signed_the_standard_way_and_carry_no_text() {
     let Some(world) = WorldBuilder::default()
         .project("WORK")

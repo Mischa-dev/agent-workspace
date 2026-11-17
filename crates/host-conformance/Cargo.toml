@@ -11,7 +11,7 @@ name = "host-conformance"
 path = "src/main.rs"
 
 [dependencies]
-agent-workspace-host-protocol = { path = "../host-protocol" }
+agent-workspace-host-protocol = { version = "0.0.1", path = "../host-protocol" }
 axum = { version = "0.8.7", features = ["json"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -20,7 +20,7 @@ tokio = { version = "1.48.0", features = ["macros", "net", "process", "rt-multi-
 uuid = { version = "1.18.1", features = ["serde", "v7"] }
 
 [dev-dependencies]
-agent-workspace-minimal-host = { path = "../../examples/minimal-host" }
+agent-workspace-minimal-host = { version = "0.0.1", path = "../../examples/minimal-host" }
 
 [lints]
 workspace = true
