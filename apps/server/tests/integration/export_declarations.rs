@@ -264,10 +264,16 @@ async fn every_workspace_table_is_exported_or_says_why() {
     let lines = export::export_kind(&mut connection, module, kind, workspaces[0])
         .await
         .expect("export");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].data["name"], "export-a project");
+    // The project and the workspace's own space (K4.10), which every
+    // workspace has.
+    let mut names = lines
+        .iter()
+        .map(|line| line.data["name"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, vec!["Workspace", "export-a project"]);
     let before = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT to_jsonb(p) FROM projects p WHERE organization_id = $1",
+        "SELECT to_jsonb(p) FROM projects p WHERE organization_id = $1 AND project_key = 'EX'",
     )
     .bind(workspaces[0])
     .fetch_one(&mut *connection)
@@ -286,12 +292,18 @@ async fn every_workspace_table_is_exported_or_says_why() {
         .await
         .expect("workspace");
     let mut connection = target.acquire().await.expect("connection");
+    // Making the workspace made its own space again; the project comes
+    // back beside it.
+    let lines = lines
+        .into_iter()
+        .filter(|line| line.data["name"] == "export-a project")
+        .collect::<Vec<_>>();
     let inserted = export::import_kind(&mut connection, module, kind, &lines)
         .await
         .expect("import");
     assert_eq!(inserted, 1);
     let after = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT to_jsonb(p) FROM projects p WHERE organization_id = $1",
+        "SELECT to_jsonb(p) FROM projects p WHERE organization_id = $1 AND project_key = 'EX'",
     )
     .bind(workspaces[0])
     .fetch_one(&mut *connection)

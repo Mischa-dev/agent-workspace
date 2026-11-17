@@ -2285,7 +2285,7 @@ pub(super) async fn task_open(
             None => None,
         };
         let planning_links =
-            planning::visible_links(&mut connection, principal, project_id, task_id).await?;
+            planning::visible_links(state, &mut connection, principal, project_id, task_id).await?;
         let watchers = planning::visible_watchers(&mut connection, project_id, task_id).await?;
         let fields = field_tools::task_fields(&mut connection, project_id, task_id).await?;
         let collection = sqlx::query_scalar::<_, String>(

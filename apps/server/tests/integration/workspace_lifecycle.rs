@@ -606,6 +606,12 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
         .execute(&t.pool)
         .await
         .expect("set the request aside");
+    // Its envelope in the thing registry goes with it.
+    sqlx::query("DELETE FROM things WHERE id = $1")
+        .bind(b_request)
+        .execute(&t.pool)
+        .await
+        .expect("set the request's envelope aside");
 
     // B: every row exactly as it was, and its agent still works.
     assert_eq!(sweep_ids(&t.pool, b.organization).await, b_ids);

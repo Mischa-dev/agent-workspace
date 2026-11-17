@@ -234,6 +234,8 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .fetch_one(&mut *transaction)
     .await?;
 
+    // The seed runs against older schemas in the upgrade tests, so it
+    // leaves conversations.workspace_id to its fill trigger (K4.4).
     let channel_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO conversations (id, project_id, kind, name)

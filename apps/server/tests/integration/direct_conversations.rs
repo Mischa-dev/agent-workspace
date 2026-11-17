@@ -289,8 +289,9 @@ async fn agents_in_your_projects_can_be_messaged() {
     let watcher = connect(build, "Watcher", "viewer").await;
     let off = connect(build, "Off", "member").await;
     let ghost = connect(elsewhere, "Ghost", "member").await;
-    // Stale also works in Build, but its home project is archived, so its
-    // connection can't reach anything any more.
+    // Stale also works in Build, but its connection is switched off, so it
+    // can't reach anything any more. (K1.6: archiving the project it was
+    // first added to no longer does that; the connection is the workspace's.)
     let attic = project("ATTIC").await;
     let stale = connect(attic, "Stale", "member").await;
     let owner = owner_actor(&pool).await;
@@ -306,12 +307,13 @@ async fn agents_in_your_projects_can_be_messaged() {
     .execute(&pool)
     .await
     .expect("add Stale to Build");
-    sqlx::query("UPDATE projects SET archived_at = now(), archived_by_actor_id = $2 WHERE id = $1")
-        .bind(attic)
-        .bind(owner)
-        .execute(&pool)
-        .await
-        .expect("archive Attic");
+    sqlx::query(
+        "UPDATE external_agent_connections SET status = 'disabled', disabled_at = now() WHERE actor_id = $1",
+    )
+    .bind(stale)
+    .execute(&pool)
+    .await
+    .expect("switch Stale's connection off");
     // The owner leaves Elsewhere, so Ghost shares no project with them.
     sqlx::query(
         "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
@@ -346,7 +348,7 @@ async fn agents_in_your_projects_can_be_messaged() {
     );
     assert!(
         !listed.contains(&stale),
-        "an agent whose home project is archived can't answer"
+        "an agent whose connection is off can't answer"
     );
 
     let (status, dm) = call(
@@ -971,14 +973,13 @@ async fn sidebar_never_lists_other_peoples_direct_threads() {
     assert_eq!(status, StatusCode::OK);
 }
 
-/// `conversation_visible_to` alone only says whether a conversation is
-/// project-wide or the viewer is on its member list, so a member of another
-/// workspace passes it for a project-wide channel; paired with
-/// `actor_can_access_project` the answer is right. `conversation_readable_by`
-/// answers exactly as `conversation_visible_to` does (ruling R32). When K4
-/// makes the rule whole, the stranger's line flips.
+/// Since K4.4 `conversation_visible_to` is whole: a member of another
+/// workspace no longer passes it for a project-wide channel, so the rule
+/// alone and the rule paired with `actor_can_access_project` agree.
+/// `conversation_readable_by` answers exactly as `conversation_visible_to`
+/// does (ruling R32).
 #[tokio::test]
-async fn conversation_visible_to_alone_does_not_check_membership() {
+async fn conversation_visible_to_is_whole_on_its_own() {
     use super::{
         mcp_tasks::space,
         message_edits::create_channel,
@@ -1011,6 +1012,8 @@ async fn conversation_visible_to_alone_does_not_check_membership() {
     assert!(status.is_success(), "DM: {status} {dm}");
     let dm = uuid(&dm["conversation"], "id");
     let bystander = add_person(&setup, &[&project, &space], "mara", "mara", "Mara").await;
+    // In the workspace, but not in the channel's space.
+    let outsider = add_person(&setup, &[&space], "olga", "olga", "Olga").await;
 
     // A person in another workspace only.
     let stranger = Uuid::now_v7();
@@ -1036,6 +1039,12 @@ async fn conversation_visible_to_alone_does_not_check_membership() {
     .expect("stranger membership");
 
     let channel = channel.parse::<Uuid>().expect("channel");
+    // A members-only space: only its members read its channels.
+    sqlx::query("UPDATE projects SET visibility = 'members' WHERE id = $1")
+        .bind(project.parse::<Uuid>().expect("project"))
+        .execute(pool)
+        .await
+        .expect("members-only space");
     let answers = |conversation: Uuid, viewer: Uuid| async move {
         sqlx::query_as::<_, (bool, bool, bool)>(
             r#"
@@ -1054,8 +1063,15 @@ async fn conversation_visible_to_alone_does_not_check_membership() {
         .expect("visibility")
     };
     for (what, conversation, viewer, alone, paired) in [
-        ("a stranger, the channel", channel, stranger, true, false),
+        ("a stranger, the channel", channel, stranger, false, false),
         ("a member, the channel", channel, member, true, true),
+        (
+            "outside the channel's space",
+            channel,
+            outsider,
+            false,
+            false,
+        ),
         ("the owner, the channel", channel, owner, true, true),
         ("a member outside the DM", dm, bystander, false, false),
         ("a member in the DM", dm, member, true, true),
@@ -1068,4 +1084,335 @@ async fn conversation_visible_to_alone_does_not_check_membership() {
         );
         assert_eq!(readable, visible, "{what}: conversation_readable_by");
     }
+    // An open space's channels are readable by everyone in the workspace by
+    // the rule; the routes still ask for membership until K4.6.
+    sqlx::query("UPDATE projects SET visibility = 'workspace' WHERE id = $1")
+        .bind(project.parse::<Uuid>().expect("project"))
+        .execute(pool)
+        .await
+        .expect("open space");
+    let (visible, _, readable) = answers(channel, outsider).await;
+    assert!(visible && readable, "open space, a workspace member");
+    let (visible, _, _) = answers(channel, stranger).await;
+    assert!(!visible, "open space, another workspace");
+}
+
+/// A kept DM (ruling R20) ends with its participants' workspace membership; a
+/// personal one doesn't, by the rule alone (the routes still check
+/// membership until K4.6). No role passes for a DM: neither the owner nor an
+/// admin outside it reads it, kept or not.
+#[tokio::test]
+async fn a_kept_dm_ends_with_workspace_membership_and_no_role_reads_a_dm() {
+    use super::support::{
+        app::{mcp, send, tool},
+        world::WorldBuilder,
+    };
+
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("ben", "admin")
+        .agent("mara", "member")
+        .dm("ana", "mara")
+        .build("kept_dm")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let ana = &world.people["ana"];
+    let ben = &world.people["ben"];
+    let mara = &world.agents["mara"];
+    let owner = world.owner.actor;
+    let dm = world.conversations["ana+mara"].clone();
+    let dm_id = dm.parse::<Uuid>().expect("DM");
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin' WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(ben.actor)
+    .execute(pool)
+    .await
+    .expect("ben is a workspace admin");
+    let word = format!("keptword{}", Uuid::now_v7().simple());
+    let (status, sent) = send(
+        &world.app,
+        ana.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{dm}/messages"),
+            Some("kept-dm-message"),
+            json!({ "content": text_content(&word) }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    sqlx::query("UPDATE conversations SET kept = true WHERE id = $1")
+        .bind(dm_id)
+        .execute(pool)
+        .await
+        .expect("keep the DM");
+
+    let timeline = format!("/api/v1/conversations/{dm}/timeline");
+    let search = format!("/api/v1/search?q={word}");
+    let read = |token: String, session: String| {
+        let app = world.app.clone();
+        let dm = dm.clone();
+        async move {
+            tool(
+                &app,
+                &token,
+                &session,
+                "conversation_read",
+                json!({ "conversationId": dm }),
+            )
+            .await
+        }
+    };
+
+    // While both are in the workspace, both read it.
+    assert!(visible(pool, dm_id, ana.actor).await);
+    assert!(visible(pool, dm_id, mara.actor).await);
+    let (status, _) = send(
+        &world.app,
+        ana.browser.request("GET", &timeline, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let answer = read(mara.token.clone(), mara.session.clone()).await;
+    assert!(answer.to_string().contains(&word), "{answer}");
+
+    // Nobody outside it reads it, whatever their role.
+    for (who, viewer) in [("the owner", owner), ("an admin", ben.actor)] {
+        assert!(!visible(pool, dm_id, viewer).await, "{who}, kept");
+    }
+    for (who, browser) in [
+        ("the owner", &world.owner.browser),
+        ("an admin", &ben.browser),
+    ] {
+        let (status, _) = send(
+            &world.app,
+            browser.request("GET", &timeline, None, Value::Null),
+        )
+        .await;
+        assert!(
+            !status.is_success(),
+            "{who} read the DM's timeline: {status}"
+        );
+        let (_, hits) = send(
+            &world.app,
+            browser.request("GET", &search, None, Value::Null),
+        )
+        .await;
+        assert!(
+            !hits.to_string().contains(&word),
+            "{who} found the DM: {hits}"
+        );
+    }
+
+    // Each participant's workspace membership ends: the kept DM ends with it.
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = false WHERE organization_id = $1 AND actor_id = ANY($2)",
+    )
+    .bind(world.organization)
+    .bind(vec![ana.actor, mara.actor])
+    .execute(pool)
+    .await
+    .expect("membership ends");
+    assert!(!visible(pool, dm_id, ana.actor).await, "ana, kept");
+    assert!(!visible(pool, dm_id, mara.actor).await, "mara, kept");
+    let (status, _) = send(
+        &world.app,
+        ana.browser.request("GET", &timeline, None, Value::Null),
+    )
+    .await;
+    assert!(!status.is_success(), "ana read the kept DM: {status}");
+    let (_, hits) = send(
+        &world.app,
+        ana.browser.request("GET", &search, None, Value::Null),
+    )
+    .await;
+    assert!(
+        !hits.to_string().contains(&word),
+        "ana found the kept DM: {hits}"
+    );
+    // Mara's token may be refused outright; either way the answer holds
+    // nothing of the DM.
+    let response = mcp(
+        &world.app,
+        &mara.token,
+        Some(&mara.session),
+        json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "conversation_read", "arguments": { "conversationId": dm } }
+        }),
+    )
+    .await;
+    let body = to_bytes(response.into_body(), 4_000_000)
+        .await
+        .expect("MCP body");
+    let body = String::from_utf8_lossy(&body);
+    assert!(!body.contains(&word), "mara read the kept DM: {body}");
+
+    // A personal DM stays its participants' by the rule alone; still no role
+    // passes.
+    sqlx::query("UPDATE conversations SET kept = false WHERE id = $1")
+        .bind(dm_id)
+        .execute(pool)
+        .await
+        .expect("make it personal");
+    assert!(visible(pool, dm_id, ana.actor).await, "ana, personal");
+    assert!(visible(pool, dm_id, mara.actor).await, "mara, personal");
+    for (who, viewer) in [("the owner", owner), ("an admin", ben.actor)] {
+        assert!(!visible(pool, dm_id, viewer).await, "{who}, personal");
+    }
+    world.finish().await;
+}
+
+/// The timings in the K4.4 migration's header: the conversation list and
+/// message search, with the rule as it was and as K4.4 made it whole.
+/// 50,000 messages over 200 channels and 200 DMs, one viewer. Run by hand:
+/// `cargo test --test integration conversation_visibility_timings -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "timings, run by hand"]
+async fn conversation_visibility_timings() {
+    use super::support::world::WorldBuilder;
+
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("ben", "member")
+        .dm("ana", "ben")
+        .build("visibility_timings")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let ana = world.people["ana"].actor;
+    let ben = world.people["ben"].actor;
+    let work = world.project("WORK").parse::<Uuid>().expect("project");
+    let space = sqlx::query_scalar::<_, Uuid>(
+        "SELECT project_id FROM conversations WHERE id = $1 -- visibility: the test's own DM",
+    )
+    .bind(world.conversations["ana+ben"].parse::<Uuid>().expect("DM"))
+    .fetch_one(pool)
+    .await
+    .expect("space");
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (id, project_id, kind, name, visibility)
+        SELECT gen_random_uuid(), $1, 'channel', 'timing-' || g,
+               CASE WHEN g % 4 = 0 THEN 'members' ELSE 'project' END
+        FROM generate_series(1, 200) g
+        "#,
+    )
+    .bind(work)
+    .execute(pool)
+    .await
+    .expect("channels");
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (id, project_id, kind, name, visibility, dm_key)
+        SELECT gen_random_uuid(), $1, 'dm', 'Direct message', 'members', 'timing-' || g
+        FROM generate_series(1, 200) g
+        "#,
+    )
+    .bind(space)
+    .execute(pool)
+    .await
+    .expect("DMs");
+    // Ana is in every other DM and every other private channel.
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+        SELECT c.project_id, c.id, member, $1
+        FROM conversations c -- visibility: seeding the test's rows
+        CROSS JOIN LATERAL (VALUES ($1), ($2)) AS members (member)
+        WHERE c.name LIKE 'timing-%' OR c.dm_key LIKE 'timing-%'
+        "#,
+    )
+    .bind(ben)
+    .bind(ana)
+    .execute(pool)
+    .await
+    .expect("members");
+    sqlx::query(
+        r#"
+        DELETE FROM conversation_members m
+        USING conversations c -- visibility: seeding the test's rows
+        WHERE c.id = m.conversation_id AND m.actor_id = $1
+          AND (c.dm_key LIKE 'timing-%' OR c.name LIKE 'timing-%')
+          AND get_byte(uuid_send(c.id), 15) % 2 = 0
+        "#,
+    )
+    .bind(ana)
+    .execute(pool)
+    .await
+    .expect("half the memberships");
+    sqlx::query(
+        r#"
+        INSERT INTO messages (id, project_id, conversation_id, author_actor_id, content, plain_text)
+        SELECT gen_random_uuid(), c.project_id, c.id, $1,
+               '{"version":1,"nodes":[]}', 'status update number ' || g
+        FROM (SELECT id, project_id, row_number() OVER (ORDER BY id) - 1 AS n
+              FROM conversations -- visibility: seeding the test's rows
+              WHERE name LIKE 'timing-%' OR dm_key LIKE 'timing-%') c
+        JOIN generate_series(0, 49999) g ON g % 400 = c.n
+        "#,
+    )
+    .bind(ben)
+    .execute(pool)
+    .await
+    .expect("messages");
+    sqlx::query("ANALYZE").execute(pool).await.expect("analyze");
+    // The rule as it was before K4.4 (migration 0037), for comparison.
+    sqlx::query(
+        r#"
+        CREATE FUNCTION conversation_visible_before(target UUID, viewer UUID)
+        RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+            SELECT EXISTS (
+                SELECT 1 FROM conversations conversation
+                LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
+                WHERE conversation.id = target
+                  AND (COALESCE(parent.visibility, conversation.visibility) = 'project'
+                       OR EXISTS (SELECT 1 FROM conversation_members member
+                                  WHERE member.conversation_id =
+                                        COALESCE(conversation.parent_channel_id, conversation.id)
+                                    AND member.actor_id = viewer)))
+        $$
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("old rule");
+
+    let time = |sql: String| async move {
+        let mut runs = Vec::new();
+        for _ in 0..7 {
+            let plan =
+                sqlx::query_scalar::<_, Value>(&format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}"))
+                    .bind(ana)
+                    .bind(vec![work, space])
+                    .fetch_one(pool)
+                    .await
+                    .expect("explain");
+            runs.push(plan[0]["Execution Time"].as_f64().expect("time"));
+        }
+        runs.sort_by(f64::total_cmp);
+        runs[runs.len() / 2]
+    };
+    for rule in ["conversation_visible_before", "conversation_visible_to"] {
+        let list = time(format!(
+            "SELECT c.id FROM conversations c WHERE c.project_id = ANY($2) AND {rule}(c.id, $1)"
+        ))
+        .await;
+        let search = time(format!(
+            "SELECT m.id FROM messages m WHERE m.project_id = ANY($2) \
+             AND m.search_vector @@ plainto_tsquery('english', 'status update') \
+             AND {rule}(m.conversation_id, $1)"
+        ))
+        .await;
+        println!("{rule}: conversation list {list:.1} ms, message search {search:.1} ms");
+    }
+    world.finish().await;
 }
