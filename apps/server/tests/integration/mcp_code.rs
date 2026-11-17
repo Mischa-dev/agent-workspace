@@ -448,7 +448,7 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
         )
         .await;
         tasks.push(
-            created["workItemId"]
+            created["value"]["workItemId"]
                 .as_str()
                 .unwrap_or_else(|| panic!("task: {created}"))
                 .parse::<Uuid>()
@@ -808,7 +808,10 @@ async fn agent_list_shows_work_and_never_secrets() {
         json!({"projectId": "WORK", "title": "Offline mode"}),
     )
     .await;
-    let task = created["workItemId"].as_str().expect("task").to_owned();
+    let task = created["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let claimed = call(
         MARA,
         "task_claim",
@@ -1849,7 +1852,7 @@ async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
         json!({"projectId": seed.project_id.to_string(), "title": "Secret run task"}),
     )
     .await;
-    let task = created["workItemId"]
+    let task = created["value"]["workItemId"]
         .as_str()
         .unwrap_or_else(|| panic!("task: {created}"))
         .parse::<Uuid>()

@@ -173,6 +173,26 @@ pub enum Trigger {
         #[schemars(with = "Option<String>")]
         collection_id: Option<Uuid>,
     },
+    /// A page is saved as a new version (K3.5), in the project or this one.
+    /// Takes no task conditions; its actions notify or post a message.
+    PageChanged {
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        page_id: Option<Uuid>,
+    },
+    /// A sheet's cells, tabs or name change, in the project or this one.
+    SheetChanged {
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        sheet_id: Option<Uuid>,
+    },
+    /// A whiteboard is saved as a new version (once per edit session), in
+    /// the project or this one.
+    WhiteboardChanged {
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        whiteboard_id: Option<Uuid>,
+    },
     /// One of the maker's provider accounts resets soon with capacity left
     /// (the capacity alert's "resets soon" rule). Launches use that account.
     CapacityWindow {
@@ -200,6 +220,9 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "message_posted",
     "record_created",
     "record_changed",
+    "page_changed",
+    "sheet_changed",
+    "whiteboard_changed",
     "schedule",
     "capacity_window",
 ];
@@ -223,17 +246,42 @@ impl Trigger {
             Self::MessagePosted { .. } => "message_posted",
             Self::RecordCreated { .. } => "record_created",
             Self::RecordChanged { .. } => "record_changed",
+            Self::PageChanged { .. } => "page_changed",
+            Self::SheetChanged { .. } => "sheet_changed",
+            Self::WhiteboardChanged { .. } => "whiteboard_changed",
             Self::Schedule { .. } => "schedule",
             Self::CapacityWindow { .. } => "capacity_window",
         }
     }
 
-    /// Fired by a collection's records, not tasks (AWD-110).
+    /// Fired by a collection's records (AWD-110) or a page, sheet or board
+    /// (K3.5), not tasks.
     fn about_records(&self) -> bool {
         matches!(
             self,
-            Self::RecordCreated { .. } | Self::RecordChanged { .. }
+            Self::RecordCreated { .. }
+                | Self::RecordChanged { .. }
+                | Self::PageChanged { .. }
+                | Self::SheetChanged { .. }
+                | Self::WhiteboardChanged { .. }
         )
+    }
+
+    /// The page, sheet or board a document trigger names: its kind, the
+    /// table it lives in, the column set when it's put away, and its id.
+    fn document(&self) -> Option<(&'static str, &'static str, &'static str, Uuid)> {
+        match self {
+            Self::PageChanged { page_id: Some(id) } => {
+                Some(("page", "project_pages", "archived_at", *id))
+            }
+            Self::SheetChanged { sheet_id: Some(id) } => {
+                Some(("sheet", "sheets", "archived_at", *id))
+            }
+            Self::WhiteboardChanged {
+                whiteboard_id: Some(id),
+            } => Some(("whiteboard", "whiteboards", "deleted_at", *id)),
+            _ => None,
+        }
     }
 
     /// Schedules and capacity windows aren't about one task: their
@@ -328,7 +376,9 @@ pub enum Recipients {
 /// What a rule does. Text may use {{task.key}}, {{task.title}},
 /// {{task.url}}, {{task.status}}, {{run.state}}, {{pr.number}},
 /// {{pr.title}}, {{pr.url}}, {{record.title}}, {{record.url}},
-/// {{collection.name}}, {{rule.name}} and {{event}}.
+/// {{collection.name}}, {{page.title}}, {{page.url}}, {{sheet.title}},
+/// {{sheet.url}}, {{whiteboard.title}}, {{whiteboard.url}}, {{rule.name}}
+/// and {{event}}.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(
     tag = "kind",
@@ -487,6 +537,15 @@ fn check_shape(
             if !conditions.is_empty() {
                 return Err(AppError::Invalid(
                     "a record rule has no task conditions: name its collection instead",
+                ));
+            }
+        }
+        Trigger::PageChanged { .. }
+        | Trigger::SheetChanged { .. }
+        | Trigger::WhiteboardChanged { .. } => {
+            if !conditions.is_empty() {
+                return Err(AppError::Invalid(
+                    "a page, sheet or board rule has no task conditions: name the one it watches instead",
                 ));
             }
         }
@@ -839,6 +898,7 @@ async fn check_references(
     conditions: &Conditions,
     trigger: &Trigger,
     actions: &[Action],
+    fresh_collections: &[Uuid],
 ) -> Result<(), AppError> {
     let pool = &state.pool;
     if let Some(view_id) = conditions.view_id {
@@ -869,6 +929,7 @@ async fn check_references(
     | Trigger::RecordChanged {
         collection_id: Some(id),
     } = trigger
+        && !fresh_collections.contains(id)
     {
         let found = sqlx::query_scalar::<_, bool>(
             // Records that act like tasks change as tasks: task triggers
@@ -882,6 +943,21 @@ async fn check_references(
         .await?;
         if !found {
             return Err(AppError::NotFound("collection"));
+        }
+    }
+    if let Some((kind, table, put_away, id)) = trigger.document() {
+        // The named page, sheet or board is in this project and not
+        // archived or in the trash.
+        let found = sqlx::query_scalar::<_, bool>(&format!(
+            "SELECT EXISTS (SELECT 1 FROM {table} WHERE project_id = $1 AND id = $2 \
+             AND {put_away} IS NULL)"
+        ))
+        .bind(project_id)
+        .bind(id)
+        .fetch_one(crate::db::scoped(pool))
+        .await?;
+        if !found {
+            return Err(AppError::NotFound(kind));
         }
     }
     let mut conversations = Vec::new();
@@ -1019,9 +1095,51 @@ pub(crate) async fn create(
     state: &AppState,
     caller: &Caller,
     project_id: Uuid,
-    mut request: CreateRule,
+    request: CreateRule,
 ) -> Result<RuleView, AppError> {
-    let (can_create, admin) = reader_access(&state.pool, caller, project_id).await?;
+    let (_, admin) = reader_access(&state.pool, caller, project_id).await?;
+    let prepared = prepare(state, caller, project_id, request, &[]).await?;
+    let organization_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_one(crate::db::scoped(&state.pool))
+            .await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let id = insert(
+        &mut transaction,
+        caller,
+        organization_id,
+        project_id,
+        &prepared,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(view(
+        fetch(&state.pool, project_id, id).await?,
+        caller,
+        admin,
+    ))
+}
+
+/// A rule checked and ready to insert: who may make it, its shape, and
+/// what it refers to. Collections in `fresh_collections` were made in the
+/// caller's own transaction (a built module's inline parts, M1.6), which
+/// the pool can't see yet; they are taken as found.
+pub(crate) struct PreparedRule {
+    name: String,
+    request: CreateRule,
+    enabled: bool,
+    next_run_at: Option<DateTime<Utc>>,
+}
+
+pub(crate) async fn prepare(
+    state: &AppState,
+    caller: &Caller,
+    project_id: Uuid,
+    mut request: CreateRule,
+    fresh_collections: &[Uuid],
+) -> Result<PreparedRule, AppError> {
+    let (can_create, _) = reader_access(&state.pool, caller, project_id).await?;
     if !can_create {
         return Err(AppError::Forbidden);
     }
@@ -1038,26 +1156,152 @@ pub(crate) async fn create(
         &request.conditions,
         &request.trigger,
         &request.actions,
+        fresh_collections,
     )
     .await?;
-    let organization_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_one(crate::db::scoped(&state.pool))
-            .await?;
     let enabled = request.enabled.unwrap_or(true);
     let next_run_at = enabled
         .then(|| next_run_after(&request.trigger, Utc::now()))
         .flatten();
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    Ok(PreparedRule {
+        name,
+        request,
+        enabled,
+        next_run_at,
+    })
+}
+
+/// [`prepare`] for a rule made in the same transaction as its space or
+/// collections (a package install, M1.9): every check reads `connection`,
+/// so what the transaction made counts. The caller has checked the maker
+/// may write in the space. A rule naming a view, a filter, an environment
+/// or an agent profile is refused: a package leaves those for setup.
+pub(crate) async fn prepare_in(
+    connection: &mut sqlx::PgConnection,
+    caller: &Caller,
+    project_id: Uuid,
+    mut request: CreateRule,
+    fresh_collections: &[Uuid],
+) -> Result<PreparedRule, AppError> {
+    if !caller.reaches(project_id) || !caller.can_write {
+        return Err(AppError::NotFound("project"));
+    }
+    let name = normalize_name(&request.name)?;
+    check_shape(
+        &mut request.trigger,
+        &request.conditions,
+        &mut request.actions,
+    )?;
+    let names_setup = request.conditions.view_id.is_some()
+        || !request.conditions.filters.is_empty()
+        || request.actions.iter().any(|action| {
+            matches!(
+                action,
+                Action::Launch {
+                    environment_id: Some(_),
+                    ..
+                } | Action::Launch {
+                    agent_profile_id: Some(_),
+                    ..
+                }
+            )
+        });
+    if names_setup {
+        return Err(AppError::Refused {
+            field: "rule",
+            message: "A rule from a package can't name a view, a filter, an environment or an \
+                      agent profile: make it in the space after install.",
+        });
+    }
+    if let Trigger::RecordCreated {
+        collection_id: Some(id),
+    }
+    | Trigger::RecordChanged {
+        collection_id: Some(id),
+    } = &request.trigger
+        && !fresh_collections.contains(id)
+    {
+        let found = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM collections WHERE project_id = $1 AND id = $2 \
+             AND archived_at IS NULL AND NOT acts_like_task)",
+        )
+        .bind(project_id)
+        .bind(id)
+        .fetch_one(&mut *connection)
+        .await?;
+        if !found {
+            return Err(AppError::NotFound("collection"));
+        }
+    }
+    let mut conversations = Vec::new();
+    if let Trigger::MessagePosted {
+        conversation_id: Some(id),
+        ..
+    } = &request.trigger
+    {
+        conversations.push(*id);
+    }
+    for action in &request.actions {
+        if let Action::PostMessage {
+            conversation_id, ..
+        } = action
+        {
+            conversations.push(*conversation_id);
+        }
+    }
+    for conversation_id in conversations {
+        let visible = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM conversations conversation
+                WHERE conversation.id = $1 AND conversation.project_id = $2
+                  AND conversation_visible_to(conversation.id, $3)
+            )
+            "#,
+        )
+        .bind(conversation_id)
+        .bind(project_id)
+        .bind(caller.actor_id)
+        .fetch_one(&mut *connection)
+        .await?;
+        if !visible {
+            return Err(AppError::NotFound("conversation"));
+        }
+    }
+    let enabled = request.enabled.unwrap_or(true);
+    let next_run_at = enabled
+        .then(|| next_run_after(&request.trigger, Utc::now()))
+        .flatten();
+    Ok(PreparedRule {
+        name,
+        request,
+        enabled,
+        next_run_at,
+    })
+}
+
+/// Inserts a prepared rule in the caller's transaction, with its audit row.
+pub(crate) async fn insert(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    organization_id: Uuid,
+    project_id: Uuid,
+    prepared: &PreparedRule,
+) -> Result<Uuid, AppError> {
+    let PreparedRule {
+        name,
+        request,
+        enabled,
+        next_run_at,
+    } = prepared;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("automations:{project_id}"))
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     let count =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM automation_rules WHERE project_id = $1")
             .bind(project_id)
-            .fetch_one(&mut *transaction)
+            .fetch_one(&mut **transaction)
             .await?;
     if count >= MAX_RULES_PER_PROJECT {
         return Err(AppError::Conflict(
@@ -1081,7 +1325,7 @@ pub(crate) async fn create(
     .bind(caller.actor_id)
     .bind(caller.via_grant_id)
     .bind(caller.external_agent_connection_id)
-    .bind(&name)
+    .bind(name)
     .bind(enabled)
     .bind(request.trigger.kind())
     .bind(serde_json::to_value(&request.trigger).map_err(|_| AppError::Validation("trigger"))?)
@@ -1090,10 +1334,10 @@ pub(crate) async fn create(
     .bind(serde_json::to_value(&request.actions).map_err(|_| AppError::Validation("actions"))?)
     .bind(next_run_at)
     .bind(through_app(caller))
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     events::audit(
-        &mut *transaction,
+        &mut **transaction,
         caller,
         organization_id,
         Some(project_id),
@@ -1103,12 +1347,7 @@ pub(crate) async fn create(
         json!({ "trigger": request.trigger.kind(), "actions": request.actions.iter().map(Action::kind).collect::<Vec<_>>() }),
     )
     .await?;
-    transaction.commit().await?;
-    Ok(view(
-        fetch(&state.pool, project_id, id).await?,
-        caller,
-        admin,
-    ))
+    Ok(id)
 }
 
 pub(crate) async fn update(
@@ -1168,6 +1407,7 @@ pub(crate) async fn update(
             &conditions,
             &trigger,
             &actions,
+            &[],
         )
         .await?;
     }
@@ -1438,6 +1678,9 @@ fn kinds_for(event_type: &str) -> &'static [&'static str] {
         "message.created" => &["message_posted"],
         "record.created" => &["record_created"],
         "record.updated" => &["record_changed"],
+        "page.updated" => &["page_changed"],
+        "sheet.updated" => &["sheet_changed"],
+        "whiteboard.updated" => &["whiteboard_changed"],
         _ => &[],
     }
 }
@@ -1574,6 +1817,15 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             }
             Trigger::RecordCreated { collection_id } | Trigger::RecordChanged { collection_id } => {
                 collection_id.is_none_or(|only| subject.collection_id == Some(only))
+            }
+            Trigger::PageChanged { page_id } => {
+                page_id.is_none_or(|only| subject.page_id == Some(only))
+            }
+            Trigger::SheetChanged { sheet_id } => {
+                sheet_id.is_none_or(|only| subject.sheet_id == Some(only))
+            }
+            Trigger::WhiteboardChanged { whiteboard_id } => {
+                whiteboard_id.is_none_or(|only| subject.whiteboard_id == Some(only))
             }
             Trigger::Schedule { .. } | Trigger::CapacityWindow { .. } => false,
         };
@@ -2062,6 +2314,17 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
         let reason = format!("{} is turned off in this workspace.", module.name);
         return finish(pool, run_id, "skipped", Some(reason.as_str()), &[]).await;
     }
+    // M1.6: a rule that is part of a built module waits while the module is
+    // switched off (or archived with its parts).
+    let rule_id = rule.id;
+    let module_on = crate::db::scoped_one(pool, async |connection| {
+        crate::modules::built::object_on(connection, "automation", rule_id).await
+    })
+    .await?;
+    if !module_on {
+        let reason = "Its module is turned off.";
+        return finish(pool, run_id, "skipped", Some(reason), &[]).await;
+    }
     let recent = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT count(*) FROM automation_runs
@@ -2234,6 +2497,9 @@ impl Context {
             // fires nothing, as webhooks don't deliver it.
             record_id: subject.record_id,
             collection_id: subject.collection_id,
+            page_id: subject.page_id,
+            sheet_id: subject.sheet_id,
+            whiteboard_id: subject.whiteboard_id,
             ..Subject::default()
         };
         if !crate::webhooks::visible_to(&state.pool, rule.owner_actor_id, rule.project_id, &about)
@@ -2317,6 +2583,19 @@ impl Context {
                     .unwrap_or_default()
                     .to_owned(),
             ));
+        }
+        if let Some((kind, document)) =
+            crate::webhooks::document_data(state, rule.owner_actor_id, rule.project_id, subject)
+                .await?
+        {
+            let (title, url) = match kind {
+                "page" => ("page.title", "page.url"),
+                "sheet" => ("sheet.title", "sheet.url"),
+                _ => ("whiteboard.title", "whiteboard.url"),
+            };
+            let text = |key: &str| document[key].as_str().unwrap_or_default().to_owned();
+            variables.push((title, text("title")));
+            variables.push((url, text("url")));
         }
         if let Some(run_state) = &subject.state
             && subject.agent_run_id.is_some()

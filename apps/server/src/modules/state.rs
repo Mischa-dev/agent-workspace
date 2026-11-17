@@ -420,6 +420,20 @@ pub async fn workspace(
     Ok(switches(connection, organization_id).await?.set())
 }
 
+/// The modules on in one space: the workspace's switches narrowed by the
+/// space's own (a space can only turn modules off). What follows a space's
+/// events (webhooks, automations) reads this, not the workspace alone
+/// (AWD-186).
+pub async fn in_space(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    space_id: Uuid,
+) -> Result<ModuleSet, AppError> {
+    let workspace = workspace(connection, organization_id).await?;
+    let space = space_switches(connection, organization_id, space_id).await?;
+    Ok(workspace.intersect(space.set()))
+}
+
 /// The modules off for the holders of the role a membership holds, from
 /// `workspace_roles.modules_off` (AWD-75 on AWD-74's roles). `{org}` and
 /// `{membership}` are SQL aliases, as in `roles::held_role_join`.

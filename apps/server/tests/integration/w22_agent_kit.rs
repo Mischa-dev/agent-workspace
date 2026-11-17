@@ -171,7 +171,7 @@ async fn a_handoff_note_reaches_whoever_claims_the_task_next() {
         json!({"projectId": "WORK", "title": "Fix the flaky test"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
 
     let mara_call = |name: &'static str, arguments: Value| {
         let token = mara_token.clone();
@@ -236,7 +236,7 @@ async fn a_handoff_note_reaches_whoever_claims_the_task_next() {
     assert_eq!(next["value"]["handoff"]["by"], "Mara", "{next}");
     assert_eq!(next["value"]["handoff"]["note"], note);
     // People see it on the task page too, with who left it.
-    let task_id = created["workItemId"].as_str().expect("task id");
+    let task_id = created["value"]["workItemId"].as_str().expect("task id");
     let (status, shown) = send(
         app,
         setup.browser.request(

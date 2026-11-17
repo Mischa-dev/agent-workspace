@@ -1090,3 +1090,186 @@ async fn the_cluster_works_as_a_pooler_needs() {
     until_host(cluster.instance(1 - holder)).await;
     cluster.finish().await;
 }
+
+/// K5.7: a stopping instance says it isn't ready at once, closes its
+/// sockets with 1012 so they reconnect to the other instance, and lets the
+/// built-in host go so the other takes it at once.
+#[tokio::test]
+async fn draining_instance_moves_its_sockets() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::{Message, protocol::frame::coding::CloseCode};
+    const DRAIN: &[(&str, &str)] = &[("AGENT_WORKSPACE_DRAIN_SECONDS", "1")];
+    let Some(mut cluster) = cluster_with("k5_7_drain", 0, DRAIN).await else {
+        return;
+    };
+    cluster.start(DRAIN).await;
+    until_host(cluster.instance(0)).await;
+    cluster.start(DRAIN).await;
+    let (status, ready) = cluster.instance(0).ready().await;
+    assert_eq!(status, StatusCode::OK, "{ready}");
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["roles"], json!(["api", "live", "work"]));
+    assert_eq!(ready["draining"], false);
+
+    let browser = cluster.instance(0).login("owner").await;
+    let mut socket = cluster.instance(0).socket(&browser).await;
+    let drainer = cluster.instance(0).drainer();
+    let draining = tokio::spawn(async move { drainer.drain().await });
+
+    // Not ready at once, while the other stays ready.
+    let started = Instant::now();
+    loop {
+        let (status, ready) = cluster.instance(0).ready().await;
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            assert_eq!(ready["status"], "draining");
+            assert_eq!(ready["draining"], true);
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "A stayed ready while draining"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(cluster.instance(1).ready().await.0, StatusCode::OK);
+
+    // After the drain time, its socket closes to restart.
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match socket.next().await {
+                Some(Ok(Message::Close(frame))) => return frame,
+                Some(Ok(_)) => {}
+                other => panic!("the socket ended without a close frame: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("A's socket was never closed");
+    let frame = closed.expect("a close frame with a code");
+    assert_eq!(frame.code, CloseCode::Restart);
+    assert_eq!(frame.reason.as_str(), "server_draining");
+    draining.await.expect("drain");
+    // The browser reconnects to the other instance.
+    let _on_b = cluster.instance(1).socket(&browser).await;
+
+    // Stopping lets the host go; B takes it without waiting for it to run
+    // out (the release wakes it, except in the run without a listener).
+    cluster.instance_mut(0).stop().await;
+    let stopped = Instant::now();
+    until_host(cluster.instance(1)).await;
+    if !crate::cluster_support::pooler_run() {
+        assert!(
+            stopped.elapsed() < Duration::from_secs(2),
+            "B took {:?} to take the host",
+            stopped.elapsed()
+        );
+    }
+    cluster.finish().await;
+}
+
+/// K5.7: an instance with only `work` serves health checks, nothing else.
+#[tokio::test]
+async fn work_only_instance_serves_no_app_routes() {
+    let Some(mut cluster) = cluster("k5_7_work_only", 1).await else {
+        return;
+    };
+    cluster.start(&[("AGENT_WORKSPACE_ROLES", "work")]).await;
+    let work = cluster.instance(1);
+    let (status, ready) = work.ready().await;
+    assert_eq!(status, StatusCode::OK, "{ready}");
+    assert_eq!(ready["roles"], json!(["work"]));
+    let browser = cluster.instance(0).login("owner").await;
+    for path in ["/api/v1/auth/session", "/api/v1/realtime", "/api/v1/mcp"] {
+        let (status, _) = work
+            .send(browser.request("GET", path, None, Value::Null))
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    cluster.finish().await;
+}
+
+/// K5.7: an instance without `work` runs no jobs and takes no work leases;
+/// a queued job waits for an instance that has it.
+#[tokio::test]
+async fn api_only_instance_runs_no_jobs() {
+    let api: &[(&str, &str)] = &[SHORT_LEASES[0], ("AGENT_WORKSPACE_ROLES", "api,live")];
+    let Some(mut cluster) = cluster_with("k5_7_api_only", 0, SHORT_LEASES).await else {
+        return;
+    };
+    cluster.start(api).await;
+    let job = match agent_workspace_server::jobs::enqueue(
+        &cluster.pool,
+        agent_workspace_server::jobs::NewJob::new("jobs.prune_finished"),
+    )
+    .await
+    .expect("enqueue")
+    {
+        agent_workspace_server::jobs::Enqueued::Created(id) => id,
+        agent_workspace_server::jobs::Enqueued::Duplicate => panic!("no other job"),
+    };
+    let state = async |pool: &sqlx::PgPool| {
+        sqlx::query_scalar::<_, String>("SELECT state FROM background_jobs WHERE id = $1")
+            .bind(job)
+            .fetch_one(pool)
+            .await
+            .expect("job")
+    };
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(state(&cluster.pool).await, "queued");
+    let held = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM leases WHERE holder_instance_id = $1 AND expires_at > now()",
+    )
+    .bind(cluster.instance(0).cluster().instance_id().0)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("leases");
+    assert_eq!(held, 0, "an api instance took a lease");
+    // It still serves the app.
+    let browser = cluster.instance(0).login("owner").await;
+    let (status, _) = cluster
+        .instance(0)
+        .send(browser.request("GET", "/api/v1/auth/session", None, Value::Null))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    cluster
+        .start(&[SHORT_LEASES[0], ("AGENT_WORKSPACE_ROLES", "work")])
+        .await;
+    let started = Instant::now();
+    while state(&cluster.pool).await != "succeeded" {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the work instance never ran the job"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    cluster.finish().await;
+}
+
+/// K5.7 (from #283's review): recovery's later writes, after its slow git
+/// and provider inspection, are fenced by the host lease too, so a server
+/// that lost the host can't overwrite what the new holder recovers.
+#[tokio::test]
+async fn recovery_writes_nothing_once_the_host_is_lost() {
+    let Some(mut cluster) = cluster_with("k5_7_recovery_fence", 0, SHORT_LEASES).await else {
+        return;
+    };
+    cluster.start(SHORT_LEASES).await;
+    until_host(cluster.instance(0)).await;
+    let lease = cluster
+        .instance(0)
+        .cluster()
+        .held_lease(&LeaseName::BuiltinHost)
+        .expect("A holds the host");
+    let old_holder = cluster.instance(0).cluster().clone();
+    let state = cluster.instance(0).state().clone();
+    // A stalls (as a crash would look from outside); B takes the host.
+    cluster.instance_mut(0).abort();
+    cluster.start(SHORT_LEASES).await;
+    until_host(cluster.instance(1)).await;
+    // With no run to recover, only the later writes are left: each refuses.
+    let result =
+        agent_workspace_server::recovery::reconcile_owned(&state, &old_holder, &lease).await;
+    assert!(matches!(result, Err(AppError::LeaseLost)), "{result:?}");
+    cluster.finish().await;
+}

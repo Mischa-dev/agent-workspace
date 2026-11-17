@@ -108,7 +108,7 @@ pub(super) async fn board_module_off(
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WhiteboardLine {
+pub struct WhiteboardLine {
     #[serde(flatten)]
     pub whiteboard: BoardSummary,
     pub url: String,
@@ -517,7 +517,7 @@ pub(super) async fn whiteboard_render(
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LinkArgument {
+pub struct LinkArgument {
     /// task, project, or page.
     pub target_kind: String,
     pub target_id: String,
@@ -548,7 +548,7 @@ pub(super) struct WhiteboardCreateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WhiteboardChangeValue {
+pub struct WhiteboardChangeValue {
     pub whiteboard: WhiteboardLine,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edit: Option<EditOutcome>,
@@ -567,7 +567,7 @@ fn link_argument(
     Ok((kind, id))
 }
 
-fn edit_refused<T>(error: EditError, operation: &'static str) -> ToolResult<T> {
+pub(super) fn edit_refused<T>(error: EditError, operation: &'static str) -> ToolResult<T> {
     match error {
         EditError::Invalid(message) => ToolResult::invalid("operations", message),
         EditError::Conflict(message) => ToolResult::conflict(message),
@@ -720,95 +720,10 @@ pub(super) async fn whiteboard_create(
     }
 }
 
-// ---------------------------------------------------------------------------
-// whiteboard_edit
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WhiteboardEditArguments {
-    pub whiteboard_id: String,
-    /// Applied in order, all or nothing. Each is {op, ...}:
-    /// add {type, id?, x?, y?, width?, height?, text?, styles…} draws a
-    /// shape (rectangle, ellipse, diamond, frame), text, line or arrow;
-    /// add {type: "image", dataBase64, mimeType?, x?, y?, width?, height?}
-    /// puts an image on the board (or fileId, one already on it);
-    /// connect {from, to, text?, id?} draws an arrow bound to both;
-    /// update {id, text?, x?, y?, width?, height?, styles…};
-    /// delete {ids} (labels and bound arrows go with their shape);
-    /// move {ids, dx, dy}; align {ids, edge}; distribute {ids, axis, gap?};
-    /// layout {ids?, direction?, gap?}; group/ungroup {ids};
-    /// order {ids, position}. Arrows follow the shapes they connect.
-    pub operations: Vec<Operation>,
-    /// The sceneSeq you last read. When given, an operation naming an
-    /// element someone else changed since is refused instead of applied.
-    pub expected_scene_seq: Option<i64>,
-    /// Needed to remove more than 25 elements at once. The board is saved
-    /// first, so whiteboard_update restoreRevision can undo it.
-    pub confirm_delete: Option<bool>,
-}
-
-pub(super) async fn whiteboard_edit(
-    state: &AppState,
-    principal: &McpPrincipal,
-    arguments: WhiteboardEditArguments,
-) -> ToolResult<EditOutcome> {
-    if !principal.can_write() {
-        return ToolResult::read_only();
-    }
-    let Some(id) = whiteboard_id(&arguments.whiteboard_id) else {
-        return ToolResult::invalid("whiteboardId", "Pass a whiteboard ID or link.");
-    };
-    let caller = caller(principal);
-    match board_module_off(state, &caller, id).await {
-        Ok(true) => return ToolResult::module_off("whiteboard_edit", "Whiteboards"),
-        Ok(false) => {}
-        Err(error) => return refused(error, "whiteboard_edit"),
-    }
-    let result = async {
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let board = whiteboards::access(&mut transaction, &caller, id, true).await?;
-        if board.deleted {
-            return Err(EditError::Conflict(
-                "That whiteboard is in the trash. Restore it with whiteboard_update deleted: false first."
-                    .to_owned(),
-            ));
-        }
-        let operations =
-            store_images(&mut transaction, &caller, id, &arguments.operations).await?;
-        let outcome = edit::apply(
-            &mut transaction,
-            &caller,
-            id,
-            &operations,
-            arguments.expected_scene_seq,
-            arguments.confirm_delete.unwrap_or(false),
-        )
-        .await?;
-        if !outcome.changed.is_empty() {
-            whiteboards::audit(
-                &mut transaction,
-                &caller,
-                board.organization_id,
-                board.project_id,
-                "whiteboard.edited",
-                id,
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-        Ok(outcome)
-    }
-    .await;
-    match result {
-        Ok(outcome) => ToolResult::ok(outcome),
-        Err(error) => edit_refused(error, "whiteboard_edit"),
-    }
-}
-
 /// Stores the images added operations carry, as the web stores an image
 /// dropped on the board, and points those operations at them by file id.
 /// An image named by fileId must already be on this board.
-async fn store_images(
+pub(super) async fn store_images(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     caller: &whiteboards::Caller,
     whiteboard_id: Uuid,
@@ -1141,7 +1056,7 @@ pub(super) struct WhiteboardLinkArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WhiteboardLinkValue {
+pub struct WhiteboardLinkValue {
     pub whiteboard_id: String,
     pub linked: bool,
     /// False when it was already that way.

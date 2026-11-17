@@ -2007,6 +2007,7 @@ fn mcp_case_names() -> BTreeSet<String> {
 const MCP_CASE_TOOLS: &[&str] = &[
     "agent_list",
     "agent_profile_list",
+    "agent_template_list",
     "ai_suggestions_list",
     "approval_get",
     "approval_list",
@@ -2047,11 +2048,14 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "whiteboard_template_list",
     "milestone_list",
     "module_list",
+    "module_open",
     "my_permissions",
     "my_work",
     "notification_list",
     "notification_keyword_list",
     "package_export",
+    "package_list",
+    "package_preview",
     "page_blocks",
     "page_comments",
     "page_get",
@@ -2308,6 +2312,12 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"spaceId": b.project}), json!({"spaceId": b.space})],
             vec![],
         ),
+        case(
+            "module_open",
+            vec![json!({"moduleId": a.module.to_string()})],
+            vec![json!({"moduleId": b.module.to_string()})],
+            vec![],
+        ),
         by_project("milestone_list"),
         by_project("task_ready_list"),
         by_project("dependency_graph"),
@@ -2412,6 +2422,20 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         ),
         by_project("settings_get"),
         by_project("module_list"),
+        by_project("package_list"),
+        by_project("agent_template_list"),
+        case(
+            "package_preview",
+            vec![json!({"package": {
+                "format": "agent-workspace-package/1", "id": "own_tiny", "version": "1.0.0",
+                "name": "Tiny", "target": "space", "contents": []},
+                "target": {"spaceId": a.project}})],
+            vec![json!({"package": {
+                "format": "agent-workspace-package/1", "id": "net_tiny", "version": "1.0.0",
+                "name": "Tiny", "target": "space", "contents": []},
+                "target": {"spaceId": b.project}})],
+            vec![],
+        ),
         case(
             "thing_open",
             vec![
@@ -2866,11 +2890,11 @@ async fn check_mcp(
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let a_ids = sweep_ids(pool, a.organization).await;
-    let a_pattern = a_ids.iter().cloned().collect::<Vec<_>>().join("|");
+    let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
     // Fingerprints first, so a write landing during the digest is caught
     // by the next refresh rather than missed.
     let mut fingerprints = table_fingerprints(pool).await;
-    let mut a_rows = digest_ignoring(pool, &a_pattern, READ_TOUCHES).await;
+    let mut a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
         ("A's agent", &a.agent_token, &agent_session, true),
@@ -2931,7 +2955,7 @@ async fn check_mcp(
                 );
             }
             fingerprints =
-                refresh_digest(pool, &a_pattern, READ_TOUCHES, &fingerprints, &mut a_rows).await;
+                refresh_digest(pool, &a_list, READ_TOUCHES, &fingerprints, &mut a_rows).await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(

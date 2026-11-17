@@ -141,6 +141,9 @@ pub async fn apply(
         .map_err(EditError::Invalid)?;
     let outcome =
         store::write_elements(transaction, caller, whiteboard_id, scene_seq, parsed).await?;
+    if let Some(revision) = saved_revision {
+        store::updated(transaction, caller, whiteboard_id, revision).await?;
+    }
     Ok(EditOutcome {
         scene_seq: outcome.scene_seq,
         results,

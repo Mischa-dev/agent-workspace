@@ -57,6 +57,20 @@ impl SpaceKind {
     }
 }
 
+/// Whether `space` is one of the hidden Messages projects (stored kind
+/// `direct`, which is not a space kind): read through `SpaceKind`, so no
+/// caller compares the stored literal.
+pub async fn holds_messages(
+    connection: &mut sqlx::PgConnection,
+    space: uuid::Uuid,
+) -> Result<bool, sqlx::Error> {
+    let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM projects WHERE id = $1")
+        .bind(space)
+        .fetch_optional(connection)
+        .await?;
+    Ok(kind.is_some_and(|kind| SpaceKind::from_stored(&kind).is_none()))
+}
+
 /// Who may find and read a space.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

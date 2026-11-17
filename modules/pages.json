@@ -33,10 +33,10 @@
     "/api/v1/projects/{id}/decisions",
     "/api/v1/organizations/{organization_id}/pages-space"
   ],
-  "events": { "emits": ["page.content_saved", "page.discussion_changed", "page.commented", "page.comment_changed", "page.version_restored", "decision.recorded", "decision.updated"], "listens": [] },
+  "events": { "emits": ["page.content_saved", "page.updated", "page.discussion_changed", "page.commented", "page.comment_changed", "page.version_restored", "decision.recorded", "decision.updated"], "listens": [] },
   "notifications": ["page_suggestion", "page_comment"],
   "search": ["pages", "decisions"],
-  "automations": { "triggers": [], "actions": [] },
+  "automations": { "triggers": ["page_changed"], "actions": [] },
   "things": [
     {
       "kind": "page",
