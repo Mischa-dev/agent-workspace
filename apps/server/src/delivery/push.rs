@@ -163,13 +163,17 @@ pub async fn sweep(pool: &sqlx::PgPool) -> Result<(), AppError> {
         r#"
         SELECT c.id, c.account_id, c.home_workspace_id
         FROM agent_connections c
+        CROSS JOIN LATERAL (
+            SELECT EXISTS (
+                SELECT 1 FROM deliveries d
+                WHERE d.connection_id = c.id AND d.state = 'pending'
+                  AND d.next_attempt_at <= now()) AS retry_due
+        ) due
         WHERE c.state = 'active' AND c.webhook_url IS NOT NULL
-          AND (c.push_cursor < (SELECT next_position - 1 FROM event_position_counter)
-               OR EXISTS (
-                   SELECT 1 FROM deliveries d
-                   WHERE d.connection_id = c.id AND d.state = 'pending'
-                     AND d.next_attempt_at <= now()))
-        ORDER BY c.id
+          AND (due.retry_due
+               OR c.push_cursor < (SELECT next_position - 1 FROM event_position_counter))
+        -- Retries first, then the connections furthest behind.
+        ORDER BY due.retry_due DESC, c.push_cursor, c.id
         LIMIT 1000
         "#,
     )

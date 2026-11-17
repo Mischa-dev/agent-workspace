@@ -87,6 +87,10 @@ pub async fn read_batch(
         .map(|column| format!("e.{}", column.trim()))
         .collect::<Vec<_>>()
         .join(", ");
+    // The head before the scan: every event up to it is already in the log
+    // (the sequencer numbers and moves the head in one transaction), so a
+    // scan that reaches its end has seen all of them.
+    let head = crate::events::head(&mut *connection).await?;
     let run_followed = crate::runs::sql::run_followed_by("e.thing_id", "$1");
     let rows = sqlx::query_as::<_, Row>(&format!(
         r#"
@@ -158,8 +162,12 @@ pub async fn read_batch(
         }
     }
     // Nothing more for this connection in what was read: the cursor still
-    // moves past it.
+    // moves past it, and past the rest of the log up to the head when the
+    // scan reached its end, so a connection nothing is for stays caught up.
     batch.has_more = scanned == SCAN as usize;
+    if !batch.has_more {
+        batch.next = batch.next.max(head);
+    }
     Ok(batch)
 }
 
