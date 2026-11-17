@@ -221,10 +221,10 @@ pub async fn lock(
         "#,
     )
     .bind(run_id)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .map(|state| state.parse::<RunState>())
-        .transpose()
+    .fetch_optional(&mut **transaction)
+    .await?
+    .map(|state| state.parse::<RunState>())
+    .transpose()
 }
 
 /// Move a built-in run to `next`, writing its state-change step. Refuses a
