@@ -210,6 +210,26 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     )
     .await;
     assert_eq!(status, StatusCode::LOCKED, "{body}");
+    // An approval would set a blocked run going again: refused, and still
+    // waiting.
+    let (status, body) = send(
+        &t.app,
+        a.browser.request(
+            "POST",
+            &format!("/api/v1/agent-approvals/{}/respond", a.approval),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"decision": "approve"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::LOCKED, "{body}");
+    let approval_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM agent_approvals WHERE id = $1")
+            .bind(a.approval)
+            .fetch_one(&t.pool)
+            .await
+            .expect("approval");
+    assert_eq!(approval_status, "pending");
     // The session says why.
     let (_, session) = send(
         &t.app,
