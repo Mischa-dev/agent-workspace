@@ -57,6 +57,12 @@ fn needs(meta: &OpMeta) -> String {
         ),
         None => meta.description.to_owned(),
     };
+    if meta.long {
+        text.push_str(
+            " A big call runs in the background: it answers started with a jobId, and job_get \
+             gives the answer once it is done.",
+        );
+    }
     if meta.kind.writes() && meta.idempotency != super::Idempotency::None {
         text.push_str(
             " Send a clientRequestId to make a retry safe; without one the change runs once \
@@ -105,7 +111,7 @@ pub fn tool_of(meta: &OpMeta) -> Tool {
         Value::Object(object) => object,
         _ => JsonObject::new(),
     };
-    let output = match super::envelope::schema((meta.output_schema)()) {
+    let output = match super::envelope::schema((meta.output_schema)(), meta.long) {
         Value::Object(object) => object,
         _ => JsonObject::new(),
     };
@@ -215,6 +221,22 @@ pub async fn call(
     result
 }
 
+/// The MCP task handle for a long call answered `started` (K2.21): its id
+/// is the job id `job_get` and `tasks/get` take.
+pub fn task_handle(result: &CallToolResult) -> Option<rmcp::model::CreateTaskResult> {
+    let envelope = result.structured_content.as_ref()?;
+    if envelope["outcome"] != "started" {
+        return None;
+    }
+    let id = envelope["value"]["jobId"].as_str()?;
+    let created = envelope["value"]["createdAt"].as_str()?;
+    Some(rmcp::model::CreateTaskResult::new(
+        rmcp::model::Task::new(id, rmcp::model::TaskStatus::Working, created, created)
+            .with_ttl_ms(super::long::KEEP_MS)
+            .with_poll_interval_ms(super::long::POLL_INTERVAL_MS),
+    ))
+}
+
 async fn request(
     state: &AppState,
     principal: &McpPrincipal,
@@ -262,6 +284,7 @@ async fn request(
         }
     };
     let preview = matches!(arguments.remove("preview"), Some(Value::Bool(true)));
+    let defer_long = matches!(edge, Edge::Mcp { .. });
     let caller = caller_of(state, principal).await?;
     Ok((
         DispatchRequest {
@@ -275,6 +298,9 @@ async fn request(
             unkeyed: super::Unkeyed::RunOnce,
             preview,
             renamed_from: None,
+            // MCP clients follow a long call (`tasks/get`, `job_get`); the
+            // older direct path and automations wait for it.
+            defer_long,
         },
         Value::Object(arguments),
     ))

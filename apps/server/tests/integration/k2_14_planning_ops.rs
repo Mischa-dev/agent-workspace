@@ -167,7 +167,15 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     let milestone = call(
         "milestone_create",
@@ -203,6 +211,8 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
                "clientRequestId": "k2-14-plan"}),
     )
     .await;
+    // Thirty is a long batch: a job makes them (K2.21).
+    let created = super::support::long::finished(&setup.pool, created).await;
     let created = ok(&created);
     assert_eq!(created["tasks"].as_array().expect("tasks").len(), 30);
     let (planned, chained) = sqlx::query_as::<_, (i64, i64)>(
@@ -387,7 +397,15 @@ async fn a_plan_import_updates_the_tasks_a_space_already_has() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     for title in ["Write the parser", "Old name"] {
         let created = call(

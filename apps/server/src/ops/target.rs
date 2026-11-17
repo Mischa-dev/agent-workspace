@@ -103,6 +103,11 @@ const KINDS: &[(&str, &str)] = &[
              WHERE membership.project_id = project.id AND membership.actor_id = $2 \
                AND membership.enabled)",
     ),
+    // K2.21: a long call's task is found only by its caller.
+    (
+        "operation_task",
+        "SELECT workspace_id, space_id FROM operation_tasks WHERE id = $1 AND account_id = $2",
+    ),
     // K2.7: a scheduled message is found only by its author.
     (
         "scheduled_message",

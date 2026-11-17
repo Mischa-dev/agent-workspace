@@ -524,6 +524,10 @@ export type InviteLinkRevokeInput = { link: string }
 
 export type InviteLinkRevokeOutput = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
 
+export type JobGetInput = { jobId: string }
+
+export type JobGetOutput = { createdAt: string; jobId: string; op: string; pollIntervalMs?: number | null; result?: unknown; status: string; updatedAt: string }
+
 export type LabelCreateInput = { archived?: boolean | null; color?: string | null; description?: string | null; expectedVersion?: number | null; label?: string | null; name?: string | null; projectId: string }
 
 export type LabelCreateOutput = { changedFields: string[]; created: boolean; label: LabelLine; note?: string | null }
@@ -1023,6 +1027,7 @@ export type Operations = {
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
   invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
   invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }
+  job_get: { input: JobGetInput; output: JobGetOutput }
   label_create: { input: LabelCreateInput; output: LabelCreateOutput }
   label_list: { input: LabelListInput; output: LabelListOutput }
   label_update: { input: LabelUpdateInput; output: LabelUpdateOutput }

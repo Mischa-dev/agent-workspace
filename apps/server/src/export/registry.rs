@@ -252,6 +252,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "daily counts of calls to old operation names, kept to retire them (K2); this server's own measure",
             ),
             (
+                "operation_tasks",
+                "long calls in flight and their answers for a week (K2.21); a call on this server, not the workspace's content",
+            ),
+            (
                 "mcp_client_credentials",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),

@@ -141,13 +141,7 @@ button.aw-collection__chiptext:hover,
   outline-offset: calc(-1 * var(--focus-width));
 }
 
-/* The table */
-.aw-records {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
+/* The table (the table piece draws it; these are the collection's parts) */
 .aw-records__summary {
   display: flex;
   align-items: center;
@@ -155,17 +149,6 @@ button.aw-collection__chiptext:hover,
   margin: 0 0 var(--space-2);
   font: var(--t-small);
   color: var(--content-fg-muted);
-}
-
-.aw-records__scroll {
-  min-width: 0;
-  overflow: auto;
-  border-radius: var(--radius-md);
-}
-
-.aw-records__table {
-  width: max-content;
-  min-width: 100%;
 }
 
 /* A wide screen gives the table the rest of the page, and the table scrolls
@@ -178,30 +161,16 @@ button.aw-collection__chiptext:hover,
     padding-bottom: var(--space-4);
   }
 
-  .aw-collection > .aw-records {
+  .aw-collection > .aw-piece-table {
     flex: 1 1 0;
     min-height: 320px;
   }
 
-  .aw-collection .aw-records__scroll {
+  .aw-collection .aw-piece-table__scroll {
     flex: 1 1 0;
     min-height: 0;
     overscroll-behavior: contain;
   }
-}
-
-.aw-records__table .aw-table__cell {
-  height: 100%;
-  border-right: 1px solid var(--content-border);
-}
-
-.aw-records__table .aw-table__cell:last-child,
-.aw-records__table .aw-table__cell--full {
-  border-right: 0;
-}
-
-.aw-records__table .aw-table__row.is-open {
-  background: var(--accent-soft);
 }
 
 .aw-records__head {
@@ -305,35 +274,11 @@ button.aw-collection__chiptext:hover,
   overflow: hidden;
 }
 
-.aw-records__grouprow {
-  background: var(--surface-sunken);
-}
-
-.aw-records__group {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  height: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--content-fg);
-  font: var(--t-ui-strong);
-  cursor: pointer;
-}
-
 .aw-records__groupcount {
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
 
-.aw-records__loading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font: var(--t-small);
-  color: var(--content-fg-muted);
-}
 
 .aw-records__new {
   display: flex;

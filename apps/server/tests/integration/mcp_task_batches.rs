@@ -148,7 +148,15 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     let existing = call(
         "task_create",
@@ -506,7 +514,15 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     let created = call(
         "task_create_many",
@@ -851,7 +867,15 @@ async fn bulk_tools_check_access_for_every_task() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     for project in ["PLAN", "OTHER"] {
         let created = call(
@@ -1013,7 +1037,15 @@ async fn an_agent_imports_a_plan_and_reorganizes_the_board() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     let label = call(
         "label_write",
@@ -1152,7 +1184,15 @@ async fn big_batches_fit_one_call() {
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
         let session = session.clone();
-        async move { tool(app, &codex, &session, name, arguments).await }
+        let pool = setup.pool.clone();
+        // A long batch is finished by its job (K2.21).
+        async move {
+            super::support::long::finished(
+                &pool,
+                tool(app, &codex, &session, name, arguments).await,
+            )
+            .await
+        }
     };
     let description = "Context for this step of the plan, as an agent would write it.\n".repeat(50);
     for (batch, request) in [(0, "big-1"), (1, "big-2")] {
@@ -1178,6 +1218,7 @@ async fn big_batches_fit_one_call() {
         );
         let started = Instant::now();
         let created = call("task_create_many", arguments).await;
+        let created = super::support::long::finished(&setup.pool, created).await;
         eprintln!("task_create_many of 100 tasks took {:?}", started.elapsed());
         assert_eq!(created["outcome"], "ok", "{created}");
         assert_eq!(

@@ -115,6 +115,7 @@ pub(crate) async fn run_for_session(
         unkeyed: Unkeyed::RunOnce,
         preview: false,
         renamed_from: None,
+        defer_long: false,
     };
     let mut outcome = dispatch(state, request, name, input).await;
     if outcome.status == StatusCode::OK && outcome.body["outcome"] == "ok" {
@@ -264,6 +265,7 @@ async fn call(
         unkeyed: Unkeyed::Refuse("Idempotency-Key"),
         preview,
         renamed_from: None,
+        defer_long: false,
     };
     answer(dispatch(state, request, name, input).await)
 }

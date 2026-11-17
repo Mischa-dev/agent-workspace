@@ -38,6 +38,9 @@ pub struct DispatchRequest {
     pub preview: bool,
     /// The old name the caller used (`aliases`), counted once the call is done.
     pub renamed_from: Option<&'static str>,
+    /// A long call (`Operation::runs_long`) is answered `started` and run by
+    /// a job (`long`): the MCP edge, whose clients can follow it.
+    pub defer_long: bool,
 }
 
 /// What a write that arrives without a request id does (ruling R52). An
@@ -414,6 +417,35 @@ async fn pipeline<O: Operation>(
     }
 
     let key = request_id_for::<O>(&request)?;
+    // K2.21: checked, then kept and run by a job; the job dispatches it
+    // again (checked again) as the same caller.
+    if request.defer_long && O::LONG && !request.preview && !spans && O::runs_long(&decoded) {
+        // What the call would be refused for (a thing in another
+        // workspace, a bad field) is answered now, not by the job: an
+        // operation that previews is previewed first, and only a clean
+        // preview is kept to run.
+        if O::PREVIEW {
+            let checked = DispatchRequest {
+                preview: true,
+                renamed_from: None,
+                defer_long: false,
+                ..request.clone()
+            };
+            let preview = Box::pin(pipeline::<O>(state, checked, canonical.clone())).await?;
+            if preview.outcome() != "ok" {
+                return Ok(preview);
+            }
+        }
+        return super::long::start(
+            state,
+            &request,
+            O::NAME,
+            &located,
+            &canonical,
+            key.as_ref().map(IdempotencyKey::as_str),
+        )
+        .await;
+    }
     let ctx = OpContext {
         caller: request.caller,
         edge: request.edge,

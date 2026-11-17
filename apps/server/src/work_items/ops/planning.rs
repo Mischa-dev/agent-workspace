@@ -69,6 +69,7 @@ macro_rules! tool_op {
             idempotency: $idem:ident,
             $(preview: $preview:literal,)?
             $(destructive: $destructive:literal,)?
+            $(long: |$long_input:ident| $long_body:expr,)?
             title: $title:literal,
             description: $description:expr,
             emits: [$($emit:literal),*],
@@ -87,6 +88,12 @@ macro_rules! tool_op {
             const IDEMPOTENCY: Idempotency = Idempotency::$idem;
             $(const PREVIEW: bool = $preview;)?
             $(const DESTRUCTIVE: bool = $destructive;)?
+            $(
+                const LONG: bool = true;
+                fn runs_long($long_input: &$input) -> bool {
+                    $long_body
+                }
+            )?
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
             const EMITS: &'static [&'static str] = &[$($emit),*];
@@ -98,6 +105,10 @@ macro_rules! tool_op {
         }
     };
 }
+
+/// K2.21: a batch over this many tasks (twice it for a change) runs as a
+/// job when an MCP client calls it; a smaller one answers at once.
+const LONG_BATCH: usize = 25;
 
 /// The space a project-scoped input names (`projectId`: an id, key or
 /// link; the dispatcher turns a key into the id first).
@@ -521,6 +532,7 @@ tool_op!(TaskCreateMany {
     permission: Some(Perm::TasksCreate),
     idempotency: Command,
     preview: true,
+    long: |input| input.tasks.len() > LONG_BATCH,
     title: "Create many tasks",
     description: "Create up to 100 tasks in one space at once, all or nothing, such as a plan \
         turned into tasks. Each takes a title and optionally a description, priority, status and \
@@ -569,6 +581,7 @@ tool_op!(TaskUpdateMany {
     idempotency: Command,
     preview: true,
     destructive: true,
+    long: |input| input.task_ids.len() > 2 * LONG_BATCH,
     title: "Update many tasks",
     description: "Apply one change to up to 200 tasks in one space, all or nothing: a status \
         (each task must be allowed to move there directly), priority, assignee, type, labels to \

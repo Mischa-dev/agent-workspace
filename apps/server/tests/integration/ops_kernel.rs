@@ -174,6 +174,7 @@ fn request(caller: Caller, request_id: Option<&str>) -> DispatchRequest {
         unkeyed: Unkeyed::RunOnce,
         preview: false,
         renamed_from: None,
+        defer_long: false,
     }
 }
 
@@ -201,11 +202,14 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
     .await
     .expect("owner");
     let person = Caller::person(owner, ActorKind::Human);
-    let schema = envelope::schema((ops::registry()
-        .get("echo_create")
-        .expect("registered")
-        .meta
-        .output_schema)());
+    let schema = envelope::schema(
+        (ops::registry()
+            .get("echo_create")
+            .expect("registered")
+            .meta
+            .output_schema)(),
+        false,
+    );
     let matches_schema = |answer: &Value| {
         let outcome = answer["outcome"].clone();
         assert!(

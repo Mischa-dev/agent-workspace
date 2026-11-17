@@ -2033,6 +2033,7 @@ impl ServerHandler for McpServer {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
+                .enable_tasks()
                 .build(),
         )
         .with_server_info(Implementation::new("agent-workspace", "0.7.0"))
@@ -2097,6 +2098,41 @@ impl ServerHandler for McpServer {
         run_tool(self, request, context).await
     }
 
+    /// K2.21: one of the caller's long calls (`ops::long`), from any
+    /// server process; anyone else's is not found.
+    async fn get_task(
+        &self,
+        request: rmcp::model::GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::GetTaskResult, ErrorData> {
+        let task = own_task(&self.state, &context, &request.task_id, false).await?;
+        Ok(rmcp::model::GetTaskResult::new(task.detailed()))
+    }
+
+    /// Cancels a long call that hasn't started; one already running
+    /// finishes.
+    async fn cancel_task(
+        &self,
+        request: rmcp::model::CancelTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        own_task(&self.state, &context, &request.task_id, true).await?;
+        Ok(())
+    }
+
+    /// No long call asks for input on the way.
+    async fn update_task(
+        &self,
+        request: rmcp::model::UpdateTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        own_task(&self.state, &context, &request.task_id, false).await?;
+        Err(ErrorData::invalid_params(
+            "This task asks for no input.",
+            None,
+        ))
+    }
+
     async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -2122,6 +2158,35 @@ impl ServerHandler for McpServer {
                 context,
             ))
             .await
+    }
+}
+
+/// The caller's task `task_id` (cancelled first when `cancel`); another
+/// account's, or a missing one, is the same invalid-params error.
+async fn own_task(
+    state: &AppState,
+    context: &RequestContext<RoleServer>,
+    task_id: &str,
+    cancel: bool,
+) -> Result<crate::ops::long::KeptTask, ErrorData> {
+    let unknown = || ErrorData::invalid_params("There is no task with that id.", None);
+    let principal = context_principal(context).ok_or_else(unknown)?;
+    let id = Uuid::parse_str(task_id).map_err(|_| unknown())?;
+    let found = if cancel {
+        crate::ops::long::cancel(state, principal.actor_id, id).await
+    } else {
+        crate::ops::long::read(state, principal.actor_id, id).await
+    };
+    match found {
+        Ok(Some(task)) => Ok(task),
+        Ok(None) => Err(unknown()),
+        Err(error) => {
+            tracing::error!(category = error.log_category(), "MCP task lookup failed");
+            Err(ErrorData::internal_error(
+                "Couldn't read the task just now. Try again.",
+                None,
+            ))
+        }
     }
 }
 
@@ -2356,18 +2421,25 @@ async fn run_tool(
             .and_then(|parts| parts.headers.get(crate::REQUEST_ID_HEADER))
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        return Ok(rmcp::model::CallToolResponse::Complete(
-            crate::ops::mcp::call(
-                &server.state,
-                &principal,
-                alias,
-                edge,
-                trace_id,
-                &request.name,
-                request.arguments,
-            )
-            .await,
-        ));
+        // K2.21: a client that declared the Tasks extension gets a long
+        // call's task handle; any other reads `started` and asks job_get.
+        let follows_tasks = context
+            .client_capabilities()
+            .is_some_and(|capabilities| capabilities.supports_tasks());
+        let result = crate::ops::mcp::call(
+            &server.state,
+            &principal,
+            alias,
+            edge,
+            trace_id,
+            &request.name,
+            request.arguments,
+        )
+        .await;
+        if follows_tasks && let Some(handle) = crate::ops::mcp::task_handle(&result) {
+            return Ok(rmcp::model::CallToolResponse::Task(handle));
+        }
+        return Ok(rmcp::model::CallToolResponse::Complete(result));
     }
     let Some(principal) = context_principal(&context) else {
         return McpServer::tools()

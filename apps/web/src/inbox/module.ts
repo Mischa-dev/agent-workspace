@@ -34,6 +34,7 @@ export default {
       path: '/later',
     },
   ],
+  capture: [{ id: 'reminder', label: 'New reminder', icon: 'bookmark', path: '/later?new=reminder' }],
   shortcuts: [
     { action: 'go-inbox', key: 'i', label: 'Inbox', path: '/inbox', rank: 20 },
     { action: 'go-later', key: 'l', label: 'Later', path: '/later', rank: 40 },

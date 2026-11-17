@@ -1984,6 +1984,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "history_list",
     "history_show",
     "invite_link_list",
+    "job_get",
     "collection_list",
     "collection_describe",
     "record_query",
@@ -2248,6 +2249,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case("webhook_list", vec![json!({})], vec![], vec![]),
+        // K2.21: a long call's answer is its caller's alone.
+        case(
+            "job_get",
+            vec![json!({"jobId": a.job.to_string()})],
+            vec![json!({"jobId": b.job.to_string()})],
+            vec![],
+        ),
         // K4.26: another workspace's invitation links are out of reach.
         case(
             "invite_link_list",

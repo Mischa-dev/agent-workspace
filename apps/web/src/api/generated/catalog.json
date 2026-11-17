@@ -707,6 +707,20 @@
     "title": "Revoke an invitation link"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "job_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get job"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1070,7 +1084,7 @@
     "emits": [],
     "idempotent": false,
     "kind": "query",
-    "long": false,
+    "long": true,
     "module": "workspace",
     "name": "package_export",
     "permission": "settings.manage",
@@ -1847,7 +1861,7 @@
     ],
     "idempotent": true,
     "kind": "create",
-    "long": false,
+    "long": true,
     "module": "tasks",
     "name": "task_create_many",
     "permission": "tasks.create",
@@ -2050,7 +2064,7 @@
     ],
     "idempotent": true,
     "kind": "change",
-    "long": false,
+    "long": true,
     "module": "tasks",
     "name": "task_update_many",
     "permission": null,

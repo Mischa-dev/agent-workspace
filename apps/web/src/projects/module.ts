@@ -12,6 +12,7 @@ export default {
       page: () => import('./ProjectOverviewPage').then((module) => ({ default: module.ProjectOverviewPage })),
     },
   ],
+  capture: [{ id: 'project', label: 'New project', icon: 'plus', path: '/projects/new' }],
   palette: [
     { id: 'g:projects', space: 'workspace', rank: 70, label: 'All projects', icon: 'list', keywords: ['projects', 'archived'], path: '/projects' },
   ],

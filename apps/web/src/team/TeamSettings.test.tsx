@@ -34,6 +34,8 @@ const member = {
   createdAt: '2026-08-01T20:00:00Z',
   executionProfileReadiness: 'not_configured',
   capabilities: { changeRole: true, disable: true, enable: false },
+  // The server's choice (W1.37): no Admin for this caller to give.
+  assignableRoles: ['member', 'viewer'],
 }
 const invitation = {
   id: invitationId,
@@ -121,6 +123,9 @@ describe('TeamSettings', () => {
         })
       ).violations,
     ).toEqual([])
+    const picker = screen.getByLabelText(`Role for ${member.displayName}`)
+    expect(within(picker).queryByRole('option', { name: 'Admin' })).toBeNull()
+    expect(within(picker).getByRole('option', { name: 'Viewer' })).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText(`Role for ${member.displayName}`), {
       target: { value: 'viewer' },
     })

@@ -38,7 +38,7 @@ import { CollectionToolbar } from './CollectionToolbar'
 import type { ColumnActions } from './ColumnMenus'
 import { RecordCards } from './RecordCards'
 import { RecordPanel } from './RecordPanel'
-import { RecordTable } from './RecordTable'
+import { CollectionTableView } from './CollectionTableView'
 import { useRecordEdits } from './useRecordEdits'
 
 // Forms are managed now and then, so their dialog loads when it opens.
@@ -410,7 +410,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
         ) : phone ? (
           <RecordCards {...shared} />
         ) : (
-          <RecordTable {...shared} actions={actions} />
+          <CollectionTableView {...shared} actions={actions} />
         )}
       </div>
       {filtering ? (

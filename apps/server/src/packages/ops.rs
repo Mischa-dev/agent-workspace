@@ -93,6 +93,7 @@ impl Operation for PackageExport {
     const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = Some(Perm::SettingsManage);
     const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const LONG: bool = true;
     const TITLE: &'static str = "Export package";
     const DESCRIPTION: &'static str = "Export a space's setup (roles, channels, collections, \
         forms, automations, skills) or the workspace's (switches, layout, roles) as one package \
@@ -102,6 +103,11 @@ impl Operation for PackageExport {
 
     type Input = PackageExportInput;
     type Output = PackageExportOutput;
+
+    /// K2.21: a space's pages make it big enough to run as a job.
+    fn runs_long(input: &PackageExportInput) -> bool {
+        input.include_pages
+    }
 
     async fn run(
         call: &mut OpCall<'_>,

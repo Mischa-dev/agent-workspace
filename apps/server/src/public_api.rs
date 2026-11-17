@@ -148,6 +148,8 @@ pub(crate) fn status_for(result: &Value) -> StatusCode {
 fn outcome_status(outcome: &str) -> Option<StatusCode> {
     Some(match outcome {
         "ok" | "applied" | "found" | "events" | "requested" => StatusCode::OK,
+        // K2.21: a long call kept and run by a job.
+        "started" => StatusCode::ACCEPTED,
         "not_found" => StatusCode::NOT_FOUND,
         "permission_denied" => StatusCode::FORBIDDEN,
         "invalid_request" | "invalid_transition" | "rejected" => StatusCode::UNPROCESSABLE_ENTITY,

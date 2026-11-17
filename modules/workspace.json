@@ -57,7 +57,8 @@
     "invite_link_create": "create",
     "invite_link_list": "query",
     "invite_link_revoke": "change",
-    "thing_open": "describe"
+    "thing_open": "describe",
+    "job_get": "describe"
   },
   "routes": [
     "/health/*",
