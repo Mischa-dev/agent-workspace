@@ -8,7 +8,6 @@ mod a1_requests_by_role;
 mod a1_run_reads;
 mod a1_run_reporting;
 mod a1_runs_record;
-mod access_compare;
 mod accounts;
 mod activity_log;
 mod agent_interface;

@@ -8,7 +8,7 @@
   "switchable": false,
   "needs": [],
   "worksWith": [],
-  "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage", "workspace.delete"],
+  "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage", "webhooks.manage", "automations.manage", "workspace.delete"],
   "tools": {
     "briefing": "query",
     "settings_get": "describe",
@@ -38,6 +38,10 @@
     "workspace_template_save": "create",
     "package_export": "query",
     "role_assign": "change",
+    "person_create": "create",
+    "invite_link_create": "create",
+    "invite_link_list": "query",
+    "invite_link_revoke": "change",
     "thing_open": "describe"
   },
   "routes": [
@@ -58,6 +62,9 @@
     "/api/v1/{*path}",
     "/api/v2/*",
     "/api/v1/account/*",
+    "/api/v1/account-claims/*",
+    "/api/v1/invite-links/*",
+    "/api/v1/links/resolve",
     "/api/v1/auth/*",
     "/api/v1/client-errors",
     "/api/v1/dev/bootstrap",
@@ -141,6 +148,6 @@
     "slash": [],
     "setup": ["template", "workspace", "roles"]
   },
-  "settings": ["notifications.*", "files.*", "layout.*", "modules.*"],
+  "settings": ["notifications.*", "files.*", "layout.*", "modules.*", "access.*"],
   "nouns": []
 }

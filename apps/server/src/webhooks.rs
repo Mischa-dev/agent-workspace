@@ -1070,7 +1070,7 @@ pub(crate) async fn visible_to(
         task_projects: &[],
         modules,
         workspaces: &workspaces,
-        workspace_boards: false,
+        addresses: crate::addresses::Addresses::LEGACY,
     };
     Ok(crate::things::get(&mut connection, &viewer, id)
         .await?
@@ -1545,7 +1545,7 @@ pub(crate) async fn document_data(
         task_projects: &[],
         modules,
         workspaces: &workspaces,
-        workspace_boards: false,
+        addresses: crate::addresses::Addresses::LEGACY,
     };
     let Some(thing) = crate::things::get(&mut connection, &viewer, id).await? else {
         return Ok(None);

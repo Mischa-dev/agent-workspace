@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": ["tasks", "channels", "code"],
   "worksWith": ["agents", "automations"],
-  "permissions": ["runs.launch", "runs.approve", "runs.interrupt", "runs.accounts", "runs.report", "requests.raise", "requests.answer"],
+  "permissions": ["runs.launch", "runs.approve", "runs.interrupt", "runs.accounts", "runs.report", "requests.raise", "requests.answer", "runs.environments", "requests.answer_sensitive"],
   "tools": {
     "run_start": "create",
     "task_launch": "create",

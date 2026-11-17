@@ -4,26 +4,35 @@ import {
   type SessionResponse,
 } from '../auth/session'
 
-/** Workspace invitations start `aw_wsi_`; Project invitations start `aw_inv_`. */
-export type InvitationKind = 'workspace' | 'project'
+/**
+ * Workspace invitations start `aw_wsi_`; Project invitations start `aw_inv_`;
+ * invitation links, which several people may use, start `aw_lnk_`.
+ */
+export type InvitationKind = 'workspace' | 'project' | 'link'
 
 export type ResolvedInvitation = {
   kind: InvitationKind
   organizationName: string
-  /** Null for a workspace invitation. */
+  /** Null for a workspace invitation, and for a link that names no space. */
   projectName: string | null
   role: 'admin' | 'member' | 'viewer'
   expiresAt: string
 }
 
 export function invitationKind(token: string): InvitationKind {
-  return token.startsWith('aw_wsi_') ? 'workspace' : 'project'
+  if (token.startsWith('aw_wsi_')) return 'workspace'
+  if (token.startsWith('aw_lnk_')) return 'link'
+  return 'project'
+}
+
+const INVITATION_PATHS: Record<InvitationKind, string> = {
+  workspace: '/api/v1/workspace-invitations',
+  project: '/api/v1/project-invitations',
+  link: '/api/v1/invite-links',
 }
 
 function invitationPath(token: string, action: 'resolve' | 'accept-new' | 'accept-existing') {
-  return invitationKind(token) === 'workspace'
-    ? `/api/v1/workspace-invitations/${action}`
-    : `/api/v1/project-invitations/${action}`
+  return `${INVITATION_PATHS[invitationKind(token)]}/${action}`
 }
 
 function normalizeResolvedInvitation(value: unknown, kind: InvitationKind): ResolvedInvitation {
@@ -45,7 +54,7 @@ function normalizeResolvedInvitation(value: unknown, kind: InvitationKind): Reso
   return {
     kind,
     organizationName: record.organizationName,
-    projectName: kind === 'project' ? projectName : null,
+    projectName: kind === 'workspace' ? null : projectName,
     role: record.role,
     expiresAt: record.expiresAt,
   }

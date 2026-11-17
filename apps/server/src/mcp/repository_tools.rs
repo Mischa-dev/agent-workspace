@@ -12,14 +12,10 @@ use super::{
     McpPrincipal,
     common::{ToolResult, insert_audit, mark_via, parse_id},
 };
-use crate::{
-    AppState,
-    error::AppError,
-    policy::{Action, ActorKind},
-    repositories,
-};
+use crate::{AppState, error::AppError, policy::Action, repositories};
 
-const PEOPLE_ONLY: &str = "Agents read repositories, but only people add, prepare or archive them: those who manage code in the project, on the web or through an app connected as themselves.";
+const PEOPLE_ONLY: &str =
+    "Adding, preparing or archiving repositories takes a role that manages code in this project.";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -69,9 +65,6 @@ pub(super) async fn repository_write(
 ) -> ToolResult<RepositoryWriteValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_ONLY);
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
@@ -131,7 +124,7 @@ pub(super) async fn repository_write(
         let role = repositories::require_project_access_as(
             &mut transaction,
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             project_id,
             Action::RepositoryManage,
         )
@@ -141,7 +134,7 @@ pub(super) async fn repository_write(
         repositories::require_project_access_as(
             &mut transaction,
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             project_id,
             Action::RepositoryView,
         )
@@ -277,7 +270,7 @@ async fn add_from_installation(
         let mut picked = crate::github::add_picked_repository_as(
             state,
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             project_id,
             installation_id,
             github_repository_id,

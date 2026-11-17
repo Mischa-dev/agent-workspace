@@ -36,9 +36,9 @@ use crate::{
     },
 };
 
-/// Owner or admin, and a person: what changing a project takes.
-const ADMIN_ONLY: &str =
-    "Only a project's owners and admins can do that, and only as themselves, not as an agent.";
+/// What changing a project takes: a role holding the permission (K1.13:
+/// the role decides, never the kind of account).
+const ADMIN_ONLY: &str = "Your role here doesn't allow that. Ask someone who manages this project.";
 
 // ---------------------------------------------------------------------------
 // workflow_get
@@ -262,9 +262,6 @@ pub(super) async fn workflow_update(
 ) -> ToolResult<WorkflowUpdateValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(ADMIN_ONLY);
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
@@ -624,9 +621,13 @@ async fn admin_row(
          AND organization_membership.actor_id = $2
          AND organization_membership.enabled
         JOIN actors actor ON actor.id = $2 AND actor.status = 'active'
-        JOIN users user_account ON user_account.actor_id = $2 AND user_account.status = 'active'
         WHERE project.id = $1
-        FOR SHARE OF membership, organization_membership, actor, user_account
+          -- A person's sign-in must be active too; an agent has none.
+          AND NOT EXISTS (
+              SELECT 1 FROM users user_account
+              WHERE user_account.actor_id = $2 AND user_account.status <> 'active'
+          )
+        FOR SHARE OF membership, organization_membership, actor
         "#,
     )
     .bind(project_id)
@@ -639,8 +640,7 @@ async fn admin_row(
 /// connected for their whole account or to this Project, who is an owner or
 /// admin of it.
 fn may_administer(principal: &McpPrincipal, project_id: Uuid, row: &AdminRow) -> bool {
-    principal.actor_kind == ActorKind::Human
-        && (principal.account_wide || principal.project_id == project_id)
+    (principal.account_wide || principal.project_id == project_id)
         && RoleGrant::stored(
             &row.organization_role,
             row.organization_role_permissions.as_deref(),
@@ -680,7 +680,7 @@ pub(super) struct ProjectCreateArguments {
     pub client_request_id: Option<String>,
 }
 
-const PROJECT_CREATE_ONLY: &str = "Only people can create projects, through an app connected for their whole account, in a workspace where they may create projects.";
+const PROJECT_CREATE_ONLY: &str = "Creating a project takes a connection for the whole account, in a workspace where your role may create projects.";
 
 /// Create a Project in the caller's workspace, as the web app does: the
 /// caller becomes its owner. Calling again with the same key and name
@@ -693,7 +693,7 @@ pub(super) async fn project_create(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human || !principal.account_wide {
+    if !principal.account_wide {
         return ToolResult::denied(PROJECT_CREATE_ONLY);
     }
     let Ok(key) = crate::projects::normalize_project_key(&arguments.key) else {
@@ -942,9 +942,6 @@ pub(super) async fn project_update(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(ADMIN_ONLY);
-    }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
     }
@@ -1033,9 +1030,6 @@ pub(super) async fn project_archive(
 ) -> ToolResult<ProjectValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(ADMIN_ONLY);
     }
     let archive = arguments.archived.unwrap_or(true);
     let result = async {
@@ -1226,9 +1220,6 @@ pub(super) async fn project_layout_set(
 ) -> ToolResult<ProjectLayoutValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(ADMIN_ONLY);
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
@@ -1540,9 +1531,6 @@ pub(super) async fn project_member_set(
 ) -> ToolResult<MemberLine> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(ADMIN_ONLY);
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
