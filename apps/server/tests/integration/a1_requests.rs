@@ -146,7 +146,8 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
 
     let approval_copy = |status: &str, answer: Option<Value>, by: Option<Uuid>| Copied {
         kind: "approval".to_owned(),
-        raised_by_account_id: seed.human_actor_id,
+        // Raised by the run's own account, as new asks are.
+        raised_by_account_id: seed.worker_actor_id,
         run_id: Some(run),
         space_id: Some(seed.project_id),
         conversation_id: Some(seed.thread_id),
