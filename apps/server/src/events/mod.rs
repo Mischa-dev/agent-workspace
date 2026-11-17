@@ -9,19 +9,18 @@
 //! changed, never text (AGENTS.md rule 10): readers fetch content live with
 //! their own access.
 //!
-//! Until every writer emits its own events, `outbox::enqueue` mirrors each
-//! outbox event into the log with the same id (`legacy`), so every outbox
-//! writer is in the log without touching its call site.
+//! Writers that predate the catalogue stage typed change notices with
+//! `outbox::enqueue` (`notice`); they are events like any other.
 
 pub mod catalog;
 pub mod consumer;
-pub mod legacy;
+pub mod notice;
 mod route;
 pub mod sequencer;
 pub mod upkeep;
 
 pub use catalog::{EventClass, EventType};
-pub use consumer::{Consumer, ConsumerError, EventFilter, read, run_consumer};
+pub use consumer::{Consumer, ConsumerError, EventFilter, catch_up, read, run_consumer};
 pub use route::*;
 
 use serde::Serialize;
@@ -224,6 +223,12 @@ pub async fn emit(
     connection: &mut sqlx::PgConnection,
     event: NewEvent<'_>,
 ) -> Result<Uuid, AppError> {
+    emit_on(connection, event).await
+}
+
+/// [`emit`] on a connection the caller holds inside its transaction, for
+/// shared write code that takes a connection.
+pub async fn emit_on(connection: &mut PgConnection, event: NewEvent<'_>) -> Result<Uuid, AppError> {
     if !event.payload.is_object()
         || serde_json::to_vec(&event.payload).map_or(true, |bytes| bytes.len() > MAX_PAYLOAD_BYTES)
     {

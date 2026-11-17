@@ -41,7 +41,7 @@ use std::{
 
 use agent_workspace_server::{
     mcp::MCP_PATH,
-    realtime::{RealtimeHub, outbox_worker_id, run_outbox_publisher},
+    realtime::RealtimeHub,
     test_support::source::{routes as shared_routes, rust_files, server_src, strip_tests},
 };
 use axum::{
@@ -51,7 +51,7 @@ use axum::{
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use tokio::{net::TcpListener, sync::watch, time::timeout};
+use tokio::{net::TcpListener, time::timeout};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{Message as ClientMessage, client::IntoClientRequest, http::HeaderValue},
@@ -2897,8 +2897,7 @@ pub(super) async fn list_tools(app: &axum::Router, token: &str, session: &str) -
 // Realtime
 // ---------------------------------------------------------------------------
 
-/// A subscribes over the real WebSocket, then the outbox publisher and the
-/// log's tail start: the whole fixture's backlog (both workspaces) is
+/// A subscribes over the real WebSocket, then the log's tail starts: the whole fixture's backlog (both workspaces) is
 /// delivered from the start of the log, B changes a
 /// few more things, and A posts a sentinel message. A must see its sentinel
 /// and nothing of B's.
@@ -2938,13 +2937,6 @@ async fn check_realtime(
     );
     let (mut socket, _) = connect_async(request).await.expect("A's WebSocket");
 
-    let (stop_publisher, publisher_stopped) = watch::channel(false);
-    let publisher = tokio::spawn(run_outbox_publisher(
-        pool.clone(),
-        realtime.clone(),
-        outbox_worker_id(),
-        publisher_stopped,
-    ));
     let (stop_log, log) = crate::support::live::follow_log(pool, realtime, Some(0)).await;
 
     // More changes in B while A listens.
@@ -3070,8 +3062,6 @@ async fn check_realtime(
         report.leak("realtime frame to A", "", frame, b_ids);
     }
 
-    let _ = stop_publisher.send(true);
-    let _ = publisher.await;
     let _ = stop_log.send(true);
     let _ = log.await;
     let _ = socket.close(None).await;

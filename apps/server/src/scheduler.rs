@@ -154,7 +154,7 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) -> Result
     loop {
         tokio::select! {
             // A database blip must not stop the server: log and try again
-            // on the next tick, as the outbox publisher does.
+            // on the next tick, as the log's consumers do.
             _ = interval.tick() => {
                 if let Err(error) = drain(&state, None).await {
                     tracing::error!(

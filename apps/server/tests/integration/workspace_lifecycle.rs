@@ -13,7 +13,10 @@ use uuid::Uuid;
 
 use crate::{
     agent_interface::{Browser, initialize, send},
-    support::two_workspaces::{TwoWorkspaces, sweep_ids, two_workspaces},
+    support::{
+        NOTICES,
+        two_workspaces::{TwoWorkspaces, sweep_ids, two_workspaces},
+    },
     workspace_isolation::{call_tool, structured},
 };
 
@@ -207,11 +210,12 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     // Open screens hear of it.
-    let announced = sqlx::query_scalar::<_, String>(
-        "SELECT payload->>'lifecycle' FROM outbox_events \
-         WHERE event_type = 'workspace.lifecycle.changed' AND payload->>'workspaceId' = $1 \
-         ORDER BY event_cursor DESC LIMIT 1",
-    )
+    let announced = sqlx::query_scalar::<_, String>(&format!(
+        "SELECT notice.payload->>'lifecycle' FROM {NOTICES} notice \
+         WHERE notice.event_type = 'workspace.lifecycle.changed' \
+           AND notice.payload->>'workspaceId' = $1 \
+         ORDER BY notice.created_at DESC, notice.event_id DESC LIMIT 1"
+    ))
     .bind(a.organization.to_string())
     .fetch_optional(&t.pool)
     .await

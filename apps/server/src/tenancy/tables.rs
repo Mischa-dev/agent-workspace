@@ -117,7 +117,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("operation_alias_usage", WORKSPACE_ID),
     ("organization_actor_profiles", ORGANIZATION_ID),
     ("organization_memberships", ORGANIZATION_ID),
-    ("outbox_events", WORKSPACE_ID),
     ("project_counters", WORKSPACE_ID),
     ("project_decisions", WORKSPACE_ID),
     ("project_environments", ORGANIZATION_ID),

@@ -108,7 +108,10 @@ pub(super) fn item<'a>(result: &'a Value, message: &str) -> &'a Value {
 async fn reaction_events(pool: &PgPool, message: &str) -> i64 {
     count(
         pool,
-        "SELECT count(*) FROM outbox_events WHERE event_type = 'conversation.message.reactions.updated' AND resource_id = $1",
+        &format!(
+"SELECT count(*) FROM {n} outbox WHERE event_type = 'conversation.message.reactions.updated' AND resource_id = $1",
+ n = crate::support::NOTICES
+),
         message,
     )
     .await
@@ -199,7 +202,10 @@ async fn reactions_stay_inside_the_conversation() {
     // organization is in the DM/group project.
     assert_eq!(
         sqlx::query_scalar::<_, Option<Uuid>>(
-            "SELECT conversation_id FROM outbox_events WHERE event_type = 'conversation.message.reactions.updated' AND resource_id = $1",
+            &format!(
+"SELECT conversation_id FROM {n} outbox WHERE event_type = 'conversation.message.reactions.updated' AND resource_id = $1",
+ n = crate::support::NOTICES
+),
         )
         .bind(message.parse::<Uuid>().expect("message"))
         .fetch_one(&setup.pool)
@@ -209,7 +215,10 @@ async fn reactions_stay_inside_the_conversation() {
     );
     assert_eq!(
         sqlx::query_scalar::<_, Value>(
-            "SELECT payload FROM outbox_events WHERE event_type = 'conversation.message.reactions.updated' AND resource_id = $1",
+            &format!(
+"SELECT payload FROM {n} outbox WHERE event_type = 'conversation.message.reactions.updated' AND resource_id = $1",
+ n = crate::support::NOTICES
+),
         )
         .bind(message.parse::<Uuid>().expect("message"))
         .fetch_one(&setup.pool)

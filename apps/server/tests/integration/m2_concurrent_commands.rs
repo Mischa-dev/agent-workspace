@@ -266,7 +266,7 @@ async fn thread_side_effect_counts(
     channel_id: Uuid,
 ) -> ThreadSideEffectCounts {
     let (conversations, read_states, created_outbox_events, creation_audits) =
-        sqlx::query_as::<_, (i64, i64, i64, i64)>(
+        sqlx::query_as::<_, (i64, i64, i64, i64)>(&format!(
             r#"
             SELECT
                 (
@@ -288,7 +288,7 @@ async fn thread_side_effect_counts(
                 ),
                 (
                     SELECT count(*)
-                    FROM outbox_events
+                    FROM {n} outbox
                     WHERE project_id = $1
                       AND event_type = 'conversation.created'
                 ),
@@ -299,7 +299,8 @@ async fn thread_side_effect_counts(
                       AND action = 'conversation.thread_created'
                 )
             "#,
-        )
+            n = crate::support::NOTICES
+        ))
         .bind(project_id)
         .bind(channel_id)
         .fetch_one(pool)
@@ -386,17 +387,17 @@ async fn assert_thread_result(
         vec![(0, 1)]
     );
     assert_eq!(
-        sqlx::query_scalar::<_, i64>(
+        sqlx::query_scalar::<_, i64>(&format!(
             r#"
             SELECT count(*)
-            FROM outbox_events
+            FROM {n} outbox
             WHERE project_id = $1
               AND conversation_id = $2
-              AND resource_kind = 'conversation'
               AND resource_id = $2
               AND event_type = 'conversation.created'
             "#,
-        )
+            n = crate::support::NOTICES
+        ),)
         .bind(project_id)
         .bind(thread_id)
         .fetch_one(pool)

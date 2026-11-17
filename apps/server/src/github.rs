@@ -4428,6 +4428,15 @@ async fn complete_pull_request_sync_job(
     if updated.rows_affected() != 1 {
         return Err(AppError::Conflict("github_job", "lease_lost"));
     }
+    // What it was, so the facts below name only what this sync changed.
+    let before = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT state, checks_state, head_sha FROM github_pull_requests \
+         WHERE project_id = $1 AND id = $2",
+    )
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .fetch_one(&mut *transaction)
+    .await?;
     let pull_request_version = sqlx::query_scalar::<_, i64>(
         r#"
         UPDATE github_pull_requests
@@ -4569,7 +4578,74 @@ async fn complete_pull_request_sync_job(
     .execute(&mut *transaction)
     .await?;
     enqueue_pull_request_invalidations(&mut transaction, job).await?;
+    emit_pull_request_facts(
+        &mut transaction,
+        job,
+        &before,
+        (
+            canonical_state,
+            projection.checks_state,
+            &pull_request.head.sha,
+        ),
+    )
+    .await?;
     transaction.commit().await?;
+    Ok(())
+}
+
+/// The pull request's facts in the event log (K3.7), for webhooks and
+/// automations: merged or closed, or its checks failing or passing on a
+/// new head, when this sync changed that and the pull request is linked to
+/// a task or run here. Keyed by what they say, so a repeat lands once.
+async fn emit_pull_request_facts(
+    transaction: &mut Transaction<'_, Postgres>,
+    job: &ClaimedPullRequestSyncJob,
+    (state_before, checks_before, head_before): &(String, String, String),
+    (state, checks, head): (&str, &str, &str),
+) -> Result<(), AppError> {
+    use crate::events::catalog;
+    let ty = match state {
+        "merged" if state_before != "merged" => &catalog::PULL_REQUEST_MERGED,
+        "closed" if state_before != "closed" => &catalog::PULL_REQUEST_CLOSED,
+        "merged" | "closed" => return Ok(()),
+        _ if checks == checks_before && head == head_before => return Ok(()),
+        _ => match checks {
+            "failure" => &catalog::PULL_REQUEST_CHECKS_FAILED,
+            "success" => &catalog::PULL_REQUEST_CHECKS_PASSED,
+            _ => return Ok(()),
+        },
+    };
+    // The task and run it is linked to here, if any; unlinked, nothing.
+    let (work_item, run) = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>)>(
+        r#"
+        SELECT
+            (SELECT link.work_item_id FROM github_pull_request_work_item_links link
+             WHERE link.project_id = $1 AND link.github_pull_request_id = $2
+             ORDER BY link.work_item_id LIMIT 1),
+            (SELECT link.agent_run_id FROM github_pull_request_workspace_links link
+             WHERE link.project_id = $1 AND link.github_pull_request_id = $2
+               AND link.agent_run_id IS NOT NULL
+             ORDER BY link.agent_run_id LIMIT 1)
+        "#,
+    )
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if work_item.is_none() && run.is_none() {
+        return Ok(());
+    }
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(ty, job.project_id, "pull_request", job.pull_request_id)
+            .payload(serde_json::json!({
+                "state": if matches!(state, "merged" | "closed") { state } else { checks },
+                "headSha": head,
+                "workItemId": work_item,
+                "agentRunId": run,
+            })),
+    )
+    .await?;
     Ok(())
 }
 
