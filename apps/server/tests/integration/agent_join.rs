@@ -15,7 +15,7 @@ use super::support::{
 
 /// A second workspace, B, with the world's owner as its owner and lena as
 /// an admin there.
-async fn second_workspace(world: &Workspace) -> Uuid {
+pub(super) async fn second_workspace(world: &Workspace) -> Uuid {
     let pool = world.pool();
     let workspace = Uuid::now_v7();
     sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Second', $2)")

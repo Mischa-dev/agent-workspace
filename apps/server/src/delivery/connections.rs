@@ -148,7 +148,8 @@ pub async fn for_caller(
     }
 }
 
-/// The connection made for an older project credential's connection.
+/// The connection made for an agent's token. Like the token, it reaches
+/// each workspace the account is in (R19).
 pub async fn for_source(
     connection: &mut PgConnection,
     account_id: Uuid,
@@ -160,7 +161,7 @@ pub async fn for_source(
             id, home_workspace_id, account_id, reaches_all, source_connection_id, is_default,
             name, push_cursor, read_cursor, created_by_account_id
         )
-        SELECT $1, source.workspace_id, source.actor_id, false, source.id, true,
+        SELECT $1, source.workspace_id, source.actor_id, true, source.id, true,
                source.connection_name, counter.next_position - 1, counter.next_position - 1,
                source.created_by_actor_id
         FROM external_agent_connections source, event_position_counter counter
