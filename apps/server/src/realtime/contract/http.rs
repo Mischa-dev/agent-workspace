@@ -7,6 +7,10 @@
 //!   (access checked as of now), and a ticket starting where that ends;
 //!   or `resync: true` when `N` is too far back to replay.
 //! - `GET /api/v2/live/key`: the public keys, for an outside live service.
+//!
+//! Both take `documents=page.<id>,sheet.<id>` (K5.21): the ticket names
+//! the room of each the caller may see now, checked here, so the live side
+//! routes a document's changes and cursors without asking.
 
 use std::collections::BTreeSet;
 
@@ -17,14 +21,19 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 
-use super::ticket::{Audience, ConnectionKind, Signer, TICKET_LIFETIME_SECONDS, Ticket};
+use super::ticket::{
+    Audience, ConnectionKind, Signer, TICKET_LIFETIME_SECONDS, Ticket, document_name,
+    parse_document,
+};
 use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::AppError,
     realtime::{
+        documents::{DocumentRef, can_view},
         hub::{Replay, replay, subscription_for},
         subscriptions::SubscriptionSet,
+        wire::MAX_WATCHED,
     },
 };
 
@@ -35,9 +44,26 @@ const RESUME_EVENTS: usize = 2_000;
 pub struct AfterQuery {
     /// A log position, as a string or a number.
     after: Option<String>,
+    /// Documents to watch, comma separated, each `<kind>.<id>` (K5.21).
+    documents: Option<String>,
 }
 
 impl AfterQuery {
+    /// The documents asked for, at most as many as a connection watches.
+    fn documents(&self) -> Result<Vec<DocumentRef>, AppError> {
+        let Some(list) = self.documents.as_deref().filter(|list| !list.is_empty()) else {
+            return Ok(Vec::new());
+        };
+        let documents = list
+            .split(',')
+            .map(|name| parse_document(name.trim()).ok_or(AppError::Validation("documents")))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if documents.len() > MAX_WATCHED {
+            return Err(AppError::Validation("documents"));
+        }
+        Ok(documents.into_iter().collect())
+    }
+
     fn position(&self) -> Result<Option<i64>, AppError> {
         self.after
             .as_deref()
@@ -61,6 +87,24 @@ pub struct TicketResponse {
     pub position: String,
     /// Unix seconds; fetch a new ticket before then.
     pub expires_at: i64,
+    /// The asked-for documents whose rooms the ticket names: those the
+    /// caller may see now.
+    pub documents: Vec<String>,
+}
+
+/// The documents the account may see now, of those asked for.
+async fn viewable(
+    state: &AppState,
+    account: uuid::Uuid,
+    asked: Vec<DocumentRef>,
+) -> Result<Vec<DocumentRef>, AppError> {
+    let mut granted = Vec::with_capacity(asked.len());
+    for document in asked {
+        if can_view(&state.pool, account, document).await? {
+            granted.push(document);
+        }
+    }
+    Ok(granted)
 }
 
 /// The audiences a set names: every workspace, space and restricted
@@ -99,8 +143,15 @@ fn issue(
     state: &AppState,
     principal: &AuthenticatedActor,
     set: &SubscriptionSet,
+    documents: &[DocumentRef],
     from: i64,
 ) -> Result<TicketResponse, AppError> {
+    let mut named = audiences(set);
+    named.extend(
+        documents
+            .iter()
+            .map(|document| Audience::Document(*document)),
+    );
     let signer = Signer::from_config(&state.config)?;
     let expires = chrono::Utc::now().timestamp() + TICKET_LIFETIME_SECONDS;
     let ticket = signer.sign(&Ticket {
@@ -109,7 +160,7 @@ fn issue(
         account: principal.actor_id,
         session: principal.session_id,
         kind: ConnectionKind::Web,
-        audiences: audiences(set),
+        audiences: named,
         from,
         expires,
     });
@@ -118,6 +169,10 @@ fn issue(
         url: socket_url(state),
         position: from.to_string(),
         expires_at: expires,
+        documents: documents
+            .iter()
+            .map(|document| document_name(*document))
+            .collect(),
     })
 }
 
@@ -136,7 +191,8 @@ pub async fn ticket(
         None => head(&state).await?,
     };
     let set = subscription_for(&state, principal.actor_id, &principal.actor_kind).await?;
-    Ok(Json(issue(&state, &principal, &set, from)?))
+    let documents = viewable(&state, principal.actor_id, query.documents()?).await?;
+    Ok(Json(issue(&state, &principal, &set, &documents, from)?))
 }
 
 #[derive(Debug, Serialize)]
@@ -159,6 +215,7 @@ pub async fn resume(
     Query(query): Query<AfterQuery>,
 ) -> Result<Json<ResumeResponse>, AppError> {
     let after = query.position()?.ok_or(AppError::Validation("after"))?;
+    let asked = query.documents()?;
     let mut set = subscription_for(&state, principal.actor_id, &principal.actor_kind).await?;
     let mut events = Vec::new();
     let mut position = after;
@@ -185,7 +242,8 @@ pub async fn resume(
             }
         }
     };
-    let ticket = issue(&state, &principal, &set, position)?;
+    let documents = viewable(&state, principal.actor_id, asked).await?;
+    let ticket = issue(&state, &principal, &set, &documents, position)?;
     Ok(Json(ResumeResponse {
         events,
         position: position.to_string(),

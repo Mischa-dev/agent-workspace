@@ -14,7 +14,12 @@ use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{config::AppConfig, error::AppError, secrets};
+use crate::{
+    config::AppConfig,
+    error::AppError,
+    realtime::documents::{DocumentKind, DocumentRef},
+    secrets,
+};
 
 /// How long a ticket works; the client refreshes it through `api` first.
 pub const TICKET_LIFETIME_SECONDS: i64 = 5 * 60;
@@ -36,11 +41,45 @@ pub enum Audience {
     Conversation(Uuid),
     /// One account.
     Account(Uuid),
+    /// A document's room (K5.21): connections watching it, whose ticket
+    /// was issued after checking they may see it.
+    Document(DocumentRef),
+}
+
+fn kind_name(kind: DocumentKind) -> &'static str {
+    match kind {
+        DocumentKind::Page => "page",
+        DocumentKind::Whiteboard => "whiteboard",
+        DocumentKind::Sheet => "sheet",
+    }
+}
+
+/// A document as an audience and a query write it: `<kind>.<id>`.
+pub fn parse_document(text: &str) -> Option<DocumentRef> {
+    let (kind, id) = text.split_once('.')?;
+    let kind = match kind {
+        "page" => DocumentKind::Page,
+        "whiteboard" => DocumentKind::Whiteboard,
+        "sheet" => DocumentKind::Sheet,
+        _ => return None,
+    };
+    Some(DocumentRef {
+        kind,
+        id: Uuid::parse_str(id).ok()?,
+    })
+}
+
+/// `<kind>.<id>`.
+pub fn document_name(document: DocumentRef) -> String {
+    format!("{}.{}", kind_name(document.kind), document.id)
 }
 
 impl Audience {
     pub fn parse(text: &str) -> Option<Self> {
         let (kind, id) = text.split_once(':')?;
+        if kind == "document" {
+            return parse_document(id).map(Self::Document);
+        }
         let id = Uuid::parse_str(id).ok()?;
         Some(match kind {
             "workspace" => Self::Workspace(id),
@@ -59,6 +98,9 @@ impl std::fmt::Display for Audience {
             Self::Space(id) => write!(formatter, "space:{id}"),
             Self::Conversation(id) => write!(formatter, "conversation:{id}"),
             Self::Account(id) => write!(formatter, "account:{id}"),
+            Self::Document(document) => {
+                write!(formatter, "document:{}", document_name(*document))
+            }
         }
     }
 }
@@ -298,9 +340,18 @@ mod tests {
             Audience::Space(id),
             Audience::Conversation(id),
             Audience::Account(id),
+            Audience::Document(DocumentRef {
+                kind: DocumentKind::Sheet,
+                id,
+            }),
         ] {
             assert_eq!(Audience::parse(&audience.to_string()), Some(audience));
         }
         assert_eq!(Audience::parse("board:x"), None);
+        assert_eq!(
+            Audience::parse(&format!("document:page.{id}")).map(|audience| audience.to_string()),
+            Some(format!("document:page.{id}"))
+        );
+        assert_eq!(Audience::parse(&format!("document:note.{id}")), None);
     }
 }

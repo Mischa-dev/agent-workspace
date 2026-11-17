@@ -118,7 +118,7 @@ pub(crate) fn of_logged(event: &LoggedEvent) -> Vec<Publish> {
 }
 
 /// What an ephemeral frame publishes. Awareness and document changes go to
-/// document rooms (K5.21); a cache invalidation stays on the bus.
+/// the document's room (K5.21); a cache invalidation stays on the bus.
 pub(crate) fn of_ephemeral(frame: &EphemeralFrame) -> Vec<Publish> {
     match frame {
         EphemeralFrame::Presence {
@@ -169,10 +169,32 @@ pub(crate) fn of_ephemeral(frame: &EphemeralFrame) -> Vec<Publish> {
         EphemeralFrame::SessionRevoked { session } => {
             vec![Publish::Revoke { session: *session }]
         }
-        EphemeralFrame::StreamDelta { route: None, .. }
-        | EphemeralFrame::Invalidate { .. }
-        | EphemeralFrame::Awareness { .. }
-        | EphemeralFrame::DocumentUpdate { .. } => Vec::new(),
+        // Each watcher drops its own connection's cursor by `connection`.
+        EphemeralFrame::Awareness {
+            document,
+            connection,
+            account,
+            state,
+        } => vec![Publish::Frame {
+            audiences: vec![Audience::Document(*document)],
+            position: None,
+            except_account: None,
+            frame: wire::awareness(*document, *connection, *account, state),
+        }],
+        EphemeralFrame::DocumentUpdate {
+            document,
+            generation,
+            version,
+            update,
+        } => vec![Publish::Frame {
+            audiences: vec![Audience::Document(*document)],
+            position: None,
+            except_account: None,
+            frame: wire::document_update(*document, *generation, *version, update),
+        }],
+        EphemeralFrame::StreamDelta { route: None, .. } | EphemeralFrame::Invalidate { .. } => {
+            Vec::new()
+        }
     }
 }
 

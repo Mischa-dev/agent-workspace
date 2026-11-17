@@ -30,6 +30,7 @@ An audience is written `<kind>:<id>`:
 | `space:<id>` | Everyone who reads the space |
 | `conversation:<id>` | The members of a restricted conversation (a DM, a group or a private channel), by its root |
 | `account:<id>` | One account |
+| `document:<kind>.<id>` | The connections watching a page, sheet or whiteboard (see Document rooms) |
 
 ## Tickets
 
@@ -110,7 +111,19 @@ After `ready`, the connection hears:
 The client sends a new ticket on the open connection with
 `{"type": "ticket", "ticket": "<ticket>"}`. It must be for the same account
 and session, or the connection closes with 4401. Its audiences replace the
-old ones.
+old ones from the next frame on, and the live side answers
+`{"type": "ticket.accepted", "position": "…"}`.
+
+## Document rooms
+
+A ticket can name rooms: `document:page.<id>`, `document:sheet.<id>` or
+`document:whiteboard.<id>`. The client asks for them when it fetches a
+ticket or resumes, with `documents=page.<id>,sheet.<id>` (at most 20). The
+server checks that the caller may see each one now, and the answer's
+`documents` lists the rooms the ticket names. A document's changes and its
+watchers' cursors are published to its room. When access changes, the
+ticket goes stale, and the new ticket leaves out the rooms the caller lost.
+Each watcher ignores cursor frames whose `connection` is its own.
 
 When a session signs out, its connections close with 4401.
 

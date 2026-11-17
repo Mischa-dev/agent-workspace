@@ -349,6 +349,10 @@ async fn serve(
                             last = last.max(fresh.from);
                             ticket = fresh;
                             stale_until = None;
+                            let accepted = json!({"type": "ticket.accepted", "position": last.to_string()});
+                            if !send(&mut socket, accepted.to_string()).await {
+                                return;
+                            }
                         }
                         _ => {
                             close(&mut socket, CLOSE_TICKET, "ticket").await;

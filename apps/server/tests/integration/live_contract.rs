@@ -370,7 +370,8 @@ async fn conformance(name: &str, target: Target) {
     let ready = until(&mut socket, WAIT, |frame| frame["type"] == "ready")
         .await
         .expect("ready");
-    assert_eq!(ready["position"], issued["position"]);
+    // Anything published since the ticket came first.
+    assert!(position(&ready) >= position(&issued), "{ready} {issued}");
     let other_ticket = ticket(&world, &other).await;
     let mut away = open(&world, other_ticket["ticket"].as_str().expect("ticket")).await;
     until(&mut away, WAIT, |frame| frame["type"] == "ready")
@@ -463,7 +464,7 @@ async fn conformance(name: &str, target: Target) {
     let ready = until(&mut socket, WAIT, |frame| frame["type"] == "ready")
         .await
         .expect("ready");
-    assert_eq!(position(&ready), through);
+    assert!(position(&ready) >= through, "{ready}");
     let next_message = say(&world, &owner, general, "live-after").await;
     let frame = until(&mut socket, WAIT, |frame| message_in(frame, general))
         .await
@@ -513,6 +514,11 @@ async fn conformance(name: &str, target: Target) {
         ))
         .await
         .expect("new ticket");
+    until(&mut socket, WAIT, |frame| {
+        frame["type"] == "ticket.accepted"
+    })
+    .await
+    .expect("the new ticket is in use");
     say(&world, &owner, group, "live-group-0").await;
     say(&world, &owner, general, "live-general-after-group").await;
     until(&mut socket, WAIT, |frame| message_in(frame, group))
@@ -590,4 +596,142 @@ async fn the_ticket_key_is_public_and_tickets_need_a_session() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     world.cluster.finish().await;
+}
+
+/// K5.21: a document's room. A watcher whose ticket names the room hears
+/// its changes; a connection whose ticket lacks it, or someone who may not
+/// see the document, hears nothing; once access is gone, `ticket.stale`
+/// and a new ticket drop the room.
+async fn document_rooms(name: &str, target: Target) {
+    use agent_workspace_server::realtime::{
+        documents::{DocumentKind, DocumentRef},
+        ephemeral::{EphemeralFrame, publish},
+    };
+    let Some(world) = world(name, target).await else {
+        return;
+    };
+    let api = world.api();
+    let owner = api.login("owner").await;
+    let workspace = world.cluster.organization_id;
+    let (project, _) = channel(&world, &owner, workspace, "rooms").await;
+    let page = call(
+        api,
+        &owner,
+        "POST",
+        &format!("/api/v1/projects/{project}/pages"),
+        None,
+        json!({"title": "Plan", "body": "Hello"}),
+    )
+    .await;
+    let page: Uuid = page["id"].as_str().expect("page").parse().expect("id");
+    let document = DocumentRef {
+        kind: DocumentKind::Page,
+        id: page,
+    };
+    let watching = format!("documents=page.{page}");
+    let (mara, mara_browser) = person(&world, workspace, project, "mara").await;
+    second_workspace_owner(&world.cluster.pool).await;
+    let outsider = api.login(&second_owner_login()).await;
+
+    let watch = async |browser: &Browser| {
+        call(
+            api,
+            browser,
+            "GET",
+            &format!("/api/v2/live/ticket?{watching}"),
+            None,
+            Value::Null,
+        )
+        .await
+    };
+    let mara_ticket = watch(&mara_browser).await;
+    assert_eq!(mara_ticket["documents"], json!([format!("page.{page}")]));
+    let outsider_ticket = watch(&outsider).await;
+    assert_eq!(outsider_ticket["documents"], json!([]), "may not see it");
+    let owner_ticket = ticket(&world, &owner).await;
+    let mut sockets = Vec::new();
+    for issued in [&mara_ticket, &outsider_ticket, &owner_ticket] {
+        let mut socket = open(&world, issued["ticket"].as_str().expect("ticket")).await;
+        until(&mut socket, WAIT, |frame| frame["type"] == "ready")
+            .await
+            .expect("ready");
+        sockets.push(socket);
+    }
+    let change = |version: i64| EphemeralFrame::DocumentUpdate {
+        document,
+        generation: Uuid::now_v7(),
+        version,
+        update: "AQLy".to_owned(),
+    };
+    let is_update = |frame: &Value| frame["kind"] == "document.update";
+    publish(api.state(), change(1)).await;
+    let heard = until(&mut sockets[0], WAIT, is_update)
+        .await
+        .expect("the watcher hears");
+    assert_eq!(heard["document"]["id"], page.to_string());
+    for socket in &mut sockets[1..] {
+        assert!(
+            until(socket, Duration::from_secs(1), is_update)
+                .await
+                .is_none(),
+            "only the room hears"
+        );
+    }
+
+    // Access gone: the ticket goes stale, and a new one has no room.
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(mara)
+    .fetch_one(&world.cluster.pool)
+    .await
+    .expect("version");
+    call(
+        api,
+        &owner,
+        "PATCH",
+        &format!("/api/v1/projects/{project}/members/{mara}"),
+        Some("rooms-disable"),
+        json!({"expectedVersion": version, "enabled": false}),
+    )
+    .await;
+    until(&mut sockets[0], WAIT, |frame| {
+        frame["type"] == "ticket.stale"
+    })
+    .await
+    .expect("Mara's ticket went stale");
+    let fresh = watch(&mara_browser).await;
+    assert_eq!(fresh["documents"], json!([]), "the room is dropped");
+    sockets[0]
+        .send(Message::Text(
+            json!({"type": "ticket", "ticket": fresh["ticket"]})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .expect("new ticket");
+    until(&mut sockets[0], WAIT, |frame| {
+        frame["type"] == "ticket.accepted"
+    })
+    .await
+    .expect("the new ticket is in use");
+    publish(api.state(), change(2)).await;
+    assert!(
+        until(&mut sockets[0], Duration::from_secs(1), is_update)
+            .await
+            .is_none(),
+        "no longer in the room"
+    );
+    world.cluster.finish().await;
+}
+
+#[tokio::test]
+async fn the_in_process_live_role_keeps_document_rooms() {
+    document_rooms("k5_21_in_process", Target::InProcess).await;
+}
+
+#[tokio::test]
+async fn a_separate_live_instance_keeps_document_rooms() {
+    document_rooms("k5_21_separate", Target::Separate).await;
 }
