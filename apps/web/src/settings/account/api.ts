@@ -60,6 +60,7 @@ export const accountKeys = {
   sessions: ['account', 'sessions'] as const,
   security: ['account', 'security'] as const,
   apiTokens: ['account', 'api-tokens'] as const,
+  profile: ['account-profile'] as const,
 }
 
 const post = <T>(path: string, json: unknown = {}) => requestJson<T>(path, { method: 'POST', json })

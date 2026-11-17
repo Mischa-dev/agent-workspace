@@ -58,7 +58,7 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
   const key = hostKeys.list(workspaceId, mineOnly)
   const hosts = useQuery({ queryKey: key, queryFn: () => listHosts(workspaceId, mineOnly) })
   const members = useQuery({
-    queryKey: workspace ? workspaceKeys.members(workspace.id) : ['organization', 'none', 'members'],
+    queryKey: workspaceKeys.members(workspace?.id ?? 'none'),
     queryFn: () => listWorkspaceMembers(workspace?.id ?? ''),
     enabled: Boolean(workspace),
   })

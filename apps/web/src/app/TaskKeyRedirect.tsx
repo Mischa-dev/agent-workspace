@@ -8,6 +8,7 @@ import { parseTaskKey } from '../shell/shortcuts'
 import { useProjectByKey } from '../shell/useProjectByKey'
 import { Button, EmptyState, ErrorState, PageSkeleton } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
+import { queryKeys } from '../api/queryKeys'
 
 /** `/AWD-12` opens task 12 of the project whose key is AWD. */
 export function TaskKeyRedirect() {
@@ -20,7 +21,7 @@ export function TaskKeyRedirect() {
   const byKey = useProjectByKey(parsed?.projectKey ?? null, chosenId)
   const { project } = byKey
   const lookup = useQuery({
-    queryKey: ['project', project?.id ?? '', 'task-key', parsed?.key ?? ''],
+    queryKey: queryKeys.taskKey(project?.id ?? '', parsed?.key ?? ''),
     queryFn: async () => {
       if (!project || !parsed) return null
       const matches = await searchWorkItemReferences(project.id, parsed.key)

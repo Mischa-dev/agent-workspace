@@ -47,7 +47,7 @@ import '../../styles/pages.css'
 /** Workspace › General: its name, which workspace is your default, and leaving or handing it over. */
 export default function GeneralPage({ session, workspace: summary }: SettingsPageProps) {
   const organizationId = summary?.id ?? ''
-  const serverVersion = useQuery({ queryKey: ['server-version'], queryFn: getServerVersion, staleTime: Infinity })
+  const serverVersion = useQuery({ queryKey: workspaceKeys.serverVersion, queryFn: getServerVersion, staleTime: Infinity })
   const workspace = useQuery({
     queryKey: workspaceKeys.workspace(organizationId),
     queryFn: () => getWorkspace(organizationId),

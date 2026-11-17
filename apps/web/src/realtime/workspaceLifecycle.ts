@@ -14,7 +14,7 @@ export function workspaceLifecycleChanged(queryClient: QueryClient, envelope: Re
   void queryClient.invalidateQueries({ queryKey: queryKeys.session, exact: true })
   const workspaceId = uuid(envelope.payload?.workspaceId)
   if (workspaceId) {
-    void queryClient.invalidateQueries({ queryKey: ['organization', workspaceId], exact: true })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workspace(workspaceId), exact: true })
   }
   return true
 }

@@ -4,14 +4,13 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
 import { toastError } from '../app/mutations'
-import { useAuthenticatedSession } from '../auth/session'
 import { useProjectExperience, type Experience } from '../experience/layout'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarChannel, SidebarThread } from '../conversations/types'
 import { inboxKeys, isExternalHref, normalizePage, useUpdateInbox, type InboxNotification } from '../inbox/api'
 import { FAILURE_KINDS, KIND_ICON } from '../inbox/kinds'
 import { projectSettingsHref } from '../settings/paths'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import {
   Avatar,
   Banner,
@@ -52,7 +51,6 @@ const RECENT_WORK = { limit: 5 }
 const SHOWN = 5
 
 export function ProjectOverviewPage() {
-  const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
   const experience = useProjectExperience(projectId)
@@ -64,24 +62,21 @@ export function ProjectOverviewPage() {
   )
 
   // While it loads, the shell finds the project from the address, so its sidebar stays put.
+  useShellPage({ project: project.data })
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading />
-      </AppShell>
+      <ProjectPageLoading />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
   const base = `/projects/${encodeURIComponent(project.data.id)}`
   return (
-    <AppShell project={project.data} user={session.user}>
+    <>
       <div className="aw-page">
         <NavigationSyncAlert {...navigationSync} />
         <PageHeader
@@ -119,7 +114,7 @@ export function ProjectOverviewPage() {
           </Suspense>
         ) : null}
       </div>
-    </AppShell>
+    </>
   )
 }
 
@@ -141,7 +136,7 @@ function pathOf(href: string) {
 /** This project's unread inbox items, under the inbox's key so reading one anywhere refreshes it. */
 function useProjectUnread(projectId: string) {
   return useQuery({
-    queryKey: [...inboxKeys.root, 'project', projectId],
+    queryKey: inboxKeys.project(projectId),
     queryFn: async () => {
       const search = new URLSearchParams({ view: 'unread', category: 'all', projectId, limit: '20' })
       return normalizePage(await requestJson<unknown>(`/api/v1/inbox?${search}`))

@@ -5,7 +5,8 @@ import { useSearchParams } from 'react-router-dom'
 import { requestJson } from '../../api/client'
 import { queryKeys } from '../../api/queryKeys'
 import { describeError } from '../../app/mutations'
-import { startWorkOs, workOsStatus } from '../../auth/workos'
+import { authKeys, startWorkOs, workOsStatus } from '../../auth/workos'
+import { accountKeys } from './api'
 import { Avatar, Banner, Button, PageHeader, Section, SettingsSkeleton, TextField, describeLoadError, showToast } from '../../ui'
 import type { SettingsPageProps } from '../types'
 import { EmailSection } from './EmailSection'
@@ -33,9 +34,9 @@ export default function ProfilePage({ session, workspace }: SettingsPageProps) {
   }, [parameters, setParameters])
   const [name, setName] = useState(session.user.displayName)
   const [error, setError] = useState<string | null>(null)
-  const status = useQuery({ queryKey: ['workos-status'], queryFn: workOsStatus })
+  const status = useQuery({ queryKey: authKeys.workOsStatus, queryFn: workOsStatus })
   const profile = useQuery({
-    queryKey: ['account-profile'],
+    queryKey: accountKeys.profile,
     queryFn: () => requestJson<{ githubLogin?: string | null }>('/api/v1/account/profile'),
   })
   const [githubDraft, setGithubDraft] = useState<string | null>(null)
@@ -46,7 +47,7 @@ export default function ProfilePage({ session, workspace }: SettingsPageProps) {
       setError(null)
       setGithubDraft(null)
       showToast({ tone: 'success', title: githubLogin.trim() ? 'GitHub username saved' : 'GitHub username removed' })
-      await client.invalidateQueries({ queryKey: ['account-profile'] })
+      await client.invalidateQueries({ queryKey: accountKeys.profile })
     },
     onError: (reason) => setError(`Your GitHub username wasn’t saved. ${describeError(reason).message}`),
   })

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
+import { useWorkspaceId } from '../app/workspace'
 import type { SessionResponse } from '../auth/session'
 import type { NounId, PartId } from './parts'
 
@@ -224,18 +225,7 @@ export function useWorkspaceExperience(organizationId: string | null | undefined
   return useExperience(layoutKeys.workspace(id), workspaceLayoutPath(id), id, 'workspace')
 }
 
-/** What the person sees on Home and the pages beside it. */
+/** What the person sees on Home and the pages beside it: the workspace they're in (W1.14a). */
 export function useHomeExperience(): Experience {
-  return useWorkspaceExperience(useHomeWorkspaceId())
-}
-
-/** The workspace Home and the pages beside it follow: the one the person chose, else their first. */
-export function useHomeWorkspaceId(): string | null {
-  const session = useCachedSession()
-  if (!session?.user) return null
-  return (
-    session.organizations.find((organization) => organization.id === session.user?.defaultOrganizationId)?.id ??
-    session.organizations[0]?.id ??
-    null
-  )
+  return useWorkspaceExperience(useWorkspaceId())
 }

@@ -11,7 +11,7 @@ import { PendingMessages } from '../conversations/Timeline'
 import type { ConversationActor } from '../conversations/types'
 import { ExternalAgentSettings } from '../external-agents/ExternalAgentSettings'
 import { useProjects } from '../projects/hooks'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import {
   ActorTag,
   Avatar,
@@ -166,8 +166,9 @@ export function MessagesPage() {
   const onlyKind = only ? actorKind(only.kind) : 'person'
   const showList = listOpen && (matches.length > 0 || Boolean(needle))
 
+  useShellPage({ direct: true, mainClassName: 'aw-main--conversation' })
   return (
-    <AppShell direct mainClassName="aw-main--conversation" user={session.user}>
+    <>
       <ConversationHeader icon="compose" title="New message" />
       {overview.isError ? (
         <ErrorState error={overview.error} onRetry={() => void overview.refetch()} title="Messages didn’t load" />
@@ -331,13 +332,12 @@ export function MessagesPage() {
           }}
         />
       ) : null}
-    </AppShell>
+    </>
   )
 }
 
 /** Add agents and choose where each works. Every agent can be messaged; a project adds its tasks and channels. */
 export function AgentsPage() {
-  const session = useAuthenticatedSession()
   const overview = useDirectOverview()
   const projects = useProjects()
   const queryClient = useQueryClient()
@@ -354,8 +354,9 @@ export function AgentsPage() {
       .map((project) => ({ id: project.id, name: project.name })),
   ]
   const shown = places.some((candidate) => candidate.id === place) ? (place ?? spaceId) : spaceId
+  useShellPage({ direct: true, mainClassName: 'aw-main--page' })
   return (
-    <AppShell direct mainClassName="aw-main--page" user={session.user}>
+    <>
       <div className="aw-page">
         <PageHeader icon="bot" title="Agents" />
         {overview.data?.capabilities.manageAgents ? (
@@ -390,6 +391,6 @@ export function AgentsPage() {
           <ListSkeleton label="Loading agents" rows={2} avatars />
         ) : null}
       </div>
-    </AppShell>
+    </>
   )
 }

@@ -121,6 +121,7 @@ const base = (organizationId: string) => `/api/v1/organizations/${encodeURICompo
 
 export const workspaceKeys = {
   workspace: (organizationId: string) => ['organization', organizationId] as const,
+  serverVersion: ['server-version'] as const,
   members: (organizationId: string) => ['organization', organizationId, 'members'] as const,
   invitations: (organizationId: string) => ['organization', organizationId, 'invitations'] as const,
   secrets: (organizationId: string) => ['organization', organizationId, 'secrets'] as const,

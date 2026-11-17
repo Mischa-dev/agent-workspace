@@ -1,5 +1,6 @@
 import { requestJson } from '../../api/client'
 import { isApiError } from '../../api/errors'
+import { queryKeys } from '../../api/queryKeys'
 import type { Thing, ThingLink } from '../contract'
 
 /**
@@ -8,7 +9,7 @@ import type { Thing, ThingLink } from '../contract'
  */
 export function thingQuery(kind: string, id: string) {
   return {
-    queryKey: ['things', kind, id],
+    queryKey: queryKeys.thing(kind, id),
     queryFn: () => requestJson<{ thing: Thing; links: ThingLink[] }>(`/api/v1/things/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
     retry: (count: number, error: unknown) => !(isApiError(error) && error.status < 500) && count < 2,
   }
