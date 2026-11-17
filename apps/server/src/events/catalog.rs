@@ -176,6 +176,18 @@ pub static CONVERSATION_PINS_CHANGED: EventType = fact(
 );
 
 // --- channels ----------------------------------------------------------
+pub static MESSAGE_DRAFT_CHANGED: EventType = signal(
+    "message_draft.changed",
+    "messages",
+    None,
+    "Someone's draft was saved or cleared",
+);
+pub static NOTIFICATION_KEYWORDS_CHANGED: EventType = signal(
+    "notification_keywords.changed",
+    "messages",
+    None,
+    "Someone's keyword alerts changed",
+);
 pub static THREAD_STATUS_CHANGED: EventType = fact(
     "thread.status_changed",
     "channels",
@@ -284,6 +296,15 @@ pub static PAGE_CONTENT_SAVED: EventType = signal(
     "A page's content or details were saved",
 )
 .legacy(&["page.updated"]);
+/// A page's content was kept as a new version: quick saves merged into one
+/// version are one fact, which rules and webhooks hear (K3.5).
+pub static PAGE_UPDATED: EventType = fact(
+    "page.updated",
+    "pages",
+    Some("page"),
+    "A page was saved as a new version",
+)
+.automatable();
 pub static PAGE_DISCUSSION_CHANGED: EventType = signal(
     "page.discussion_changed",
     "pages",
@@ -329,7 +350,8 @@ pub static SHEET_UPDATED: EventType = fact(
     Some("sheet"),
     "A sheet's cells, tabs or name changed",
 )
-.legacy(&["sheet.updated"]);
+.legacy(&["sheet.updated"])
+.automatable();
 
 // --- whiteboards -----------------------------------------------------------
 pub static WHITEBOARD_SCENE_CHANGED: EventType = signal(
@@ -340,6 +362,15 @@ pub static WHITEBOARD_SCENE_CHANGED: EventType = signal(
 )
 .legacy(&["whiteboard.updated"]);
 
+/// A whiteboard's scene was kept as a new version (its revision cadence),
+/// which rules and webhooks hear (K3.5).
+pub static WHITEBOARD_UPDATED: EventType = fact(
+    "whiteboard.updated",
+    "whiteboards",
+    Some("whiteboard"),
+    "A whiteboard was saved as a new version",
+)
+.automatable();
 pub static WHITEBOARD_VERSION_RESTORED: EventType = fact(
     "whiteboard.version_restored",
     "whiteboards",
@@ -462,6 +493,19 @@ pub static FILE_REMOVED: EventType = fact(
     Some("file"),
     "A file was removed",
 );
+pub static ACCOUNT_STATUS_CHANGED: EventType = signal(
+    "account.status_changed",
+    "workspace",
+    None,
+    "Someone's status changed",
+)
+.legacy(&["account.status.changed"]);
+pub static CUSTOM_EMOJI_CHANGED: EventType = signal(
+    "custom_emoji.changed",
+    "workspace",
+    None,
+    "A workspace's custom emoji changed",
+);
 
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
@@ -492,6 +536,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &MESSAGE_REMOVED,
         &MESSAGE_REACTIONS_CHANGED,
         &CONVERSATION_PINS_CHANGED,
+        &MESSAGE_DRAFT_CHANGED,
+        &NOTIFICATION_KEYWORDS_CHANGED,
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,
@@ -510,6 +556,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &VIEW_CHANGED,
         &FIELD_CHANGED,
         &PAGE_CONTENT_SAVED,
+        &PAGE_UPDATED,
         &PAGE_DISCUSSION_CHANGED,
         &PAGE_COMMENTED,
         &PAGE_COMMENT_CHANGED,
@@ -518,6 +565,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &DECISION_UPDATED,
         &SHEET_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
+        &WHITEBOARD_UPDATED,
         &WHITEBOARD_VERSION_RESTORED,
         &COLLECTION_UPDATED,
         &RECORD_CREATED,
@@ -535,6 +583,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &WORKSPACE_LIFECYCLE_CHANGED,
         &FILE_ATTACHED,
         &FILE_REMOVED,
+        &ACCOUNT_STATUS_CHANGED,
+        &CUSTOM_EMOJI_CHANGED,
         &NOTIFICATION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
     ];

@@ -407,8 +407,9 @@ pub(super) async fn projects_list(
                     LEFT JOIN conversation_read_states read_state
                       ON read_state.conversation_id = conversation.id AND read_state.actor_id = $1
                     WHERE conversation.project_id = project.id AND conversation.archived_at IS NULL
-                      AND conversation.next_entry_sequence - 1
+                      AND conversation.last_message_sequence
                           > COALESCE(read_state.highest_seen_sequence, 0)
+                      AND conversation_notification_level($1, conversation.id) <> 'nothing'
                       AND conversation_visible_to(conversation.id, $1)) AS unread_conversations,
                    '' AS url
             FROM projects project

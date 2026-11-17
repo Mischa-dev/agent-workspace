@@ -5,7 +5,7 @@ use agent_workspace_server::{
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
     domain::RunState,
-    external_events::{enqueue_external_approval_requested, enqueue_external_event},
+    external_events::enqueue_external_event,
     hosts::builtin::transition as transition_run,
     mcp::MCP_PATH,
     provider::SupervisorRegistry,
@@ -81,7 +81,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
                 "displayName":"Hermes teammate",
                 "handle":"Hermes Teammate",
                 "role":"member",
-                "scopes":["read","write","events","approval_respond","worker_request"]
+                "scopes":["read","write","events","worker_request"]
             }),
         ))
         .await
@@ -387,6 +387,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &session_id,
         "task_create",
         json!({
+            "projectId":seed.project_id.to_string(),
             "title":"External teammate fixture",
             "description":"Created through the canonical M9 MCP command.",
             "priority":"medium",
@@ -395,8 +396,8 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         }),
     )
     .await;
-    assert_eq!(created_work_item["outcome"], "applied");
-    let external_work_item_id = created_work_item["workItemId"]
+    assert_eq!(created_work_item["outcome"], "ok");
+    let external_work_item_id = created_work_item["value"]["workItemId"]
         .as_str()
         .expect("created Work Item id")
         .parse::<Uuid>()
@@ -407,6 +408,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &session_id,
         "task_create",
         json!({
+            "projectId":seed.project_id.to_string(),
             "title":"External teammate fixture",
             "description":"A different description must not replay.",
             "priority":"medium",
@@ -416,7 +418,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     )
     .await;
     assert_eq!(mismatched_create["outcome"], "conflict");
-    assert_eq!(mismatched_create["retryCategory"], "use_new_request_id");
+    assert_eq!(mismatched_create["code"], "request_id_reused");
     let created_subtask = call_mcp_tool(
         &application,
         &first_token,
@@ -430,7 +432,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         }),
     )
     .await;
-    assert_eq!(created_subtask["outcome"], "applied");
+    assert_eq!(created_subtask["outcome"], "ok");
     let mismatched_subtask = call_mcp_tool(
         &application,
         &first_token,
@@ -445,7 +447,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     )
     .await;
     assert_eq!(mismatched_subtask["outcome"], "conflict");
-    assert_eq!(mismatched_subtask["retryCategory"], "use_new_request_id");
+    assert_eq!(mismatched_subtask["code"], "request_id_reused");
     let updated_work_item = call_mcp_tool(
         &application,
         &first_token,
@@ -459,8 +461,8 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         }),
     )
     .await;
-    assert_eq!(updated_work_item["outcome"], "applied");
-    assert_eq!(updated_work_item["version"], 2);
+    assert_eq!(updated_work_item["outcome"], "ok");
+    assert_eq!(updated_work_item["value"]["version"], 2);
     let read_work_item = call_mcp_tool(
         &application,
         &first_token,
@@ -564,7 +566,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
                 "displayName":"Second external teammate",
                 "handle":"second-external-teammate",
                 "role":"member",
-                "scopes":["read","write","events","approval_respond"]
+                "scopes":["read","write","events"]
             }),
         ))
         .await
@@ -581,22 +583,9 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .expect("second connection token")
         .to_owned();
     let second_session_id = initialize_mcp(&application, &second_token).await;
-    let second_initial_events = call_mcp_tool(
-        &application,
-        &second_token,
-        &second_session_id,
-        "external_event_poll",
-        json!({"limit":10,"waitSeconds":0}),
-    )
-    .await;
-    let second_initial_cursor = second_initial_events["nextCursor"]
-        .as_str()
-        .expect("second connection initial cursor")
-        .to_owned();
-
-    let self_response_run_id = Uuid::now_v7();
-    let self_response_approval_id = Uuid::now_v7();
-    let mut self_response_transaction = pool.begin().await.expect("begin self-response fixture");
+    // A run asks a question. Any member who may answer requests answers it,
+    // another agent included, and the waiting run goes on.
+    let question_run_id = Uuid::now_v7();
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -606,458 +595,70 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blocked', $8, '{}'::jsonb)
         "#,
     )
-    .bind(self_response_run_id)
+    .bind(question_run_id)
     .bind(seed.project_id)
     .bind(seed.thread_id)
     .bind(seed.execution_worker_id)
     .bind(seed.human_actor_id)
     .bind(seed.execution_profile_id)
     .bind(seed.repository_id)
-    .bind("External self-response authorization fixture")
-    .execute(&mut *self_response_transaction)
+    .bind("External question fixture")
+    .execute(&pool)
     .await
-    .expect("insert self-response run");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options, eligible_role, human_required
-        ) VALUES (
-            $1, $2, $3, $4, 'question', $5, '[]'::jsonb,
-            'any_authorized', false
-        )
-        "#,
-    )
-    .bind(self_response_approval_id)
-    .bind(self_response_run_id)
-    .bind(actor_id)
-    .bind(format!("m9-self-response:{self_response_approval_id}"))
-    .bind("Which authorized teammate should answer this question?")
-    .execute(&mut *self_response_transaction)
-    .await
-    .expect("insert self-response approval");
-    enqueue_external_approval_requested(&mut self_response_transaction, self_response_approval_id)
-        .await
-        .expect("enqueue self-response approval request");
-    self_response_transaction
-        .commit()
-        .await
-        .expect("commit self-response fixture");
-
-    let requester_self_response = call_mcp_tool(
-        &application,
-        &first_token,
-        &session_id,
-        "approval_respond",
-        json!({
-            "approvalId":self_response_approval_id.to_string(),
-            "expectedVersion":1,
-            "answer":"I should not be able to answer my own question.",
-            "clientRequestId":"m9-self-response-requester"
-        }),
+    .expect("insert question run");
+    let question = crate::support::requests::question(
+        &pool,
+        question_run_id,
+        "m9-question",
+        "Which branch should this go to?",
+        &[("main", "main")],
     )
     .await;
-    assert_eq!(requester_self_response["outcome"], "not_found");
-    assert_eq!(
-        sqlx::query_as::<_, (String, Option<Uuid>)>(
-            "SELECT status, responded_by_actor_id FROM agent_approvals WHERE id = $1",
-        )
-        .bind(self_response_approval_id)
-        .fetch_one(&pool)
-        .await
-        .expect("self-response approval remains pending"),
-        ("pending".to_owned(), None)
-    );
-
-    let teammate_response = call_mcp_tool(
+    let teammate_answer = call_mcp_tool(
         &application,
         &second_token,
         &second_session_id,
-        "approval_respond",
+        "request_respond",
         json!({
-            "approvalId":self_response_approval_id.to_string(),
-            "expectedVersion":1,
-            "answer":"Another authorized teammate can answer.",
-            "clientRequestId":"m9-self-response-teammate"
+            "requestId":question.to_string(),
+            "text":"Another teammate can answer.",
+            "clientRequestId":"m9-question-teammate"
         }),
     )
     .await;
-    assert_eq!(teammate_response["outcome"], "applied");
+    assert_eq!(teammate_answer["outcome"], "ok", "{teammate_answer}");
     assert_eq!(
         sqlx::query_as::<_, (String, Option<Uuid>)>(
-            "SELECT status, responded_by_actor_id FROM agent_approvals WHERE id = $1",
+            "SELECT status, answered_by_account_id FROM requests WHERE id = $1",
         )
-        .bind(self_response_approval_id)
+        .bind(question)
         .fetch_one(&pool)
         .await
-        .expect("teammate resolved self-response approval"),
-        ("resolved".to_owned(), Some(second_actor_id))
+        .expect("answered question"),
+        ("answered".to_owned(), Some(second_actor_id))
     );
-    let mut self_response_terminal = pool
-        .begin()
-        .await
-        .expect("begin self-response terminal transition");
-    transition_run(
-        &mut self_response_terminal,
-        self_response_run_id,
-        RunState::Completed,
-        None,
-    )
-    .await
-    .expect("complete self-response fixture run");
-    self_response_terminal
-        .commit()
-        .await
-        .expect("commit self-response terminal transition");
-
-    let addressed_run_id = Uuid::now_v7();
-    let addressed_approval_id = Uuid::now_v7();
-    let human_required_approval_id = Uuid::now_v7();
-    let mut approval_transaction = pool.begin().await.expect("begin approval fixture");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_runs (
-            id, project_id, conversation_id, execution_worker_id,
-            requesting_actor_id, execution_profile_id, repository_id,
-            state, prompt, authorization_snapshot
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blocked', $8, '{}'::jsonb)
-        "#,
-    )
-    .bind(addressed_run_id)
-    .bind(seed.project_id)
-    .bind(seed.thread_id)
-    .bind(seed.execution_worker_id)
-    .bind(seed.human_actor_id)
-    .bind(seed.execution_profile_id)
-    .bind(seed.repository_id)
-    .bind("Addressed approval fixture")
-    .execute(&mut *approval_transaction)
-    .await
-    .expect("insert addressed run");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options, eligible_role, human_required
-        ) VALUES (
-            $1, $2, $3, $4, 'approval', $5,
-            '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-            'any_authorized', false
-        )
-        "#,
-    )
-    .bind(addressed_approval_id)
-    .bind(addressed_run_id)
-    .bind(seed.human_actor_id)
-    .bind(format!("m9-addressed:{addressed_approval_id}"))
-    .bind("Allow one bounded fixture action?")
-    .execute(&mut *approval_transaction)
-    .await
-    .expect("insert addressed approval");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, eligible_actor_id,
-            provider_request_id, kind, summary, options,
-            eligible_role, human_required
-        ) VALUES (
-            $1, $2, $3, $4, $5, 'approval', $6,
-            '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-            'member', true
-        )
-        "#,
-    )
-    .bind(human_required_approval_id)
-    .bind(addressed_run_id)
-    .bind(seed.human_actor_id)
-    .bind(actor_id)
-    .bind(format!("m9-human-required:{human_required_approval_id}"))
-    .bind("Human-required approval audit fixture")
-    .execute(&mut *approval_transaction)
-    .await
-    .expect("insert human-required approval");
-    enqueue_external_approval_requested(&mut approval_transaction, addressed_approval_id)
-        .await
-        .expect("enqueue addressed approval");
-    approval_transaction
-        .commit()
-        .await
-        .expect("commit approval fixture");
-
-    let hidden_human_required = call_mcp_tool(
-        &application,
-        &first_token,
-        &session_id,
-        "approval_respond",
-        json!({
-            "approvalId":human_required_approval_id.to_string(),
-            "expectedVersion":1,
-            "decision":"approve",
-            "clientRequestId":"m9-human-required-denial-1"
-        }),
-    )
-    .await;
-    assert_eq!(hidden_human_required["outcome"], "not_found");
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            r#"
-            SELECT count(*) FROM audit_events
-            WHERE external_agent_connection_id = $1
-              AND target_id = $2
-              AND action = 'approval.external_response_rejected'
-              AND outcome = 'denied'
-              AND metadata->>'reason' = 'human_required'
-            "#,
-        )
-        .bind(connection_id)
-        .bind(human_required_approval_id)
-        .fetch_one(&pool)
-        .await
-        .expect("human-required denial audit count"),
-        1
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT status FROM agent_approvals WHERE id = $1")
-            .bind(human_required_approval_id)
-            .fetch_one(&pool)
-            .await
-            .expect("human-required approval status"),
-        "pending"
-    );
-    sqlx::query("UPDATE agent_approvals SET status = 'canceled' WHERE id = $1")
-        .bind(human_required_approval_id)
-        .execute(&pool)
-        .await
-        .expect("clean up human-required approval fixture");
-
-    let addressed = call_mcp_tool(
-        &application,
-        &first_token,
-        &session_id,
-        "approval_get",
-        json!({"approvalId":addressed_approval_id.to_string()}),
-    )
-    .await;
-    assert_eq!(addressed["outcome"], "found");
-    assert_eq!(addressed["approval"]["version"], 1);
-    assert_eq!(addressed["approval"]["canRespond"], true);
-    let invalid_approval = call_mcp_tool(
-        &application,
-        &first_token,
-        &session_id,
-        "approval_respond",
-        json!({
-            "approvalId":addressed_approval_id.to_string(),
-            "expectedVersion":1,
-            "decision":"later",
-            "clientRequestId":"m9-addressed-invalid-1"
-        }),
-    )
-    .await;
-    assert_eq!(invalid_approval["outcome"], "invalid_request");
-    assert_eq!(invalid_approval["field"], "approval decision");
-    let denied_approval = call_mcp_tool(
-        &application,
-        &first_token,
-        &session_id,
-        "approval_respond",
-        json!({
-            "approvalId":addressed_approval_id.to_string(),
-            "expectedVersion":1,
-            "decision":"deny",
-            "clientRequestId":"m9-addressed-deny-1"
-        }),
-    )
-    .await;
-    assert_eq!(denied_approval["outcome"], "applied");
-    assert_eq!(denied_approval["approval"]["version"], 2);
-    assert_eq!(denied_approval["approval"]["canRespond"], false);
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
-            .bind(addressed_run_id)
+            .bind(question_run_id)
             .fetch_one(&pool)
             .await
-            .expect("addressed run state"),
-        "interrupted"
+            .expect("question run"),
+        "working",
+        "an answered question lets its run go on"
     );
-    let stale_approval = call_mcp_tool(
-        &application,
-        &first_token,
-        &session_id,
-        "approval_respond",
-        json!({
-            "approvalId":addressed_approval_id.to_string(),
-            "expectedVersion":1,
-            "decision":"deny",
-            "clientRequestId":"m9-addressed-deny-stale"
-        }),
-    )
-    .await;
-    assert_eq!(stale_approval["outcome"], "conflict");
-    assert_eq!(stale_approval["current"]["version"], 2);
-
-    let second_addressed_events = call_mcp_tool(
-        &application,
-        &second_token,
-        &second_session_id,
-        "external_event_poll",
-        json!({
-            "afterCursor":second_initial_cursor,
-            "limit":10,
-            "waitSeconds":0
-        }),
-    )
-    .await;
-    let second_addressed_kinds = second_addressed_events["events"]
-        .as_array()
-        .expect("second connection addressed events")
-        .iter()
-        .filter_map(|event| event["kind"].as_str())
-        .collect::<Vec<_>>();
-    assert!(second_addressed_kinds.contains(&"approval.requested"));
-    assert!(second_addressed_kinds.contains(&"approval.resolved"));
-    let second_addressed_cursor = second_addressed_events["nextCursor"]
-        .as_str()
-        .expect("second connection addressed cursor")
-        .to_owned();
-
-    let browser_resolution_run_id = Uuid::now_v7();
-    let browser_resolution_approval_id = Uuid::now_v7();
-    let mut browser_resolution_transaction = pool
-        .begin()
-        .await
-        .expect("begin browser resolution fixture");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_runs (
-            id, project_id, conversation_id, execution_worker_id,
-            requesting_actor_id, execution_profile_id, repository_id,
-            state, prompt, authorization_snapshot
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blocked', $8, '{}'::jsonb)
-        "#,
-    )
-    .bind(browser_resolution_run_id)
-    .bind(seed.project_id)
-    .bind(seed.thread_id)
-    .bind(seed.execution_worker_id)
-    .bind(seed.human_actor_id)
-    .bind(seed.execution_profile_id)
-    .bind(seed.repository_id)
-    .bind("Browser approval resolution fixture")
-    .execute(&mut *browser_resolution_transaction)
-    .await
-    .expect("insert browser resolution run");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options, eligible_role, human_required
-        ) VALUES (
-            $1, $2, $3, $4, 'question', $5, '[]'::jsonb,
-            'any_authorized', false
-        )
-        "#,
-    )
-    .bind(browser_resolution_approval_id)
-    .bind(browser_resolution_run_id)
-    .bind(actor_id)
-    .bind(format!(
-        "m9-browser-resolution:{browser_resolution_approval_id}"
-    ))
-    .bind("Provide one bounded fixture answer.")
-    .execute(&mut *browser_resolution_transaction)
-    .await
-    .expect("insert browser resolution approval");
-    enqueue_external_approval_requested(
-        &mut browser_resolution_transaction,
-        browser_resolution_approval_id,
-    )
-    .await
-    .expect("enqueue browser resolution request");
-    browser_resolution_transaction
-        .commit()
-        .await
-        .expect("commit browser resolution fixture");
-    let browser_projection = application
-        .clone()
-        .oneshot(read_request(
-            &format!("/api/v1/conversations/{}/timeline", seed.thread_id),
-            &cookie,
-        ))
-        .await
-        .expect("browser approval projection response");
-    let browser_projection_status = browser_projection.status();
-    let browser_projection = response_json(browser_projection).await;
-    assert_eq!(
-        browser_projection_status,
-        StatusCode::OK,
-        "browser approval projection: {browser_projection}"
-    );
-    assert!(
-        browser_projection["approvals"]
-            .as_array()
-            .expect("browser approval projection")
-            .iter()
-            .any(|approval| {
-                approval["id"] == browser_resolution_approval_id.to_string()
-                    && approval["capabilities"]["respond"] == true
-            })
-    );
-    let browser_resolution = application
-        .clone()
-        .oneshot(write_request_with_idempotency(
-            "POST",
-            &format!("/api/v1/agent-approvals/{browser_resolution_approval_id}/respond"),
-            &cookie,
-            &csrf,
-            "m9-browser-approval-resolution",
-            json!({"answer":"Bounded browser answer"}),
-        ))
-        .await
-        .expect("browser approval resolution response");
-    let browser_resolution_status = browser_resolution.status();
-    let browser_resolution_body = response_json(browser_resolution).await;
-    assert_eq!(
-        browser_resolution_status,
-        StatusCode::OK,
-        "browser approval resolution: {browser_resolution_body}"
-    );
-    let second_browser_resolution_events = call_mcp_tool(
-        &application,
-        &second_token,
-        &second_session_id,
-        "external_event_poll",
-        json!({
-            "afterCursor":second_addressed_cursor,
-            "limit":10,
-            "waitSeconds":0
-        }),
-    )
-    .await;
-    let second_browser_resolution_kinds = second_browser_resolution_events["events"]
-        .as_array()
-        .expect("second connection browser resolution events")
-        .iter()
-        .filter_map(|event| event["kind"].as_str())
-        .collect::<Vec<_>>();
-    assert!(second_browser_resolution_kinds.contains(&"approval.requested"));
-    assert!(second_browser_resolution_kinds.contains(&"approval.resolved"));
-    let mut browser_resolution_terminal = pool
-        .begin()
-        .await
-        .expect("begin browser resolution terminal transition");
+    let mut question_terminal = pool.begin().await.expect("begin question run end");
     transition_run(
-        &mut browser_resolution_terminal,
-        browser_resolution_run_id,
+        &mut question_terminal,
+        question_run_id,
         RunState::Completed,
         None,
     )
     .await
-    .expect("complete browser resolution run");
-    browser_resolution_terminal
+    .expect("complete question run");
+    question_terminal
         .commit()
         .await
-        .expect("commit browser resolution terminal transition");
+        .expect("commit question run end");
 
     let run_count_before = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_runs")
         .fetch_one(&pool)
@@ -1088,15 +689,6 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .expect("sponsored approval id")
         .parse::<Uuid>()
         .expect("sponsored approval UUID");
-    let human_required = call_mcp_tool(
-        &application,
-        &first_token,
-        &session_id,
-        "approval_get",
-        json!({"approvalId":sponsored_approval_id.to_string()}),
-    )
-    .await;
-    assert_eq!(human_required["outcome"], "not_found");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_runs")
             .fetch_one(&pool)
@@ -1137,21 +729,23 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .clone()
         .oneshot(write_request_with_idempotency(
             "POST",
-            &format!("/api/v1/agent-approvals/{sponsored_approval_id}/respond"),
+            "/api/v2/ops/request_respond",
             &cookie,
             &csrf,
             "m9-sponsored-approval-1",
-            json!({"decision":"approve"}),
+            json!({"requestId":sponsored_approval_id.to_string(),"optionId":"approve"}),
         ))
         .await
         .expect("sponsored approval response");
     assert_eq!(approval_response.status(), StatusCode::OK);
-    let approval_response = response_json(approval_response).await;
-    let sponsored_run_id = approval_response["agentRunId"]
-        .as_str()
-        .expect("sponsored Agent Run id")
-        .parse::<Uuid>()
-        .expect("sponsored Agent Run UUID");
+    let sponsored_run_id = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT agent_run_id FROM external_execution_requests WHERE id = $1",
+    )
+    .bind(sponsored_request_id)
+    .fetch_one(&pool)
+    .await
+    .expect("sponsored request")
+    .expect("an approved sponsorship starts its run");
     let run_attribution = sqlx::query_as::<_, (Uuid, Option<Uuid>, Option<Uuid>)>(
         "SELECT requesting_actor_id, sponsoring_actor_id, external_execution_request_id FROM agent_runs WHERE id = $1",
     )
@@ -1218,8 +812,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     for expected in [
         "work_item.assigned",
         "work_item.changed",
-        "approval.requested",
-        "approval.resolved",
+        "request.answered",
         "agent_run.terminal",
     ] {
         assert!(event_kinds.contains(&expected), "missing event {expected}");
@@ -1407,7 +1000,8 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .fetch_one(&pool)
         .await
         .expect("external audit count"),
-        13
+        // K2.7: a sent message leaves an audit row (its replay doesn't).
+        11
     );
 
     drop(application);
@@ -1485,7 +1079,7 @@ async fn sponsored_run_cancelled_when_a_party_loses_start_runs(party: SponsoredP
                 "displayName":"Hermes admission teammate",
                 "handle":"hermes_admission",
                 "role":"member",
-                "scopes":["read","write","events","approval_respond","worker_request"]
+                "scopes":["read","write","events","worker_request"]
             }),
         ))
         .await
@@ -1587,25 +1181,15 @@ async fn sponsored_run_cancelled_when_a_party_loses_start_runs(party: SponsoredP
         .expect("approval id")
         .parse::<Uuid>()
         .expect("approval UUID");
-    let approved = application
-        .clone()
-        .oneshot(write_request_with_idempotency(
-            "POST",
-            &format!("/api/v1/agent-approvals/{approval_id}/respond"),
-            &cookie,
-            &csrf,
-            "admission-sponsored-approval",
-            json!({"decision":"approve"}),
-        ))
-        .await
-        .expect("approval response");
-    assert_eq!(approved.status(), StatusCode::OK);
-    let approved = response_json(approved).await;
-    let run_id = approved["agentRunId"]
-        .as_str()
-        .expect("sponsored Agent Run id")
-        .parse::<Uuid>()
-        .expect("sponsored Agent Run UUID");
+    let run_id = approve_sponsorship(
+        &application,
+        &pool,
+        &cookie,
+        &csrf,
+        "admission-sponsored-approval",
+        approval_id,
+    )
+    .await;
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
@@ -1792,6 +1376,44 @@ fn write_request(method: &str, uri: &str, cookie: &str, csrf: &str, body: Value)
             serde_json::to_vec(&body).expect("serialize write request"),
         ))
         .expect("write request")
+}
+
+/// The sponsor approves an agent's run request (the request it raised for
+/// them) as the web app does; the run it starts.
+async fn approve_sponsorship(
+    application: &axum::Router,
+    pool: &PgPool,
+    cookie: &str,
+    csrf: &str,
+    key: &str,
+    approval_id: Uuid,
+) -> Uuid {
+    let approved = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            "/api/v2/ops/request_respond",
+            cookie,
+            csrf,
+            key,
+            json!({"requestId":approval_id.to_string(),"optionId":"approve"}),
+        ))
+        .await
+        .expect("approval response");
+    assert_eq!(approved.status(), StatusCode::OK);
+    sqlx::query_scalar::<_, Option<Uuid>>(
+        r#"
+        SELECT sponsored.agent_run_id
+        FROM requests request
+        JOIN external_execution_requests sponsored ON sponsored.id = request.subject_id
+        WHERE request.id = $1
+        "#,
+    )
+    .bind(approval_id)
+    .fetch_one(pool)
+    .await
+    .expect("sponsored request")
+    .expect("an approved sponsorship starts its run")
 }
 
 fn write_request_with_idempotency(
@@ -2338,8 +1960,9 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     );
     terminate_mcp(&application, token, &session).await;
 
-    // An approval in an agent's additional project can be read and answered
-    // with the home-project credential, and only while the agent belongs there.
+    // A run's question in an agent's additional project can be read and
+    // answered with the home-project credential, and only while the agent
+    // belongs there.
     let approver = response_json(
         application
             .clone()
@@ -2348,7 +1971,7 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
                 &format!("/api/v1/projects/{second}/external-agents"),
                 &cookie,
                 &csrf,
-                json!({"connectionName":"Approver agent","displayName":"Approver agent","handle":"approver_agent","role":"member","scopes":["read","write","approval_respond"]}),
+                json!({"connectionName":"Approver agent","displayName":"Approver agent","handle":"approver_agent","role":"member","scopes":["read","write"]}),
             ))
             .await
             .expect("create approver agent"),
@@ -2375,7 +1998,6 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         .expect("add approver to seed project");
     assert_eq!(joined.status(), StatusCode::OK);
     let run_id = Uuid::now_v7();
-    let approval_id = Uuid::now_v7();
     let mut fixture = pool.begin().await.expect("begin approval fixture");
     sqlx::query(
         "UPDATE execution_profiles SET status = 'available', account_state = 'authenticated' WHERE id = $1",
@@ -2410,32 +2032,21 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     .execute(&mut *fixture)
     .await
     .expect("insert approval run");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options, eligible_role, human_required
-        ) VALUES ($1, $2, $3, $4, 'question', 'Which branch?', '[]'::jsonb, 'any_authorized', false)
-        "#,
-    )
-    .bind(approval_id)
-    .bind(run_id)
-    .bind(seed.human_actor_id)
-    .bind(format!("cross-project:{approval_id}"))
-    .execute(&mut *fixture)
-    .await
-    .expect("insert approval");
     fixture.commit().await.expect("commit approval fixture");
+    let approval_id =
+        crate::support::requests::question(&pool, run_id, "cross-project", "Which branch?", &[])
+            .await;
     let approver_session = initialize_mcp(&application, &approver_token).await;
     let fetched = call_mcp_tool(
         &application,
         &approver_token,
         &approver_session,
-        "approval_get",
-        json!({"approvalId":approval_id.to_string()}),
+        "request_get",
+        json!({"requestId":approval_id.to_string()}),
     )
     .await;
-    assert_eq!(fetched["outcome"], "found", "{fetched}");
+    assert_eq!(fetched["outcome"], "ok", "{fetched}");
+    assert_eq!(fetched["value"]["mayAnswer"], true, "{fetched}");
     let member_version = response_json(
         application
             .clone()
@@ -2471,15 +2082,17 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     assert_eq!(removed.status(), StatusCode::OK);
     // K1.6: leaving a project no longer signs the agent out; the request in
     // that project is refused, as anything there is.
-    let denied = call_mcp_tool(
-        &application,
-        &approver_token,
-        &approver_session,
-        "approval_respond",
-        json!({"approvalId":approval_id.to_string(),"expectedVersion":1,"answer":"main","clientRequestId":"cross-project-denied"}),
-    )
-    .await;
-    assert_ne!(denied["outcome"], "applied", "{denied}");
+    let denied = mcp_request(&application,&approver_token,Some(&approver_session),json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"request_respond","arguments":{"requestId":approval_id.to_string(),"text":"main","clientRequestId":"cross-project-denied"}}})).await;
+    drop(denied);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT status FROM requests WHERE id = $1")
+            .bind(approval_id)
+            .fetch_one(&pool)
+            .await
+            .expect("question"),
+        "open",
+        "an agent no longer in the space can't answer its requests"
+    );
     let rejoined = application
         .clone()
         .oneshot(write_request_with_idempotency(
@@ -2500,11 +2113,11 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         &application,
         &approver_token,
         &approver_session,
-        "approval_respond",
-        json!({"approvalId":approval_id.to_string(),"expectedVersion":1,"answer":"main","clientRequestId":"cross-project-answer"}),
+        "request_respond",
+        json!({"requestId":approval_id.to_string(),"text":"main","clientRequestId":"cross-project-answer"}),
     )
     .await;
-    assert_eq!(answered["outcome"], "applied", "{answered}");
+    assert_eq!(answered["outcome"], "ok", "{answered}");
     terminate_mcp(&application, &approver_token, &approver_session).await;
     drop(application);
     pool.close().await;
@@ -2768,7 +2381,7 @@ async fn a_sponsored_run_gets_the_projects_run_settings() {
                 "displayName":"Hermes defaults teammate",
                 "handle":"hermes_defaults",
                 "role":"member",
-                "scopes":["read","write","events","approval_respond","worker_request"]
+                "scopes":["read","write","events","worker_request"]
             }),
         ))
         .await
@@ -2844,25 +2457,15 @@ async fn a_sponsored_run_gets_the_projects_run_settings() {
         .expect("approval id")
         .parse::<Uuid>()
         .expect("approval UUID");
-    let approved = application
-        .clone()
-        .oneshot(write_request_with_idempotency(
-            "POST",
-            &format!("/api/v1/agent-approvals/{approval_id}/respond"),
-            &cookie,
-            &csrf,
-            "defaults-sponsored-approval",
-            json!({"decision":"approve"}),
-        ))
-        .await
-        .expect("approval response");
-    assert_eq!(approved.status(), StatusCode::OK);
-    let approved = response_json(approved).await;
-    let run_id = approved["agentRunId"]
-        .as_str()
-        .expect("sponsored Agent Run id")
-        .parse::<Uuid>()
-        .expect("sponsored Agent Run UUID");
+    let run_id = approve_sponsorship(
+        &application,
+        &pool,
+        &cookie,
+        &csrf,
+        "defaults-sponsored-approval",
+        approval_id,
+    )
+    .await;
     let (reasoning, mirrored) = sqlx::query_as::<_, (Option<String>, bool)>(
         r#"
         SELECT run.config->>'reasoning',

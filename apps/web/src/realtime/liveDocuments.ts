@@ -121,6 +121,14 @@ function later(key: string, delay: number, run: () => void) {
 
 const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => isPageKey(query.queryKey, projectId)
 
+/** A thing's discussion summary (`comment_list` through `opQuery`), for one thing or any. */
+export function isCommentSummary(key: readonly unknown[], thingId?: string) {
+  if (key[0] !== 'op' || key[2] !== 'comment_list') return false
+  if (!thingId) return true
+  const input = key[3] as { thing?: { id?: unknown } } | undefined
+  return input?.thing?.id === thingId
+}
+
 /**
  * A whiteboard.updated, page.updated, page.discussion.updated or
  * collection.updated event: tells
@@ -147,6 +155,8 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
     later(`sheet:${event.projectId}:${sheet.sheetId}`, COLLECTION_DELAY_MS, () => {
       void queryClient.invalidateQueries({ queryKey: sheetKeys.one(event.projectId, sheet.sheetId) })
       void queryClient.invalidateQueries({ queryKey: sheetKeys.list(event.projectId) })
+      // Its cell discussions' anchors may have moved with rows and columns.
+      void queryClient.invalidateQueries({ predicate: (query) => isCommentSummary(query.queryKey, sheet.sheetId) })
     })
     return
   }

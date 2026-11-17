@@ -24,7 +24,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
         ActorView, ConversationCreateResponse, ConversationView, ReadStateView, enqueue_event,
-        insert_audit_event, lock_conversation_for, normalize_conversation_name, parse_actor_kind,
+        insert_audit_event, lock_seen_conversation_for, normalize_conversation_name,
     },
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
@@ -32,7 +32,7 @@ use crate::{
         ConversationCreatedPayload, ConversationMemberRemovedPayload, ConversationUpdatedPayload,
         OutboxConversationKind, OutboxEventPayload,
     },
-    policy::{Action, ActorKind, RoleGrant},
+    policy::{Action, RoleGrant},
     replies::{self, Withdraw},
     spaces::manage::membership_handle,
 };
@@ -101,6 +101,9 @@ struct DirectConversationItem {
     highest_sequence: i64,
     read_state: ReadStateView,
     unread: bool,
+    /// The number a DM row shows, its mentions, and whether it's muted.
+    #[serde(flatten)]
+    counts: crate::conversations::UnreadCounts,
     last_activity_at: String,
 }
 
@@ -218,9 +221,16 @@ async fn direct_overview(
     .bind(MAX_LISTED_CONVERSATIONS)
     .fetch_all(&mut *transaction)
     .await?;
+    let summary = crate::read_state::unread_by_conversation(
+        &mut transaction,
+        principal.actor_id,
+        crate::read_state::UnreadScope::Space(space.project_id),
+    )
+    .await?;
     let conversations = rows
         .into_iter()
         .map(|row| {
+            let (unread, counts) = crate::conversations::UnreadCounts::of(&summary, row.id);
             let read_state = ReadStateView {
                 highest_seen_sequence: row.highest_seen_sequence,
                 version: row.read_version,
@@ -242,7 +252,8 @@ async fn direct_overview(
                 members: serde_json::from_value(row.members)
                     .map_err(|_| AppError::Internal("direct conversation members"))?,
                 highest_sequence: row.highest_sequence,
-                unread: row.highest_sequence > read_state.highest_seen_sequence,
+                unread,
+                counts,
                 read_state,
                 last_activity_at: row.last_activity_at,
             })
@@ -469,7 +480,6 @@ async fn change_members_from_web(
         &mut transaction,
         GroupEditor {
             actor_id: principal.actor_id,
-            actor_kind: parse_actor_kind(&principal.actor_kind)?,
         },
         conversation_id,
         add,
@@ -505,7 +515,6 @@ async fn change_members_from_web(
 /// Who changes a group's members.
 pub(crate) struct GroupEditor {
     pub actor_id: Uuid,
-    pub actor_kind: ActorKind,
 }
 
 /// What `change_group_members` did. `added` and `removed` hold only the
@@ -528,11 +537,10 @@ pub(crate) struct GroupMembersChange {
 ///   which also locks the group row, so concurrent changes are serialized and
 ///   the cap is checked under that lock. Someone who can't see the group gets
 ///   `NotFound("conversation")`.
-/// - People can add and remove anyone. Anyone else (agents) can only remove
-///   themselves: whoever is added reads the whole history, so handing out
-///   that access needs a person (`Forbidden`).
-/// - Leaving needs only to see the group; changing others needs
-///   `ChannelCreate` in the Messages space.
+/// - Leaving needs only to see the group; adding or removing others needs
+///   `conversations.members` where the group is (`Forbidden`), whoever is
+///   asking: whoever is added reads the whole history, so roles decide who
+///   may hand that out.
 /// - A change that changes nothing bumps no version and sends no events.
 /// - New members' read marks start at the newest entry of the group and of
 ///   each thread under it, so its history isn't flagged as unread.
@@ -554,16 +562,15 @@ pub(crate) async fn change_group_members(
         return Err(AppError::Validation("group members"));
     }
     let leaving_only = add.is_empty() && remove.iter().all(|id| *id == editor.actor_id);
-    let conversation = lock_conversation_for(
+    let conversation = lock_seen_conversation_for(
         transaction,
         editor.actor_id,
         conversation_id,
         if leaving_only {
             Action::ProjectView
         } else {
-            Action::ChannelCreate
+            Action::ConversationMembersChange
         },
-        false,
     )
     .await?;
     if conversation.kind != "group" {
@@ -571,9 +578,6 @@ pub(crate) async fn change_group_members(
             "conversation",
             "only groups can change members",
         ));
-    }
-    if editor.actor_kind != ActorKind::Human && !leaving_only {
-        return Err(AppError::Forbidden);
     }
     if let Some(expected_version) = expected_version
         && expected_version != conversation.version

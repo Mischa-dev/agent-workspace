@@ -384,16 +384,54 @@ pub async fn lock_membership(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<ProjectMembership>, AppError> {
+    // NO KEY UPDATE on the project row (C1.12): it orders writers that lock
+    // the project just as FOR UPDATE did, but leaves alone the key-share
+    // lock a foreign key takes, so a write that only adds rows pointing at
+    // the project (a sheet's cells under `share_membership`) never waits
+    // for it, nor it for them.
     let membership = sqlx::query_as::<_, ProjectMembership>(concat!(
         membership_select!(),
-        "FOR UPDATE OF project, membership\n        FOR SHARE OF organization_membership, actor"
+        "FOR NO KEY UPDATE OF project\n        FOR UPDATE OF membership\n        FOR SHARE OF organization_membership, actor"
     ))
     .bind(project_id)
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?;
-    // H1.24: every task write locks its membership here first, from any
-    // edge, so a suspended or deleting workspace refuses them all here.
+    open_for_writes(transaction, project_id, membership).await
+}
+
+/// `lock_membership` for a write that changes one document's content and
+/// nothing about the project (a sheet's cells and tabs, C1.12): it holds the
+/// membership `FOR SHARE`, so a revocation waits for it and is seen by the
+/// next write, but it takes no lock on the project row, so a long write
+/// never holds up task updates and other writes in the same project. The
+/// document's own row lock orders writes to it. Creating, renaming or
+/// archiving a document still uses `lock_membership` (per-project counts and
+/// unique names).
+pub async fn share_membership(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<Option<ProjectMembership>, AppError> {
+    let membership = sqlx::query_as::<_, ProjectMembership>(concat!(
+        membership_select!(),
+        "FOR SHARE OF membership, organization_membership, actor"
+    ))
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    open_for_writes(transaction, project_id, membership).await
+}
+
+/// H1.24: every write locks its membership through one of the two above
+/// first, from any edge, so a suspended or deleting workspace refuses them
+/// all here.
+async fn open_for_writes(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    membership: Option<ProjectMembership>,
+) -> Result<Option<ProjectMembership>, AppError> {
     if membership.is_some() {
         crate::workspace::lifecycle::ensure_open_for_space(
             &mut *transaction,
@@ -2969,6 +3007,134 @@ async fn finalize_created(
     Ok(FinalizedChange {
         activity_id,
         audit_id,
+    })
+}
+
+/// A new comment on a locked, open task (C1.1).
+pub(crate) struct NewTaskComment<'a> {
+    pub work_item_id: Uuid,
+    /// The locked task's version, which the comment's update event carries.
+    pub version: i64,
+    pub content: crate::message_content::MessageContent,
+    pub reply_to: Option<Uuid>,
+    pub attachments: &'a [Uuid],
+    pub audit_action: &'a str,
+}
+
+pub(crate) struct InsertedTaskComment {
+    pub comment_id: Uuid,
+    pub created_at: String,
+    pub sequence: i64,
+    pub audit_id: Uuid,
+    pub content_json: serde_json::Value,
+    pub plain_text: String,
+    pub mentioned_actor_ids: Vec<Uuid>,
+    pub referenced_work_item_ids: Vec<Uuid>,
+}
+
+/// The one way a task comment is written (C1.1), for the web and agent
+/// tools alike: its mentions and task references are checked against the
+/// project, the comment and the rows notifications and "Referenced in" read
+/// are inserted, the timeline, events and audit follow, its files are
+/// attached, and each mentioned agent with a connection gets a
+/// `comment.mentioned` event.
+///
+/// The caller has locked the task and checked it's open and that
+/// `reply_to` can be answered. Content that doesn't check out is
+/// `Validation("comment content")` (or `"Message content"`), files that
+/// aren't the author's unsent uploads `Validation("attachments")`.
+pub(crate) async fn insert_task_comment(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    comment: NewTaskComment<'_>,
+) -> Result<InsertedTaskComment, AppError> {
+    let resolved = crate::work_items::comments::resolve_comment_content(
+        transaction,
+        actor.project_id,
+        comment.content,
+    )
+    .await?;
+    let comment_id = Uuid::now_v7();
+    let created_at = sqlx::query_scalar::<_, String>(
+        r#"
+        INSERT INTO work_item_comments (
+            id, project_id, work_item_id, author_actor_id, content_version,
+            content, plain_text, reply_to_comment_id
+        ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
+        RETURNING created_at::text
+        "#,
+    )
+    .bind(comment_id)
+    .bind(actor.project_id)
+    .bind(comment.work_item_id)
+    .bind(actor.actor_id)
+    .bind(&resolved.content_json)
+    .bind(&resolved.plain_text)
+    .bind(comment.reply_to)
+    .fetch_one(&mut **transaction)
+    .await?;
+    crate::work_items::comments::insert_comment_projections(
+        transaction,
+        actor.project_id,
+        comment.work_item_id,
+        comment_id,
+        &resolved,
+    )
+    .await?;
+    let (sequence, audit_id) = finalize_comment(
+        transaction,
+        actor,
+        comment.work_item_id,
+        comment_id,
+        comment.version,
+        comment.audit_action,
+    )
+    .await?;
+    crate::files::attach_to_comment(
+        transaction,
+        actor.project_id,
+        comment.work_item_id,
+        comment_id,
+        actor.actor_id,
+        comment.attachments,
+    )
+    .await?;
+    let mut mentioned_actor_ids = resolved
+        .mention_nodes
+        .iter()
+        .map(|(_, actor_id)| *actor_id)
+        .collect::<Vec<_>>();
+    mentioned_actor_ids.sort();
+    mentioned_actor_ids.dedup();
+    crate::external_events::enqueue_comment_mentioned(
+        transaction,
+        crate::external_events::MentioningComment {
+            project_id: actor.project_id,
+            thing_kind: "task",
+            thing_id: comment.work_item_id,
+            comment_kind: "work_item_comment",
+            comment_id,
+            anchor: comment_id,
+            author_actor_id: actor.actor_id,
+        },
+        &mentioned_actor_ids,
+    )
+    .await?;
+    let mut referenced_work_item_ids = Vec::new();
+    for (_, referenced) in &resolved.references {
+        if !referenced_work_item_ids.contains(referenced) {
+            referenced_work_item_ids.push(*referenced);
+        }
+    }
+    Ok(InsertedTaskComment {
+        comment_id,
+        created_at,
+        sequence,
+        audit_id,
+        content_json: resolved.content_json,
+        plain_text: resolved.plain_text,
+        mentioned_actor_ids,
+        referenced_work_item_ids,
     })
 }
 

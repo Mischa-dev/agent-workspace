@@ -81,8 +81,13 @@ async fn task_and_board_tools_check_the_module_where_they_act() {
         (&there, "There two"),
     ] {
         let created = call("task_create", json!({"projectId": project, "title": title})).await;
-        assert_eq!(created["outcome"], "applied", "{created}");
-        tasks.push(created["workItemId"].as_str().expect("task").to_owned());
+        assert_eq!(created["outcome"], "ok", "{created}");
+        tasks.push(
+            created["value"]["workItemId"]
+                .as_str()
+                .expect("task")
+                .to_owned(),
+        );
     }
     let board = call(
         "whiteboard_create",
@@ -94,10 +99,14 @@ async fn task_and_board_tools_check_the_module_where_they_act() {
         .as_str()
         .expect("board")
         .to_owned();
-    // Before anything is off: with no project or workspace named, a board
-    // goes into this workspace (the app's own). A space is made where the
-    // call names, since this app reaches two workspaces.
-    let default_board = call("whiteboard_create", json!({"title": "Default board"})).await;
+    // Before anything is off: with no project named, a board or a space
+    // goes into the workspace named (a caller reaching several must name
+    // one, K2 §3.7).
+    let default_board = call(
+        "whiteboard_create",
+        json!({"title": "Default board", "workspace": setup.organization_id}),
+    )
+    .await;
     assert_eq!(default_board["outcome"], "ok", "{default_board}");
     let unnamed = call("space_create", json!({"key": "PRE", "name": "Before"})).await;
     assert_eq!(unnamed["outcome"], "invalid_request", "{unnamed}");
@@ -146,7 +155,7 @@ async fn task_and_board_tools_check_the_module_where_they_act() {
     assert_eq!(links, 0, "a board was linked where Whiteboards is off");
     for arguments in [
         json!({"title": "Named here", "workspaceId": setup.organization_id}),
-        json!({"title": "Defaulted here"}),
+        json!({"title": "Defaulted here", "workspace": setup.organization_id}),
     ] {
         let refused = call("whiteboard_create", arguments.clone()).await;
         assert_module_off(&refused, "Whiteboards");

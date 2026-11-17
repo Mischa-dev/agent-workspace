@@ -16,9 +16,9 @@
 
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
-    CollectionsEdit, MembersInvite, MembersView, PagesComment, PagesSuggest, RolesManage,
-    RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit, TasksCreate, TasksDelete,
-    TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    CollectionsEdit, ConversationsContinueAgents, MembersInvite, MembersView, PagesComment,
+    PagesSuggest, RepliesSteer, RolesManage, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit,
+    TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -54,26 +54,17 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("conversation_open", None),
     ("conversation_read", None),
     ("conversation_start", Some(ChannelsCreate)),
-    ("message_send", Some(ChannelsPost)),
-    ("message_forward", Some(ChannelsPost)),
     ("file_upload", Some(ChannelsPost)),
     ("file_list", None),
     ("file_read", None),
     ("file_delete", None),
-    ("message_edit", Some(ChannelsPost)),
-    ("message_delete", None),
-    ("message_preview_hide", None),
-    ("message_history", None),
     ("conversation_members", None),
-    ("conversation_continue", Some(ChannelsPost)),
-    ("mark_read", None),
+    ("conversation_continue", Some(ConversationsContinueAgents)),
     ("notification_list", None),
     ("notification_update", None),
     ("later_list", None),
     ("later_save", None),
     ("later_update", None),
-    ("message_schedule", Some(ChannelsPost)),
-    ("scheduled_message_update", Some(ChannelsPost)),
     ("agent_list", None),
     ("people_search", None),
     ("thread_start", Some(ChannelsPost)),
@@ -81,7 +72,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("channel_create", Some(ChannelsCreate)),
     ("conversation_update", Some(ChannelsPost)),
     ("pin_set", Some(ChannelsPost)),
-    ("message_react", Some(ChannelsPost)),
     ("inbox_list", None),
     ("reply_claim", Some(ChannelsPost)),
     ("session_bind", None),
@@ -89,20 +79,12 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("reply_progress", Some(ChannelsPost)),
     ("reply_pass", Some(ChannelsPost)),
     ("reply_release", Some(ChannelsPost)),
-    ("reply_stop", Some(ChannelsPost)),
-    ("reply_retry", Some(ChannelsPost)),
+    ("reply_stop", Some(RepliesSteer)),
+    ("reply_retry", Some(RepliesSteer)),
     ("task_list", Some(TasksView)),
     ("task_open", Some(TasksView)),
-    ("task_create", Some(TasksCreate)),
-    ("task_update", Some(TasksEdit)),
     ("task_create_many", Some(TasksCreate)),
     ("task_update_many", Some(TasksEdit)),
-    ("task_criteria", Some(TasksEdit)),
-    ("task_comment", Some(TasksEdit)),
-    ("task_comment_edit", Some(TasksEdit)),
-    ("task_comment_delete", Some(TasksEdit)),
-    ("task_mark_blocked", Some(TasksEdit)),
-    ("task_mark_ready_for_review", Some(TasksEdit)),
     ("task_link_pull_request", Some(TasksEdit)),
     ("task_reorder", Some(TasksEdit)),
     ("task_claim", Some(TasksEdit)),
@@ -144,13 +126,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("whiteboard_list", None),
     ("whiteboard_read", None),
     ("whiteboard_render", None),
-    ("whiteboard_create", Some(WhiteboardsEdit)),
-    ("whiteboard_edit", Some(WhiteboardsEdit)),
-    ("whiteboard_update", Some(WhiteboardsEdit)),
     ("whiteboard_trash_empty", Some(WhiteboardsEdit)),
-    ("whiteboard_duplicate", Some(WhiteboardsEdit)),
-    ("whiteboard_link", Some(WhiteboardsEdit)),
-    ("approval_list", None),
     ("task_depend", Some(TasksEdit)),
     ("view_list", Some(TasksView)),
     ("view_write", Some(TasksView)),
@@ -208,17 +184,14 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("pull_request_refresh", Some(CodePublish)),
     ("pull_request_merge", Some(CodeManage)),
     ("run_request", Some(RunsLaunch)),
-    ("approval_get", None),
-    ("approval_respond", Some(RunsApprove)),
     ("external_event_poll", None),
 ];
 
 /// Tools another permission also opens, for the use the handler then
-/// checks itself: archiving through the task update tools needs only
-/// "archive tasks", and uploading to a task needs only "edit tasks" (the
+/// checks itself: archiving through task_update_many needs only "archive
+/// tasks" (task_archive is the operation for one task), and uploading to a task needs only "edit tasks" (the
 /// handler checks "post messages" for a conversation upload).
 const ALSO_OPENED_BY: &[(&str, Permission)] = &[
-    ("task_update", TasksDelete),
     ("task_update_many", TasksDelete),
     ("file_upload", TasksEdit),
     // Forms add a collection's records (AWD-110); the handler checks each
@@ -283,7 +256,6 @@ mod tests {
     #[test]
     fn archiving_alone_opens_the_task_update_tools() {
         let archive_only = PermissionSet::from_keys(&["tasks.view", "tasks.delete"]);
-        assert!(super::reachable("task_update", archive_only));
         assert!(super::reachable("task_update_many", archive_only));
         assert!(!super::reachable("task_comment", archive_only));
     }

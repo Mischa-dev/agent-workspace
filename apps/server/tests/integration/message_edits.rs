@@ -377,7 +377,7 @@ async fn removed_message_text_vanishes_everywhere() {
         json!({"projectId": "WORK", "title": "Rotate the key"}),
     )
     .await;
-    assert_eq!(task["outcome"], "applied", "{task}");
+    assert_eq!(task["outcome"], "ok", "{task}");
     let linked = call(
         "task_link",
         json!({"taskId": "WORK-1", "messageId": message}),
@@ -524,7 +524,7 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(
         listed,
         [
-            (json!(threads[0]), json!("Thread")),
+            (json!(threads[0]), json!("New thread")),
             (json!(threads[1]), json!("Rotation plan")),
         ],
         "the remover sees the threads, after renaming"
@@ -558,8 +558,8 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(audit["unpinned"], 1, "{audit}");
     assert_eq!(audit["renamed_threads"], 1, "{audit}");
 
-    // The thread named after the message gets a neutral name; the one named
-    // by hand keeps its name.
+    // The thread going by the message (C1.2: nobody named it) loses its
+    // words; the one named by hand keeps its name.
     let names = sqlx::query_scalar::<_, String>(
         "SELECT name FROM conversations WHERE origin_message_id = $1 ORDER BY created_at, id",
     )
@@ -567,7 +567,7 @@ async fn removed_message_text_vanishes_everywhere() {
     .fetch_all(&setup.pool)
     .await
     .expect("thread names");
-    assert_eq!(names, ["Thread", "Rotation plan"]);
+    assert_eq!(names, ["New thread", "Rotation plan"]);
     // Older audit rows naming those threads keep who changed what, not the
     // name.
     let mut thread_audits = sqlx::query_scalar::<_, Value>(
@@ -836,7 +836,7 @@ async fn removed_message_text_vanishes_everywhere() {
         json!({"projectId": "WORK", "title": "Audit the logs"}),
     )
     .await;
-    assert_eq!(second_task["outcome"], "applied", "{second_task}");
+    assert_eq!(second_task["outcome"], "ok", "{second_task}");
     let link_again = call(
         "task_link",
         json!({"taskId": "WORK-2", "messageId": message}),
@@ -869,7 +869,7 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(thread_again["outcome"], "ok", "{thread_again}");
     assert_eq!(thread_again["value"]["created"], false, "{thread_again}");
     assert_eq!(thread_again["value"]["id"], threads[0].as_str());
-    assert_eq!(thread_again["value"]["name"], "Thread");
+    assert_eq!(thread_again["value"]["name"], "New thread");
     // A withdrawn request can't be retried into asking about it again.
     let (status, retried) = send(
         app,
@@ -1055,7 +1055,7 @@ async fn removed_message_text_vanishes_everywhere() {
         own_thread["value"]["id"]
     );
     assert_eq!(
-        own_removed["value"]["threads"][0]["name"], "Thread (2)",
+        own_removed["value"]["threads"][0]["name"], "New thread",
         "{own_removed}"
     );
     assert!(!own_removed.to_string().contains(&own_secret));
@@ -1666,7 +1666,10 @@ async fn edits_keep_every_revision_and_projections_follow() {
         json!({"projectId": "WORK", "title": "Zebracorn task"}),
     )
     .await;
-    let task_id = task["workItemId"].as_str().expect("task").to_owned();
+    let task_id = task["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let general = create_channel(&setup, &work, "general").await;
     let message = say(
         &setup,

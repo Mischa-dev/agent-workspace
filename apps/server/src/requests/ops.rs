@@ -261,6 +261,7 @@ impl Operation for RequestOpen {
                 host_request_ref: None,
                 conversation_id,
                 work_item_id,
+                subject: None,
                 field: "request",
             },
             &request,
@@ -328,18 +329,31 @@ impl Operation for RequestAnswer {
 
     async fn run(call: &mut OpCall<'_>, input: RequestAnswerInput) -> Result<RequestView, OpError> {
         let caller = call.ctx.caller.clone();
+        let state = call.state;
+        let space = call.ctx.space_id;
         let tx = call.tx().await?;
+        // An answer can set a run going again: a suspended or closing
+        // workspace answers nothing, and a suspension waits for this one
+        // (the workspace is held before the request's row is locked).
+        if let Some(space) = space {
+            crate::workspace::lifecycle::hold_open_for_space(tx, space, "request_respond").await?;
+        }
         let row = super::visible(tx, input.request_id.id(), caller.account_id, true)
             .await?
             .ok_or(OpError::not_found(REQUEST))?;
         let row = super::answer(
             tx,
+            state,
             &caller,
             &row,
             input.option_id.as_deref(),
             input.text.as_deref(),
         )
         .await?;
+        // An approved run request queued its run (`external_execution`).
+        if row.subject_kind.as_deref() == Some(crate::external_execution::REQUEST_SUBJECT) {
+            call.start_queued_runs();
+        }
         call.audit_target("request", row.id, json!({"status": row.status}));
         Ok(RequestView::from(&row))
     }
@@ -377,18 +391,20 @@ impl Operation for RequestCancel {
 
     async fn run(call: &mut OpCall<'_>, input: RequestCancelInput) -> Result<RequestView, OpError> {
         let account_id = call.ctx.caller.account_id;
+        let state = call.state;
         let tx = call.tx().await?;
         let row = super::visible(tx, input.request_id.id(), account_id, true)
             .await?
             .ok_or(OpError::not_found(REQUEST))?;
-        let row = super::cancel(tx, account_id, &row)
-            .await
-            .map_err(|error| match error {
-                AnswerError::NotYours => {
-                    OpError::invalid("requestId", "Only whoever raised a request withdraws it.")
-                }
-                other => other.into(),
-            })?;
+        let row =
+            super::cancel(tx, state, account_id, &row)
+                .await
+                .map_err(|error| match error {
+                    AnswerError::NotYours => {
+                        OpError::invalid("requestId", "Only whoever raised a request withdraws it.")
+                    }
+                    other => other.into(),
+                })?;
         call.audit_target("request", row.id, json!({"status": row.status}));
         Ok(RequestView::from(&row))
     }
@@ -438,8 +454,7 @@ impl Operation for RequestGet {
         let row = super::visible(tx, input.request_id.id(), caller.account_id, false)
             .await?
             .ok_or(OpError::not_found(REQUEST))?;
-        let may_answer =
-            row.legacy_source.is_none() && super::may_answer(tx, &caller, &row).await?;
+        let may_answer = super::may_answer(tx, &caller, &row).await?;
         Ok(RequestDetail {
             request: RequestView::from(&row),
             may_answer,
@@ -524,8 +539,7 @@ impl Operation for RequestList {
             WHERE request.workspace_id = $1
               AND ($2::uuid IS NULL OR request.space_id = $2)
               AND CASE WHEN $4 THEN request.raised_by_account_id = $3
-                       ELSE request.raised_by_account_id <> $3 AND request.status = 'open'
-                            AND request.legacy_source IS NULL END
+                       ELSE request.raised_by_account_id <> $3 AND request.status = 'open' END
               AND ($5::text IS NULL OR request.status = $5)
               AND request_visible_to(request.id, $3)
             ORDER BY request.created_at DESC, request.id DESC

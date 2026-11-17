@@ -205,6 +205,42 @@ pub async fn stage(
             None,
             None,
         ),
+        P::MessageDraftChanged(p) => (
+            &catalog::MESSAGE_DRAFT_CHANGED,
+            "account",
+            p.actor_id,
+            None,
+            Audience::Account(p.actor_id),
+            None,
+            Some(p.actor_id),
+        ),
+        P::NotificationKeywordsChanged(p) => (
+            &catalog::NOTIFICATION_KEYWORDS_CHANGED,
+            "account",
+            p.actor_id,
+            None,
+            Audience::Account(p.actor_id),
+            None,
+            Some(p.actor_id),
+        ),
+        P::AccountStatusChanged(p) => (
+            &catalog::ACCOUNT_STATUS_CHANGED,
+            "account",
+            p.account_id,
+            None,
+            Audience::Workspace,
+            None,
+            Some(p.account_id),
+        ),
+        P::CustomEmojiChanged(p) => (
+            &catalog::CUSTOM_EMOJI_CHANGED,
+            "custom_emoji",
+            p.emoji_id,
+            None,
+            Audience::Workspace,
+            None,
+            None,
+        ),
         // A workspace board has no project of its own: whoever can see the
         // board hears it, checked per event (as realtime does today).
         P::WhiteboardUpdated(p) => (

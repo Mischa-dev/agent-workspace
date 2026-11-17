@@ -632,8 +632,11 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         }),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    let task = created["workItemId"].as_str().expect("task").to_owned();
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let task = created["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let subtask = tool(
         app,
         &codex,
@@ -642,7 +645,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         json!({"parentId": task, "title": "Write a failing test"}),
     )
     .await;
-    assert_eq!(subtask["outcome"], "applied", "{subtask}");
+    assert_eq!(subtask["outcome"], "ok", "{subtask}");
     let commented = tool(
         app,
         &codex,
@@ -663,14 +666,14 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         json!({"taskId": task, "expectedVersion": 1, "status": "Ready"}),
     )
     .await;
-    assert_eq!(started["outcome"], "applied", "{started}");
+    assert_eq!(started["outcome"], "ok", "{started}");
     let (status, criterion) = send(
         app,
         setup.browser.request(
             "POST",
             &format!("/api/v1/projects/{old}/work-items/{task}/acceptance-criteria"),
             Some("criterion-1"),
-            json!({"expectedVersion": started["version"], "text": "Mirrors prepare with a token"}),
+            json!({"expectedVersion": started["value"]["version"], "text": "Mirrors prepare with a token"}),
         ),
     )
     .await;
@@ -816,7 +819,7 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
         (&other, "Elsewhere"),
     ] {
         let created = call("task_create", json!({"projectId": project, "title": title})).await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
 
     // Ship waits on Build, Build on Design.
@@ -946,8 +949,8 @@ async fn moving_an_archived_original_does_not_reveal_its_hidden_destination() {
         json!({"projectId": source, "title": "Move me"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    let original = created["workItemId"].clone();
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let original = created["value"]["workItemId"].clone();
     let moved = tool(
         &setup.app,
         &owner_token,
@@ -1019,13 +1022,13 @@ async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
         json!({"title": "Stay here"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
     let result = tool(
         &setup.app,
         &issued.token,
         &session,
         "task_move",
-        json!({"taskId": created["workItemId"], "toProjectId": target}),
+        json!({"taskId": created["value"]["workItemId"], "toProjectId": target}),
     )
     .await;
     assert_ne!(
@@ -1038,6 +1041,207 @@ async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
         .await
         .expect("target tasks");
     assert_eq!(count, 0);
+
+    // Nor does it change the workspace through a package: not a role, and
+    // not a package that lands outside its project.
+    let package = json!({
+        "format": "agent-workspace-package/1",
+        "id": "escape",
+        "version": "1.0.0",
+        "name": "Escape",
+        "target": "workspace",
+        "contents": [{"kind": "role", "key": "boss", "body": {
+            "name": "Boss", "baseRole": "admin", "permissions": ["tasks.view"]}}],
+    });
+    let preview = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "package_preview",
+        json!({"package": package}),
+    )
+    .await;
+    let installed = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "package_install",
+        json!({"package": package, "planHash": preview["value"]["planHash"],
+               "clientRequestId": "escape-1"}),
+    )
+    .await;
+    assert_eq!(installed["outcome"], "permission_denied", "{installed}");
+    let roles: i64 = sqlx::query_scalar("SELECT count(*) FROM workspace_roles WHERE name = 'Boss'")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("roles");
+    assert_eq!(roles, 0);
+
+    // Nor reaches into the other space through a workspace-wide module: the
+    // owner is in TARGET, but this connection isn't.
+    let elsewhere = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO collections (id, project_id, name, description, title_name, position, \
+         created_by_actor_id) VALUES ($1, $2::uuid, 'Target list', '', 'Name', 0, $3)",
+    )
+    .bind(elsewhere)
+    .bind(&target)
+    .bind(actor)
+    .execute(&setup.pool)
+    .await
+    .expect("collection in TARGET");
+    let wide = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "module_create",
+        json!({"key": "wide", "name": "Wide", "clientRequestId": "wide-1"}),
+    )
+    .await;
+    assert_eq!(wide["outcome"], "permission_denied", "{wide}");
+    let module = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "module_create",
+        json!({"key": "reach", "name": "Reach", "spaceId": source,
+               "clientRequestId": "reach-1"}),
+    )
+    .await;
+    assert_eq!(module["outcome"], "ok", "{module}");
+    let linked = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "module_part_link",
+        json!({"moduleId": module["value"]["id"],
+                   "part": {"kind": "collection", "id": elsewhere.to_string()}}),
+    )
+    .await;
+    assert_eq!(linked["outcome"], "not_found", "{linked}");
+    let parts: i64 = sqlx::query_scalar("SELECT count(*) FROM module_parts WHERE object_id = $1")
+        .bind(elsewhere)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("parts");
+    assert_eq!(parts, 0);
+
+    // Nor switches, changes or archives a workspace-wide module, which
+    // reaches every space.
+    let full = connect_app(&setup.app, &setup.browser, "Owner app", "full").await;
+    let owner_session = initialize(&setup.app, &full).await.expect("session");
+    let shared = tool(
+        &setup.app,
+        &full,
+        &owner_session,
+        "module_create",
+        json!({"key": "shared", "name": "Shared", "clientRequestId": "shared-1"}),
+    )
+    .await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    let shared_id = shared["value"]["id"].clone();
+    for (name, arguments) in [
+        ("module_set", json!({"moduleId": shared_id, "on": false})),
+        (
+            "module_update",
+            json!({"moduleId": shared_id, "name": "Mine",
+                   "expectedRevision": shared["value"]["revision"]}),
+        ),
+        (
+            "module_archive",
+            json!({"moduleId": shared_id, "parts": "archive"}),
+        ),
+    ] {
+        let result = tool(&setup.app, &issued.token, &session, name, arguments).await;
+        assert_eq!(result["outcome"], "permission_denied", "{name}: {result}");
+    }
+    let untouched: (String, bool) =
+        sqlx::query_as("SELECT name, archived_at IS NULL FROM modules WHERE id = $1::text::uuid")
+            .bind(shared_id.as_str().expect("id"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("module");
+    assert_eq!(untouched, ("Shared".to_owned(), true));
+
+    // Nor reads what lives in the other space, though the account is a
+    // member there: its templates, its installs, or a module's part there.
+    sqlx::query(
+        "INSERT INTO agent_templates (id, workspace_id, space_id, template_key, name, definition) \
+         SELECT $1, organization_id, id, 'target_helper', 'Target helper', \
+                '{\"instructions\": \"TARGET-ONLY\"}'::jsonb \
+         FROM projects WHERE id = $2::uuid",
+    )
+    .bind(Uuid::now_v7())
+    .bind(&target)
+    .execute(&setup.pool)
+    .await
+    .expect("template in TARGET");
+    let package_row = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO packages (id, workspace_id, package_key, version, name, document, digest, source) \
+         SELECT $1, organization_id, 'target_kit', '1.0.0', 'Target kit', '{}'::jsonb, 'd', 'upload' \
+         FROM projects WHERE id = $2::uuid",
+    )
+    .bind(package_row)
+    .bind(&target)
+    .execute(&setup.pool)
+    .await
+    .expect("package");
+    sqlx::query(
+        "INSERT INTO package_installs (id, workspace_id, space_id, package_id, state, plan, \
+             plan_hash, summary, installed_by_actor_id) \
+         SELECT $1, organization_id, id, $3, 'installed', '{}'::jsonb, 'h', \
+                ARRAY['Made TARGET-ONLY'], $4 \
+         FROM projects WHERE id = $2::uuid",
+    )
+    .bind(Uuid::now_v7())
+    .bind(&target)
+    .bind(package_row)
+    .bind(actor)
+    .execute(&setup.pool)
+    .await
+    .expect("install in TARGET");
+    let linked = tool(
+        &setup.app,
+        &full,
+        &owner_session,
+        "module_part_link",
+        json!({"moduleId": shared_id, "part": {"kind": "collection", "id": elsewhere.to_string()}}),
+    )
+    .await;
+    assert_eq!(linked["outcome"], "ok", "{linked}");
+    for (name, arguments) in [
+        ("agent_template_list", json!({})),
+        ("package_list", json!({})),
+        ("module_open", json!({"moduleId": shared_id})),
+    ] {
+        let result = tool(&setup.app, &issued.token, &session, name, arguments).await;
+        assert_eq!(result["outcome"], "ok", "{name}: {result}");
+        let text = result.to_string();
+        assert!(
+            !text.contains("TARGET-ONLY")
+                && !text.contains("Target list")
+                && !text.contains(&elsewhere.to_string()),
+            "{name} reached past its space: {result}"
+        );
+    }
+
+    // A board made with no space named lands in the held space, as before.
+    let board = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "whiteboard_create",
+        json!({"title": "Held board", "clientRequestId": "held-board"}),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let space: Option<Uuid> =
+        sqlx::query_scalar("SELECT project_id FROM whiteboards WHERE title = 'Held board'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("board");
+    assert_eq!(space, Some(source.parse::<Uuid>().expect("source")));
 }
 
 #[tokio::test]
@@ -1112,7 +1316,7 @@ async fn task_moves_lock_projects_in_id_order() {
         json!({"projectId": high, "title": "Move down"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
     let mut blocker = setup.pool.begin().await.expect("blocker");
     let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
         .fetch_one(&mut *blocker)
@@ -1130,7 +1334,7 @@ async fn task_moves_lock_projects_in_id_order() {
             &token,
             &session,
             "task_move",
-            json!({"taskId": created["workItemId"], "toProjectId": low}),
+            json!({"taskId": created["value"]["workItemId"], "toProjectId": low}),
         )
         .await
     });
@@ -1562,5 +1766,5 @@ async fn a_space_confined_credential_does_nothing_workspace_wide() {
         json!({"title": "Still works here"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
 }

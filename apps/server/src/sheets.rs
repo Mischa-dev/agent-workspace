@@ -13,9 +13,12 @@
 //!   rows and columns, changed since. Edits to different cells never clash.
 //!
 //! Everyone in a project reads its sheets; `sheets.edit` changes them.
-//! Archiving hides a sheet; nothing is deleted. Every write takes the
-//! project row lock first (`work_item_commands::lock_membership`), then the
-//! sheet's row.
+//! Archiving hides a sheet; nothing is deleted. Making, renaming,
+//! archiving or restoring a sheet takes the project row lock first
+//! (`work_item_commands::lock_membership`); a change to its cells and tabs
+//! only shares the membership (`share_membership`, C1.12), so a long
+//! recalculation never holds up the rest of the project. Either way the
+//! sheet's own row lock orders writes to one sheet.
 
 pub mod address;
 pub mod engine;
@@ -242,7 +245,8 @@ pub async fn find(
     .await?)
 }
 
-/// Locks a sheet's row for a write. The caller holds the project lock.
+/// Locks a sheet's row for a write. The caller holds the project lock or,
+/// for a change to its cells and tabs, a shared membership (C1.12).
 pub async fn lock(
     connection: &mut PgConnection,
     project_id: Uuid,
@@ -1635,6 +1639,26 @@ async fn apply_unbounded(
                     .bind(tab.frozen_rows)
                     .bind(Json::Object(tab.column_widths.clone()))
                     .execute(&mut *connection)
+                    .await?;
+                }
+                if tab.structure_changed {
+                    let moves = tab
+                        .moves
+                        .iter()
+                        .map(|step| crate::discussion::anchors::GridMove {
+                            rows: step.rows,
+                            insert: step.insert,
+                            // Anchors count from 0; a write's rows and columns from 1.
+                            at: i64::from(step.at) - 1,
+                            count: i64::from(step.count),
+                        })
+                        .collect::<Vec<_>>();
+                    crate::discussion::anchors::follow_sheet_moves(
+                        &mut *connection,
+                        sheet.id,
+                        *id,
+                        &moves,
+                    )
                     .await?;
                 }
             }

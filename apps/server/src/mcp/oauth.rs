@@ -2042,15 +2042,9 @@ mod tests {
 
     #[test]
     fn read_only_consent_keeps_an_agent_grant_read_only() {
-        let connection = [
-            "read",
-            "write",
-            "events",
-            "approval_respond",
-            "worker_request",
-        ]
-        .map(str::to_owned)
-        .to_vec();
+        let connection = ["read", "write", "events", "worker_request"]
+            .map(str::to_owned)
+            .to_vec();
         assert_eq!(
             agent_grant_scopes(connection.clone(), &["read".to_owned()]),
             vec!["read".to_owned(), "events".to_owned()],

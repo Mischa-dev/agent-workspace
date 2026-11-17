@@ -20,6 +20,8 @@ export type Whiteboard = {
   updatedByKind: string | null
   deleted: boolean
   linkCount: number
+  /** A template: offered in "New whiteboard" as something to start from. */
+  isTemplate: boolean
 }
 
 export type WhiteboardLink = {
@@ -94,6 +96,8 @@ export function createWhiteboard(input: {
   organizationId?: string
   projectId?: string
   link?: { targetKind: LinkTargetKind; targetId: string }
+  /** Start from this template: a template board's id or a built-in's name. */
+  fromTemplateId?: string
 }) {
   return requestJson<WhiteboardDetail>(base, { method: 'POST', json: input })
 }
@@ -104,7 +108,7 @@ export function getWhiteboard(id: string) {
 
 export function updateWhiteboard(
   id: string,
-  change: { title?: string; projectId?: string | null; deleted?: boolean; expectedVersion?: number },
+  change: { title?: string; projectId?: string | null; deleted?: boolean; isTemplate?: boolean; expectedVersion?: number },
 ) {
   return requestJson<WhiteboardDetail>(board(id), { method: 'PATCH', json: change })
 }

@@ -262,6 +262,21 @@ pub async fn state_of<'e, E: sqlx::PgExecutor<'e>>(
     .await?)
 }
 
+/// Who asked for a run, read without locking it (a notification's
+/// recipient, not a change to the run).
+pub async fn requested_by<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT requested_by_account_id FROM runs WHERE id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(executor)
+    .await?
+    .flatten())
+}
+
 /// The run, locked for a change.
 pub async fn locked(
     transaction: &mut Transaction<'_, Postgres>,

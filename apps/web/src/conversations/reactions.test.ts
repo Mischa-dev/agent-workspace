@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyReaction, REACTION_CHOICES, reactionNames } from './reactions'
+import { applyReaction, loadEmojiList, REACTION_CHOICES, reactionNames, searchEmoji } from './reactions'
 import type { ConversationActor, MessageReaction } from './types'
 
 const viewer = '019fb600-0000-7000-8000-000000000001'
@@ -53,5 +53,24 @@ describe('reactions shown before the server answers', () => {
 
   it('offers the twelve choices the server accepts', () => {
     expect(REACTION_CHOICES.map((choice) => choice.emoji).join(' ')).toBe('👍 👎 ❤️ 😄 🎉 😕 🚀 👀 ✅ ❌ 🙏 🤔')
+  })
+})
+
+describe('the shared emoji list (C2.19)', () => {
+  it('starts with the quick reactions, in the server’s order, and names each emoji once', async () => {
+    const list = await loadEmojiList()
+    expect(list.length).toBeGreaterThan(1000)
+    expect(list.slice(0, REACTION_CHOICES.length).map(({ emoji, name }) => ({ emoji, name }))).toEqual(
+      REACTION_CHOICES.map(({ emoji, name }) => ({ emoji, name })),
+    )
+    expect(new Set(list.map((choice) => choice.name)).size).toBe(list.length)
+    expect(new Set(list.map((choice) => choice.emoji)).size).toBe(list.length)
+  })
+
+  it('finds emoji by name and alias, starts first', async () => {
+    const list = await loadEmojiList()
+    expect(searchEmoji(list, 'unicorn')[0]?.emoji).toBe('🦄')
+    expect(searchEmoji(list, ':white_check_mark:')[0]?.name).toBe('check')
+    expect(searchEmoji(list, 'zzzz-nothing')).toEqual([])
   })
 })

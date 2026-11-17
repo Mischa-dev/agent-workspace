@@ -20,11 +20,11 @@ use super::{
 use crate::{
     AppState,
     conversations::{
-        ConversationAccessRow, MessageCommandActor, MessageMcpCredential,
-        THREAD_STATUS_SUGGESTIONS, ThreadPatch, UnreadFrom, append_message_command_with,
-        authorize_conversation_row_for, enqueue_event, fetch_conversation_access,
-        lock_conversation_for, mark_unread_from, normalize_conversation_name,
-        suggested_thread_name as suggested_name, update_thread,
+        ConversationAccessRow, MessageCommandActor, MessageMcpCredential, ThreadPatch, UnreadFrom,
+        append_message_command_with, authorize_conversation_row_for, enqueue_event,
+        fetch_conversation_access, mark_unread_from, normalize_conversation_name,
+        threads::{self, ThreadCreator, ThreadName, ThreadSpec},
+        update_thread,
     },
     error::AppError,
     idempotency::IdempotencyKey,
@@ -219,7 +219,11 @@ pub(super) struct ConversationSummary {
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    /// Others' messages you haven't read, at most 99.
     pub unread_count: i64,
+    /// You set it to tell you nothing: still unread, never counted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message: Option<LastMessage>,
     pub url: String,
@@ -249,13 +253,14 @@ pub(super) struct ConversationRow {
     parent_kind: Option<String>,
     thread_status: String,
     thread_outcome: Option<String>,
-    highest_sequence: i64,
-    last_read_sequence: i64,
     last_activity_at: String,
     last_author: Option<String>,
     last_text: Option<String>,
     last_removed: Option<bool>,
     member_names: Option<String>,
+    /// From `read_state::unread_summary` (C2.3), filled after the query.
+    #[sqlx(skip)]
+    unread: Option<crate::read_state::UnreadRow>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -331,7 +336,7 @@ pub(super) struct ReplyQuote {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ThreadRef {
+pub struct ThreadRef {
     pub id: String,
     pub name: String,
     pub status: String,
@@ -441,7 +446,7 @@ pub(super) struct ConversationReadValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SentMessage {
+pub struct SentMessage {
     pub conversation_id: String,
     pub message_id: String,
     pub sequence: i64,
@@ -463,7 +468,7 @@ pub(super) struct StartedConversation {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ReadMark {
+pub struct ReadMark {
     pub conversation_id: String,
     pub last_read_sequence: i64,
     /// Messages after lastReadSequence.
@@ -610,15 +615,14 @@ pub(super) async fn list_rows(
     offset: i64,
     limit: i64,
 ) -> Result<Vec<ConversationRow>, AppError> {
-    Ok(sqlx::query_as::<_, ConversationRow>(
+    let filter_unread_only = filter.unread_only;
+    let rows = sqlx::query_as::<_, ConversationRow>(
         r#"
         SELECT conversation.id, conversation.kind, conversation.name,
                conversation.project_id, project.name AS project_name,
                project.kind = 'direct' AS direct,
                parent.id AS parent_id, parent.name AS parent_name, parent.kind AS parent_kind,
                conversation.thread_status, conversation.thread_outcome,
-               conversation.next_entry_sequence - 1 AS highest_sequence,
-               COALESCE(read_state.highest_seen_sequence, 0) AS last_read_sequence,
                COALESCE(last_entry.created_at, conversation.created_at)::text AS last_activity_at,
                last_author.display_name AS last_author,
                CASE WHEN last_message.removed_at IS NOT NULL THEN 'Message removed'
@@ -667,7 +671,7 @@ pub(super) async fn list_rows(
                         CASE WHEN parent.kind IN ('dm', 'group') THEN parent.id END,
                         conversation.id)
                   AND member.actor_id = $4))
-          AND (NOT $5 OR conversation.next_entry_sequence - 1
+          AND (NOT $5 OR conversation.last_message_sequence
                           > COALESCE(read_state.highest_seen_sequence, 0))
           AND ($6::text IS NULL OR (conversation.kind = 'thread'
                                     AND lower(conversation.thread_status) = lower($6)))
@@ -696,7 +700,31 @@ pub(super) async fn list_rows(
     .bind(offset)
     .bind(limit)
     .fetch_all(crate::db::scoped(&state.pool))
-    .await?)
+    .await?;
+    let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+    let summary = crate::db::scoped_one(&state.pool, async |connection| {
+        crate::read_state::unread_by_conversation(
+            connection,
+            viewer,
+            crate::read_state::UnreadScope::Conversations(ids),
+        )
+        .await
+    })
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|mut row| {
+            row.unread = summary.get(&row.id).copied();
+            row
+        })
+        // An unread-only list follows R1 to R7: others' messages, unmuted.
+        .filter(|row| {
+            !filter_unread_only
+                || row
+                    .unread
+                    .is_some_and(|unread| unread.unread && !unread.muted)
+        })
+        .collect())
 }
 
 pub(super) fn summary(
@@ -737,7 +765,8 @@ pub(super) fn summary(
         },
         status: is_thread.then(|| row.thread_status.clone()),
         outcome: if is_thread { row.thread_outcome } else { None },
-        unread_count: (row.highest_sequence - row.last_read_sequence).max(0),
+        unread_count: row.unread.map_or(0, |unread| unread.unread_messages),
+        muted: row.unread.is_some_and(|unread| unread.muted),
         last_message: match (row.last_author, row.last_text) {
             (Some(author), Some(text)) => Some(LastMessage {
                 author,
@@ -887,6 +916,7 @@ pub(super) async fn conversation_open(
             thread_lists(state, conversation.id, principal.actor_id).await?
         };
         let hint = thread_hint(&conversation, highest);
+        let unread_count = unread_count_of(state, principal.actor_id, conversation.id).await?;
         if arguments.mark_read.unwrap_or(false) && principal.can_write() {
             mark(state, principal, &conversation, highest).await?;
         }
@@ -895,7 +925,7 @@ pub(super) async fn conversation_open(
             pinned,
             highest_sequence: highest,
             last_read_sequence: last_read,
-            unread_count: (highest - last_read).max(0),
+            unread_count,
             has_older: from > 1,
             messages,
             open_threads,
@@ -1438,7 +1468,7 @@ pub(super) async fn mark_read(
         Ok::<_, AppError>(ToolResult::ok(ReadMark {
             conversation_id: conversation.id.to_string(),
             last_read_sequence: last_read,
-            unread_count: (highest - last_read).max(0),
+            unread_count: unread_count_of(state, principal.actor_id, conversation.id).await?,
         }))
     }
     .await;
@@ -1489,8 +1519,27 @@ async fn mark_unread(
     Ok(ToolResult::ok(ReadMark {
         conversation_id: conversation.id.to_string(),
         last_read_sequence: change.highest_seen_sequence,
-        unread_count: (change.highest_sequence - change.highest_seen_sequence).max(0),
+        unread_count: unread_count_of(state, principal.actor_id, conversation.id).await?,
     }))
+}
+
+/// Others' unread messages in one conversation (C2.3), as every list
+/// counts them: `read_state::unread_summary`.
+async fn unread_count_of(
+    state: &AppState,
+    viewer: Uuid,
+    conversation_id: Uuid,
+) -> Result<i64, AppError> {
+    let summary = crate::db::scoped_one(&state.pool, async |connection| {
+        crate::read_state::unread_summary(
+            connection,
+            viewer,
+            crate::read_state::UnreadScope::Conversations(vec![conversation_id]),
+        )
+        .await
+    })
+    .await?;
+    Ok(summary.first().map_or(0, |row| row.unread_messages))
 }
 
 // ---------------------------------------------------------------------------
@@ -2046,178 +2095,71 @@ pub(super) async fn thread_start(
         },
         None => None,
     };
+    let name = match arguments
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(name) => match normalize_conversation_name(name) {
+            Ok(name) => ThreadName::Composed(name),
+            Err(_) => return ToolResult::invalid("name", "Use a name up to 120 characters."),
+        },
+        // Named from the message until someone names it, so removing the
+        // message takes its words out of the name too.
+        None if origin_id.is_some() => ThreadName::Derived,
+        None => {
+            return ToolResult::invalid(
+                "name",
+                "Give the thread a name, or start it from a message.",
+            );
+        }
+    };
     let result = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let parent = match lock_conversation_for(
+        let created = match threads::create(
             &mut transaction,
-            principal.actor_id,
+            &ThreadCreator::mcp(principal),
             parent_id,
-            Action::ThreadCreate,
-            false,
+            ThreadSpec::new(name).opened_from(origin_id).reusing(),
         )
         .await
         {
-            Ok(parent) => parent,
+            Ok(created) => created,
+            Err(AppError::NotFound("message")) => {
+                return Ok(ToolResult::not_found("That message in this conversation"));
+            }
             Err(AppError::NotFound(_)) => {
                 return Ok(ToolResult::not_found("That conversation"));
             }
-            Err(error) => return Err(error),
-        };
-        if parent.project_id != principal.project_id {
-            return Ok(ToolResult::not_found("That conversation"));
-        }
-        if !matches!(parent.kind.as_str(), "channel" | "dm" | "group") {
-            return Ok(ToolResult::invalid(
-                "conversationId",
-                "Threads go in a channel, DM, or group, not inside another thread.",
-            ));
-        }
-        let origin_text = match origin_id {
-            Some(origin_id) => {
-                // Whether it was removed comes first: a removed message's
-                // text is never read, and no new thread starts from it.
-                let Some((removed, text)) = sqlx::query_as::<_, (bool, String)>(
-                    r#"
-                    SELECT removed_at IS NOT NULL,
-                           CASE WHEN removed_at IS NULL THEN plain_text ELSE '' END
-                    FROM messages
-                    WHERE id = $1 AND conversation_id = $2
-                    "#,
-                )
-                .bind(origin_id)
-                .bind(parent.id)
-                .fetch_optional(&mut *transaction)
-                .await?
-                else {
-                    return Ok(ToolResult::not_found("That message in this conversation"));
-                };
-                if let Some((id, name, status, outcome)) =
-                    sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
-                        r#"
-                        SELECT id, name, thread_status, thread_outcome FROM conversations
-                        WHERE origin_message_id = $1 AND kind = 'thread' AND archived_at IS NULL
-                        ORDER BY created_at LIMIT 1
-                        "#,
-                    )
-                    .bind(origin_id)
-                    .fetch_optional(&mut *transaction)
-                    .await?
-                {
-                    transaction.commit().await?;
-                    let message = post_optional(
-                        state,
-                        principal,
-                        id,
-                        arguments.text.as_deref(),
-                        Some(origin_id),
-                    )
-                    .await?;
-                    return Ok(ToolResult::ok(ThreadValue {
-                        url: public_url(state, &thread_path(&parent, id)),
-                        id: id.to_string(),
-                        name,
-                        status,
-                        outcome,
-                        parent_id: parent.id.to_string(),
-                        created: Some(false),
-                        message,
-                    }));
-                }
-                if removed {
-                    return Ok(ToolResult::invalid(
-                        "fromMessageId",
-                        "That message was removed. Start the thread without fromMessageId.",
-                    ));
-                }
-                Some(text)
+            Err(AppError::Refused { message, .. }) => {
+                return Ok(ToolResult::invalid("conversationId", message));
             }
-            None => None,
-        };
-        let base_name = match arguments
-            .name
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_owned)
-            .or_else(|| origin_text.as_deref().map(suggested_name))
-        {
-            Some(name) if !name.is_empty() => name,
-            _ => {
+            Err(AppError::Conflict("message", "removed")) => {
                 return Ok(ToolResult::invalid(
-                    "name",
-                    "Give the thread a name, or start it from a message.",
+                    "fromMessageId",
+                    "That message was removed. Start the thread without fromMessageId.",
                 ));
             }
+            Err(error) => return Err(error),
         };
-        let base_name = match normalize_conversation_name(&base_name) {
-            Ok(name) => name,
-            Err(_) => return Ok(ToolResult::invalid("name", "Use a name up to 120 characters.")),
-        };
-        let name = unique_thread_name(&mut transaction, parent.id, &base_name).await?;
-        let thread_id = Uuid::now_v7();
-        sqlx::query(
-            r#"
-            INSERT INTO conversations (
-                id, project_id, workspace_id, kind, parent_channel_id, origin_message_id, name
-            )
-            VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4, $5)
-            "#,
-        )
-        .bind(thread_id)
-        .bind(parent.project_id)
-        .bind(parent.id)
-        .bind(origin_id)
-        .bind(&name)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO conversation_read_states (project_id, conversation_id, actor_id, highest_seen_sequence)
-            VALUES ($1, $2, $3, 0)
-            "#,
-        )
-        .bind(parent.project_id)
-        .bind(thread_id)
-        .bind(principal.actor_id)
-        .execute(&mut *transaction)
-        .await?;
-        enqueue_event(
-            &mut transaction,
-            parent.project_id,
-            OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
-                conversation_id: thread_id,
-                kind: OutboxConversationKind::Thread,
-                version: 1,
-            }),
-        )
-        .await?;
-        insert_audit(
-            &mut transaction,
-            principal,
-            parent.project_id,
-            "conversation.thread_created",
-            "conversation",
-            thread_id,
-            serde_json::json!({ "parent_channel_id": parent.id }),
-        )
-        .await?;
         transaction.commit().await?;
         let message = post_optional(
             state,
             principal,
-            thread_id,
+            created.id,
             arguments.text.as_deref(),
             origin_id,
         )
         .await?;
         Ok::<_, AppError>(ToolResult::ok(ThreadValue {
-            url: public_url(state, &thread_path(&parent, thread_id)),
-            id: thread_id.to_string(),
-            name,
-            status: THREAD_STATUS_SUGGESTIONS[0].to_owned(),
-            outcome: None,
-            parent_id: parent.id.to_string(),
-            created: Some(true),
+            url: public_url(state, &thread_path(&created.parent, created.id)),
+            id: created.id.to_string(),
+            name: created.name,
+            status: created.status,
+            outcome: created.outcome,
+            parent_id: created.parent.id.to_string(),
+            created: Some(created.created),
             message,
         }))
     }
@@ -2257,40 +2199,6 @@ fn thread_path(parent: &ConversationAccessRow, thread_id: Uuid) -> String {
     } else {
         format!("/projects/{}/threads/{thread_id}", parent.project_id)
     }
-}
-
-pub(super) async fn unique_thread_name(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    parent_id: Uuid,
-    base: &str,
-) -> Result<String, AppError> {
-    let taken = sqlx::query_scalar::<_, String>(
-        r#"
-        SELECT lower(name) FROM conversations
-        WHERE parent_channel_id = $1 AND kind = 'thread' AND archived_at IS NULL
-        "#,
-    )
-    .bind(parent_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    if !taken.contains(&base.to_lowercase()) {
-        return Ok(base.to_owned());
-    }
-    for number in 2..1000 {
-        let suffix = format!(" ({number})");
-        let stem = base
-            .chars()
-            .take(120 - suffix.chars().count())
-            .collect::<String>();
-        let candidate = format!("{stem}{suffix}");
-        if !taken.contains(&candidate.to_lowercase()) {
-            return Ok(candidate);
-        }
-    }
-    Err(AppError::Conflict(
-        "conversation_name",
-        "an active Conversation already uses that name",
-    ))
 }
 
 pub(super) async fn thread_update(
@@ -2384,7 +2292,7 @@ pub(super) async fn can_write_in(
 
 #[cfg(test)]
 mod tests {
-    use super::suggested_name;
+    use crate::conversations::suggested_thread_name as suggested_name;
 
     #[test]
     fn suggested_thread_names_are_short_first_lines() {

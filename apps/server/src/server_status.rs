@@ -213,6 +213,22 @@ struct ServerView {
     mail: MailView,
     jobs: JobsView,
     event_log: EventLogView,
+    instances: Vec<InstanceView>,
+}
+
+/// A server process sharing this database (K5.7): what it does, which
+/// release, how long since its heartbeat, and the leases it holds.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+struct InstanceView {
+    id: Uuid,
+    label: Option<String>,
+    roles: Vec<String>,
+    release: String,
+    started_at: DateTime<Utc>,
+    heartbeat_seconds: f64,
+    draining: bool,
+    leases: Vec<String>,
 }
 
 /// The event log (K3.3): events waiting for a position, and parked events
@@ -281,6 +297,26 @@ async fn read_http(
                 (SELECT count(*) FROM event_consumer_failures WHERE resolved_at IS NULL)",
     )
     .fetch_one(&mut *connection).await).await?;
+    // Instances heard from in the last minute that haven't stopped.
+    let instances = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, InstanceView>(
+            "SELECT instance.id, instance.label, instance.roles, instance.release, \
+                    instance.started_at, \
+                    EXTRACT(EPOCH FROM now() - instance.heartbeat_at)::float8 AS heartbeat_seconds, \
+                    instance.draining_at IS NOT NULL AS draining, \
+                    COALESCE(ARRAY(SELECT lease.name FROM leases lease \
+                                   WHERE lease.holder_instance_id = instance.id \
+                                     AND lease.expires_at > now() \
+                                   ORDER BY lease.name), '{}') AS leases \
+             FROM server_instances instance \
+             WHERE instance.stopped_at IS NULL \
+               AND instance.heartbeat_at > now() - interval '1 minute' \
+             ORDER BY instance.started_at",
+        )
+        .fetch_all(&mut *connection)
+        .await
+    })
+    .await?;
     Ok(Json(ServerView {
         version: env!("CARGO_PKG_VERSION"),
         commit: BUILD_COMMIT,
@@ -301,6 +337,7 @@ async fn read_http(
             oldest_waiting_seconds,
             parked,
         },
+        instances,
     }))
 }
 

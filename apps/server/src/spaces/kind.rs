@@ -40,7 +40,9 @@ impl SpaceKind {
     /// switches: a space's own switches only narrow it further.
     pub const fn starting_modules(self) -> Option<&'static [&'static str]> {
         match self {
-            Self::Workspace => Some(&["pages", "whiteboards", "channels"]),
+            // Messages too: channels need it, and comments on the
+            // workspace's own boards and sheets belong to it.
+            Self::Workspace => Some(&["pages", "whiteboards", "channels", "messages"]),
             // Drafts and notes: pages, boards, sheets and collections; no
             // chat, since nobody else is there.
             Self::Personal => Some(&["pages", "whiteboards", "sheets", "collections"]),
@@ -57,6 +59,20 @@ impl SpaceKind {
             Self::Personal => "personal",
         }
     }
+}
+
+/// Whether `space` is one of the hidden Messages projects (stored kind
+/// `direct`, which is not a space kind): read through `SpaceKind`, so no
+/// caller compares the stored literal.
+pub async fn holds_messages(
+    connection: &mut sqlx::PgConnection,
+    space: uuid::Uuid,
+) -> Result<bool, sqlx::Error> {
+    let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM projects WHERE id = $1")
+        .bind(space)
+        .fetch_optional(connection)
+        .await?;
+    Ok(kind.is_some_and(|kind| SpaceKind::from_stored(&kind).is_none()))
 }
 
 /// Who may find and read a space.

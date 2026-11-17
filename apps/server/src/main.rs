@@ -53,9 +53,16 @@ async fn main() -> anyhow::Result<()> {
     // Serving (no subcommand): take the address now, so a probe sees the
     // server starting (`/health/ready` 503 with the step) instead of nothing
     // while it migrates (H1.13).
+    // An instance without `api` or `live` serves health checks only, on
+    // their own address when one is set (K5.7).
+    let address = if config.roles.api || config.roles.live {
+        config.server_addr
+    } else {
+        config.health_addr.unwrap_or(config.server_addr)
+    };
     let mut starting = if std::env::args().nth(1).is_none() {
-        let listener = std::net::TcpListener::bind(config.server_addr)
-            .with_context(|| format!("bind application server to {}", config.server_addr))?;
+        let listener = std::net::TcpListener::bind(address)
+            .with_context(|| format!("bind application server to {address}"))?;
         listener
             .set_nonblocking(true)
             .context("make the application listener non-blocking")?;
@@ -424,6 +431,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let server = while_starting(&mut starting, Server::build(Arc::clone(&config), pool)).await?;
+    let roles = config.roles;
 
     let listener = match starting {
         Some(Starting {
@@ -440,33 +448,48 @@ async fn main() -> anyhow::Result<()> {
             }
             TcpListener::from_std(listener).context("listen on the application address")?
         }
-        None => TcpListener::bind(config.server_addr)
+        None => TcpListener::bind(address)
             .await
-            .with_context(|| format!("bind application server to {}", config.server_addr))?,
+            .with_context(|| format!("bind application server to {address}"))?,
     };
-    let webhook_listener = TcpListener::bind(config.webhook_addr)
-        .await
-        .with_context(|| format!("bind GitHub webhook server to {}", config.webhook_addr))?;
+    let webhook_listener = if roles.api {
+        Some(
+            TcpListener::bind(config.webhook_addr)
+                .await
+                .with_context(|| {
+                    format!("bind GitHub webhook server to {}", config.webhook_addr)
+                })?,
+        )
+    } else {
+        None
+    };
 
     tracing::info!(
-        address = %config.server_addr,
+        %address,
         environment = %config.environment,
+        roles = ?roles.names(),
+        builtin_host = roles.work && config.builtin_host,
         "Agent Workspace server listening"
     );
-    tracing::info!(
-        address = %config.webhook_addr,
-        github_configured = config.github.is_some(),
-        "GitHub webhook server listening"
-    );
+    if roles.api {
+        tracing::info!(
+            address = %config.webhook_addr,
+            github_configured = config.github.is_some(),
+            "GitHub webhook server listening"
+        );
+    }
 
     let running = server.spawn(listener, webhook_listener);
     let shutdown = running.shutdown();
+    let drainer = running.drainer();
     let supervisors = running.state().supervisors.clone();
     let wait = running.wait();
     tokio::pin!(wait);
     tokio::select! {
         result = &mut wait => result,
         () = shutdown_signal() => {
+            // Not ready, sockets moved off, then stop (K5.7).
+            drainer.drain().await;
             supervisors.request_shutdown();
             let _ = shutdown.send(true);
             wait.await

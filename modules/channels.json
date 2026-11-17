@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": ["projects", "messages"],
   "worksWith": ["tasks", "runs"],
-  "permissions": ["channels.post", "channels.create", "channels.moderate", "conversations.see", "conversations.members", "replies.steer"],
+  "permissions": ["channels.post", "channels.create", "channels.moderate", "conversations.see", "conversations.members", "replies.steer", "conversations.continue_agents"],
   "tools": {
     "channel_create": "create",
     "thread_start": "create",

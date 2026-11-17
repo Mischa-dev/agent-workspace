@@ -16,13 +16,9 @@ use std::{collections::BTreeMap, path::Path};
 /// that moves each into the run service.
 const LEGACY_RUN_SQL: &[(&str, &str)] = &[
     ("api.rs", "A1.14"),
-    ("conversations.rs", "A1.8"),
-    ("external_events.rs", "A1.8"),
     ("github.rs", "A1.17"),
     ("mcp.rs", "A1.8"),
-    ("mcp/approvals.rs", "A1.8"),
     ("mcp/code.rs", "A1.17"),
-    ("notifications.rs", "A1.8"),
     ("provider.rs", "A1.17"),
     ("recovery.rs", "A1.17"),
     ("run_log.rs", "A1.14"),

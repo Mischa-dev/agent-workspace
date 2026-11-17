@@ -182,7 +182,7 @@ const ACCESS_BYPASSES_CEILING: usize = 67;
 const ACCOUNT_KIND_STRINGS_CEILING: usize = 48;
 const AGENT_RUNS_SQL_CEILING: usize = 111;
 const ACTIVE_RUN_STATES_LITERAL_CEILING: usize = 6;
-const CONVERSATION_INSERTS_CEILING: usize = 11;
+const CONVERSATION_INSERTS_CEILING: usize = 6;
 const MESSAGE_INSERTS_CEILING: usize = 4;
 const TASK_CORE_UPDATES_CEILING: usize = 10;
 const DIRECT_TOOL_CALLS_CEILING: usize = 4;
@@ -992,6 +992,28 @@ mod tests {
             eprintln!("hint: {hint}");
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// C1.2: a thread is made only by `conversations/threads.rs` (and the
+    /// development seed), so every path gets the same lock, name policy,
+    /// read state, event and audit row.
+    #[test]
+    fn threads_are_made_in_one_place() {
+        let offenders = rust_files(&server_src())
+            .iter()
+            .filter(|(path, _)| !SKIPPED.contains(&path.as_str()))
+            .filter(|(path, _)| path != "conversations/threads.rs" && path != "seed.rs")
+            .filter(|(_, source)| {
+                sql(strip_tests(source)).any(|sql| {
+                    sql.contains("INSERT INTO conversations") && sql.contains("'thread'")
+                })
+            })
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            offenders.is_empty(),
+            "threads inserted outside conversations::threads::create: {offenders:?}"
+        );
     }
 
     /// Prints today's counts in the allowances format. Run with

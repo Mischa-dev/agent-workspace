@@ -55,6 +55,19 @@ export type ServerStatus = {
   jobs: { waiting: number; running: number; failedLastDay: number; oldestWaitingSeconds: number }
   /** The event log: events waiting for a position, and events a consumer parked. Older servers leave it out. */
   eventLog?: { waiting: number; oldestWaitingSeconds: number; parked: number }
+  instances?: ServerInstance[]
+}
+
+/** A server process sharing the database: what it does and the leases it holds. */
+export type ServerInstance = {
+  id: string
+  label: string | null
+  roles: string[]
+  release: string
+  startedAt: string
+  heartbeatSeconds: number
+  draining: boolean
+  leases: string[]
 }
 
 export const mailKeys = {

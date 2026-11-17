@@ -426,11 +426,34 @@ mod tests {
         assert!(failures.is_empty(), "{failures:#?}");
     }
 
+    /// The tables `sql` drops (`DROP TABLE [IF EXISTS] name`).
+    fn dropped_tables(sql: &str) -> Vec<String> {
+        let upper = sql.to_ascii_uppercase();
+        upper
+            .match_indices("DROP TABLE ")
+            .filter_map(|(index, word)| {
+                let rest = &sql[index + word.len()..];
+                let rest = rest
+                    .strip_prefix("IF EXISTS ")
+                    .or_else(|| rest.strip_prefix("if exists "))
+                    .unwrap_or(rest);
+                let table = rest
+                    .split(|character: char| {
+                        !(character.is_ascii_alphanumeric() || character == '_')
+                    })
+                    .next()?;
+                (!table.is_empty()).then(|| table.to_owned())
+            })
+            .collect()
+    }
+
     #[test]
     fn new_tables_use_workspace_and_space_ids() {
         let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
         let global = global_tables();
         let mut offences = Vec::new();
+        // A table a later migration drops is gone: it holds no rows.
+        let mut dropped = Vec::new();
         for entry in std::fs::read_dir(&folder).expect("migrations folder") {
             let path = entry.expect("migration").path();
             let name = path
@@ -439,12 +462,18 @@ mod tests {
                 .unwrap_or_default()
                 .to_owned();
             let sql = std::fs::read_to_string(&path).expect("read migration");
+            dropped.extend(dropped_tables(&sql));
             offences.extend(naming_offences(&name, &sql).into_iter().filter(|offence| {
                 !global
                     .iter()
                     .any(|table| offence.contains(&format!(": {table} has no workspace_id")))
             }));
         }
+        offences.retain(|offence| {
+            !dropped
+                .iter()
+                .any(|table| offence.contains(&format!(": {table} has no workspace_id")))
+        });
         assert!(offences.is_empty(), "{offences:#?}");
     }
 

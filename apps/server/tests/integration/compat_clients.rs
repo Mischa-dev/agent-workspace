@@ -77,6 +77,86 @@ async fn rpc(
     )
 }
 
+/// K5.7: a session its client ended with DELETE stays ended on every
+/// server, while a session a server simply doesn't hold (after a restart,
+/// or held by another server) is still picked up.
+#[tokio::test]
+async fn an_ended_session_stays_ended_on_another_server() {
+    let Some(setup) = setup("compat_ended_session").await else {
+        return;
+    };
+    let url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL");
+    // A second server on the same database, with its own sessions.
+    let other = crate::support::app::test_app(setup.pool.clone(), &url);
+    let (_, token) = create_agent(
+        &setup.app,
+        &setup.browser,
+        &space(&setup).await,
+        "Rook",
+        "rook",
+    )
+    .await;
+    let revision = "2025-06-18";
+    let (status, session, initialized) = rpc(
+        &setup.app,
+        &token,
+        revision,
+        None,
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": revision,
+                "capabilities": {},
+                "clientInfo": {"name": "ended", "version": "1"}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{initialized}");
+    let session = session.expect("mcp-session-id");
+    let list = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
+
+    // The other server picks the live session up.
+    let (status, _, _) = rpc(&other, &token, revision, Some(&session), list.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let ended = setup
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(MCP_PATH)
+                .header(header::HOST, "127.0.0.1")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header("mcp-session-id", &session)
+                .header("mcp-protocol-version", revision)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert!(ended.status().is_success(), "{}", ended.status());
+
+    for (name, app) in [("this", &setup.app), ("the other", &other)] {
+        let (status, _, _) = rpc(app, &token, revision, Some(&session), list.clone()).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{name} server resumed an ended session"
+        );
+    }
+    let (status, _, _) = rpc(
+        &other,
+        &token,
+        revision,
+        Some("held-by-a-server-that-restarted"),
+        list,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
 /// Clients pinned to an older MCP revision still connect, list and call,
 /// and a session the server no longer holds (after a deploy) still works.
 #[tokio::test]
@@ -165,7 +245,11 @@ fn connected_clients_find_their_tools() {
     let mut problems = Vec::new();
     for (client, contract) in fixture["clients"].as_object().expect("clients") {
         for (name, arguments) in contract["tools"].as_object().expect("tools") {
-            let Some(tool) = catalog.iter().find(|tool| tool.name == name.as_str()) else {
+            // An old name that became an alias (K2) still answers: its
+            // arguments are checked against the operation it runs.
+            let alias = agent_workspace_server::ops::aliases::active(name);
+            let named = alias.map_or(name.as_str(), |alias| alias.runs[0]);
+            let Some(tool) = catalog.iter().find(|tool| tool.name == named) else {
                 problems.push(format!("{client}: {name} is gone"));
                 continue;
             };

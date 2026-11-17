@@ -121,12 +121,12 @@ fn generate() -> (String, String, [u8; 32]) {
 /// What a secret may say it allows: always `read`; `write`; and for an
 /// agent's, what its connection holds.
 fn valid_scopes(scopes: &[String]) -> bool {
-    (1..=5).contains(&scopes.len())
+    (1..=4).contains(&scopes.len())
         && scopes.iter().any(|scope| scope == "read")
         && scopes.iter().all(|scope| {
             matches!(
                 scope.as_str(),
-                "read" | "write" | "events" | "approval_respond" | "worker_request"
+                "read" | "write" | "events" | "worker_request"
             )
         })
 }

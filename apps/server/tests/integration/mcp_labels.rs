@@ -506,7 +506,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         json!({"projectId": "WORK", "title": "Crash on launch"}),
     )
     .await;
-    let task = id(first["workItemId"].as_str().expect("task"));
+    let task = id(first["value"]["workItemId"].as_str().expect("task"));
     let second = tool(
         app,
         &codex,
@@ -515,7 +515,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         json!({"parentId": "WORK-1", "title": "Reproduce it"}),
     )
     .await;
-    let subtask = id(second["workItemId"].as_str().expect("subtask"));
+    let subtask = id(second["value"]["workItemId"].as_str().expect("subtask"));
 
     // Two labels in one change: one version bump, one activity that names
     // the labels by ID.
@@ -916,7 +916,7 @@ async fn moving_a_task_carries_its_labels() {
             json!({"projectId": "WORK", "title": title}),
         )
         .await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
     let task_id = |number: i64| {
         let pool = setup.pool.clone();

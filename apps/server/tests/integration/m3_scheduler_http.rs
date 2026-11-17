@@ -426,8 +426,10 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
             .expect("canonical expected worktree")
     );
 
+    // The demo harness asked as a request of the run (A1.14); made a
+    // question here, its answer in words reaches the harness, which goes on.
     let question_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM agent_approvals WHERE agent_run_id = $1 AND status = 'pending'",
+        "SELECT id FROM requests WHERE run_id = $1 AND status = 'open'",
     )
     .bind(second_run_id)
     .fetch_one(&pool)
@@ -435,10 +437,11 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .expect("read demo blocker for question response proof");
     sqlx::query(
         r#"
-        UPDATE agent_approvals
+        UPDATE requests
            SET kind = 'question',
-               summary = 'What should the proof answer be?',
-               options = '[]'::jsonb
+               title = 'What should the proof answer be?',
+               options = '[]'::jsonb,
+               allow_text = true
          WHERE id = $1
         "#,
     )
@@ -446,40 +449,32 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .execute(&pool)
     .await
     .expect("convert deterministic demo blocker to a question");
-    let question = respond_to_approval(
+    let question = respond_to_request(
         &application,
         &cookie,
         &csrf,
         question_id,
         "question-answer-proof",
-        json!({"answer": "Aurora"}),
+        json!({"text": "Aurora"}),
     )
     .await;
-    assert_eq!(question.0, StatusCode::OK);
-    assert_eq!(question.2["kind"], "question");
-    assert_eq!(question.2["response"]["answer"], "Aurora");
-    // A1.7: the answer reaches the request record in the same commit.
-    let (request_status, request_answer) = sqlx::query_as::<_, (String, Option<Value>)>(
-        "SELECT status, answer FROM requests WHERE id = $1 AND legacy_source = 'agent_approval'",
-    )
-    .bind(question_id)
-    .fetch_one(&pool)
-    .await
-    .expect("the approval's request");
-    assert_eq!(request_status, "answered");
-    assert_eq!(
-        request_answer
-            .as_ref()
-            .and_then(|answer| answer.get("answer")),
-        Some(&json!("Aurora"))
-    );
-    let repeated_question = respond_to_approval(
+    assert_eq!(question.0, StatusCode::OK, "{}", question.1);
+    assert_eq!(question.2["value"]["kind"], "question");
+    assert_eq!(question.2["value"]["status"], "answered");
+    let request_answer =
+        sqlx::query_scalar::<_, Option<Value>>("SELECT answer FROM requests WHERE id = $1")
+            .bind(question_id)
+            .fetch_one(&pool)
+            .await
+            .expect("the answered request");
+    assert_eq!(request_answer, Some(json!({"text": "Aurora"})));
+    let repeated_question = respond_to_request(
         &application,
         &cookie,
         &csrf,
         question_id,
         "question-answer-proof",
-        json!({"answer": "Aurora"}),
+        json!({"text": "Aurora"}),
     )
     .await;
     assert_eq!(repeated_question.0, StatusCode::OK);
@@ -1276,33 +1271,35 @@ pub(super) async fn interrupt(
     .await
 }
 
-async fn respond_to_approval(
+/// Answer a request as the web app does (`request_respond`).
+async fn respond_to_request(
     application: &axum::Router,
     cookie: &str,
     csrf: &str,
-    approval_id: Uuid,
+    request_id: Uuid,
     idempotency_key: &str,
-    body: Value,
+    mut body: Value,
 ) -> (StatusCode, String, Value) {
+    body["requestId"] = json!(request_id);
     response_json(
         application
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/api/v1/agent-approvals/{approval_id}/respond"))
+                    .uri("/api/v2/ops/request_respond")
                     .header("origin", ORIGIN)
                     .header("cookie", cookie)
                     .header("x-csrf-token", csrf)
                     .header("idempotency-key", idempotency_key)
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        serde_json::to_vec(&body).expect("serialize blocker response"),
+                        serde_json::to_vec(&body).expect("serialize request answer"),
                     ))
-                    .expect("build blocker response"),
+                    .expect("build request answer"),
             )
             .await
-            .expect("blocker response"),
+            .expect("request answer"),
     )
     .await
 }

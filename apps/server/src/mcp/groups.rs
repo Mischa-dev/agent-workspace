@@ -30,7 +30,6 @@ use crate::{
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
-    policy::ActorKind,
     replies::continue_conversation_in,
 };
 
@@ -132,7 +131,7 @@ pub(super) struct ContinueValue {
     pub idempotent_replay: bool,
 }
 
-const AGENTS_ONLY_LEAVE: &str = "Agents can leave a group, but only a person can add or remove others, because whoever is added can read the whole history. Ask a person in the group.";
+const ONLY_LEAVE: &str = "You can leave this group, but your role doesn't let you add or remove others (conversations.members), because whoever is added can read the whole history. Ask someone in the group whose role does.";
 
 /// A conversation the caller can see in the project this call is scoped to,
 /// and can still reach through this connection.
@@ -260,10 +259,6 @@ pub(super) async fn conversation_members(
                 ));
             }
         };
-        let is_person = principal.actor_kind == ActorKind::Human;
-        if !is_person && !add.is_empty() {
-            return Ok(ToolResult::denied(AGENTS_ONLY_LEAVE));
-        }
         let add_ids = match resolve_people(state, row.project_id, &add).await? {
             Ok(ids) => ids.into_iter().collect::<BTreeSet<_>>(),
             Err(who) => {
@@ -286,9 +281,6 @@ pub(super) async fn conversation_members(
                 ));
             }
         };
-        if !is_person && remove_ids.iter().any(|id| *id != principal.actor_id) {
-            return Ok(ToolResult::denied(AGENTS_ONLY_LEAVE));
-        }
         if let Some(both) = add_ids.intersection(&remove_ids).next() {
             let who = add
                 .iter()
@@ -339,7 +331,6 @@ pub(super) async fn conversation_members(
             &mut transaction,
             GroupEditor {
                 actor_id: principal.actor_id,
-                actor_kind: principal.actor_kind,
             },
             group_id,
             &add_ids,
@@ -361,7 +352,7 @@ pub(super) async fn conversation_members(
                     "A group can have at most {MAX_GROUP_MEMBERS} members. Remove someone first."
                 )));
             }
-            Err(AppError::Forbidden) => return Ok(ToolResult::denied(AGENTS_ONLY_LEAVE)),
+            Err(AppError::Forbidden) => return Ok(ToolResult::denied(ONLY_LEAVE)),
             Err(AppError::VersionConflict {
                 current_version, ..
             }) => {
@@ -431,11 +422,6 @@ pub(super) async fn conversation_continue(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(
-            "Only a person can let the agents continue, so agents can't keep a conversation going on their own. Ask someone in the group.",
-        );
-    }
     let Some(conversation_id) = parse_id(&arguments.conversation_id) else {
         return ToolResult::invalid("conversationId", "Pass a conversation ID or link.");
     };
@@ -490,7 +476,6 @@ pub(super) async fn conversation_continue(
         let outcome = match continue_conversation_in(
             &mut transaction,
             principal.actor_id,
-            principal.actor_kind,
             conversation_id,
         )
         .await
@@ -502,7 +487,7 @@ pub(super) async fn conversation_continue(
             Err(AppError::NotFound(_)) => return Ok(ToolResult::not_found("That conversation")),
             Err(AppError::Forbidden) => {
                 return Ok(ToolResult::denied(
-                    "You can read this conversation but can't post in it, so you can't let the agents continue.",
+                    "Your role here doesn't let you give the agents another round (conversations.continue_agents). Ask someone in the group.",
                 ));
             }
             Err(error) => return Err(error),

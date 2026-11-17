@@ -111,6 +111,7 @@ pub async fn personal(
             actor_id: account,
             actor_kind: crate::accounts::actor_kind(&actor_kind)?,
             via_grant_id: None,
+            confined_project: None,
         };
         memory::create_page(
             transaction,
@@ -120,6 +121,8 @@ pub async fn personal(
                 title: Some(NOTES_TITLE.to_owned()),
                 body: Some(String::new()),
                 is_guide: None,
+                is_template: None,
+                from_template_id: None,
                 skill_description: None,
                 expected_version: None,
                 restore_version: None,

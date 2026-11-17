@@ -423,7 +423,8 @@ async fn only_people_who_can_post_can_react() {
         0
     );
 
-    // Skin tones and colons resolve; anything off the list is refused.
+    // Skin tones and colons resolve, any single emoji is a reaction, and
+    // anything that isn't one emoji is refused.
     let toned = call(
         "message_react",
         json!({"messageId": message, "emoji": "👍🏽"}),
@@ -437,7 +438,13 @@ async fn only_people_who_can_post_can_react() {
     )
     .await;
     assert_eq!(eyes["value"]["emoji"], "👀", "{eyes}");
-    for emoji in ["🦄", "👀✅", ""] {
+    let unicorn = call(
+        "message_react",
+        json!({"messageId": message, "emoji": "🦄"}),
+    )
+    .await;
+    assert_eq!(unicorn["value"]["emoji"], "🦄", "{unicorn}");
+    for emoji in ["👀✅", ""] {
         let refused = call(
             "message_react",
             json!({"messageId": message, "emoji": emoji}),
@@ -451,7 +458,13 @@ async fn only_people_who_can_post_can_react() {
         json!({"messageId": "not a message", "emoji": "eyes"}),
     )
     .await;
-    assert_eq!(refused["field"], "messageId", "{refused}");
+    // K2.7: an operation's input fails to read as a whole, so the answer
+    // names the input when serde doesn't say which field.
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    assert!(
+        refused["field"] == "messageId" || refused["field"] == "input",
+        "{refused}"
+    );
     assert_eq!(
         sqlx::query_scalar::<_, String>(
             "SELECT string_agg(emoji, '' ORDER BY created_at) FROM message_reactions WHERE message_id = $1",
@@ -460,8 +473,18 @@ async fn only_people_who_can_post_can_react() {
         .fetch_one(&setup.pool)
         .await
         .expect("stored"),
-        "👍👀"
+        "👍👀🦄"
     );
+    let (status, _) = react_http(
+        &setup,
+        &setup.browser,
+        &general,
+        &message,
+        "unicorn_face",
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 
     // Every name on the list goes through the web and the database CHECK.
     for name in NAMES {
@@ -488,8 +511,15 @@ async fn only_people_who_can_post_can_react() {
     }
     let (status, _) = react_http(&setup, &setup.browser, &general, &message, "unicorn", true).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Since any emoji can be a reaction, the web takes the emoji itself too.
     let (status, _) = react_http(&setup, &setup.browser, &general, &message, "👀", true).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "the web takes names only");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the web takes an emoji as well as its name"
+    );
+    let (status, _) = react_http(&setup, &setup.browser, &general, &message, "👀", false).await;
+    assert_eq!(status, StatusCode::OK);
 
     let (status, _) = react_http(&setup, &setup.browser, &general, &message, "rocket", true).await;
     assert_eq!(status, StatusCode::OK);

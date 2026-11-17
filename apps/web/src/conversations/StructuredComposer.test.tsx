@@ -1,8 +1,15 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, fireEvent, render as plainRender, screen, waitFor } from '@testing-library/react'
+import type { ReactElement, ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SLASH_COMMANDS } from '../later/slashCommands'
 import { StructuredComposer } from './StructuredComposer'
+
+// The box reads statuses through the query cache, as it does in the app.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })
+const Providers = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+const render = (ui: ReactElement) => plainRender(ui, { wrapper: Providers })
 
 const human = {
   id: '019fb8b0-0000-7000-8000-000000000001',

@@ -1,0 +1,11 @@
+{
+  "title": "Retrospective",
+  "operations": [
+    {"op": "add", "type": "frame", "id": "well", "x": 0, "y": 0, "width": 360, "height": 480, "name": "Went well"},
+    {"op": "add", "type": "frame", "id": "badly", "x": 400, "y": 0, "width": 360, "height": 480, "name": "Didn't go well"},
+    {"op": "add", "type": "frame", "id": "next", "x": 800, "y": 0, "width": 360, "height": 480, "name": "Try next"},
+    {"op": "add", "type": "rectangle", "id": "well-1", "x": 30, "y": 40, "width": 300, "height": 90, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "text": "Add a note", "frameId": "well"},
+    {"op": "add", "type": "rectangle", "id": "badly-1", "x": 430, "y": 40, "width": 300, "height": 90, "backgroundColor": "#ffc9c9", "fillStyle": "solid", "text": "Add a note", "frameId": "badly"},
+    {"op": "add", "type": "rectangle", "id": "next-1", "x": 830, "y": 40, "width": 300, "height": 90, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "text": "Add a note", "frameId": "next"}
+  ]
+}

@@ -77,14 +77,37 @@ const KINDS: &[(&str, &str)] = &[
         "conversation",
         "SELECT project.organization_id, project.id FROM conversations conversation \
          JOIN projects project ON project.id = conversation.project_id \
-         WHERE conversation.id = $1 AND conversation_visible_to(conversation.id, $2)",
+         WHERE conversation.id = $1 AND conversation_visible_to(conversation.id, $2) \
+           AND EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
     ),
     (
         "message",
         "SELECT project.organization_id, project.id FROM messages message \
          JOIN projects project ON project.id = message.project_id \
          WHERE message.id = $1 AND message.removed_at IS NULL \
-           AND conversation_visible_to(message.conversation_id, $2)",
+           AND conversation_visible_to(message.conversation_id, $2) \
+           AND EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
+    ),
+    // K2.7: a message found after it was removed too (its history, a
+    // removal retried); still only in a conversation the caller may see.
+    (
+        "message_record",
+        "SELECT project.organization_id, project.id FROM messages message \
+         JOIN projects project ON project.id = message.project_id \
+         WHERE message.id = $1 AND conversation_visible_to(message.conversation_id, $2) \
+           AND EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
+    ),
+    // K2.7: a scheduled message is found only by its author.
+    (
+        "scheduled_message",
+        "SELECT organization_id, project_id FROM scheduled_messages \
+         WHERE id = $1 AND author_actor_id = $2",
     ),
     (
         "decision",
@@ -148,6 +171,44 @@ const KINDS: &[(&str, &str)] = &[
     ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
+    // C1.3: things with a discussion, by the same rule their comments follow.
+    // A whiteboard is the one below (K2.12).
+    (
+        "page",
+        "SELECT project.organization_id, project.id FROM project_pages page \
+         JOIN projects project ON project.id = page.project_id \
+         WHERE page.id = $1 AND subject_visible_to('page', page.id, $2)",
+    ),
+    (
+        "sheet",
+        "SELECT project.organization_id, project.id FROM sheets sheet \
+         JOIN projects project ON project.id = sheet.project_id \
+         WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2)",
+    ),
+    (
+        "record",
+        "SELECT project.organization_id, project.id FROM collection_records record \
+         JOIN projects project ON project.id = record.project_id \
+         WHERE record.id = $1 AND subject_visible_to('record', record.id, $2)",
+    ),
+    // M1.6: a built module, in its space or (space NULL) the workspace.
+    // Archived ones are found too, so they can be restored.
+    (
+        "module",
+        "SELECT workspace_id, space_id FROM modules WHERE id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    // K2.12: a whiteboard, in its space or (space NULL) the workspace; one
+    // in the trash too, so it can be restored. Its own rules (a space
+    // board for the space's members) are checked again by `access`.
+    (
+        "whiteboard",
+        "SELECT organization_id, project_id FROM whiteboards WHERE id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    // M1.9: a package install, in its space or the workspace.
+    (
+        "package_install",
+        "SELECT workspace_id, space_id FROM package_installs WHERE id = $1 AND $2::uuid IS NOT NULL",
+    ),
     // A1.8: a request goes by request_visible_to, which holds its
     // conversation's and run's visibility.
     (
@@ -221,8 +282,9 @@ async fn thing(
     let Some((_, sql)) = KINDS.iter().find(|(known, _)| *known == kind) else {
         return Err(OpError::Unavailable);
     };
-    // Only a registry thing (a workspace board) or a workspace-level
-    // request may come back without a space.
+    // The space is NULL only for a thing that lives in the workspace itself
+    // (a workspace-wide built module, a registry thing such as a workspace
+    // board, or a workspace-level request).
     let row = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(sql)
         .bind(id)
         .bind(viewer)
@@ -248,10 +310,17 @@ fn what_of(kind: &str) -> &'static str {
     match kind {
         "project" | "member_space" | "readable_space" => "That space",
         "conversation" => "That conversation",
-        "message" => "That message",
+        "message" | "message_record" => "That message",
+        "scheduled_message" => "That scheduled message",
         "decision" => "That decision",
         "task" => "That task",
         "run" => "That run",
+        "page" => "That page",
+        "sheet" => "That sheet",
+        "record" => "That record",
+        "module" => "That module",
+        "package_install" => "That install",
+        "whiteboard" => "That whiteboard",
         "request" => "That request",
         _ => "That",
     }

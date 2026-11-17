@@ -133,28 +133,6 @@ pub const SPACE_OF_RUN: &str = "SELECT conversation.project_id FROM agent_runs r
      -- visibility: the space only, to refuse a write; the handler checks access\n \
      WHERE run.id = $1";
 
-/// The space an approval's run lives in, unlocked and unchecked: only for
-/// holding its workspace open before the approval row is locked (H1.24).
-pub(crate) async fn approval_space(
-    connection: &mut sqlx::PgConnection,
-    approval_id: Uuid,
-) -> Result<Option<Uuid>, sqlx::Error> {
-    sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT conversation.project_id
-        FROM agent_approvals approval
-        JOIN agent_runs run ON run.id = approval.agent_run_id
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        WHERE approval.id = $1
-        -- visibility: finds the workspace to hold; the caller's locked read
-        -- applies conversation_visible_to and membership.
-        "#,
-    )
-    .bind(approval_id)
-    .fetch_optional(connection)
-    .await
-}
-
 /// The runs in `workspace` that haven't finished, locked, with where each
 /// lives: what suspending or deleting the workspace stops (H1.24).
 pub(crate) async fn active_in_workspace(

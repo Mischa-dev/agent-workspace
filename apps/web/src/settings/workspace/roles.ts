@@ -53,6 +53,7 @@ export const PERMISSION_KEYS = [
   'conversations.members',
   'direct.start',
   'replies.steer',
+  'conversations.continue_agents',
   'pages.see',
   'pages.comment',
   'pages.suggest',
@@ -72,6 +73,8 @@ export const PERMISSION_KEYS = [
   'agents.create',
   'webhooks.manage',
   'automations.manage',
+  'modules.build',
+  'modules.manage',
   'workspace.delete',
 ] as const
 

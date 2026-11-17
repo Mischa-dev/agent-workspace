@@ -29,8 +29,8 @@ CREATE UNIQUE INDEX account_credentials_request
 ALTER TABLE access_tokens
     ADD COLUMN credential_id UUID REFERENCES account_credentials(id),
     ADD COLUMN scopes TEXT[] NOT NULL DEFAULT ARRAY['read', 'write']::TEXT[] CHECK (
-        cardinality(scopes) BETWEEN 1 AND 5
-        AND scopes <@ ARRAY['read', 'write', 'events', 'approval_respond', 'worker_request']::TEXT[]
+        cardinality(scopes) BETWEEN 1 AND 4
+        AND scopes <@ ARRAY['read', 'write', 'events', 'worker_request']::TEXT[]
         AND scopes @> ARRAY['read']::TEXT[]
     );
 

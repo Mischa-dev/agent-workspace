@@ -667,6 +667,7 @@ async fn send_due(state: &AppState, job: &SendJob, last_attempt: bool) -> Result
     // A person's app or script scheduled it: it goes out within that app's
     // agent limit as it is now, as the tool call that scheduled it did.
     let limits = if row.made_through_app && row.author_kind == "human" {
+        // kind-check: mechanical (an app acting for a person sends within that app's limit)
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         Some(
             crate::roles::app_access(&mut connection, row.author_actor_id)
@@ -807,6 +808,7 @@ async fn fail(
     .execute(&mut **transaction)
     .await?;
     if row.author_kind != "human" {
+        // kind-check: mechanical (how they are told: a failure goes to a person's inbox)
         return Ok(());
     }
     // Told in their workspace's own space: the conversation may be one
@@ -829,7 +831,6 @@ async fn fail(
         work_item_id: None,
         comment_id: None,
         agent_run_id: None,
-        approval_id: None,
         pull_request_id: None,
         detail: serde_json::json!({
             "title": "Your scheduled message wasn't sent",

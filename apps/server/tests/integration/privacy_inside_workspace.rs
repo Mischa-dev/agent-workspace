@@ -34,7 +34,7 @@ use super::{
     message_edits::{say, text},
     support::{
         app::{Browser, connect_app, initialize, send},
-        callers::{Agent, Call, Caller, ConnectedApp, Person},
+        callers::{Agent, Call, Caller, ConnectedApp, Person, drain_outbox},
         two_workspaces::{
             TwoWorkspaces, World, add_person, login_as, string_at, two_workspaces, upload,
         },
@@ -168,7 +168,7 @@ async fn members_never_read_what_they_are_not_in() {
         json!({"projectId": "WORK", "title": format!("The {TASK} migration"), "clientRequestId": "quokka-task"}),
     )
     .await;
-    let task_key = string_at(&task, "/key");
+    let task_key = string_at(&task, "/value/key");
     owner_call(
         "task_comment",
         json!({"workItemId": task_key, "update": format!("{TASK} is half done"), "clientRequestId": "quokka-comment"}),
@@ -242,7 +242,7 @@ async fn members_never_read_what_they_are_not_in() {
         timeline.to_ascii_lowercase().contains(PRIVATE),
         "owner's DM: {timeline}"
     );
-    let task_id = string_at(&task, "/workItemId");
+    let task_id = string_at(&task, "/value/workItemId");
     let task_uri = format!("/api/v1/projects/{}/work-items/{task_id}", a.project);
     let (status, item) = get_text(app, &a.browser, &task_uri).await;
     assert!(
@@ -1237,6 +1237,325 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
     .await
     .expect("events");
     assert_eq!(events, vec![Some(ada)]);
+    world.finish().await;
+}
+
+/// Comment writes (C1.3) keep to what the writer may see inside the
+/// workspace: a member who isn't in a DM can't quote its messages in a
+/// comment, and a role without `tasks.view` can't comment on a task or
+/// settle a discussion on one, though a sheet it may edit takes its
+/// comments.
+#[tokio::test]
+async fn comment_writes_keep_to_what_the_writer_may_see() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("omar", "member")
+        .person("nate", "member")
+        .connected_app("Phone")
+        .custom_role(
+            "No tasks",
+            &[
+                "projects.view",
+                "sheets.edit",
+                "channels.post",
+                "directory.view",
+            ],
+        )
+        .dm("lena", "mara")
+        .build("privacy_comment_writes")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = world.project("WORK").to_owned();
+    let phone = &world.apps["Phone"];
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    let setup = Setup {
+        app: app.clone(),
+        browser: Browser {
+            cookie: world.owner.browser.cookie.clone(),
+            csrf: world.owner.browser.csrf.clone(),
+        },
+        organization_id: workspace,
+        pool: pool.clone(),
+        cleanup: None,
+    };
+    // Nate holds the narrowed role in WORK.
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["No tasks"]).expect("role id"))
+    .bind(Uuid::parse_str(&work).expect("work"))
+    .bind(world.people["nate"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow nate");
+
+    let dm_message = say(
+        &setup,
+        &world.people["lena"].browser,
+        &world.conversations["lena+mara"],
+        "private-comment-quote",
+        text(&format!("The {PRIVATE} plan")),
+    )
+    .await;
+    let sheet = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "sheet_write",
+        json!({"projectId": work, "name": "Budget", "cells": [{"cell": "A1", "input": "Rent"}],
+               "clientRequestId": "privacy-sheet"}),
+    )
+    .await;
+    let sheet = string_at(&sheet, "/value/id");
+    let task = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "task_create",
+        json!({"projectId": "WORK", "title": format!("The {TASK} task"), "clientRequestId": "privacy-task"}),
+    )
+    .await;
+    let task = string_at(&task, "/value/workItemId");
+    let (status, thread) = op(
+        &world.owner.browser,
+        "comment_create",
+        json!({"thing": {"kind": "record", "id": task}, "text": "On the title",
+               "anchor": {"kind": "field", "field": "title"}}),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "owner comments on the task: {status} {thread}"
+    );
+    let thread = string_at(&thread, "/value/threadId");
+
+    // Omar isn't in the DM: quoting its message in a comment is refused and
+    // shows nothing of it.
+    let (status, quoted) = op(
+        &world.people["omar"].browser,
+        "comment_create",
+        json!({"thing": {"kind": "sheet", "id": sheet}, "text": "As said", "replyToMessageId": dm_message}),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "omar quotes the DM: {status} {quoted}"
+    );
+    assert!(!quoted.to_string().contains(PRIVATE), "{quoted}");
+
+    // Nate's role can't see tasks: no comment on the task, no reading or
+    // settling its discussion, nothing of it in the refusal; the sheet takes his comment.
+    for (name, input) in [
+        (
+            "comment_create",
+            json!({"thing": {"kind": "record", "id": task}, "text": "Me too"}),
+        ),
+        (
+            "comment_list",
+            json!({"thing": {"kind": "record", "id": task}}),
+        ),
+        (
+            "comment_thread_update",
+            json!({"threadId": thread, "status": "Resolved"}),
+        ),
+    ] {
+        let (status, refused) = op(&world.people["nate"].browser, name, input).await;
+        assert!(!status.is_success(), "nate {name}: {status} {refused}");
+        assert!(!refused.to_string().contains(TASK), "{refused}");
+    }
+    let (status, commented) = op(
+        &world.people["nate"].browser,
+        "comment_create",
+        json!({"thing": {"kind": "sheet", "id": sheet}, "text": "Rent is fine"}),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "nate on the sheet: {status} {commented}"
+    );
+    let status_now = sqlx::query_scalar::<_, String>(
+        "SELECT thread_status FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&thread)
+    .fetch_one(pool)
+    .await
+    .expect("thread status");
+    assert_ne!(status_now.to_lowercase(), "resolved");
+    world.finish().await;
+}
+
+/// The chat writes that keep per-account state (C2.13, C2.15, C2.19, C2.28,
+/// C2.2) keep to what the writer may see inside the workspace: a member who
+/// isn't in a DM can't keep a draft there, mark it read or hear its words by
+/// keyword; nobody sets another account's status; and a role that can't
+/// manage settings can't retire someone else's emoji.
+#[tokio::test]
+async fn chat_writes_keep_to_what_the_writer_may_see() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("omar", "member")
+        .person("nate", "member")
+        .custom_role(
+            "Chat only",
+            &["projects.view", "channels.post", "directory.view"],
+        )
+        .dm("lena", "mara")
+        .build("privacy_chat_writes")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = world.project("WORK").to_owned();
+    let dm = world.conversations["lena+mara"].clone();
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    let setup = Setup {
+        app: app.clone(),
+        browser: Browser {
+            cookie: world.owner.browser.cookie.clone(),
+            csrf: world.owner.browser.csrf.clone(),
+        },
+        organization_id: workspace,
+        pool: pool.clone(),
+        cleanup: None,
+    };
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Chat only"]).expect("role id"))
+    .bind(Uuid::parse_str(&work).expect("work"))
+    .bind(world.people["nate"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow nate");
+    let omar = &world.people["omar"];
+
+    // Omar listens for a word, then Lena says it in her DM with Mara.
+    let (status, set) = op(
+        &omar.browser,
+        "notification_keyword_set",
+        json!({"keywords": ["zephyr"]}),
+    )
+    .await;
+    assert!(status.is_success(), "{set}");
+    say(
+        &setup,
+        &world.people["lena"].browser,
+        &dm,
+        "private-keyword",
+        text(&format!("The zephyr {PRIVATE} plan")),
+    )
+    .await;
+    drain_outbox(&world.state).await;
+    let told = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1 AND kind = 'keyword'",
+    )
+    .bind(omar.actor)
+    .fetch_one(pool)
+    .await
+    .expect("keyword notifications");
+    assert_eq!(told, 0, "omar isn't in the DM");
+
+    // No draft kept in it, and nothing of it in the refusal or his list.
+    let (status, refused) = op(
+        &omar.browser,
+        "message_draft_set",
+        json!({"conversationId": dm, "draft": {"text": "Peek"}}),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "omar keeps a draft in the DM: {refused}"
+    );
+    assert!(!refused.to_string().contains(PRIVATE), "{refused}");
+    let (_, listed) = op(&omar.browser, "message_draft_list", json!({})).await;
+    assert_eq!(listed["value"]["drafts"], json!([]), "{listed}");
+
+    // Mark all read reads only what he can read: no read mark in the DM.
+    let (status, marked) = op(&omar.browser, "conversations_mark_read", json!({})).await;
+    assert!(status.is_success(), "{marked}");
+    let marks = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM conversation_read_states \
+         WHERE actor_id = $1 AND conversation_id = $2::uuid",
+    )
+    .bind(omar.actor)
+    .bind(&dm)
+    .fetch_one(pool)
+    .await
+    .expect("read marks");
+    assert_eq!(marks, 0, "omar marked the DM read");
+
+    // Nobody sets a person's status for them.
+    let (status, refused) = op(
+        &omar.browser,
+        "status_set",
+        json!({"text": "Out", "account": world.people["lena"].actor}),
+    )
+    .await;
+    assert!(!status.is_success(), "omar sets lena's status: {refused}");
+    let lenas =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM account_statuses WHERE account_id = $1")
+            .bind(world.people["lena"].actor)
+            .fetch_one(pool)
+            .await
+            .expect("statuses");
+    assert_eq!(lenas, 0);
+
+    // A role that can't manage settings can't retire the owner's emoji.
+    let emoji = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id) \
+         VALUES ($1, $2, 'owners_emoji', 'image/png', $3, $4)",
+    )
+    .bind(emoji)
+    .bind(workspace)
+    .bind(b"\x89PNG\r\n\x1a\n".to_vec())
+    .bind(world.owner.actor)
+    .execute(pool)
+    .await
+    .expect("emoji");
+    let (status, refused) = op(
+        &world.people["nate"].browser,
+        "custom_emoji_update",
+        json!({"id": emoji, "retired": true}),
+    )
+    .await;
+    assert!(!status.is_success(), "nate retires it: {refused}");
+    let retired = sqlx::query_scalar::<_, bool>(
+        "SELECT retired_at IS NOT NULL FROM custom_emojis WHERE id = $1",
+    )
+    .bind(emoji)
+    .fetch_one(pool)
+    .await
+    .expect("emoji row");
+    assert!(!retired);
     world.finish().await;
 }
 

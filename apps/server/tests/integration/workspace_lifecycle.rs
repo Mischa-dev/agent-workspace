@@ -283,7 +283,7 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
             .expect("file");
     assert!(!removed);
     // Suspending stopped A's run that was waiting on an approval, and
-    // cancelled the approval; B's run is untouched.
+    // withdrew the request; B's run is untouched.
     let run_state = |run: Uuid| {
         let pool = t.pool.clone();
         async move {
@@ -337,20 +337,20 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
         &t.app,
         a.browser.request(
             "POST",
-            &format!("/api/v1/agent-approvals/{}/respond", a.approval),
+            "/api/v2/ops/request_respond",
             Some(&Uuid::now_v7().to_string()),
-            json!({"decision": "approve"}),
+            json!({"requestId": a.approval, "optionId": "approve"}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::LOCKED, "{body}");
     let approval_status =
-        sqlx::query_scalar::<_, String>("SELECT status FROM agent_approvals WHERE id = $1")
+        sqlx::query_scalar::<_, String>("SELECT status FROM requests WHERE id = $1")
             .bind(a.approval)
             .fetch_one(&t.pool)
             .await
             .expect("approval");
-    assert_eq!(approval_status, "canceled");
+    assert_eq!(approval_status, "cancelled");
     // The session says why.
     let (_, session) = send(
         &t.app,

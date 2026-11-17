@@ -897,7 +897,8 @@ async fn channel_tags_open_a_thread_and_follow_ups_stick_to_it() {
 
 /// Stop ends an agent's work: the request and its queued follow-ups are
 /// cancelled, the agent's next call is refused with the reason, its
-/// connections hear about it at once, and only people can press it.
+/// connections hear about it at once, and only roles holding replies.steer
+/// can press it.
 #[tokio::test]
 async fn stop_cancels_the_claim_and_refuses_the_next_call() {
     let Some(Fixture {
@@ -949,11 +950,31 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         .await;
     let generation = claim["value"]["request"]["generation"].clone();
 
-    // Agents can't stop each other (or themselves) this way.
+    // Stopping needs replies.steer where the conversation is, which a
+    // viewer's role doesn't hold, whatever kind of account holds it.
+    let messages_role = |role: &'static str| {
+        let pool = pool.clone();
+        let agent = mara.actor_id.clone();
+        let conversation = dm_id.clone();
+        async move {
+            sqlx::query(
+                "UPDATE project_memberships SET role = $3 WHERE actor_id = $1::uuid \
+                 AND project_id = (SELECT project_id FROM conversations WHERE id = $2::uuid)",
+            )
+            .bind(agent)
+            .bind(conversation)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .expect("role");
+        }
+    };
+    messages_role("viewer").await;
     let refused = mara_mcp
         .tool(&app, "reply_stop", json!({ "requestId": request_id }))
         .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    messages_role("member").await;
 
     let (status, stopped) = owner
         .call(

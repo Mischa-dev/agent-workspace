@@ -45,28 +45,6 @@ pub use registry::{
 };
 use run_config::RunConfig;
 
-const ANY_AUTHORIZED_APPROVER: &str = "any_authorized";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProviderApprovalPolicy {
-    eligible_role: &'static str,
-    human_required: bool,
-}
-
-fn provider_approval_policy(kind: RequestKind) -> Option<ProviderApprovalPolicy> {
-    match kind {
-        RequestKind::Question => Some(ProviderApprovalPolicy {
-            eligible_role: ANY_AUTHORIZED_APPROVER,
-            human_required: false,
-        }),
-        RequestKind::Approval => Some(ProviderApprovalPolicy {
-            eligible_role: "owner",
-            human_required: true,
-        }),
-        RequestKind::Unsupported => None,
-    }
-}
-
 #[derive(Debug)]
 pub struct StartedProviderRun {
     pub provider_session_id: Uuid,
@@ -455,6 +433,7 @@ fn spawn_drive(
 /// followed again instead of being interrupted. Returns whether it was.
 pub(crate) async fn follow_recovered_run(
     state: &AppState,
+    fence: crate::recovery::HostFence<'_>,
     run_id: Uuid,
     worktree: PathBuf,
 ) -> Result<bool, AppError> {
@@ -503,7 +482,8 @@ pub(crate) async fn follow_recovered_run(
     {
         return Ok(false);
     }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    // Following took a while: take the run back only while the host is ours.
+    let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
@@ -697,6 +677,7 @@ async fn mark_account_failure(state: &AppState, account_id: Uuid, category: &'st
 
 pub(crate) async fn complete_recovered_run(
     state: &AppState,
+    fence: crate::recovery::HostFence<'_>,
     run_id: Uuid,
     message: &str,
     previous_state: &str,
@@ -715,11 +696,14 @@ pub(crate) async fn complete_recovered_run(
     .bind(run_id)
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
+    if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {
+        return Err(AppError::LeaseLost);
+    }
     complete_run(
         state,
         project_id,
@@ -925,85 +909,73 @@ async fn handle_provider_request(
             })?;
         return Ok(());
     }
-    let kind = match request.kind {
-        RequestKind::Question => "question",
-        RequestKind::Approval => "approval",
+    let ask = match request.kind {
+        RequestKind::Question => crate::hosts::builtin::requests::Ask::Question,
+        RequestKind::Approval => crate::hosts::builtin::requests::Ask::Approval,
         RequestKind::Unsupported => unreachable!("unsupported requests return above"),
     };
-    let approval_policy = provider_approval_policy(request.kind)
-        .ok_or(AppError::Internal("unsupported provider approval policy"))?;
+    let kind = if ask == crate::hosts::builtin::requests::Ask::Question {
+        "question"
+    } else {
+        "approval"
+    };
     let provider_request_id = request.durable_id.clone();
     let summary = request.summary.clone();
-    let options = request.public_options();
+    let options = request
+        .options
+        .iter()
+        .map(|option| (option.id.clone(), option.label.clone()))
+        .collect::<Vec<_>>();
+    // A1.14: the ask is a request of the run; whoever may answer it is told.
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let inserted_approval_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options, eligible_role, human_required
-        )
-        SELECT $1, $2, ar.requesting_actor_id, $3, $4, $5, $6, $7, $8
-        FROM agent_runs ar WHERE ar.id = $2
-        ON CONFLICT (agent_run_id, provider_request_id) DO NOTHING
-        RETURNING id
-        "#,
+    let raised = crate::hosts::builtin::requests::raise(
+        &mut transaction,
+        run_id,
+        &provider_request_id,
+        ask,
+        &summary,
+        &options,
     )
-    .bind(Uuid::now_v7())
-    .bind(run_id)
-    .bind(&provider_request_id)
-    .bind(kind)
-    .bind(&summary)
-    .bind(options)
-    .bind(approval_policy.eligible_role)
-    .bind(approval_policy.human_required)
-    .fetch_optional(&mut *transaction)
     .await?;
-    let approval_id = match inserted_approval_id {
-        Some(approval_id) => {
-            crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
-            crate::external_events::enqueue_external_approval_requested(
-                &mut transaction,
-                approval_id,
-            )
+    if raised.created {
+        crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Blocked, None)
             .await?;
-            crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Blocked, None)
-                .await?;
-            let event_id = insert_event(
-                &mut transaction,
-                run_id,
-                &format!("provider:{kind}:requested:{provider_request_id}"),
-                if kind == "question" {
-                    "question_requested"
-                } else {
-                    "approval_requested"
-                },
-                &summary,
-                json!({"approval_id": approval_id}),
-            )
-            .await?
-            .ok_or(AppError::Internal("new approval event was not inserted"))?;
-            insert_entry(&mut transaction, conversation_id, event_id).await?;
-            outbox::enqueue_agent_run_updated(
-                &mut transaction,
-                project_id,
-                conversation_id,
-                run_id,
-            )
-            .await?;
-            approval_id
-        }
-        None => sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM agent_approvals WHERE agent_run_id = $1 AND provider_request_id = $2",
+        let event_id = insert_event(
+            &mut transaction,
+            run_id,
+            &format!("provider:{kind}:requested:{provider_request_id}"),
+            if kind == "question" {
+                "question_requested"
+            } else {
+                "approval_requested"
+            },
+            &summary,
+            json!({"request_id": raised.request_id}),
         )
-        .bind(run_id)
-        .bind(&provider_request_id)
-        .fetch_one(&mut *transaction)
-        .await?,
-    };
+        .await?
+        .ok_or(AppError::Internal("new approval event was not inserted"))?;
+        insert_entry(&mut transaction, conversation_id, event_id).await?;
+        outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
+            .await?;
+    }
     transaction.commit().await?;
 
+    // The answer arrives as a wake from whichever server took it (the
+    // control channel); the one-second check is the safety net when no
+    // wake comes (a lost notification, or no listener at all).
+    let cluster = state.supervisors.cluster();
     loop {
-        sleep(Duration::from_millis(300)).await;
+        let woken = async {
+            match &cluster {
+                Some(cluster) => cluster.released().await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            () = sleep(Duration::from_secs(1)) => {}
+            () = woken => {}
+            () = lease_lost.cancelled() => {}
+        }
         if state.supervisors.is_shutting_down() || lease_lost.is_cancelled() {
             let _ = provider.answer(request, HarnessAnswer::Deny).await;
             provider.shutdown().await;
@@ -1022,76 +994,30 @@ async fn handle_provider_request(
             .await?;
             return Ok(());
         }
-        #[derive(FromRow)]
-        struct Resolution {
-            run_state: String,
-            kind: String,
-            status: String,
-            response: Option<Value>,
-        }
-        let resolution = sqlx::query_as::<_, Resolution>(
-            r#"
-            SELECT ar.state AS run_state, aa.kind, aa.status, aa.response
-            FROM agent_approvals aa
-            JOIN agent_runs ar ON ar.id = aa.agent_run_id
-            WHERE aa.id = $1
-            "#,
-        )
-        .bind(approval_id)
-        .fetch_one(crate::db::scoped(&state.pool))
-        .await?;
-        if resolution.run_state == "interrupted" {
-            provider
-                .answer(request, HarnessAnswer::Deny)
-                .await
-                .map_err(|error| provider_error(run_id, "decline interrupted request", error))?;
-            return Ok(());
-        }
-        if resolution.status != "resolved" {
-            continue;
-        }
-        let claimed = sqlx::query_scalar::<_, Uuid>(
-            r#"
-            UPDATE agent_approvals
-               SET provider_response_claimed_at = now()
-             WHERE id = $1
-               AND status = 'resolved'
-               AND provider_response_claimed_at IS NULL
-            RETURNING id
-            "#,
-        )
-        .bind(approval_id)
-        .fetch_optional(crate::db::scoped(&state.pool))
-        .await?;
-        if claimed.is_none() {
-            return Ok(());
-        }
-        let answer = match resolution.response.as_ref() {
-            Some(response) if resolution.kind == "question" => response
-                .get("answer")
-                .and_then(Value::as_str)
-                .map(|answer| HarnessAnswer::Text(answer.to_owned()))
-                .ok_or(AppError::Internal("resolved question omitted its answer"))?,
-            Some(response)
-                if response.get("decision").and_then(Value::as_str) == Some("approve") =>
-            {
-                HarnessAnswer::Approve
+        use crate::hosts::builtin::requests::{Outcome, claim_delivery, outcome};
+        let answer = match outcome(&state.pool, raised.request_id).await? {
+            Outcome::Waiting => continue,
+            Outcome::Interrupted => {
+                provider
+                    .answer(request, HarnessAnswer::Deny)
+                    .await
+                    .map_err(|error| {
+                        provider_error(run_id, "decline interrupted request", error)
+                    })?;
+                return Ok(());
             }
-            _ => HarnessAnswer::Deny,
+            Outcome::Approve => HarnessAnswer::Approve,
+            Outcome::Deny => HarnessAnswer::Deny,
+            Outcome::Text(text) => HarnessAnswer::Text(text),
         };
+        // Passed on once, however many turns wait on it.
+        if !claim_delivery(&state.pool, raised.request_id).await? {
+            return Ok(());
+        }
         provider
             .answer(request, answer)
             .await
             .map_err(|error| provider_error(run_id, "answer provider request", error))?;
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        sqlx::query(
-            "UPDATE agent_approvals SET provider_response_delivered_at = now() WHERE id = $1",
-        )
-        .bind(approval_id)
-        .execute(&mut *transaction)
-        .await?;
-        crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
-        transaction.commit().await?;
         return Ok(());
     }
 }
@@ -1243,13 +1169,6 @@ async fn complete_run(
         insert_entry(&mut transaction, conversation_id, event_id).await?;
     }
     if let Some(recovery) = recovery {
-        sqlx::query(
-            "UPDATE agent_approvals SET status = 'canceled' WHERE agent_run_id = $1 AND status = 'pending'",
-        )
-        .bind(run_id)
-        .execute(&mut *transaction)
-        .await?;
-        crate::requests::legacy::run_approvals_written(&mut *transaction, run_id).await?;
         let recovery_event = insert_event(
             &mut transaction,
             run_id,
@@ -1575,30 +1494,10 @@ fn provider_message_error(run_id: Uuid, error: MessageContentError) -> AppError 
 #[cfg(test)]
 mod tests {
     use super::{
-        OpenTurn, ProviderApprovalPolicy, provider_approval_policy, recovered_turn_has_identity,
-        settle_open_turn, validated_worker_message,
+        OpenTurn, recovered_turn_has_identity, settle_open_turn, validated_worker_message,
     };
     use crate::message_content::{MAX_MESSAGE_TEXT_CHARACTERS, MessageContentError};
-    use crate::provider::adapter::{RecoveredTurn, RequestKind};
-
-    #[test]
-    fn provider_approval_policy_keeps_execution_approvals_human_required() {
-        assert_eq!(
-            provider_approval_policy(RequestKind::Question),
-            Some(ProviderApprovalPolicy {
-                eligible_role: "any_authorized",
-                human_required: false,
-            })
-        );
-        assert_eq!(
-            provider_approval_policy(RequestKind::Approval),
-            Some(ProviderApprovalPolicy {
-                eligible_role: "owner",
-                human_required: true,
-            })
-        );
-        assert_eq!(provider_approval_policy(RequestKind::Unsupported), None);
-    }
+    use crate::provider::adapter::RecoveredTurn;
 
     #[test]
     fn worker_messages_share_unicode_and_control_boundaries() {

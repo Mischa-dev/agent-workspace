@@ -103,7 +103,14 @@ describe('live documents from the realtime socket', () => {
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
       ['project', PROJECT, 'sheets', COLLECTION],
       ['project', PROJECT, 'sheets', 'list'],
+      undefined,
     ])
+    // The third refetches this sheet's discussion summaries, and no other's.
+    const summaries = invalidate.mock.calls[2]?.[0]?.predicate
+    const query = (queryKey: unknown[]) => ({ queryKey }) as unknown as Parameters<NonNullable<typeof summaries>>[0]
+    expect(summaries?.(query(['op', null, 'comment_list', { thing: { kind: 'sheet', id: COLLECTION } }]))).toBe(true)
+    expect(summaries?.(query(['op', null, 'comment_list', { thing: { kind: 'sheet', id: 'other' } }]))).toBe(false)
+    expect(summaries?.(query(['op', null, 'page_list', {}]))).toBe(false)
   })
 
   // The pages cache under their features' key factories; the live connection

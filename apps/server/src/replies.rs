@@ -34,12 +34,12 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
         ActorView, enqueue_event, insert_audit_event, insert_audit_event_for,
-        lock_conversation_for, parse_actor_kind,
+        lock_seen_conversation_for,
     },
     error::{ApiPath, AppError},
     external_events::enqueue_external_event,
     outbox::{OutboxEventPayload, ReplyRequestsUpdatedPayload},
-    policy::{Action, ActorKind},
+    policy::Action,
 };
 
 /// Agent messages allowed in a group before a person has to say Continue.
@@ -102,6 +102,7 @@ pub(crate) async fn ask_for_replies(
         // also the agents already working there (follow-ups). DMs and groups
         // retain their existing delivery and turn rules below.
         if message.author_kind != "human" {
+            // kind-check: mechanical (loop guard: an agent's channel message wakes no agent until A2.8's chain depth)
             return Ok(());
         }
         if !message.mentioned_actor_ids.is_empty() {
@@ -167,7 +168,7 @@ pub(crate) async fn ask_after_edit(
     message: NewMessage<'_>,
 ) -> Result<(), AppError> {
     if !matches!(message.conversation_kind, "channel" | "thread")
-        || message.author_kind != "human"
+        || message.author_kind != "human" // kind-check: mechanical (loop guard, as on send)
         || message.mentioned_actor_ids.is_empty()
     {
         return Ok(());
@@ -806,13 +807,8 @@ async fn continue_conversation(
 ) -> Result<Json<ContinueResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let outcome = continue_conversation_in(
-        &mut transaction,
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        conversation_id,
-    )
-    .await?;
+    let outcome =
+        continue_conversation_in(&mut transaction, principal.actor_id, conversation_id).await?;
     insert_audit_event(
         &mut transaction,
         &headers,
@@ -842,8 +838,8 @@ pub(crate) struct ContinueOutcome {
 
 /// Let the agents in a group (or a thread under one) take another round:
 /// reset its turn allowance and, when the newest message is an agent's, ask
-/// the group's other agents to answer it. People only, so agents can't keep a
-/// conversation going on their own. Shared by the browser API and MCP;
+/// the group's other agents to answer it. Needs `conversations.continue_agents`
+/// (roles decide who may keep a conversation going). Shared by the browser API and MCP;
 /// callers record their own audit rows.
 ///
 /// A removed message is never asked about: the newest message that wasn't
@@ -853,18 +849,13 @@ pub(crate) struct ContinueOutcome {
 pub(crate) async fn continue_conversation_in(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     conversation_id: Uuid,
 ) -> Result<ContinueOutcome, AppError> {
-    if actor_kind != ActorKind::Human {
-        return Err(AppError::Forbidden);
-    }
-    let conversation = lock_conversation_for(
+    let conversation = lock_seen_conversation_for(
         transaction,
         actor_id,
         conversation_id,
-        Action::MessageSend,
-        false,
+        Action::AgentsContinue,
     )
     .await?;
     if conversation.effective_kind() != "group" {
@@ -998,14 +989,9 @@ pub(crate) async fn retry_request_in(
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(AppError::NotFound("reply request"))?;
-    let conversation = lock_conversation_for(
-        transaction,
-        actor_id,
-        conversation_id,
-        Action::MessageSend,
-        false,
-    )
-    .await?;
+    let conversation =
+        lock_seen_conversation_for(transaction, actor_id, conversation_id, Action::ReplySteer)
+            .await?;
     // Retrying asks the agent again, so it has to be able to answer: still
     // active, still in the project, and able to see the conversation. An
     // agent removed from a group would otherwise hold a pending request it
@@ -1091,13 +1077,7 @@ async fn stop_request(
 ) -> Result<Json<StopResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let outcome = stop_request_in(
-        &mut transaction,
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        request_id,
-    )
-    .await?;
+    let outcome = stop_request_in(&mut transaction, principal.actor_id, request_id).await?;
     insert_audit_event_for(
         &mut transaction,
         &headers,
@@ -1129,19 +1109,15 @@ pub(crate) struct StopOutcome {
 }
 
 /// Stop an agent's pending or claimed request, and the follow-ups queued
-/// behind it where it answers. People only, and only people who can see the
-/// conversation. The agent's next call on any of them is refused with the
+/// behind it where it answers. Needs `replies.steer` where the conversation
+/// is, and only those who can see the conversation. The agent's next call on any of them is refused with the
 /// reason, and its connections get a `reply.cancelled` wakeup at once.
 /// Shared by the browser API and MCP; callers record their own audit rows.
 pub(crate) async fn stop_request_in(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     request_id: Uuid,
 ) -> Result<StopOutcome, AppError> {
-    if actor_kind != ActorKind::Human {
-        return Err(AppError::Forbidden);
-    }
     let Some((conversation_id, answer_conversation_id, agent_actor_id)) =
         sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
             r#"
@@ -1158,12 +1134,11 @@ pub(crate) async fn stop_request_in(
     // The conversation's lock first, then the request rows (the order
     // `withdraw_requests` documents). Someone who can't see the conversation
     // gets the same answer as for a request that doesn't exist.
-    let conversation = match lock_conversation_for(
+    let conversation = match lock_seen_conversation_for(
         transaction,
         actor_id,
         conversation_id,
-        Action::MessageSend,
-        false,
+        Action::ReplySteer,
     )
     .await
     {

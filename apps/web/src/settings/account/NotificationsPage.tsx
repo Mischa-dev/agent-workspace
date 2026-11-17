@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { describeError, toastError } from '../../app/mutations'
+import { callOp, opKey, opQuery } from '../../api/ops'
 import { pauseChoices, pausedUntilLabel, useNotificationPause } from '../../shell/notificationPause'
 import {
   Banner,
@@ -93,6 +94,7 @@ export default function NotificationsPage({ projects, session, workspace }: Sett
           <PauseSection />
           <QuietHoursSection settings={settings.data} />
           <MutesSection projects={projects} settings={settings.data} />
+          <KeywordsSection workspaceId={settings.data.organizationId} />
           <DigestSection settings={settings.data} />
         </>
       )}
@@ -430,6 +432,59 @@ function PauseSection() {
           ))}
         </div>
       )}
+    </Section>
+  )
+}
+
+/** Words to hear about (C2.13): a message with one, where you can read it and haven't muted it. */
+function KeywordsSection({ workspaceId }: { workspaceId: string }) {
+  const queryClient = useQueryClient()
+  const listed = useQuery(opQuery('notification_keyword_list', {}, { workspaceId }))
+  const [text, setText] = useState<string | null>(null)
+  const shown = text ?? listed.data?.keywords.join(', ') ?? ''
+  const keywords = shown
+    .split(/[,\n]/)
+    .map((word) => word.trim())
+    .filter(Boolean)
+  const save = useMutation({
+    mutationFn: () => callOp('notification_keyword_set', { keywords }, { workspaceId }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(opKey('notification_keyword_list', {}, workspaceId), saved)
+      setText(null)
+      showToast({ tone: 'success', title: saved.keywords.length ? 'Keywords saved' : 'Keyword alerts are off' })
+    },
+  })
+  const tooShort = keywords.find((word) => word.length < 2 || word.length > 60)
+  const tooMany = listed.data && keywords.length > listed.data.limit
+  return (
+    <Section
+      description="Hear about messages that name one of these words, in conversations you can read and haven’t muted. Your own messages never count."
+      id="keywords-heading"
+      title="Keywords"
+    >
+      <form
+        className="aw-card aw-formcard aw-form aw-usage__form"
+        onSubmit={(event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault()
+          if (!tooShort && !tooMany) save.mutate()
+        }}
+      >
+        {listed.isError ? <Banner tone="danger">Your keywords didn’t load. {describeError(listed.error).message}</Banner> : null}
+        {save.isError ? <Banner tone="danger">Keywords weren’t saved. {describeError(save.error).message}</Banner> : null}
+        <TextField
+          disabled={listed.isPending}
+          error={tooShort ? 'Each keyword is 2 to 60 characters.' : tooMany ? `Keep up to ${listed.data?.limit} keywords.` : null}
+          hint="Separate them with commas, such as launch, design review."
+          label="Keywords"
+          onChange={(event) => setText(event.target.value)}
+          value={shown}
+        />
+        <div className="aw-form__actions">
+          <Button busy={save.isPending} disabled={listed.isPending} type="submit" variant="primary">
+            Save keywords
+          </Button>
+        </div>
+      </form>
     </Section>
   )
 }

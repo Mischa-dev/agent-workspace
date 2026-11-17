@@ -13,6 +13,7 @@ pub mod http;
 pub mod markdown;
 #[cfg(test)]
 mod parity;
+pub mod pdf;
 pub mod store;
 pub mod suggestions;
 #[cfg(test)]

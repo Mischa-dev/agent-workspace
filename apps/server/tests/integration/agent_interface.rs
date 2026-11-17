@@ -386,8 +386,11 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         }),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    let task_id = created["workItemId"].as_str().expect("task").to_owned();
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let task_id = created["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     // A fresh task and a person's briefing have empty lists, which the results
     // leave out; `tool` checks that their outputSchemas allow that.
     let opened = tool(
