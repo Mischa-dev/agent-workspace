@@ -25,6 +25,7 @@ use sqlx::{FromRow, PgConnection, PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
+    addresses::{Linker, Target},
     error::AppError,
     policy::Action,
     work_item_commands::{
@@ -524,6 +525,7 @@ pub async fn get(
 
 async fn task_refs(
     connection: &mut PgConnection,
+    linker: &mut Linker,
     ids: &[Uuid],
 ) -> Result<HashMap<Uuid, TaskRef>, AppError> {
     if ids.is_empty() {
@@ -545,13 +547,12 @@ async fn task_refs(
     .bind(ids)
     .fetch_all(&mut *connection)
     .await?;
-    Ok(refs
-        .into_iter()
-        .map(|mut task| {
-            task.href = format!("/projects/{}/work-items/{}", task.project_id, task.id);
-            (task.id, task)
-        })
-        .collect())
+    let mut linked = HashMap::with_capacity(refs.len());
+    for task in refs {
+        let task = task.linked(connection, linker).await?;
+        linked.insert(task.id, task);
+    }
+    Ok(linked)
 }
 
 async fn views(
@@ -582,16 +583,18 @@ async fn views(
     task_ids.dedup();
     conversation_ids.sort_unstable();
     conversation_ids.dedup();
-    let tasks = task_refs(connection, &task_ids).await?;
+    let mut linker = Linker::new(reader.addresses);
+    let tasks = task_refs(connection, &mut linker, &task_ids).await?;
     // Every row already passed ai_suggestion_visible_to for this reader, so
     // these conversations are visible to them; the check is repeated anyway.
-    let conversations = if conversation_ids.is_empty() {
-        HashMap::new()
-    } else {
-        sqlx::query_as::<_, (Uuid, Uuid, String)>(
+    let mut conversations = HashMap::new();
+    if !conversation_ids.is_empty() {
+        let rows = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<Uuid>, Option<String>)>(
             r#"
-            SELECT conversation.id, conversation.project_id, conversation.name
+            SELECT conversation.id, conversation.project_id, conversation.name,
+                   conversation.kind, conversation.parent_channel_id, parent.kind
             FROM conversations conversation
+            LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
             WHERE conversation.id = ANY($1)
               AND conversation_visible_to(conversation.id, $2)
               AND actor_can_access_project($2, $3, conversation.project_id)
@@ -601,11 +604,14 @@ async fn views(
         .bind(reader.actor_id)
         .bind(reader.connection_id)
         .fetch_all(&mut *connection)
-        .await?
-        .into_iter()
-        .map(|(id, project_id, name)| (id, (project_id, name)))
-        .collect::<HashMap<_, _>>()
-    };
+        .await?;
+        for (id, project_id, name, kind, parent, parent_kind) in rows {
+            let in_direct = matches!(parent_kind.as_deref(), Some("dm" | "group"));
+            let target = Target::conversation(project_id, &kind, id, parent, in_direct, true);
+            let href = linker.path(connection, &target).await?;
+            conversations.insert(id, (href, name));
+        }
+    }
     let mut views = Vec::with_capacity(rows.len());
     for (row, sources) in rows.into_iter().zip(parsed_sources) {
         let (Some(kind), Some(task)) = (Kind::parse(&row.kind), tasks.get(&row.work_item_id))
@@ -630,11 +636,11 @@ async fn views(
                     conversation_id,
                 } => conversations
                     .get(&conversation_id)
-                    .map(|(project_id, name)| SourceView::Message {
+                    .map(|(href, name)| SourceView::Message {
                         message_id,
                         conversation_id,
                         conversation_name: name.clone(),
-                        href: format!("/projects/{project_id}/conversations/{conversation_id}"),
+                        href: format!("{href}#message-{message_id}"),
                     }),
                 SourceRef::Signal { name } => Some(SourceView::Signal { name }),
             })

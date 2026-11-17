@@ -26,6 +26,7 @@ pub const WORKSPACE_ID: &str = "workspace_id";
 
 /// Workspace-owned tables and their tenant column.
 pub const TENANT_TABLES: &[(&str, &str)] = &[
+    ("account_claims", WORKSPACE_ID),
     ("agent_profiles", ORGANIZATION_ID),
     ("agent_run_acknowledgements", WORKSPACE_ID),
     ("agent_run_events", WORKSPACE_ID),
@@ -90,6 +91,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("harness_catalog_refreshes", ORGANIZATION_ID),
     ("harness_models", ORGANIZATION_ID),
     ("host_commands", WORKSPACE_ID),
+    ("invite_tokens", WORKSPACE_ID),
     ("launches", ORGANIZATION_ID),
     ("layout_presets", ORGANIZATION_ID),
     ("link_previews", ORGANIZATION_ID),
@@ -215,10 +217,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
 /// Server-wide tables, each with the reason it belongs to no workspace.
 pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     ("_sqlx_migrations", "the schema's migration ledger"),
-    (
-        "access_disagreements",
-        "the server's log of where the old and new access checks differ during K1's cutover; a row names a workspace when there is one",
-    ),
     (
         "account_managers",
         "who manages an agent or app account: accounts and their naming are server-wide (R19)",

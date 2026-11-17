@@ -38,6 +38,7 @@ use super::{
 };
 use crate::{
     AppState,
+    addresses::{Addresses, Place, Target},
     error::AppError,
     jobs::{self, Enqueued, JobContext, JobError, JobRegistry, NewJob},
     policy::ActorKind,
@@ -587,7 +588,7 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
                 created.len(),
                 if created.len() == 1 { "" } else { "s" }
             ),
-            format!("/projects/{}/suggestions", payload.project_id),
+            Target::space(payload.project_id, Place::Suggestions).legacy_path(),
         )
         .await?;
     }
@@ -1616,6 +1617,7 @@ async fn auto_apply(
     let reader = Reader {
         actor_id,
         connection_id: None,
+        addresses: Addresses::of(state),
     };
     let mut applied = 0;
     for &(suggestion_id, confidence, audience) in created {

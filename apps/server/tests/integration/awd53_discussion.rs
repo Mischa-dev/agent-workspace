@@ -14,6 +14,7 @@ use super::{
     mcp_admin::{create_project, setup},
     mcp_tasks::{add_member, space},
     message_edits::add_person,
+    support::agents_suggest,
 };
 
 const BODY: &str = "# Plan\n\nFirst we sketch.\n\n## Risks\n\n- slow CI\n\nShip it.\n";
@@ -40,6 +41,9 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     let (mara, mara_token) =
         create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
     add_member(&setup, &work, mara, "member").await;
+    // Mara's role is the "suggests" copy of Member: she suggests on pages
+    // others made.
+    agents_suggest(&setup.pool).await;
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
     let call = |name: &'static str, arguments: Value| {
         let token = mara_token.clone();

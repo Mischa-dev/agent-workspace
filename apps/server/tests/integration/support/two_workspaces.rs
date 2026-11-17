@@ -68,7 +68,7 @@ pub(crate) struct World {
     pub(crate) comment: Uuid,
     pub(crate) page: String,
     /// A comment thread on `page` (AWD-53), and two edits the agent
-    /// suggested to it, pending: the page is a person's.
+    /// suggested to it (it asks to suggest: its role edits), pending.
     pub(crate) page_thread: Uuid,
     pub(crate) page_suggestions: [Uuid; 2],
     pub(crate) repository: Uuid,
@@ -853,7 +853,7 @@ async fn build_workspace(
             &agent_token,
             &agent_session,
             "page_edit",
-            json!({"pageId": page, "edits": [{"op": "append", "markdown": format!("Launch suggestion {index}{m}")}]}),
+            json!({"pageId": page, "suggest": true, "edits": [{"op": "append", "markdown": format!("Launch suggestion {index}{m}")}]}),
         )
         .await;
         let suggested = structured(&suggested);
@@ -1702,7 +1702,9 @@ pub(crate) async fn sweep_ids(pool: &PgPool, organization: Uuid) -> HashSet<Stri
           AND parent.data_type = 'uuid'
           AND parent.column_name IN (
               'organization_id', 'project_id', 'conversation_id', 'work_item_id',
-              'agent_run_id', 'actor_id', 'repository_id', 'page_id', 'message_id'
+              'agent_run_id', 'actor_id', 'repository_id', 'page_id', 'message_id',
+              -- K4.3 (G6): the names new tables use (ruling R1).
+              'workspace_id', 'space_id'
           )
         ORDER BY 1, 2
         "#,

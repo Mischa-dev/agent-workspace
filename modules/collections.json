@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": ["projects"],
   "worksWith": ["tasks", "pages"],
-  "permissions": ["collections.edit", "collections.build"],
+  "permissions": ["collections.edit", "collections.build", "collections.comment", "collections.suggest", "data.connect", "data.share"],
   "tools": {
     "collection_list": "query",
     "collection_describe": "describe",

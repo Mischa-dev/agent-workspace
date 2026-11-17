@@ -1,3 +1,5 @@
+pub mod ops;
+
 use axum::{
     Json, Router,
     extract::State,
@@ -177,11 +179,11 @@ struct ConnectionsResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OneTimeCredential {
-    id: Uuid,
-    token: String,
-    token_prefix: String,
-    expires_at: String,
+pub(crate) struct OneTimeCredential {
+    pub(crate) id: Uuid,
+    pub(crate) token: String,
+    pub(crate) token_prefix: String,
+    pub(crate) expires_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -371,23 +373,41 @@ async fn insert_agent(
     created_by: Uuid,
     normalized: &NormalizedCreate,
 ) -> Result<CreatedAgent, AppError> {
-    let (token, token_prefix, token_digest) = generate_token();
-    let actor_id = Uuid::now_v7();
-    let connection_id = Uuid::now_v7();
-    let credential_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'external_agent')")
-        .bind(actor_id)
-        .execute(&mut **transaction)
-        .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO organization_memberships (organization_id, actor_id, role)
-        VALUES ($1, $2, 'member')
-        "#,
+    // K1.6: one way to make an agent account. The workspace owns it, and
+    // its creator manages it. Its workspace role is the workspace's role for
+    // new agents (K1.12).
+    // Like every other way in, that is within what its creator may give.
+    let (workspace_role, workspace_role_id) =
+        crate::invitations::engine::agent_role(transaction, organization_id, None)
+            .await?
+            .unwrap_or_else(|| ("member".to_owned(), None));
+    let creator_kind = crate::accounts::actor_kind(
+        &sqlx::query_scalar::<_, String>("SELECT kind FROM actors WHERE id = $1")
+            .bind(created_by)
+            .fetch_one(&mut **transaction)
+            .await?,
+    )?;
+    if !crate::invitations::engine::issuer_may_grant(
+        transaction,
+        &crate::access::Caller::person(created_by, creator_kind),
+        crate::access::Scope::Workspace(organization_id),
+        &workspace_role,
+        workspace_role_id,
     )
-    .bind(organization_id)
-    .bind(actor_id)
-    .execute(&mut **transaction)
+    .await?
+    {
+        return Err(AppError::Forbidden);
+    }
+    let actor_id = crate::accounts::create_agent(
+        transaction,
+        crate::accounts::NewAgent {
+            workspace_id: organization_id,
+            role: &workspace_role,
+            role_id: workspace_role_id,
+            owner: crate::accounts::Owner::Workspace(organization_id),
+            created_by,
+        },
+    )
     .await?;
     sqlx::query(
         r#"
@@ -407,22 +427,55 @@ async fn insert_agent(
     .execute(&mut **transaction)
     .await
     .map_err(map_database_error)?;
+    let (connection_id, credential) = connect(
+        transaction,
+        organization_id,
+        project_id,
+        actor_id,
+        created_by,
+        &normalized.connection_name,
+        &normalized.scopes,
+    )
+    .await?;
+    Ok(CreatedAgent {
+        actor_id,
+        connection_id,
+        credential,
+    })
+}
+
+/// An agent account's connection and its first credential (K1.6): shared by
+/// the project routes and `agent_create`. `project_id` is where it was first
+/// added (the workspace's own space for an agent made at workspace level).
+pub(crate) async fn connect(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    project_id: Uuid,
+    actor_id: Uuid,
+    created_by: Uuid,
+    connection_name: &str,
+    scopes: &[String],
+) -> Result<(Uuid, OneTimeCredential), AppError> {
+    let (token, token_prefix, token_digest) = generate_token();
+    let connection_id = Uuid::now_v7();
+    let credential_id = Uuid::now_v7();
     sqlx::query(
         r#"
         INSERT INTO external_agent_connections (
             id, project_id, actor_id, connection_name, runtime_kind,
-            runtime_version, scopes, created_by_actor_id, updated_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+            runtime_version, scopes, created_by_actor_id, updated_by_actor_id, workspace_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9)
         "#,
     )
     .bind(connection_id)
     .bind(project_id)
     .bind(actor_id)
-    .bind(&normalized.connection_name)
+    .bind(connection_name)
     .bind(RUNTIME_KIND)
     .bind(RUNTIME_VERSION)
-    .bind(&normalized.scopes)
+    .bind(scopes)
     .bind(created_by)
+    .bind(organization_id)
     .execute(&mut **transaction)
     .await
     .map_err(map_database_error)?;
@@ -432,8 +485,8 @@ async fn insert_agent(
         project_id,
         actor_id,
         connection_id,
-        &normalized.connection_name,
-        &normalized.scopes,
+        connection_name,
+        scopes,
         &token_prefix,
         &token_digest,
     )
@@ -449,16 +502,15 @@ async fn insert_agent(
         &format!("/projects/{project_id}/settings"),
     )
     .await?;
-    Ok(CreatedAgent {
-        actor_id,
+    Ok((
         connection_id,
-        credential: OneTimeCredential {
+        OneTimeCredential {
             id: credential_id,
             token,
             token_prefix,
             expires_at,
         },
-    })
+    ))
 }
 
 /// Host command support: point a connection's wakeups at `url` and return the
@@ -596,7 +648,7 @@ async fn update_connection(
     if request
         .role
         .as_deref()
-        .is_some_and(|role| !matches!(role, "member" | "viewer"))
+        .is_some_and(|role| !matches!(role, "admin" | "member" | "viewer"))
     {
         return Err(AppError::Validation("external_agent_role"));
     }
@@ -1210,7 +1262,7 @@ fn validate_create(request: CreateConnectionRequest) -> Result<NormalizedCreate,
                 || character.is_ascii_digit()
                 || (index > 0 && matches!(character, '_' | '-'))
         })
-        || !matches!(request.role.as_str(), "member" | "viewer")
+        || !matches!(request.role.as_str(), "admin" | "member" | "viewer")
     {
         return Err(AppError::Validation("external_agent_identity"));
     }
@@ -1232,7 +1284,7 @@ fn validate_create(request: CreateConnectionRequest) -> Result<NormalizedCreate,
     })
 }
 
-fn normalize_scopes(mut scopes: Vec<String>) -> Result<Vec<String>, AppError> {
+pub(crate) fn normalize_scopes(mut scopes: Vec<String>) -> Result<Vec<String>, AppError> {
     scopes.sort();
     scopes.dedup();
     if scopes.is_empty()
@@ -1717,7 +1769,7 @@ async fn insert_audit(
     Ok(())
 }
 
-fn map_database_error(error: sqlx::Error) -> AppError {
+pub(crate) fn map_database_error(error: sqlx::Error) -> AppError {
     if matches!(
         &error,
         sqlx::Error::Database(database)
