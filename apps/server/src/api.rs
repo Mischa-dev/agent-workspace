@@ -1234,7 +1234,7 @@ pub(crate) async fn answer_approval(
     // A suspended or closing workspace answers nothing: an approval would
     // set its run going again.
     crate::workspace::lifecycle::ensure_open_for_space(
-        &mut *transaction,
+        &mut transaction,
         context.project_id,
         "approval_respond",
     )
