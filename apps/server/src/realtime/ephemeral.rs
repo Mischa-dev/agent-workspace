@@ -51,6 +51,38 @@ pub enum EphemeralFrame {
         cache: CacheName,
         workspace: Option<Uuid>,
     },
+    /// Someone came online or went offline (K5.10), for the workspaces
+    /// they are in.
+    Presence {
+        account: Uuid,
+        workspaces: Vec<Uuid>,
+        online: bool,
+    },
+    /// Someone is typing in a conversation, heard as the conversation is:
+    /// its space's readers, or its members when restricted.
+    Typing {
+        space: Uuid,
+        root: Uuid,
+        restricted: bool,
+        conversation: Uuid,
+        account: Uuid,
+        until: String,
+    },
+    /// A watcher's cursor or selection in a document, for its other
+    /// watchers.
+    Awareness {
+        document: super::documents::DocumentRef,
+        connection: Uuid,
+        account: Uuid,
+        state: serde_json::Value,
+    },
+    /// A live document's change, for its watchers to apply without a sync.
+    DocumentUpdate {
+        document: super::documents::DocumentRef,
+        generation: Uuid,
+        version: i64,
+        update: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -150,6 +182,10 @@ fn route(hub: &RealtimeHub, frame: &EphemeralFrame) {
             Some(workspace) => crate::modules::gate::forget(*workspace),
             None => crate::modules::gate::forget_all(),
         },
+        EphemeralFrame::Presence { .. }
+        | EphemeralFrame::Typing { .. }
+        | EphemeralFrame::Awareness { .. }
+        | EphemeralFrame::DocumentUpdate { .. } => hub.live(frame.clone()),
     }
 }
 

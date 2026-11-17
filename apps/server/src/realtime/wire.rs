@@ -12,10 +12,18 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::subscriptions::SubscriptionSet;
+use super::{documents::DocumentRef, subscriptions::SubscriptionSet};
 
 /// How far back a connection may resume from; further back, it refetches.
 pub(crate) const RESUME_LIMIT: i64 = 5_000;
+/// The most documents one connection watches at once.
+pub(crate) const MAX_WATCHED: usize = 20;
+/// The largest awareness state (a cursor, a selection) a client may send.
+pub(crate) const MAX_AWARENESS_BYTES: usize = 1_024;
+/// How often one connection may say it is typing.
+pub(crate) const TYPING_EVERY: std::time::Duration = std::time::Duration::from_secs(3);
+/// How long someone shows as typing after they last said so.
+pub(crate) const TYPING_SHOWS_FOR: chrono::TimeDelta = chrono::TimeDelta::seconds(6);
 /// How long a protocol 2 connection has to say `hello` before it is served
 /// without resuming.
 pub(crate) const HELLO_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -36,6 +44,10 @@ impl WireQuery {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClientFrame {
     Hello { resume_from: Option<i64> },
+    Typing { conversation: Uuid },
+    Watch { document: DocumentRef },
+    Unwatch { document: DocumentRef },
+    Awareness { document: DocumentRef, state: Value },
     Other,
 }
 
@@ -53,9 +65,78 @@ impl ClientFrame {
                     })
                     .filter(|position| *position >= 0),
             }),
+            "typing" => Some(Self::Typing {
+                conversation: value.get("conversationId")?.as_str()?.parse().ok()?,
+            }),
+            "watch" => Some(Self::Watch {
+                document: serde_json::from_value(value.get("document")?.clone()).ok()?,
+            }),
+            "unwatch" => Some(Self::Unwatch {
+                document: serde_json::from_value(value.get("document")?.clone()).ok()?,
+            }),
+            "awareness" => Some(Self::Awareness {
+                document: serde_json::from_value(value.get("document")?.clone()).ok()?,
+                state: value.get("state")?.clone(),
+            }),
             _ => Some(Self::Other),
         }
     }
+}
+
+pub(crate) fn presence(workspace: Uuid, account: Uuid, online: bool) -> String {
+    json!({
+        "type": "ephemeral",
+        "kind": "presence",
+        "workspaceId": workspace,
+        "accountId": account,
+        "online": online,
+    })
+    .to_string()
+}
+
+pub(crate) fn typing(conversation: Uuid, account: Uuid, until: &str) -> String {
+    json!({
+        "type": "ephemeral",
+        "kind": "typing",
+        "conversationId": conversation,
+        "accountId": account,
+        "until": until,
+    })
+    .to_string()
+}
+
+pub(crate) fn awareness(
+    document: DocumentRef,
+    connection: Uuid,
+    account: Uuid,
+    state: &Value,
+) -> String {
+    json!({
+        "type": "ephemeral",
+        "kind": "awareness",
+        "document": document,
+        "connection": connection,
+        "accountId": account,
+        "state": state,
+    })
+    .to_string()
+}
+
+pub(crate) fn document_update(
+    document: DocumentRef,
+    generation: Uuid,
+    version: i64,
+    update: &str,
+) -> String {
+    json!({
+        "type": "ephemeral",
+        "kind": "document.update",
+        "document": document,
+        "generation": generation,
+        "version": version,
+        "update": update,
+    })
+    .to_string()
 }
 
 pub(crate) fn ready(position: i64, resumed: bool, replayed: usize) -> String {
@@ -196,6 +277,37 @@ mod tests {
                 )),
             ),
         ];
+        let page = DocumentRef {
+            kind: super::super::documents::DocumentKind::Page,
+            id: Uuid::now_v7(),
+        };
+        let written = written.into_iter().chain([
+            (
+                "presence",
+                parse(presence(Uuid::now_v7(), Uuid::now_v7(), true)),
+            ),
+            (
+                "typing",
+                parse(typing(
+                    Uuid::now_v7(),
+                    Uuid::now_v7(),
+                    "2026-11-14T10:02:09Z",
+                )),
+            ),
+            (
+                "awareness",
+                parse(awareness(
+                    page,
+                    Uuid::now_v7(),
+                    Uuid::now_v7(),
+                    &json!({"anchor": 1}),
+                )),
+            ),
+            (
+                "document.update",
+                parse(document_update(page, Uuid::now_v7(), 42, "AQLy")),
+            ),
+        ]);
         for (kind, frame) in written {
             assert_eq!(keys(&frame), keys(&example(kind)), "{kind}");
         }
@@ -241,8 +353,19 @@ mod tests {
         );
         assert_eq!(
             ClientFrame::parse(r#"{"type":"typing","conversationId":"x"}"#),
-            Some(ClientFrame::Other)
+            None,
+            "a conversation is named by its id"
         );
+        let mut parsed = 0;
+        for frame in fixture["client"].as_array().expect("client frames") {
+            let parsed_frame = ClientFrame::parse(&frame.to_string());
+            assert!(
+                parsed_frame.is_some_and(|frame| frame != ClientFrame::Other),
+                "{frame}"
+            );
+            parsed += 1;
+        }
+        assert_eq!(parsed, 5, "hello, watch, unwatch, typing, awareness");
         assert_eq!(ClientFrame::parse("not json"), None);
     }
 }

@@ -71,6 +71,9 @@ enum RealtimeDelivery {
     /// What this account may hear changed (K5.8): its connections work
     /// out their sets again before routing anything after it.
     AccessChanged(Uuid),
+    /// Presence, typing, awareness and live document changes (K5.10),
+    /// for protocol 2 connections only.
+    Live(Box<super::ephemeral::EphemeralFrame>),
     /// Every socket closes with 1012 and this reason, to reconnect and
     /// refetch: the tail skipped ahead (K5.5), or this instance is
     /// draining (K5.7).
@@ -82,7 +85,7 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope, .. } => envelope.event_id,
             Self::Ephemeral(event) => event.event_id,
-            Self::Restart(_) | Self::AccessChanged(_) => Uuid::nil(),
+            Self::Restart(_) | Self::AccessChanged(_) | Self::Live(_) => Uuid::nil(),
         }
     }
 
@@ -90,7 +93,7 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope, .. } => envelope.project_id,
             Self::Ephemeral(event) => event.project_id,
-            Self::Restart(_) | Self::AccessChanged(_) => Uuid::nil(),
+            Self::Restart(_) | Self::AccessChanged(_) | Self::Live(_) => Uuid::nil(),
         }
     }
 
@@ -99,14 +102,14 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope, .. } => envelope.conversation_id,
             Self::Ephemeral(event) => event.conversation_id,
-            Self::Restart(_) | Self::AccessChanged(_) => None,
+            Self::Restart(_) | Self::AccessChanged(_) | Self::Live(_) => None,
         }
     }
 
     fn recipient_actor_id(&self) -> Option<Uuid> {
         match self {
             Self::Durable { envelope, .. } => envelope.recipient_actor_id,
-            Self::Ephemeral(_) | Self::Restart(_) | Self::AccessChanged(_) => None,
+            Self::Ephemeral(_) | Self::Restart(_) | Self::AccessChanged(_) | Self::Live(_) => None,
         }
     }
 
@@ -119,7 +122,7 @@ impl RealtimeDelivery {
         let json = match self {
             Self::Durable { envelope, .. } => serde_json::to_string(envelope),
             Self::Ephemeral(event) => serde_json::to_string(event),
-            Self::Restart(_) | Self::AccessChanged(_) => {
+            Self::Restart(_) | Self::AccessChanged(_) | Self::Live(_) => {
                 return Err(RealtimePublishError::Serialization);
             }
         }
@@ -226,6 +229,13 @@ impl RealtimeHub {
             return;
         }
         let _ = self.sender.send(RealtimeDelivery::Ephemeral(event));
+    }
+
+    /// Presence, typing, awareness or a document change to this instance's
+    /// protocol 2 sockets; use `realtime::ephemeral::publish` to reach
+    /// every instance's.
+    pub(crate) fn live(&self, frame: super::ephemeral::EphemeralFrame) {
+        let _ = self.sender.send(RealtimeDelivery::Live(Box::new(frame)));
     }
 
     /// Closes this instance's sockets for the session; use
@@ -567,6 +577,19 @@ async fn serve_socket(
             return;
         }
     }
+    // Presence (K5.10): the connection is a row any instance can count.
+    let connection_id = Uuid::now_v7();
+    let account = original_principal.actor_id;
+    match super::presence::open(&state.pool, connection_id, account, state.realtime.origin()).await
+    {
+        Ok(true) => announce(&state, account, &subscription, true).await,
+        Ok(false) => {}
+        Err(error) => tracing::warn!(
+            error_category = error.log_category(),
+            "realtime presence not recorded"
+        ),
+    }
+    let mut live = LiveState::default();
 
     loop {
         tokio::select! {
@@ -576,6 +599,23 @@ async fn serve_socket(
                     Some(Ok(Message::Ping(payload))) => {
                         if socket.send(Message::Pong(payload)).await.is_err() {
                             break;
+                        }
+                    }
+                    Some(Ok(Message::Text(text))) if protocol == 2 => {
+                        if let Some(frame) = wire::ClientFrame::parse(&text)
+                            && let Err(error) = client_frame(
+                                &state,
+                                &original_principal,
+                                connection_id,
+                                &mut live,
+                                frame,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                error_category = error.log_category(),
+                                "realtime client frame failed"
+                            );
                         }
                     }
                     Some(Ok(_)) => {}
@@ -609,6 +649,21 @@ async fn serve_socket(
                     }
                     close_socket_to_restart(&mut socket, reason).await;
                     break;
+                }
+                if let RealtimeDelivery::Live(frame) = &event {
+                    if protocol == 2 {
+                        let mut closed = false;
+                        for text in live_frames(frame, &subscription, &live, connection_id, account) {
+                            if socket.send(Message::Text(text.into())).await.is_err() {
+                                closed = true;
+                                break;
+                            }
+                        }
+                        if closed {
+                            break;
+                        }
+                    }
+                    continue;
                 }
                 if let RealtimeDelivery::Durable { envelope, .. } = &event
                     && protocol == 2
@@ -708,6 +763,7 @@ async fn serve_socket(
                 }
             }
             _ = revalidation.tick() => {
+                let _ = super::presence::renew(&state.pool, connection_id).await;
                 match current_principal(&state, &headers, &original_principal).await {
                     Ok(Some(_)) => {}
                     Ok(None) => {
@@ -725,6 +781,200 @@ async fn serve_socket(
                 }
             }
         }
+    }
+    if let Ok(true) = super::presence::close(&state.pool, connection_id, account).await {
+        announce(&state, account, &subscription, false).await;
+    }
+}
+
+/// What a protocol 2 connection keeps for presence, typing and watching.
+#[derive(Default)]
+struct LiveState {
+    watched: std::collections::BTreeSet<super::documents::DocumentRef>,
+    last_typing: Option<tokio::time::Instant>,
+}
+
+/// Tells the account's workspaces it came online or went offline.
+async fn announce(state: &AppState, account: Uuid, subscription: &SubscriptionSet, online: bool) {
+    let mut workspaces = subscription.workspaces.iter().copied().collect::<Vec<_>>();
+    workspaces.sort();
+    super::ephemeral::publish(
+        state,
+        super::ephemeral::EphemeralFrame::Presence {
+            account,
+            workspaces,
+            online,
+        },
+    )
+    .await;
+}
+
+/// A protocol 2 client's own frame: typing, watching a document, or its
+/// cursor in one it watches. Each is checked as it comes; one that isn't
+/// allowed is dropped.
+async fn client_frame(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    connection: Uuid,
+    live: &mut LiveState,
+    frame: wire::ClientFrame,
+) -> Result<(), AppError> {
+    use super::ephemeral::{EphemeralFrame, publish};
+    let account = principal.actor_id;
+    match frame {
+        wire::ClientFrame::Typing { conversation } => {
+            let now = tokio::time::Instant::now();
+            if live
+                .last_typing
+                .is_some_and(|last| now.duration_since(last) < wire::TYPING_EVERY)
+            {
+                return Ok(());
+            }
+            live.last_typing = Some(now);
+            let Some((space, root, restricted)) = sqlx::query_as::<_, (Uuid, Uuid, bool)>(
+                r#"
+                SELECT conversation.project_id,
+                       COALESCE(conversation.parent_channel_id, conversation.id),
+                       COALESCE(parent.visibility, conversation.visibility) <> 'project'
+                FROM conversations conversation
+                LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
+                WHERE conversation.id = $1 AND conversation.archived_at IS NULL
+                  AND conversation_visible_to(conversation.id, $2)
+                "#,
+            )
+            .bind(conversation)
+            .bind(account)
+            .fetch_optional(crate::db::scoped(&state.pool))
+            .await?
+            else {
+                return Ok(());
+            };
+            let until = (chrono::Utc::now() + wire::TYPING_SHOWS_FOR)
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string();
+            publish(
+                state,
+                EphemeralFrame::Typing {
+                    space,
+                    root,
+                    restricted,
+                    conversation,
+                    account,
+                    until,
+                },
+            )
+            .await;
+        }
+        wire::ClientFrame::Watch { document } => {
+            if live.watched.len() < wire::MAX_WATCHED
+                && super::documents::can_view(&state.pool, account, document).await?
+            {
+                live.watched.insert(document);
+            }
+        }
+        wire::ClientFrame::Unwatch { document } => {
+            live.watched.remove(&document);
+        }
+        wire::ClientFrame::Awareness {
+            document,
+            state: cursor,
+        } => {
+            if live.watched.contains(&document)
+                && cursor.to_string().len() <= wire::MAX_AWARENESS_BYTES
+            {
+                publish(
+                    state,
+                    EphemeralFrame::Awareness {
+                        document,
+                        connection,
+                        account,
+                        state: cursor,
+                    },
+                )
+                .await;
+            }
+        }
+        wire::ClientFrame::Hello { .. } | wire::ClientFrame::Other => {}
+    }
+    Ok(())
+}
+
+/// The protocol 2 frames a live signal becomes for this connection, routed
+/// by its set and the documents it watches, with no query.
+fn live_frames(
+    frame: &super::ephemeral::EphemeralFrame,
+    subscription: &SubscriptionSet,
+    live: &LiveState,
+    connection: Uuid,
+    account: Uuid,
+) -> Vec<String> {
+    use super::ephemeral::EphemeralFrame;
+    match frame {
+        EphemeralFrame::Presence {
+            account: who,
+            workspaces,
+            online,
+        } => {
+            if *who == account {
+                return Vec::new();
+            }
+            workspaces
+                .iter()
+                .filter(|workspace| subscription.workspaces.contains(workspace))
+                .map(|workspace| wire::presence(*workspace, *who, *online))
+                .collect()
+        }
+        EphemeralFrame::Typing {
+            space,
+            root,
+            restricted,
+            conversation,
+            account: who,
+            until,
+        } => {
+            let route = Route {
+                workspace: Uuid::nil(),
+                space: Some(*space),
+                audience: RouteAudience::Conversation {
+                    root: *root,
+                    restricted: *restricted,
+                },
+                event_type: String::new(),
+                about_account: None,
+            };
+            if *who == account || subscription.hears(&route) != Hearing::Yes {
+                return Vec::new();
+            }
+            vec![wire::typing(*conversation, *who, until)]
+        }
+        EphemeralFrame::Awareness {
+            document,
+            connection: from,
+            account: who,
+            state,
+        } => {
+            if *from == connection || !live.watched.contains(document) {
+                return Vec::new();
+            }
+            vec![wire::awareness(*document, *from, *who, state)]
+        }
+        EphemeralFrame::DocumentUpdate {
+            document,
+            generation,
+            version,
+            update,
+        } => {
+            if !live.watched.contains(document) {
+                return Vec::new();
+            }
+            vec![wire::document_update(
+                *document,
+                *generation,
+                *version,
+                update,
+            )]
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -786,7 +1036,9 @@ fn frame(event: &RealtimeDelivery, protocol: u8) -> Result<String, RealtimePubli
         RealtimeDelivery::Ephemeral(delta) => {
             wire::stream_delta(delta.conversation_id, &delta.payload)
         }
-        RealtimeDelivery::Restart(_) | RealtimeDelivery::AccessChanged(_) => {
+        RealtimeDelivery::Restart(_)
+        | RealtimeDelivery::AccessChanged(_)
+        | RealtimeDelivery::Live(_) => {
             return Err(RealtimePublishError::Serialization);
         }
     })
@@ -804,7 +1056,7 @@ async fn wait_for_hello(socket: &mut WebSocket) -> Option<i64> {
     };
     match wire::ClientFrame::parse(&text)? {
         wire::ClientFrame::Hello { resume_from } => resume_from,
-        wire::ClientFrame::Other => None,
+        _ => None,
     }
 }
 
@@ -995,7 +1247,9 @@ async fn hears(
         RealtimeDelivery::Ephemeral(delta) => {
             ephemeral_is_authorized(state, principal, delta).await
         }
-        RealtimeDelivery::Restart(_) | RealtimeDelivery::AccessChanged(_) => Ok(false),
+        RealtimeDelivery::Restart(_)
+        | RealtimeDelivery::AccessChanged(_)
+        | RealtimeDelivery::Live(_) => Ok(false),
     }
 }
 

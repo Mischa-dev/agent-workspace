@@ -1,9 +1,51 @@
 {
   "client": [
-    { "type": "hello", "protocol": 2, "resumeFrom": "18342", "client": "web" }
+    {
+      "type": "hello",
+      "protocol": 2,
+      "resumeFrom": "18342",
+      "client": "web"
+    },
+    {
+      "type": "watch",
+      "document": {
+        "kind": "page",
+        "id": "0193a1f0-0000-7000-8000-000000000007"
+      }
+    },
+    {
+      "type": "unwatch",
+      "document": {
+        "kind": "page",
+        "id": "0193a1f0-0000-7000-8000-000000000007"
+      }
+    },
+    {
+      "type": "typing",
+      "conversationId": "0193a0aa-0000-7000-8000-000000000003"
+    },
+    {
+      "type": "awareness",
+      "document": {
+        "kind": "whiteboard",
+        "id": "0193a1f0-0000-7000-8000-000000000008"
+      },
+      "state": {
+        "cursor": [
+          412,
+          88
+        ]
+      }
+    }
   ],
   "server": [
-    { "type": "ready", "protocol": 2, "position": "18350", "resumed": true, "replayed": 8 },
+    {
+      "type": "ready",
+      "protocol": 2,
+      "position": "18350",
+      "resumed": true,
+      "replayed": 8
+    },
     {
       "type": "event",
       "position": "18343",
@@ -27,16 +69,24 @@
       "type": "access",
       "added": {
         "workspaces": [],
-        "spaces": ["0192a0aa-0000-7000-8000-000000000002"],
+        "spaces": [
+          "0192a0aa-0000-7000-8000-000000000002"
+        ],
         "conversations": []
       },
       "removed": {
         "workspaces": [],
         "spaces": [],
-        "conversations": ["0193a0aa-0000-7000-8000-000000000006"]
+        "conversations": [
+          "0193a0aa-0000-7000-8000-000000000006"
+        ]
       }
     },
-    { "type": "resync", "reason": "too_far_behind", "position": "40112" },
+    {
+      "type": "resync",
+      "reason": "too_far_behind",
+      "position": "40112"
+    },
     {
       "type": "ephemeral",
       "kind": "stream.delta",
@@ -45,6 +95,49 @@
       "runId": null,
       "delta": "next words"
     },
-    { "type": "reconnect", "afterMs": 1800, "reason": "server_draining" }
+    {
+      "type": "reconnect",
+      "afterMs": 1800,
+      "reason": "server_draining"
+    },
+    {
+      "type": "ephemeral",
+      "kind": "typing",
+      "conversationId": "0193a0aa-0000-7000-8000-000000000003",
+      "accountId": "0192a0aa-0000-7000-8000-000000000005",
+      "until": "2026-11-14T10:02:09Z"
+    },
+    {
+      "type": "ephemeral",
+      "kind": "presence",
+      "workspaceId": "0192a0aa-0000-7000-8000-000000000009",
+      "accountId": "0192a0aa-0000-7000-8000-000000000005",
+      "online": true
+    },
+    {
+      "type": "ephemeral",
+      "kind": "awareness",
+      "document": {
+        "kind": "page",
+        "id": "0193a1f0-0000-7000-8000-000000000007"
+      },
+      "connection": "0193a0aa-0000-7000-8000-00000000000a",
+      "accountId": "0192a0aa-0000-7000-8000-000000000005",
+      "state": {
+        "anchor": 120,
+        "head": 131
+      }
+    },
+    {
+      "type": "ephemeral",
+      "kind": "document.update",
+      "document": {
+        "kind": "page",
+        "id": "0193a1f0-0000-7000-8000-000000000007"
+      },
+      "generation": "0193a0aa-0000-7000-8000-00000000000b",
+      "version": 42,
+      "update": "AQLy"
+    }
   ]
 }

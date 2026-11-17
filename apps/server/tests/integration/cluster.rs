@@ -1606,3 +1606,254 @@ async fn resume_replays_what_was_missed() {
     assert!(replayed.is_empty(), "{replayed:?}");
     cluster.finish().await;
 }
+
+/// The next protocol 2 ephemeral frame of `kind`, or None within `within`.
+async fn ephemeral_of(
+    socket: &mut crate::cluster_support::Socket,
+    kind: &str,
+    within: Duration,
+) -> Option<Value> {
+    let deadline = Instant::now() + within;
+    loop {
+        match next_frame(socket, deadline.saturating_duration_since(Instant::now())).await {
+            Frame::Json(frame) if frame["type"] == "ephemeral" && frame["kind"] == kind => {
+                return Some(frame);
+            }
+            Frame::Json(_) => {}
+            Frame::Closed | Frame::Nothing => return None,
+        }
+    }
+}
+
+async fn send_frame(socket: &mut crate::cluster_support::Socket, frame: Value) {
+    use futures_util::SinkExt;
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            frame.to_string().into(),
+        ))
+        .await
+        .expect("client frame");
+}
+
+/// K5.10: typing on one instance shows on the other, only to those who can
+/// see the conversation.
+#[tokio::test]
+async fn typing_on_one_instance_shows_on_the_other() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("typing crosses instances on the listener, off in the pooler run");
+        return;
+    }
+    let Some(cluster) = cluster("k5_10_typing", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, channel) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let (_, rook) = add_person(&cluster, project, "rook").await;
+    for browser in [&owner, &mara_browser] {
+        let (status, body) = cluster
+            .instance(0)
+            .send(browser.request("GET", "/api/v1/direct", None, Value::Null))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, group) = cluster
+        .instance(0)
+        .send(owner.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("k5-10-group"),
+            json!({"memberIds": [mara]}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{group}");
+    let group = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    let mut typist = cluster.instance(0).socket_v2(&owner, None).await;
+    ready_of(&mut typist).await;
+    let mut mara_on_b = cluster.instance(1).socket_v2(&mara_browser, None).await;
+    ready_of(&mut mara_on_b).await;
+    let mut rook_on_b = cluster.instance(1).socket_v2(&rook, None).await;
+    ready_of(&mut rook_on_b).await;
+
+    send_frame(
+        &mut typist,
+        json!({"type": "typing", "conversationId": group}),
+    )
+    .await;
+    let typing = ephemeral_of(&mut mara_on_b, "typing", Duration::from_secs(3))
+        .await
+        .expect("Mara saw the owner typing in their group");
+    assert_eq!(typing["conversationId"], group.as_str(), "{typing}");
+    assert!(typing["until"].is_string(), "{typing}");
+    // Rook sees typing in the channel (after the rate limit), never the group.
+    tokio::time::sleep(Duration::from_millis(3_100)).await;
+    send_frame(
+        &mut typist,
+        json!({"type": "typing", "conversationId": channel.to_string()}),
+    )
+    .await;
+    let seen = ephemeral_of(&mut rook_on_b, "typing", Duration::from_secs(3))
+        .await
+        .expect("Rook saw typing in the channel");
+    assert_eq!(
+        seen["conversationId"],
+        channel.to_string(),
+        "Rook saw {seen}"
+    );
+    cluster.finish().await;
+}
+
+/// K5.10: someone is online while any instance holds one of their
+/// connections, and their workspace hears when that changes; a connection
+/// left behind by a stopped instance stops counting once its heartbeat
+/// lapses.
+#[tokio::test]
+async fn presence_follows_connections_across_instances() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("presence frames cross instances on the listener, off in the pooler run");
+        return;
+    }
+    let Some(cluster) = cluster("k5_10_presence", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, _) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let owner_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'owner'")
+            .fetch_one(&cluster.pool)
+            .await
+            .expect("owner");
+    let online = |instance: usize| {
+        let pool = cluster.instance(instance).state().pool.clone();
+        let workspace = cluster.organization_id;
+        async move {
+            agent_workspace_server::realtime::presence::online_in(&pool, workspace)
+                .await
+                .expect("online")
+        }
+    };
+    let mut watcher = cluster.instance(1).socket_v2(&mara_browser, None).await;
+    ready_of(&mut watcher).await;
+    let mut on_a = cluster.instance(0).socket_v2(&owner, None).await;
+    ready_of(&mut on_a).await;
+    let came = ephemeral_of(&mut watcher, "presence", Duration::from_secs(3))
+        .await
+        .expect("Mara heard the owner come online");
+    assert_eq!(came["accountId"], owner_id.to_string(), "{came}");
+    assert_eq!(came["online"], true, "{came}");
+    assert!(online(1).await.contains(&owner_id), "counted on B too");
+    assert!(online(0).await.contains(&mara));
+
+    drop(on_a);
+    let went = ephemeral_of(&mut watcher, "presence", Duration::from_secs(3))
+        .await
+        .expect("Mara heard the owner go offline");
+    assert_eq!(went["online"], false, "{went}");
+    assert!(!online(1).await.contains(&owner_id));
+
+    // A row an aborted instance never closed, its heartbeat lapsed.
+    sqlx::query(
+        "INSERT INTO realtime_connections (id, account_id, instance_id, opened_at, seen_at) \
+         VALUES ($1, $2, $3, now() - interval '5 minutes', now() - interval '2 minutes')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(owner_id)
+    .bind(Uuid::now_v7())
+    .execute(&cluster.pool)
+    .await
+    .expect("stale row");
+    assert!(
+        !online(0).await.contains(&owner_id),
+        "a lapsed heartbeat isn't online"
+    );
+    cluster.finish().await;
+}
+
+/// K5.10: a live document's change reaches the connections watching it,
+/// and no one else: not a connection that isn't watching, and not one
+/// that asked to watch a document it can't see.
+#[tokio::test]
+async fn document_update_reaches_watchers_only() {
+    if crate::cluster_support::pooler_run() {
+        eprintln!("document changes cross instances on the listener, off in the pooler run");
+        return;
+    }
+    let Some(cluster) = cluster("k5_10_documents", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, _) = work_channel(&cluster, &owner).await;
+    let (_, mara) = add_person(&cluster, project, "mara").await;
+    let (_, rook) = add_person(&cluster, project, "rook").await;
+    let (side, _) = side_channel(&cluster, &owner, &[]).await;
+    let mut pages = Vec::new();
+    for (space, title) in [(project, "Plan"), (side, "Side plan")] {
+        let (status, page) = cluster
+            .instance(0)
+            .send(owner.request(
+                "POST",
+                &format!("/api/v1/projects/{space}/pages"),
+                None,
+                json!({"title": title, "body": ""}),
+            ))
+            .await;
+        assert!(status.is_success(), "{page}");
+        pages.push(
+            page["id"]
+                .as_str()
+                .expect("page")
+                .parse::<Uuid>()
+                .expect("id"),
+        );
+    }
+    let (plan, side_plan) = (pages[0], pages[1]);
+    let watch = |id: Uuid| json!({"type": "watch", "document": {"kind": "page", "id": id}});
+    let mut watcher = cluster.instance(1).socket_v2(&mara, None).await;
+    ready_of(&mut watcher).await;
+    send_frame(&mut watcher, watch(plan)).await;
+    let mut idle = cluster.instance(1).socket_v2(&rook, None).await;
+    ready_of(&mut idle).await;
+    // Rook isn't in SIDE: watching its page is refused.
+    let mut prying = cluster.instance(0).socket_v2(&rook, None).await;
+    ready_of(&mut prying).await;
+    send_frame(&mut prying, watch(side_plan)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    use agent_workspace_server::realtime::{
+        documents::{DocumentKind, DocumentRef},
+        ephemeral::{EphemeralFrame, publish},
+    };
+    for (id, update) in [(side_plan, "U0lERQ=="), (plan, "UExBTg==")] {
+        publish(
+            cluster.instance(0).state(),
+            EphemeralFrame::DocumentUpdate {
+                document: DocumentRef {
+                    kind: DocumentKind::Page,
+                    id,
+                },
+                generation: Uuid::now_v7(),
+                version: 2,
+                update: update.to_owned(),
+            },
+        )
+        .await;
+    }
+    let heard = ephemeral_of(&mut watcher, "document.update", Duration::from_secs(3))
+        .await
+        .expect("the watcher heard the change");
+    assert_eq!(heard["document"]["id"], plan.to_string(), "{heard}");
+    assert_eq!(heard["update"], "UExBTg==", "{heard}");
+    for socket in [&mut idle, &mut prying] {
+        assert!(
+            ephemeral_of(socket, "document.update", Duration::from_millis(800))
+                .await
+                .is_none(),
+            "only watchers who may see the page hear it"
+        );
+    }
+    cluster.finish().await;
+}

@@ -291,6 +291,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "short-lived request budgets keyed by digests; sign-in budgets count before any workspace is known, and a per-workspace bucket carries workspace_id (K5.6)",
     ),
     (
+        "realtime_connections",
+        "an account's open live connections, by instance, for presence: accounts are server-wide (R19) and a connection lasts minutes (K5.10)",
+    ),
+    (
         "secret_master_keys_retired",
         "the server's own key history, not any workspace's",
     ),
