@@ -78,6 +78,7 @@ pub struct Saved {
 pub async fn save(
     transaction: &mut Transaction<'_, Postgres>,
     account_id: Uuid,
+    reach: Reach,
     conversation_id: Uuid,
     draft: Option<&Value>,
     saved_at: Option<DateTime<Utc>>,
@@ -115,16 +116,10 @@ pub async fn save(
         .execute(&mut **transaction)
         .await?;
         // The conversation was checked against the caller already.
-        let kept = listed(
-            transaction,
-            account_id,
-            Reach::default(),
-            None,
-            Some(conversation_id),
-        )
-        .await?
-        .into_iter()
-        .next();
+        let kept = listed(transaction, account_id, reach, None, Some(conversation_id))
+            .await?
+            .into_iter()
+            .next();
         return Ok(Saved {
             kept_newer: kept.is_some(),
             view: kept,
@@ -172,16 +167,10 @@ pub async fn save(
     .await?
     .unwrap_or(false);
     // The conversation was checked against the caller already.
-    let view = listed(
-        transaction,
-        account_id,
-        Reach::default(),
-        None,
-        Some(conversation_id),
-    )
-    .await?
-    .into_iter()
-    .next();
+    let view = listed(transaction, account_id, reach, None, Some(conversation_id))
+        .await?
+        .into_iter()
+        .next();
     Ok(Saved {
         view,
         kept_newer: newer,

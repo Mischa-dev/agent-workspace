@@ -57,7 +57,8 @@ export function useDraftSync(draftKey: string | undefined, draft: SyncedDraft, s
     void callOp('message_draft_list', { conversationId: draftKey })
       .then((output) => {
         const found = output.drafts[0]?.draft
-        if (cancelled || !isDraft(found)) return
+        // Typed (or sent) before the answer came: what's in the box now wins.
+        if (cancelled || typedAt.current !== 0 || !isDraft(found)) return
         synced.current = JSON.stringify(draftToSave({ text: found.text, mentions: found.mentions ?? [], workItems: found.workItems ?? [] }) ?? null)
         sent.current = synced.current
         restoreRef.current({ text: found.text, mentions: found.mentions ?? [], workItems: found.workItems ?? [] })

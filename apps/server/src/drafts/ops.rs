@@ -86,6 +86,10 @@ impl Operation for MessageDraftSet {
             .transpose()?;
         let account = call.account_id();
         let conversation_id = input.conversation_id.id();
+        let reach = super::Reach {
+            connection_id: call.ctx.caller.connection_id,
+            confined_space: call.ctx.caller.confined_space,
+        };
         let tx = call.tx().await?;
         // Rule 7: the conversation is one the writer may read, in a space
         // they are in (the dispatcher located it the same way).
@@ -94,20 +98,23 @@ impl Operation for MessageDraftSet {
             SELECT EXISTS (
                 SELECT 1 FROM conversations conversation
                 WHERE conversation.id = $1
-                  AND actor_can_access_project($2, NULL, conversation.project_id)
+                  AND actor_can_access_project($2, $3, conversation.project_id)
+                  AND ($4::uuid IS NULL OR conversation.project_id = $4)
                   AND conversation_readable_by(conversation.id, $2)
             )
             "#,
         )
         .bind(conversation_id)
         .bind(account)
+        .bind(reach.connection_id)
+        .bind(reach.confined_space)
         .fetch_one(&mut **tx)
         .await
         .map_err(crate::error::AppError::from)?;
         if !readable {
             return Err(OpError::not_found("That conversation"));
         }
-        let saved = super::save(tx, account, conversation_id, draft, saved_at).await?;
+        let saved = super::save(tx, account, reach, conversation_id, draft, saved_at).await?;
         call.audit_target(
             "conversation",
             conversation_id,

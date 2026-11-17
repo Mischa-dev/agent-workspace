@@ -129,6 +129,20 @@ async fn drafts_follow_their_writer_and_stay_theirs() {
     .await;
     assert_eq!(theirs["value"]["drafts"], json!([]), "{theirs}");
     assert!(!theirs.to_string().contains("thought"), "{theirs}");
+    // An agent keeps its own drafts where its connection reaches.
+    let agent_saved = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "message_draft_set",
+        json!({"conversationId": channel, "draft": {"text": "Rook's note"}}),
+    )
+    .await;
+    assert_eq!(agent_saved["outcome"], "ok", "{agent_saved}");
+    assert_eq!(
+        agent_saved["value"]["draft"]["draft"]["text"], "Rook's note",
+        "{agent_saved}"
+    );
     let dm = &world.conversations["lena+mara"];
     let refused = tool(
         app,
