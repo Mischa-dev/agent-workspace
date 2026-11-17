@@ -716,6 +716,23 @@ pub(super) async fn project_create(
         None => None,
     };
     let result = async {
+        // H1.1: an account-wide app skipped the workspace budget at the gate;
+        // the call is charged here, before the project transaction, so a
+        // rollback can't leave a cached chunk the counter no longer holds.
+        if principal.account_wide && !principal.project_explicit {
+            let workspace = crate::db::scoped_one(&state.pool, async |connection| {
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT organization_id FROM projects WHERE id = $1",
+                )
+                .bind(principal.project_id)
+                .fetch_optional(&mut *connection)
+                .await
+            })
+            .await?;
+            if let Some(workspace) = workspace {
+                state.rate_limits.check_workspace_call(workspace).await?;
+            }
+        }
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // The workspace is the one the connected app's home project is in.
         // Lock the caller's workspace membership as the web app does, so a
@@ -770,14 +787,6 @@ pub(super) async fn project_create(
             .is_some_and(|modules| !modules.contains("projects"))
         {
             return Ok(ToolResult::module_off("project_create", "Projects"));
-        }
-        // H1.1: an account-wide app skipped the workspace budget at the
-        // gate; the call is charged here, once its workspace is known.
-        if principal.account_wide && !principal.project_explicit {
-            state
-                .rate_limits
-                .check_workspace_call_on(&mut transaction, organization_id)
-                .await?;
         }
         let reservation = match reserve_create(
             &mut transaction,

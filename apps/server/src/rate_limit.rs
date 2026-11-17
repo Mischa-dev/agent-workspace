@@ -325,18 +325,6 @@ impl RateLimiters {
             .await
     }
 
-    /// [`Self::check_workspace_call`] inside the caller's transaction, so a
-    /// caller holding a pooled connection never waits for a second one.
-    pub async fn check_workspace_call_on(
-        &self,
-        connection: &mut PgConnection,
-        workspace: Uuid,
-    ) -> Result<(), AppError> {
-        self.limits
-            .check_on(connection, &WORKSPACE_CALLS, LimitKey::Workspace(workspace))
-            .await
-    }
-
     /// A bug report or public form submission into `workspace`, once its
     /// link resolved.
     pub async fn check_workspace_public_submission(&self, workspace: Uuid) -> Result<(), AppError> {
