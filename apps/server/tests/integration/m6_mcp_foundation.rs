@@ -468,7 +468,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             8,
             "repository_get",
             json!({"repositoryId":seed.repository_id.to_string()}),
-            "found",
+            "ok",
         ),
         (
             9,

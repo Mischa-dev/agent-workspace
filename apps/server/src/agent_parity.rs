@@ -882,22 +882,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/repositories",
-            Tool("repository_write"),
+            Tool("repository_create"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            Tool("repository_write"),
+            Tool("repository_prepare"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            Tool("repository_write"),
+            Tool("repository_archive"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/integrations/github/sync",
-            Tool("github_integration_write"),
+            Tool("github_installation_link"),
         ),
         (
             Post,
@@ -907,12 +907,12 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/integrations/github/repositories",
-            Tool("repository_write"),
+            Tool("repository_create"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/integrations/github/automation",
-            Tool("github_integration_write"),
+            Tool("github_automation_update"),
         ),
         (
             Post,

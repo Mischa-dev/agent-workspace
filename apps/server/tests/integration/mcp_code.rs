@@ -680,7 +680,7 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
     let zero = call(OWNER, "pull_request_list", json!({"limit": 0})).await;
     assert_eq!(zero["field"], "limit", "{zero}");
     let unknown_task = call(OWNER, "pull_request_list", json!({"taskId": "AW-999"})).await;
-    assert_eq!(unknown_task["field"], "taskId", "{unknown_task}");
+    assert_eq!(unknown_task["outcome"], "not_found", "{unknown_task}");
 
     // Repositories: ready now, connected, and counted for the owner.
     let listed = call(OWNER, "repository_list", json!({})).await;
@@ -729,10 +729,10 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
         "{with}"
     );
 
-    // A project Dana isn't in.
+    // A project Dana isn't in reads as missing.
     let other = create_project(&setup, "OTHER", "Other").await;
     let refused = call(DANA, "repository_list", json!({"projectId": other})).await;
-    assert_eq!(refused["outcome"], "forbidden", "{refused}");
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
 
     // Nothing internal ever reaches a result.
     let (mirror_path, installation_id) = sqlx::query_as::<_, (String, Option<i64>)>(

@@ -492,9 +492,15 @@ pub(crate) fn document() -> Value {
         );
         let own = json!({ "$ref": format!("#/components/responses/{result}") });
         responses.insert("200".to_owned(), own.clone());
+        // A refusal (403, 404, 409, 422) is the operation's own result, as
+        // is 503; the statuses every operation shares (401, 413, 429) are
+        // named, and take precedence over the 4XX range.
+        responses.insert("4XX".to_owned(), own.clone());
         for (status, _) in ERROR_STATUSES {
-            let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
+            let response = if *status == "503" {
                 own.clone()
+            } else if matches!(*status, "403" | "404" | "409" | "422") {
+                continue;
             } else {
                 // The same for every operation, so referenced rather than
                 // repeated, which keeps the document small as tools are added.

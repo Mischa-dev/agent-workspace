@@ -481,7 +481,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "environment_update",
     "file_delete",
     "file_upload",
-    "github_integration_write",
+    "github_automation_update",
+    "github_installation_link",
     "history_restore",
     "host_agent_bind",
     "host_agent_unbind",
@@ -557,7 +558,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "reply_send",
     "reply_stop",
     "reply_retry",
-    "repository_write",
+    "repository_archive",
+    "repository_create",
+    "repository_prepare",
     "role_assign",
     "role_write",
     "run_activity_report",
@@ -6180,22 +6183,38 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
         mcp_case(
-            "repository_write",
+            "repository_create",
             json!({"projectId": a.project, "owner": "net-org", "name": "net-mcp", "githubRepositoryId": 990_001, "defaultBranch": "main", "trustAcknowledged": true}),
             vec![json!({"projectId": b.project, "owner": "net-org", "name": "net-mcp-b", "githubRepositoryId": 990_002, "defaultBranch": "main", "trustAcknowledged": true})],
-        )
-        .rejecting(vec![
-            json!({"projectId": a.project, "repository": b.repository, "archive": true}),
-            json!({"projectId": a.project, "repository": b.repository, "prepare": true}),
-        ]),
+        ),
         mcp_case(
-            "github_integration_write",
+            "repository_prepare",
+            json!({"projectId": a.project, "repository": a.repository}),
+            vec![json!({"projectId": b.project, "repository": b.repository})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "repository": b.repository})])
+        .without_own("preparing clones the repository from GitHub"),
+        mcp_case(
+            "repository_archive",
+            json!({"projectId": a.project, "repository": a.repository}),
+            vec![json!({"projectId": b.project, "repository": b.repository})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "repository": b.repository})])
+        .without_own("A's repository is what the run and environment cases act on; archiving is checked over HTTP"),
+        mcp_case(
+            "github_automation_update",
             json!({"projectId": a.project, "pullRequestOpen": false}),
             vec![json!({"projectId": b.project, "pullRequestOpen": false})],
+        ),
+        mcp_case(
+            "github_installation_link",
+            json!({"projectId": a.project, "installationId": 990_003, "repositories": [a.repository]}),
+            vec![json!({"projectId": b.project, "installationId": 990_003, "repositories": [b.repository]})],
         )
         .rejecting(vec![
             json!({"projectId": a.project, "installationId": 990_003, "repositories": [b.repository]}),
-        ]),
+        ])
+        .without_own(NEEDS_GITHUB),
         // K1.29: adding a person who hasn't signed in yet. B's roles aren't
         // A's.
         mcp_case(

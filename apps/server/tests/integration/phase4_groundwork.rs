@@ -175,7 +175,7 @@ async fn a_pull_request_from_a_private_thread_stays_private() {
         let hidden = mara_call("pull_request_get", json!({"identifier": identifier})).await;
         assert_eq!(hidden["outcome"], "not_found", "{hidden}");
         let seen = call("pull_request_get", json!({"identifier": identifier})).await;
-        assert_eq!(seen["outcome"], "found", "{seen}");
+        assert_eq!(seen["outcome"], "ok", "{seen}");
     }
     let missing = mara_call(
         "pull_request_get",
@@ -189,7 +189,7 @@ async fn a_pull_request_from_a_private_thread_stays_private() {
     .await;
     assert_eq!(hidden, missing);
     let public = mara_call("pull_request_get", json!({"identifier": open_url})).await;
-    assert_eq!(public["outcome"], "found", "{public}");
+    assert_eq!(public["outcome"], "ok", "{public}");
 
     // task_link: nobody links a PR they can't see.
     let created = call(
@@ -390,12 +390,12 @@ async fn the_resource_a_call_acts_on_picks_its_project() {
 
     // owner/name resolves where it's unique.
     let only = call("repository_get", json!({"repositoryId": "acme/beta-only"})).await;
-    assert_eq!(only["outcome"], "found", "{only}");
+    assert_eq!(only["outcome"], "ok", "{only}");
     assert_eq!(only["value"]["id"], only_beta.to_string(), "{only}");
     // In two projects and no task or project to decide: left for the tool
     // to refuse.
     let ambiguous = call("repository_get", json!({"repositoryId": "acme/shared"})).await;
-    assert_ne!(ambiguous["outcome"], "found", "{ambiguous}");
+    assert_ne!(ambiguous["outcome"], "ok", "{ambiguous}");
 
     // The task decides: owner/name resolves inside the task's project, so
     // the same name in another project isn't picked.

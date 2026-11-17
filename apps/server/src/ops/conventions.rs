@@ -72,6 +72,12 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "rotate",
             // An environment is tried and the result recorded (K2.18).
             "check",
+            // A repository's copy on the server is made or brought up to
+            // date; a pull request is read again from its code host, or
+            // merged there (K2.18).
+            "prepare",
+            "refresh",
+            "merge",
         ],
     ),
     (

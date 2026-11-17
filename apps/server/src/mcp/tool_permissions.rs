@@ -15,10 +15,10 @@
 //! ones, so a new tool must say what it needs.
 
 use crate::policy::Permission::{
-    self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
-    CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesComment, PagesSuggest,
-    ProjectsCreate, ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch,
-    SettingsManage, SheetsEdit, TasksCreate, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    self, ChannelsCreate, ChannelsPost, CodePublish, CollectionsBuild, CollectionsEdit,
+    MembersInvite, MembersManage, MembersView, PagesComment, PagesSuggest, ProjectsCreate,
+    ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage,
+    SheetsEdit, TasksCreate, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -122,15 +122,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("launch_list", None),
     ("launch_cancel", Some(RunsLaunch)),
     ("model_catalog_write", Some(SettingsManage)),
-    ("repository_list", Some(CodeView)),
-    ("repository_write", Some(CodeManage)),
-    ("github_integration_write", Some(CodeManage)),
-    ("pull_request_list", Some(CodeView)),
-    ("repository_get", Some(CodeView)),
-    ("pull_request_get", Some(CodeView)),
-    ("pull_request_create", Some(CodePublish)),
-    ("pull_request_refresh", Some(CodePublish)),
-    ("pull_request_merge", Some(CodeManage)),
     ("run_request", Some(RunsLaunch)),
     ("approval_get", None),
     ("approval_respond", Some(RunsApprove)),
@@ -212,7 +203,7 @@ mod tests {
     #[test]
     fn viewers_keep_the_read_tools_they_had() {
         let viewer = PermissionSet::built_in(MembershipRole::Viewer);
-        for tool in ["repository_list", "workflow_get", "project_export"] {
+        for tool in ["workflow_get", "project_export"] {
             let need = super::needs(tool).expect("listed");
             assert!(need.is_none_or(|need| viewer.contains(need)), "{tool}");
         }

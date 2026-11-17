@@ -166,6 +166,10 @@ export type LinkedItem = { id: string; kind: string; status?: string | null; tex
 
 export type LinkedRepositoryProjection = { repository: RepositoryProjection; role: string }
 
+export type LinkedTask = { id: string; key: string; status: string; title: string }
+
+export type LinkedThread = { id: string; name: string; url: string }
+
 export type MemberRef = { handle: string; id: string; kind: string; name: string }
 
 export type Mention = { author: string; conversation: string; conversationId: string; messageId: string; project: string; sentAt: string; sequence: number; text: string }
@@ -232,7 +236,9 @@ export type Publisher = { name: string; url?: string | null }
 
 export type PullRequest = { baseRef: string; checksState: string; draft: boolean; headRef: string; id: string; mergedAt?: string | null; number: number; repository: string; repositoryId: string; reviewState: string; spaceId: string; state: string; title: string; updatedAt: string; url: string }
 
-export type PullRequestProjection = { baseRef: string; canonicalUrl: string; checksState: string; draft: boolean; headRef: string; headSha: string; id: string; mergeabilityState: string; number: number; projectId: string; repositoryId: string; reviewState: string; state: string; suggested: boolean; syncState: string; title: string; url: string; version: number }
+export type PullRequestLine = { checksState: string; draft: boolean; failingChecks?: string[]; id: string; lastSyncedAt?: string | null; mergeabilityState: string; needsYou?: string[]; number: number; pendingChecks?: number; project: string; projectId: string; projectKey: string; repository: string; repositoryId: string; requestedReviewers?: string[]; reviewState: string; runId?: string | null; state: string; syncState: string; tasks?: LinkedTask[]; thread?: LinkedThread | null; title: string; updatedAt: string; url: string; version: number }
+
+export type PullRequestProjection = { baseRef: string; canonicalUrl: string; checksState: string; draft: boolean; headRef: string; headSha: string; id: string; mergeabilityState: string; number: number; projectId: string; repositoryId: string; reviewState: string; state: string; suggested?: boolean; syncState: string; title: string; url: string; version: number }
 
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
@@ -247,6 +253,8 @@ export type RelationsValue = { changed: boolean; relations: RelationRef[]; task:
 export type RemoveParts = "archive" | "keep"
 
 export type ReorderedTask = { boardPosition: number; id: string; key: string; version: number }
+
+export type RepositoryItem = { activeRuns: number; archived?: boolean; cloneUrl: string; defaultBranch: string; enabled: boolean; github: string; id: string; name: string; notReadyBecause?: string | null; openPullRequests: number; preparationFailure?: string | null; preparationState: string; preparedAt?: string | null; project: string; projectId: string; projectKey: string; readyForRuns: boolean; settingsUrl: string; trusted: boolean; version: number }
 
 export type RepositoryLine = { defaultBranch: string; id: string; name: string }
 
@@ -464,6 +472,14 @@ export type FieldUpdateInput = { archived?: boolean | null; description?: string
 
 export type FieldUpdateOutput = { changedFields: string[]; created: boolean; field: FieldView; note?: string | null }
 
+export type GithubAutomationUpdateInput = { expectedVersion?: number | null; projectId: string; pullRequestMerge?: boolean | null; pullRequestOpen?: boolean | null }
+
+export type GithubAutomationUpdateOutput = { automation?: Record<string, unknown> | null; done: string; installation?: Record<string, unknown> | null }
+
+export type GithubInstallationLinkInput = { installationId: number; projectId: string; repositories: string[] }
+
+export type GithubInstallationLinkOutput = { automation?: Record<string, unknown> | null; done: string; installation?: Record<string, unknown> | null }
+
 export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
 
 export type HistoryListOutput = { caps: HistoryCaps; entries: HistoryEntry[]; kind: string }
@@ -640,6 +656,26 @@ export type ProjectListInput = { includeArchived?: boolean | null }
 
 export type ProjectListOutput = { projects: ProjectLine[] }
 
+export type PullRequestCreateInput = { body?: string | null; runId: string; taskIds?: string[] | null; title: string }
+
+export type PullRequestCreateOutput = { job: Record<string, unknown>; queued: boolean }
+
+export type PullRequestGetInput = { identifier: string; projectId?: string | null }
+
+export type PullRequestGetOutput = { baseRef: string; canonicalUrl: string; checksState: string; draft: boolean; headRef: string; headSha: string; id: string; mergeabilityState: string; number: number; projectId: string; repositoryId: string; reviewState: string; state: string; suggested?: boolean; syncState: string; title: string; url: string; version: number }
+
+export type PullRequestListInput = { checks?: string | null; cursor?: string | null; limit?: number | null; needsMe?: boolean | null; projectId?: string | null; repositoryId?: string | null; review?: string | null; state?: string | null; taskId?: string | null }
+
+export type PullRequestListOutput = { nextCursor?: string | null; note?: string | null; pullRequests: PullRequestLine[]; total: number }
+
+export type PullRequestMergeInput = { expectedHeadSha?: string | null; method?: string | null; pullRequestId: string }
+
+export type PullRequestMergeOutput = { alreadyMerged: boolean; mergeCommitSha: string; method: string; number: number; pullRequestId: string }
+
+export type PullRequestRefreshInput = { pullRequestId: string }
+
+export type PullRequestRefreshOutput = { job: Record<string, unknown>; queued: boolean }
+
 export type RecurringCreateInput = { assignee?: string | null; clearDueInDays?: boolean | null; delete?: boolean | null; dueInDays?: number | null; enabled?: boolean | null; every?: number | null; expectedVersion?: number | null; frequency?: string | null; monthDay?: number | null; projectId: string; recurring?: string | null; startsOn?: string | null; template?: string | null; timeOfDay?: string | null; timezone?: string | null; weekdays?: number[] | null }
 
 export type RecurringCreateOutput = { created: boolean; deleted: boolean; recurring?: unknown }
@@ -675,6 +711,26 @@ export type ReplySendOutput = { messageId?: string | null; requestId: string; st
 export type ReplyStopInput = { requestId: string }
 
 export type ReplyStopOutput = { requestId: string; status: string; stoppedRequestIds: string[] }
+
+export type RepositoryArchiveInput = { expectedVersion?: number | null; projectId: string; repository: string }
+
+export type RepositoryArchiveOutput = { done: string; repository: Record<string, unknown> }
+
+export type RepositoryCreateInput = { defaultBranch?: string | null; githubRepositoryId?: number | null; installationId?: number | null; name?: string | null; owner?: string | null; projectId: string; trustAcknowledged: boolean }
+
+export type RepositoryCreateOutput = { done: string; repository: Record<string, unknown> }
+
+export type RepositoryGetInput = { projectId?: string | null; repositoryId: string }
+
+export type RepositoryGetOutput = { archived: boolean; canonicalUrl: string; cloneUrl: string; defaultBranch: string; enabled: boolean; id: string; name: string; owner: string; preparationState: string; projectId: string; trusted: boolean; version: number }
+
+export type RepositoryListInput = { includeArchived?: boolean | null; projectId?: string | null }
+
+export type RepositoryListOutput = { repositories: RepositoryItem[] }
+
+export type RepositoryPrepareInput = { expectedVersion?: number | null; projectId: string; repository: string }
+
+export type RepositoryPrepareOutput = { done: string; repository: Record<string, unknown> }
 
 export type RequestCancelInput = { requestId: string }
 
@@ -954,6 +1010,8 @@ export type Operations = {
   field_create: { input: FieldCreateInput; output: FieldCreateOutput }
   field_list: { input: FieldListInput; output: FieldListOutput }
   field_update: { input: FieldUpdateInput; output: FieldUpdateOutput }
+  github_automation_update: { input: GithubAutomationUpdateInput; output: GithubAutomationUpdateOutput }
+  github_installation_link: { input: GithubInstallationLinkInput; output: GithubInstallationLinkOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
   history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
   history_show: { input: HistoryShowInput; output: HistoryShowOutput }
@@ -998,6 +1056,11 @@ export type Operations = {
   plan_import: { input: PlanImportInput; output: PlanImportOutput }
   project_get: { input: ProjectGetInput; output: ProjectGetOutput }
   project_list: { input: ProjectListInput; output: ProjectListOutput }
+  pull_request_create: { input: PullRequestCreateInput; output: PullRequestCreateOutput }
+  pull_request_get: { input: PullRequestGetInput; output: PullRequestGetOutput }
+  pull_request_list: { input: PullRequestListInput; output: PullRequestListOutput }
+  pull_request_merge: { input: PullRequestMergeInput; output: PullRequestMergeOutput }
+  pull_request_refresh: { input: PullRequestRefreshInput; output: PullRequestRefreshOutput }
   recurring_create: { input: RecurringCreateInput; output: RecurringCreateOutput }
   recurring_update: { input: RecurringUpdateInput; output: RecurringUpdateOutput }
   reply_claim: { input: ReplyClaimInput; output: ReplyClaimOutput }
@@ -1007,6 +1070,11 @@ export type Operations = {
   reply_retry: { input: ReplyRetryInput; output: ReplyRetryOutput }
   reply_send: { input: ReplySendInput; output: ReplySendOutput }
   reply_stop: { input: ReplyStopInput; output: ReplyStopOutput }
+  repository_archive: { input: RepositoryArchiveInput; output: RepositoryArchiveOutput }
+  repository_create: { input: RepositoryCreateInput; output: RepositoryCreateOutput }
+  repository_get: { input: RepositoryGetInput; output: RepositoryGetOutput }
+  repository_list: { input: RepositoryListInput; output: RepositoryListOutput }
+  repository_prepare: { input: RepositoryPrepareInput; output: RepositoryPrepareOutput }
   request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
   request_create: { input: RequestCreateInput; output: RequestCreateOutput }
   request_get: { input: RequestGetInput; output: RequestGetOutput }

@@ -1095,14 +1095,8 @@ async fn starter_project(
     let name = crate::projects::normalize_project_name(&project.name)?;
     let key = crate::projects::normalize_project_key(&project.key)?;
     let candidates = key_candidates(&key);
-    let existing = reusable_starter(
-        &mut **transaction,
-        organization_id,
-        caller.actor_id,
-        &name,
-        &key,
-    )
-    .await?;
+    let existing =
+        reusable_starter(transaction, organization_id, caller.actor_id, &name, &key).await?;
     if let Some(id) = existing {
         return Ok((id, false));
     }

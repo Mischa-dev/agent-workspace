@@ -197,6 +197,22 @@ const KINDS: &[(&str, &str)] = &[
         "SELECT organization_id, project_id FROM webhook_subscriptions \
          WHERE id = $1 AND owner_actor_id = $2",
     ),
+    // K2.18: a repository, archived ones too, in its space; the command
+    // checks who may see or manage it.
+    (
+        "repository",
+        "SELECT project.organization_id, project.id FROM repositories repository \
+         JOIN projects project ON project.id = repository.project_id \
+         WHERE repository.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    // K2.18: a pull request goes by pull_request_visible_to (one opened
+    // from a private thread stays private).
+    (
+        "pull_request",
+        "SELECT project.organization_id, project.id FROM github_pull_requests pull \
+         JOIN projects project ON project.id = pull.project_id \
+         WHERE pull.id = $1 AND pull_request_visible_to(pull.id, $2)",
+    ),
     // A1.8: a request goes by request_visible_to, which holds its
     // conversation's and run's visibility.
     (
@@ -308,6 +324,8 @@ fn what_of(kind: &str) -> &'static str {
         "whiteboard" => "That whiteboard",
         "request" => "That request",
         "webhook" => "That webhook",
+        "repository" => "That repository",
+        "pull_request" => "That pull request",
         _ => "That",
     }
 }

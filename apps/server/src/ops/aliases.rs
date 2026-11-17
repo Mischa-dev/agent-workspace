@@ -261,6 +261,73 @@ fn environment_write_in(mut arguments: JsonObject) -> JsonObject {
     arguments
 }
 
+/// `repository_write` prepared or archived the repository it named, and
+/// added one otherwise.
+fn repository_write_runs(arguments: &JsonObject) -> &'static str {
+    let flag = |name: &str| arguments.get(name).and_then(Value::as_bool) == Some(true);
+    if arguments.contains_key("repository") && flag("archive") {
+        "repository_archive"
+    } else if arguments.contains_key("repository") && flag("prepare") {
+        "repository_prepare"
+    } else {
+        "repository_create"
+    }
+}
+
+fn repository_write_in(arguments: JsonObject) -> JsonObject {
+    let keep: &[&str] = match repository_write_runs(&arguments) {
+        "repository_create" => &[
+            "projectId",
+            "owner",
+            "name",
+            "githubRepositoryId",
+            "installationId",
+            "defaultBranch",
+            "trustAcknowledged",
+            // Refused by the operation, as repository_write refused them.
+            "repository",
+            "prepare",
+            "archive",
+        ],
+        _ => &["projectId", "repository", "expectedVersion"],
+    };
+    keep_only(arguments, keep)
+}
+
+/// `github_integration_write` linked an installation or switched the
+/// automation.
+fn github_integration_write_runs(arguments: &JsonObject) -> &'static str {
+    if arguments.contains_key("installationId") || arguments.contains_key("repositories") {
+        "github_installation_link"
+    } else {
+        "github_automation_update"
+    }
+}
+
+fn github_integration_write_in(arguments: JsonObject) -> JsonObject {
+    // Mixing the two was refused; the operation refuses the other's fields.
+    let _ = github_integration_write_runs(&arguments);
+    keep_only(
+        arguments,
+        &[
+            "projectId",
+            "installationId",
+            "repositories",
+            "pullRequestOpen",
+            "pullRequestMerge",
+            "expectedVersion",
+        ],
+    )
+}
+
+/// The arguments one operation takes, and the workspace the call names.
+fn keep_only(mut arguments: JsonObject, keep: &[&str]) -> JsonObject {
+    arguments.retain(|key, value| {
+        (keep.contains(&key.as_str()) || key == NAMED_WORKSPACE) && !value.is_null()
+    });
+    arguments
+}
+
 /// The rename plan of K2 section 3.6. Adapters beyond the identity land
 /// with each row's canonical operation, in its module's slice.
 pub const ALIASES: &[Alias] = &[
@@ -318,6 +385,28 @@ pub const ALIASES: &[Alias] = &[
         sunset: None,
     },
     run_renamed!("webhook_deliveries" => "webhook_delivery_list"),
+    // K2.18: repository_write and github_integration_write chose by their
+    // fields; both answered in the envelope already.
+    Alias {
+        name: "repository_write",
+        canonical: repository_write_runs,
+        runs: &[
+            "repository_create",
+            "repository_prepare",
+            "repository_archive",
+        ],
+        adapt_in: repository_write_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
+    Alias {
+        name: "github_integration_write",
+        canonical: github_integration_write_runs,
+        runs: &["github_installation_link", "github_automation_update"],
+        adapt_in: github_integration_write_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
     // K2.18: environment_write chose by its fields; it answered in the
     // envelope already.
     Alias {

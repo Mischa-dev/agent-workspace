@@ -15,5 +15,6 @@ impl CoreModule for Module {
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::repositories::router);
         module.routes(crate::github::router);
+        module.operations(crate::code_host::ops::register_ops);
     }
 }

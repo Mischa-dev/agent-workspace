@@ -506,6 +506,38 @@
     "title": "Update field"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "github.automation_updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "code",
+    "name": "github_automation_update",
+    "permission": "code.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Update pull request automation"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "github.installation_linked"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "code",
+    "name": "github_installation_link",
+    "permission": "code.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Link GitHub installation"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -1187,6 +1219,82 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "pull_request.requested"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "code",
+    "name": "pull_request_create",
+    "permission": "code.publish",
+    "preview": false,
+    "proposable": false,
+    "title": "Open pull request"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "code",
+    "name": "pull_request_get",
+    "permission": "code.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Get pull request"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "code",
+    "name": "pull_request_list",
+    "permission": "code.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List pull requests"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "pull_request.merged"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "code",
+    "name": "pull_request_merge",
+    "permission": "code.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Merge pull request"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "pull_request.refresh_requested"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "code",
+    "name": "pull_request_refresh",
+    "permission": "code.publish",
+    "preview": false,
+    "proposable": false,
+    "title": "Refresh pull request"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "recurring.created"
     ],
     "idempotent": true,
@@ -1326,6 +1434,82 @@
     "preview": false,
     "proposable": false,
     "title": "Stop reply request"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "repository.archived"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "code",
+    "name": "repository_archive",
+    "permission": "code.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Archive repository"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "repository.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "code",
+    "name": "repository_create",
+    "permission": "code.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Add repository"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "code",
+    "name": "repository_get",
+    "permission": "code.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Get repository"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "code",
+    "name": "repository_list",
+    "permission": "code.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List repositories"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "repository.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "code",
+    "name": "repository_prepare",
+    "permission": "code.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Prepare repository"
   },
   {
     "automation": true,
