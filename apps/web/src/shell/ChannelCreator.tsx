@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import { createChannel } from '../conversations/sidebarApi'
-import { Button, Dialog, TextField } from '../ui'
+import { Button, Checkbox, Dialog, TextField } from '../ui'
 
 /** The New channel dialog, loaded when someone opens it. */
 export default function ChannelCreator({
@@ -20,6 +20,7 @@ export default function ChannelCreator({
   const queryClient = useQueryClient()
   const idempotencyKey = useRef(crypto.randomUUID())
   const [name, setName] = useState('')
+  const [isPrivate, setPrivate] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const value = name.trim().replace(/^#/, '')
@@ -29,10 +30,11 @@ export default function ChannelCreator({
     if (!value || busy) return
     setBusy(true)
     setError(null)
-    void createChannel({ projectId, name: value, idempotencyKey: idempotencyKey.current })
+    void createChannel({ projectId, name: value, private: isPrivate, idempotencyKey: idempotencyKey.current })
       .then((channel) => {
         idempotencyKey.current = crypto.randomUUID()
         setName('')
+        setPrivate(false)
         onClose()
         void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
         onCreated(`/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channel.id)}`)
@@ -43,7 +45,7 @@ export default function ChannelCreator({
 
   return (
     <Dialog
-      description="Channels are where a project’s conversations happen. Everyone in the project can read and post."
+      description="Channels are where a project’s conversations happen. Everyone in the project can read and post, unless you make it private."
       onClose={onClose}
       open={open}
       title="New channel"
@@ -55,9 +57,21 @@ export default function ChannelCreator({
           hint="Short and lowercase works best, like design or deploys."
           label="Name"
           maxLength={120}
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => {
+            setName(event.target.value)
+            idempotencyKey.current = crypto.randomUUID()
+          }}
           prefix="#"
           value={name}
+        />
+        <Checkbox
+          checked={isPrivate}
+          description="Only people you add can find it and read it. You can add them once it’s made."
+          label="Private"
+          onChange={(checked) => {
+            setPrivate(checked)
+            idempotencyKey.current = crypto.randomUUID()
+          }}
         />
         <div className="aw-form__actions">
           <Button onClick={onClose}>Cancel</Button>

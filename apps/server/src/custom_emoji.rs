@@ -72,7 +72,7 @@ pub(crate) async fn charge_announcement(
         "SELECT count(*) FROM projects WHERE organization_id = $1 AND archived_at IS NULL",
     )
     .bind(workspace_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let events = u32::try_from(spaces.clamp(1, 500)).unwrap_or(500);
     state

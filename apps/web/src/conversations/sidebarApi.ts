@@ -206,6 +206,8 @@ export async function markConversationSeen(input: {
 export async function createChannel(input: {
   projectId: string
   name: string
+  /** Its members only, starting with you (C2.6). */
+  private?: boolean
   idempotencyKey: string
 }) {
   const payload = asRecord(await requestJson<unknown>(
@@ -213,7 +215,7 @@ export async function createChannel(input: {
     {
       method: 'POST',
       idempotencyKey: input.idempotencyKey,
-      json: { name: input.name },
+      json: input.private ? { name: input.name, private: true } : { name: input.name },
     },
   ))
   const conversation = asRecord(payload.conversation ?? payload.channel ?? payload)

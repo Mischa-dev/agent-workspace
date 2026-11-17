@@ -16,6 +16,7 @@
     "conversation_start": "create",
     "conversation_continue": "create",
     "conversation_members": "query",
+    "conversation_member_list": "query",
     "conversation_update": "change",
     "message_send": "create",
     "message_forward": "create",

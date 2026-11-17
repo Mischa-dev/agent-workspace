@@ -577,6 +577,35 @@
           }
         ]
       },
+      "ConversationMember": {
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "The account's kind, for showing it.",
+            "type": "string"
+          },
+          "manager": {
+            "description": "Changes who's in a private channel.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "displayName",
+          "handle",
+          "kind",
+          "manager"
+        ],
+        "type": "object"
+      },
       "CriterionOp": {
         "enum": [
           "add",
@@ -8506,6 +8535,258 @@
           "messages"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/conversation_member_list": {
+      "post": {
+        "description": "Who is in a private channel or a group (or the one a thread is in), which of them manage a private channel, and whether you can add and remove others with conversation_members. An open channel has no member list: everyone in its space reads it.",
+        "operationId": "conversation_member_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversationId": {
+                    "description": "A private channel or a group, or a thread in one: its id or a link.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conversationId"
+                ],
+                "title": "ConversationMemberListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "canManage": {
+                              "description": "Whether you can add and remove others (conversation_members).",
+                              "type": "boolean"
+                            },
+                            "conversationId": {
+                              "description": "The channel or group whose members these are, even for a thread.",
+                              "type": "string"
+                            },
+                            "members": {
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationMember"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "conversationId",
+                            "members",
+                            "canManage"
+                          ],
+                          "title": "ConversationMembers",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "canManage": {
+                              "description": "Whether you can add and remove others (conversation_members).",
+                              "type": "boolean"
+                            },
+                            "conversationId": {
+                              "description": "The channel or group whose members these are, even for a thread.",
+                              "type": "string"
+                            },
+                            "members": {
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationMember"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "conversationId",
+                            "members",
+                            "canManage"
+                          ],
+                          "title": "ConversationMembers",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List members",
+        "tags": [
+          "messages"
+        ],
+        "x-operation-kind": "query"
       }
     },
     "/api/v2/w/{workspace}/ops/conversations_mark_read": {

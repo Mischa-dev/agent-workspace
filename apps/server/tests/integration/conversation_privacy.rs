@@ -240,6 +240,33 @@ async fn private_channels_belong_to_their_members() {
     let (status, added) = send(app, add(lena, mara.actor, "add-mara")).await;
     assert_eq!(status, StatusCode::OK, "{added}");
     assert!(sees("mara").await);
+    let members = |by: &Person| {
+        by.browser.request(
+            "POST",
+            "/api/v2/ops/conversation_member_list",
+            None,
+            json!({"conversationId": channel}),
+        )
+    };
+    let (status, listed) = send(app, members(lena)).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["value"]["canManage"], true, "{listed}");
+    assert_eq!(listed["value"]["members"][0]["manager"], true, "{listed}");
+    assert_eq!(
+        listed["value"]["members"].as_array().map(Vec::len),
+        Some(2),
+        "{listed}"
+    );
+    let (status, listed) = send(app, members(mara)).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["value"]["canManage"], false, "{listed}");
+    // Someone outside it learns nothing about who's in it.
+    let (status, refused) = send(app, members(nina)).await;
+    assert_ne!(status, StatusCode::OK, "{refused}");
+    assert!(
+        !refused.to_string().contains(&lena.actor.to_string()),
+        "{refused}"
+    );
     // Mara is in it but doesn't manage it.
     let (status, refused) = send(app, add(mara, nina.actor, "mara-adds-nina")).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");

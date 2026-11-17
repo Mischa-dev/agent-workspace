@@ -3861,6 +3861,16 @@ pub(crate) async fn fetch_conversation_access(
     actor_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<Option<ConversationAccessRow>, AppError> {
+    read_conversation_access(crate::db::scoped(pool), actor_id, conversation_id).await
+}
+
+/// [`fetch_conversation_access`] on a given connection, such as an
+/// operation's transaction; it reads without locking.
+pub(crate) async fn read_conversation_access<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+) -> Result<Option<ConversationAccessRow>, AppError> {
     Ok(sqlx::query_as::<_, ConversationAccessRow>(
         r#"
         SELECT
@@ -3909,7 +3919,7 @@ pub(crate) async fn fetch_conversation_access(
     )
     .bind(conversation_id)
     .bind(actor_id)
-    .fetch_optional(crate::db::scoped(pool))
+    .fetch_optional(executor)
     .await?)
 }
 

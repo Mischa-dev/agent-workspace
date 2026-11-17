@@ -572,27 +572,16 @@ pub(crate) async fn change_group_members(
         return Err(AppError::Validation("group members"));
     }
     let leaving_only = add.is_empty() && remove.iter().all(|id| *id == editor.actor_id);
-    // -- visibility: only a kind and a flag, before the checked lock below.
-    let private_channel = sqlx::query_scalar::<_, bool>(
-        "SELECT kind = 'channel' AND visibility = 'members' FROM conversations WHERE id = $1",
-    )
-    .bind(conversation_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .unwrap_or(false);
     let conversation = lock_conversation_for(
         transaction,
         editor.actor_id,
         editor.actor_kind,
         conversation_id,
-        if leaving_only || private_channel {
-            Action::ProjectView
-        } else {
-            Action::ChannelCreate
-        },
+        Action::ProjectView,
         false,
     )
     .await?;
+    let private_channel = conversation.private && conversation.kind == "channel";
     if private_channel {
         if !leaving_only && !manages_channel(transaction, &conversation, &editor).await? {
             return Err(AppError::Forbidden);
@@ -602,6 +591,10 @@ pub(crate) async fn change_group_members(
             "conversation",
             "only groups and private channels change members",
         ));
+    } else if !leaving_only
+        && !conversation.allows(editor.actor_id, editor.actor_kind, Action::ChannelCreate)?
+    {
+        return Err(AppError::NotFound("conversation"));
     } else if editor.actor_kind != ActorKind::Human && !leaving_only {
         return Err(AppError::Forbidden);
     }

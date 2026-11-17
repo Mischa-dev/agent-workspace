@@ -19,7 +19,6 @@ hosts/builtin/http.rs::select_run_setup_for | locks the thread a run starts in, 
 launch.rs::launch_from_tag | reads the message that tagged an agent, by id, inside the send pipeline
 launch.rs::queue_tag_launches | reads a just-written message's author by id, inside the send pipeline
 link_previews.rs::refresh_messages | a worker refreshing previews on messages by id; no text leaves it
-mcp/channels.rs::channel_create | the caller's own new channel's name clash in a space they create channels in
 mcp/channels.rs::conversation_update | locks a conversation by id after the moderation check
 mcp/channels.rs::conversation_value | the kind of a thread's parent the caller already read
 mcp/replies.rs::conflict_reason | the agent's own reply request, by id, scoped to the agent

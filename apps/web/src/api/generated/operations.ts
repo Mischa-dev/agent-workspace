@@ -50,6 +50,8 @@ export type Content = { body?: Record<string, unknown> | null; key: string; kind
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
 
+export type ConversationMember = { displayName: string; handle: string; id: string; kind: string; manager: boolean }
+
 export type CriterionOp = "add" | "edit" | "check" | "uncheck" | "remove" | "move"
 
 export type CriterionOperationArgument = { criterion?: string | null; op: CriterionOp; position?: number | null; text?: string | null }
@@ -283,6 +285,10 @@ export type ConnectionUpdateOutput = { connection: ConnectionView; webhookSecret
 export type ConversationMarkReadInput = { conversationId: string; fromMessageId?: string | null; unread?: boolean | null; upToSequence?: number | null }
 
 export type ConversationMarkReadOutput = { conversationId: string; lastReadSequence: number; unreadCount: number }
+
+export type ConversationMemberListInput = { conversationId: string }
+
+export type ConversationMemberListOutput = { canManage: boolean; conversationId: string; members: ConversationMember[] }
 
 export type ConversationsMarkReadInput = { spaceId?: string | null }
 
@@ -684,6 +690,7 @@ export type Operations = {
   connection_secret_rotate: { input: ConnectionSecretRotateInput; output: ConnectionSecretRotateOutput }
   connection_update: { input: ConnectionUpdateInput; output: ConnectionUpdateOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
+  conversation_member_list: { input: ConversationMemberListInput; output: ConversationMemberListOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
   custom_emoji_list: { input: CustomEmojiListInput; output: CustomEmojiListOutput }
