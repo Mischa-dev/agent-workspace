@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn a_planted_kind_fails_the_list() {
-        let migration = "ALTER TABLE projects DROP CONSTRAINT projects_kind_check,\n    ADD CONSTRAINT projects_kind_check\n        CHECK (kind IN ('standard', 'direct', 'workspace', 'team', 'personal', 'hidden'));";
+        let migration = "ALTER TABLE projects DROP CONSTRAINT projects_kind_check,\n    ADD CONSTRAINT projects_kind_check\n        CHECK (kind IN ('standard', 'workspace', 'team', 'personal', 'hidden'));";
         let planted = kinds_in(migration).expect("a definition");
         assert!(planted.contains("hidden"), "{planted:?}");
         assert!(kind_list_problem(&planted).is_some());

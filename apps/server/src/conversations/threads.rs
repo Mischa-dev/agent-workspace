@@ -513,6 +513,7 @@ async fn insert(
         )
         VALUES (
             $1, $2,
+            -- visibility: the parent's workspace only, after the parent's access check
             COALESCE((SELECT organization_id FROM projects WHERE id = $2),
                      (SELECT workspace_id FROM conversations WHERE id = $4)),
             $3, $4, $5, $6, $7,

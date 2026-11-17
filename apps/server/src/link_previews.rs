@@ -175,7 +175,11 @@ pub(crate) async fn add_for_message(
     }
     // The message's workspace: its space's, or the direct scope for a DM.
     let organization_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM messages WHERE id = $1")
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT workspace_id FROM messages \
+             -- visibility: the workspace of a message just sent by its author\n \
+             WHERE id = $1",
+        )
             .bind(message_id)
             .fetch_one(&mut **transaction)
             .await?;

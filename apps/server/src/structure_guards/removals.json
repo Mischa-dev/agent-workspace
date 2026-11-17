@@ -38,7 +38,6 @@
     "workspace.rs": "K1.19: the second role model (WorkspaceRole); becomes workspace permissions through access::check"
   },
   "rust_role_checks": {
-    "direct.rs": "K1.15: a role compared by name in Rust; becomes a permission or the role tier",
     "external_agents.rs": "K1.6: a role compared by name in Rust; becomes a permission or the role tier",
     "invitations.rs": "K1.19: a role compared by name in Rust; becomes a permission or the role tier",
     "layouts.rs": "K1.19: a role compared by name in Rust; becomes a permission or the role tier",
@@ -146,7 +145,6 @@
     "account.rs": "K1.19: an account kind compared as its stored string; a permission or AccountKind behind accounts",
     "agent_profiles.rs": "K1.8: an account kind compared as its stored string; a permission or AccountKind behind accounts",
     "audit_log.rs": "K1.19: an account kind compared as its stored string; a permission or AccountKind behind accounts",
-    "direct.rs": "K1.15: an account kind compared as its stored string; a permission or AccountKind behind accounts",
     "execution.rs": "K1.18: an account kind compared as its stored string; a permission or AccountKind behind accounts",
     "github.rs": "K1.18: an account kind compared as its stored string; a permission or AccountKind behind accounts",
     "later.rs": "K1.20: an account kind compared as its stored string; a permission or AccountKind behind accounts",
