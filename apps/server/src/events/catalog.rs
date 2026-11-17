@@ -419,6 +419,17 @@ pub static PULL_REQUEST_CLOSED: EventType = fact(
 )
 .automatable();
 
+// --- automations -----------------------------------------------------------
+/// An outside service's delivery to an incoming hook checked out (K3.26).
+/// The payload holds the delivery's id; the body stays in its record.
+pub static INCOMING_HOOK_RECEIVED: EventType = fact(
+    "incoming_hook.received",
+    "automations",
+    Some("incoming_hook"),
+    "An incoming hook received a delivery",
+)
+.automatable();
+
 // --- spaces (today's projects) ---------------------------------------------
 pub static SPACE_MEMBER_CHANGED: EventType = fact(
     "space.member.changed",
@@ -523,6 +534,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &PULL_REQUEST_CHECKS_PASSED,
         &PULL_REQUEST_MERGED,
         &PULL_REQUEST_CLOSED,
+        &INCOMING_HOOK_RECEIVED,
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
         &WORKSPACE_LIFECYCLE_CHANGED,

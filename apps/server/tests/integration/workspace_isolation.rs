@@ -1969,6 +1969,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "approval_list",
     "automation_list",
     "automation_runs",
+    "incoming_hook_list",
     "briefing",
     "bug_report_link_list",
     "conversation_list",
@@ -2207,6 +2208,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("skill_list"),
         by_project("decision_list"),
+        by_project("incoming_hook_list"),
         case(
             "package_export",
             vec![json!({"spaceId": "WORK"}), json!({"wholeWorkspace": true})],

@@ -280,7 +280,7 @@ async fn the_log_carries_no_text() {
     assert!(said > 0 && logged > 0, "messages {said}, events {logged}");
     let mut found = Vec::new();
     for (ty, payload) in &rows {
-        text_under(&payload, &marker, "", &mut |path| {
+        text_under(payload, &marker, "", &mut |path| {
             found.push(format!("{ty}: {path}"));
         });
     }

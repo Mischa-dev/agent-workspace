@@ -354,7 +354,8 @@ pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
         oauth_refresh_tokens AS (DELETE FROM mcp_oauth_refresh_tokens WHERE id IN (SELECT id FROM refresh_eligible) RETURNING 1),
         completed_temporary_jobs AS (DELETE FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days' RETURNING 1),
         stopped_instances AS (DELETE FROM server_instances WHERE coalesce(stopped_at, heartbeat_at) <= now() - interval '7 days' RETURNING 1),
-        old_ended_mcp_sessions AS (DELETE FROM mcp_ended_sessions WHERE ended_at <= now() - interval '30 days' RETURNING 1)
+        old_ended_mcp_sessions AS (DELETE FROM mcp_ended_sessions WHERE ended_at <= now() - interval '30 days' RETURNING 1),
+        old_incoming_hook_deliveries AS (DELETE FROM incoming_hook_deliveries WHERE received_at <= now() - interval '30 days' RETURNING 1)
         SELECT (SELECT count(*) FROM expired_idempotency)
              + (SELECT count(*) FROM expired_invitations)
              + (SELECT count(*) FROM oauth_authorization_codes)
@@ -363,6 +364,7 @@ pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
              + (SELECT count(*) FROM completed_temporary_jobs)
              + (SELECT count(*) FROM stopped_instances)
              + (SELECT count(*) FROM old_ended_mcp_sessions)
+             + (SELECT count(*) FROM old_incoming_hook_deliveries)
         "#,
     )
     .fetch_one(&mut *transaction)

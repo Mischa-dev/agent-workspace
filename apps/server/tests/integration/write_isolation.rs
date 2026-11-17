@@ -378,6 +378,12 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ),
     ("POST /api/v1/auth/login", SIGN_IN),
     (
+        "POST /api/v1/incoming-hooks/{hook_id}",
+        "an outside service's signed delivery to one hook, with no session: the hook's own \
+         secret decides, and a rule naming another workspace's hook is refused \
+         (automation_write below; tests/integration/incoming_hooks.rs)",
+    ),
+    (
         "POST /api/v1/host/commands/{command_id}/ack",
         "a host answering one of its own commands with its own token; another host's \
          command is not found (tests/integration/a1_host_protocol.rs)",
@@ -484,6 +490,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "invitation_write",
     "invite_link_create",
     "invite_link_revoke",
+    "incoming_hook_create",
+    "incoming_hook_delete",
     "label_write",
     "layout_preset_write",
     "field_write",
@@ -6968,6 +6976,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"thing": a.page, "version": 1, "expectedVersion": version("project_pages", &a.page)}),
             vec![json!({"thing": b.page, "version": 1, "expectedVersion": 1})],
         ),
+        // K3.26: incoming hooks, made and deleted in a space.
+        mcp_case(
+            "incoming_hook_create",
+            json!({"projectId": a.project, "name": "Net hook"}),
+            vec![json!({"projectId": b.project, "name": "Net hook"})],
+        ),
+        mcp_case(
+            "incoming_hook_delete",
+            json!({"projectId": a.project, "hookId": a.incoming_hook}),
+            vec![json!({"projectId": b.project, "hookId": b.incoming_hook})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "hookId": b.incoming_hook}),
+        ])
+        .last(),
         // Decisions and planning
         mcp_case(
             "decision_record",
@@ -7127,6 +7150,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "name": "Net mcp rule b",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
+            }),
+            // K3.26: B's incoming hook can't start A's rule.
+            json!({
+                "projectId": a.project,
+                "operation": "create",
+                "name": "Net mcp rule c",
+                "trigger": {"kind": "incoming_hook", "hookId": b.incoming_hook},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
             }),
         ]),
         mcp_case(

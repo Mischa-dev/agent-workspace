@@ -32,9 +32,13 @@ export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" 
 
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
 
+export type DeliveryView = { deliveryId: string; outcome: string; reason?: string | null; receivedAt: string }
+
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
 
 export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
+
+export type HookView = { createdAt: string; id: string; lastDeliveryAt?: string | null; name: string; recent: DeliveryView[]; spaceId: string; url: string }
 
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
@@ -138,6 +142,18 @@ export type HostUnlinkInput = { hostId: string }
 
 export type HostUnlinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
+export type IncomingHookCreateInput = { name: string; spaceId: string }
+
+export type IncomingHookCreateOutput = { hook: HookView; secret?: string | null }
+
+export type IncomingHookDeleteInput = { hookId: string; spaceId: string }
+
+export type IncomingHookDeleteOutput = { deleted: boolean }
+
+export type IncomingHookListInput = { spaceId: string }
+
+export type IncomingHookListOutput = { hooks: HookView[] }
+
 export type InviteLinkCreateInput = { expiresInDays?: number | null; maxUses?: number | null; roleId?: string | null; space?: string | null }
 
 export type InviteLinkCreateOutput = { link: InviteLinkView; token?: string | null; url?: string | null }
@@ -237,6 +253,9 @@ export type Operations = {
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
+  incoming_hook_create: { input: IncomingHookCreateInput; output: IncomingHookCreateOutput }
+  incoming_hook_delete: { input: IncomingHookDeleteInput; output: IncomingHookDeleteOutput }
+  incoming_hook_list: { input: IncomingHookListInput; output: IncomingHookListOutput }
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
   invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
   invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }

@@ -49,6 +49,7 @@ mod github_task_keys;
 mod harness_support;
 mod history_seam;
 mod hosting_limits;
+mod incoming_hooks;
 mod journey;
 mod layouts;
 mod links_store;
