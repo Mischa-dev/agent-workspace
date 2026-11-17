@@ -297,6 +297,9 @@ pub async fn sweep(state: &AppState) -> Result<usize, AppError> {
         SELECT project.id, project.organization_id
         FROM projects project
         LEFT JOIN ai_project_scans scan ON scan.project_id = project.id
+        JOIN organizations workspace
+          ON workspace.id = project.organization_id
+         AND workspace.lifecycle NOT IN ('suspended', 'deleting')
         WHERE project.kind = 'standard' AND project.archived_at IS NULL
           AND EXISTS (
               SELECT 1 FROM task_rows item
@@ -337,6 +340,9 @@ pub async fn nightly(state: &AppState) -> Result<usize, AppError> {
         SELECT project.id, project.organization_id
         FROM projects project
         LEFT JOIN ai_project_scans scan ON scan.project_id = project.id
+        JOIN organizations workspace
+          ON workspace.id = project.organization_id
+         AND workspace.lifecycle NOT IN ('suspended', 'deleting')
         WHERE project.kind = 'standard' AND project.archived_at IS NULL
           AND COALESCE(scan.last_nightly_at, '-infinity'::timestamptz) < now() - interval '20 hours'
           AND EXISTS (
@@ -408,6 +414,8 @@ struct ProjectRow {
     project_key: String,
     standard: bool,
     archived: bool,
+    /// The workspace is suspended or being deleted (H1.24).
+    closed: bool,
     last_scan_at: Option<DateTime<Utc>>,
 }
 
@@ -490,8 +498,10 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
         SELECT project.organization_id, project.project_key,
                project.kind = 'standard' AS standard,
                project.archived_at IS NOT NULL AS archived,
+               workspace.lifecycle IN ('suspended', 'deleting') AS closed,
                scan.last_scan_at
         FROM projects project
+        JOIN organizations workspace ON workspace.id = project.organization_id
         LEFT JOIN ai_project_scans scan ON scan.project_id = project.id
         WHERE project.id = $1
         "#,
@@ -509,6 +519,12 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
     if !project.standard || project.archived {
         return Err(AiError::NotConfigured(
             "AI planning runs only in open projects.".to_owned(),
+        ));
+    }
+    // Nothing is read or sent for a suspended or closing workspace.
+    if project.closed {
+        return Err(AiError::NotConfigured(
+            "This workspace is suspended or being deleted.".to_owned(),
         ));
     }
     // A person's run stops if they lost the project (principle 9).
