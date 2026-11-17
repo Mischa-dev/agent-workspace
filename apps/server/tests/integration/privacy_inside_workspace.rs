@@ -1344,7 +1344,7 @@ async fn invitation_links_admit_up_to_their_uses_within_their_makers_role() {
     .await;
     assert_eq!(status, StatusCode::OK, "{resolved}");
     assert_eq!(resolved["role"], "member");
-    assert_eq!(resolved["projectName"].is_string(), true, "{resolved}");
+    assert!(resolved["projectName"].is_string(), "{resolved}");
     for who in ["nia", "omar"] {
         let (status, body) = send(&world.app, join(&token, who)).await;
         assert_eq!(status, StatusCode::OK, "{who}: {body}");

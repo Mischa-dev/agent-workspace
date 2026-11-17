@@ -106,6 +106,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/inbox/summary",
     "/api/v1/link-previews/{id}/image",
     "/api/v1/later",
+    "/api/v1/links/resolve",
     "/api/v1/my-work",
     "/api/v1/notification-settings",
     "/api/v1/organizations/{organization_id}",
@@ -936,6 +937,24 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/workspaces/by-slug/{slug}",
             vec![format!("/api/v1/workspaces/by-slug/{}", a.slug)],
             vec![format!("/api/v1/workspaces/by-slug/{}", b.slug)],
+            vec![],
+        ),
+        // K4.18: an old address of B's never resolves for A, not even to
+        // B's workspace slug.
+        case(
+            "/api/v1/links/resolve",
+            vec![format!(
+                "/api/v1/links/resolve?path=/projects/{}/work-items/{}",
+                a.project, a.task
+            )],
+            vec![
+                format!(
+                    "/api/v1/links/resolve?path=/projects/{}/work-items/{}",
+                    b.project, b.task
+                ),
+                format!("/api/v1/links/resolve?path=/w/{}/inbox", b.slug),
+                format!("/api/v1/links/resolve?path=/messages/{}", b.channel),
+            ],
             vec![],
         ),
         case(

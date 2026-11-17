@@ -2297,12 +2297,13 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
             &format!("/api/v1/projects/{second}/members/{actor}"),
             &cookie,
             &csrf,
-            "no-agent-admin",
+            "agent-admin",
             json!({"expectedVersion":1,"role":"admin"}),
         ))
         .await
         .expect("account fixture operation");
-    assert_eq!(elevated.status(), StatusCode::FORBIDDEN);
+    // An agent holds any role a person can (K1.14a).
+    assert_eq!(elevated.status(), StatusCode::OK);
     let removed = application
         .clone()
         .oneshot(write_request_with_idempotency(
@@ -2311,7 +2312,7 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
             &cookie,
             &csrf,
             "remove-agent",
-            json!({"expectedVersion":1,"enabled":false}),
+            json!({"expectedVersion":2,"enabled":false}),
         ))
         .await
         .expect("account fixture operation");

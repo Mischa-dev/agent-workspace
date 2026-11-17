@@ -601,3 +601,79 @@ async fn open_team_space_is_readable_not_joined() {
             .is_none()
     );
 }
+
+/// K4.18: an old address resolves to its workspace address only for someone
+/// who may see what it leads to; anyone else gets the same 404 as for an
+/// address that leads nowhere, and never learns the workspace's slug.
+#[tokio::test]
+async fn old_addresses_resolve_only_for_those_who_may_see_them() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("nia", "member")
+        .dm("lena", "mara")
+        .build("k418_resolve")
+        .await
+    else {
+        return;
+    };
+    let slug = sqlx::query_scalar::<_, String>("SELECT slug FROM organizations WHERE id = $1")
+        .bind(world.organization)
+        .fetch_one(world.pool())
+        .await
+        .expect("slug");
+    let resolve = |who: &str, path: &str| {
+        world.people[who].browser.request(
+            "GET",
+            &format!("/api/v1/links/resolve?path={}", urlencode(path)),
+            None,
+            serde_json::Value::Null,
+        )
+    };
+    let space = world.project("WORK");
+    let dm = &world.conversations["lena+mara"];
+
+    // A space's page, with its query kept.
+    let (status, body) = send(
+        &world.app,
+        resolve("nia", &format!("/projects/{space}/pages?view=all")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["path"], format!("/w/{slug}/s/{space}/pages?view=all"));
+    assert_eq!(body["workspaceId"], world.organization.to_string());
+
+    // A DM: its two people only.
+    for who in ["lena", "mara"] {
+        let (status, body) = send(&world.app, resolve(who, &format!("/messages/{dm}"))).await;
+        assert_eq!(status, StatusCode::OK, "{who}: {body}");
+        assert_eq!(body["path"], format!("/w/{slug}/dm/{dm}"));
+    }
+    let (status, body) = send(&world.app, resolve("nia", &format!("/messages/{dm}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(!body.to_string().contains(&slug), "{body}");
+
+    // Nowhere, and things that aren't addresses, answer the same.
+    for path in [
+        format!("/projects/{}/pages", Uuid::now_v7()),
+        format!("/messages/{}", Uuid::now_v7()),
+        "//elsewhere.example/inbox".to_owned(),
+        "/account".to_owned(),
+    ] {
+        let (status, body) = send(&world.app, resolve("nia", &path)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {body}");
+    }
+    world.finish().await;
+}
+
+fn urlencode(path: &str) -> String {
+    path.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}

@@ -512,8 +512,9 @@ async fn owners_add_change_and_remove_members() {
     assert_eq!(added["value"]["kind"], "agent");
     let again = set(json!({"projectId": work, "person": "mara"})).await;
     assert_eq!(again["outcome"], "ok", "adding twice is harmless: {again}");
-    let refused = set(json!({"projectId": work, "person": "@mara", "role": "admin"})).await;
-    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    // An agent holds any role a person can (K1.14a).
+    let admin = set(json!({"projectId": work, "person": "@mara", "role": "admin"})).await;
+    assert_eq!(admin["value"]["role"], "admin", "{admin}");
     let viewer = set(json!({"projectId": work, "person": "@mara", "role": "viewer"})).await;
     assert_eq!(viewer["value"]["role"], "viewer", "{viewer}");
     let own = set(json!({"projectId": work, "person": "@owner", "remove": true})).await;

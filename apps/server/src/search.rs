@@ -163,6 +163,7 @@ impl SearchHit {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn search(
     pool: &PgPool,
     addresses: Addresses,
