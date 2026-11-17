@@ -182,6 +182,7 @@ pub(super) async fn search_tool(
                 author_id,
                 since,
                 until,
+                confined: super::common::confined_project(principal).is_some(),
             },
             limit,
         )

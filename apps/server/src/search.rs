@@ -97,6 +97,9 @@ pub struct SearchFilter {
     pub author_id: Option<Uuid>,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
+    /// The caller's credential reaches one project only: workspace boards,
+    /// which are in no project, are out of its reach.
+    pub confined: bool,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -168,9 +171,11 @@ pub async fn search(
     // projects searched, where Whiteboards is on for the viewer; the board's
     // own rule (`whiteboard_visible_to`) decides each one.
     let board_module = SearchKind::Whiteboards.module();
-    let board_workspaces = if let (true, Some(board_module)) =
-        (kinds.contains(&SearchKind::Whiteboards), board_module)
-    {
+    let board_workspaces = if let (true, false, Some(board_module)) = (
+        kinds.contains(&SearchKind::Whiteboards),
+        filter.confined,
+        board_module,
+    ) {
         let mut connection = crate::db::scoped_tx(pool).await?;
         let on = crate::modules::state::by_workspace(&mut connection, viewer)
             .await?

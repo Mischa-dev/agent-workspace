@@ -3,6 +3,7 @@
 //! in the sheet's project, or with Sheets switched off), and their words
 //! never being found at all.
 
+use agent_workspace_server::mcp::{IssueCredentialCommand, issue_credential};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -136,6 +137,56 @@ async fn board_and_sheet_words_are_found_only_by_those_who_can_open_them() {
             .iter()
             .any(|hit| hit["kind"] == "sheet" && hit["id"] == sheet),
         "{by_tool}"
+    );
+
+    // An older credential confined to WORK never finds the workspace board,
+    // which it couldn't open (whiteboards::access), though WORK's sheet is
+    // in its reach.
+    let owner_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owner");
+    let confined = issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            actor_id: owner_id,
+            project_id: work.parse().expect("work"),
+            client_name: "Confined".to_owned(),
+            scopes: vec!["read".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("credential");
+    let confined_session = initialize(app, &confined.token).await.expect("session");
+    let by_confined = tool(
+        app,
+        &confined.token,
+        &confined_session,
+        "search",
+        json!({"query": "quokka", "kinds": ["whiteboards"]}),
+    )
+    .await;
+    assert_eq!(by_confined["outcome"], "ok", "{by_confined}");
+    assert_eq!(by_confined["value"]["results"], json!([]), "{by_confined}");
+    let by_confined = tool(
+        app,
+        &confined.token,
+        &confined_session,
+        "search",
+        json!({"query": "wombat", "kinds": ["sheets"]}),
+    )
+    .await;
+    assert!(
+        by_confined["value"]["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .any(|hit| hit["kind"] == "sheet" && hit["id"] == sheet),
+        "{by_confined}"
     );
 
     // A workspace member sees the workspace's board, not WORK's sheet.
