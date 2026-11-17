@@ -190,8 +190,9 @@ struct Page {
     links: Vec<([f32; 4], String)>,
 }
 
-struct Images {
-    list: Vec<(Vec<u8>, u32, u32)>,
+/// The pictures drawn, borrowed from the embeds (never copied).
+struct Images<'a> {
+    list: Vec<(&'a [u8], u32, u32)>,
 }
 
 struct Layout<'a> {
@@ -199,14 +200,14 @@ struct Layout<'a> {
     origin: Option<String>,
     embeds: &'a HashMap<String, EmbedPicture>,
     pages: Vec<Page>,
-    images: Images,
+    images: Images<'a>,
     /// The baseline cursor: distance from the bottom of the page.
     y: f32,
 }
 
-struct Finished {
+struct Finished<'a> {
     pages: Vec<Page>,
-    images: Vec<(Vec<u8>, u32, u32)>,
+    images: Vec<(&'a [u8], u32, u32)>,
 }
 
 impl<'a> Layout<'a> {
@@ -228,7 +229,7 @@ impl<'a> Layout<'a> {
         }
     }
 
-    fn finish(self) -> Finished {
+    fn finish(self) -> Finished<'a> {
         Finished {
             pages: self.pages,
             images: self.images.list,
@@ -666,7 +667,7 @@ impl<'a> Layout<'a> {
                 self.need(draw_height + 20.0);
                 self.gap(draw_height);
                 let index = self.images.list.len();
-                self.images.list.push((rgba.clone(), *width, *height));
+                self.images.list.push((rgba.as_slice(), *width, *height));
                 let y = self.y;
                 self.page().draws.push(Draw::Image {
                     index,
@@ -816,7 +817,7 @@ fn text_string(value: &str) -> String {
     out
 }
 
-fn write_document(title: &str, face: &Face<'_>, finished: Finished) -> Vec<u8> {
+fn write_document(title: &str, face: &Face<'_>, finished: Finished<'_>) -> Vec<u8> {
     let Finished { pages, images } = finished;
     let mut writer = Writer {
         bytes: b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec(),

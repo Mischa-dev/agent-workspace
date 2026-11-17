@@ -125,6 +125,11 @@ pub async fn export_page(
             "docx",
         ),
         Format::Pdf => {
+            // Drawing boards is the costly part: counted as an expensive read.
+            state
+                .rate_limits
+                .check_expensive_read(principal.session_id)
+                .await?;
             let blocks = tree::from_markdown(&page.body);
             let embeds = pdf_embeds(&state, &principal, &blocks).await?;
             (
@@ -162,7 +167,7 @@ pub async fn import_page(
     ApiQuery(query): ApiQuery<ImportQuery>,
     body: Body,
 ) -> Result<Json<ImportView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
     let format = format_of(query.format.as_deref(), query.name.as_deref())
         .filter(|format| *format != Format::Pdf)
@@ -342,6 +347,12 @@ const MAX_PDF_EMBEDS: usize = 24;
 /// A sheet range in a PDF shows at most this much of the range.
 const MAX_PDF_SHEET_ROWS: i32 = 60;
 const MAX_PDF_SHEET_COLUMNS: i32 = 12;
+/// A board in a PDF is drawn at most this many pixels on its longer side:
+/// sharp at the page's width, and a bounded picture whatever the board.
+const MAX_PDF_BOARD_SIDE: u32 = 1600;
+/// The pixels all of a PDF's boards may hold together (about 32 MiB as
+/// RGBA); boards past it show as their links.
+const MAX_PDF_BOARD_PIXELS: u64 = 8_000_000;
 
 /// The pictures for a PDF's embeds: a board's drawing and a sheet range's
 /// values, each only when this reader may open it there. Anything else, or
@@ -352,6 +363,7 @@ async fn pdf_embeds(
     blocks: &[tree::Block],
 ) -> Result<HashMap<String, pdf::EmbedPicture>, AppError> {
     let mut pictures = HashMap::new();
+    let mut board_pixels = 0_u64;
     let hrefs = blocks
         .iter()
         .filter_map(|block| match &block.node {
@@ -365,7 +377,14 @@ async fn pdf_embeds(
             continue;
         }
         let picture = match embed_target(&href) {
-            Some(EmbedTarget::Board(id)) => board_picture(state, principal, id).await?,
+            Some(EmbedTarget::Board(_)) if board_pixels >= MAX_PDF_BOARD_PIXELS => None,
+            Some(EmbedTarget::Board(id)) => {
+                let picture = board_picture(state, principal, id).await?;
+                if let Some(pdf::EmbedPicture::Image { width, height, .. }) = &picture {
+                    board_pixels += u64::from(*width) * u64::from(*height);
+                }
+                picture.filter(|_| board_pixels <= MAX_PDF_BOARD_PIXELS)
+            }
             Some(EmbedTarget::Sheet {
                 project_id,
                 sheet_id,
@@ -452,13 +471,15 @@ async fn board_picture(
             dark: false,
         },
     );
-    Ok(crate::whiteboards::render::pixels(&rendered.svg, 1.5)
-        .ok()
-        .map(|(rgba, width, height)| pdf::EmbedPicture::Image {
-            rgba,
-            width,
-            height,
-        }))
+    Ok(
+        crate::whiteboards::render::pixels_within(&rendered.svg, 1.5, MAX_PDF_BOARD_SIDE)
+            .ok()
+            .map(|(rgba, width, height)| pdf::EmbedPicture::Image {
+                rgba,
+                width,
+                height,
+            }),
+    )
 }
 
 async fn sheet_picture(
