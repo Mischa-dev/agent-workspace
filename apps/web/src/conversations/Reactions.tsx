@@ -21,12 +21,15 @@ export function MessageReactions({
   onToggle,
   reactions,
   viewerId,
+  workspaceId,
 }: {
   /** Adds the "add reaction" chip at the end of the row. */
   onPick?: (choice: ReactionChoice, reacted: boolean) => void
   onToggle?: (reaction: MessageReaction) => void
   reactions: readonly MessageReaction[]
   viewerId?: string
+  /** The message's workspace, whose own emoji the picker offers. */
+  workspaceId?: string | null
 }) {
   if (reactions.length === 0) return null
   return (
@@ -66,7 +69,7 @@ export function MessageReactions({
           </Tooltip>
         )
       })}
-      {onPick ? <ReactionPicker onPick={onPick} reactions={reactions} variant="chip" /> : null}
+      {onPick ? <ReactionPicker onPick={onPick} reactions={reactions} variant="chip" workspaceId={workspaceId} /> : null}
     </div>
   )
 }
@@ -108,11 +111,14 @@ export function ReactionPicker({
   onPick,
   reactions,
   variant = 'toolbar',
+  workspaceId,
 }: {
   onPick: (choice: ReactionChoice, reacted: boolean) => void
   reactions: readonly MessageReaction[]
   /** The toolbar's icon button, or the chip at the end of a message's reactions. */
   variant?: 'toolbar' | 'chip'
+  /** The message's workspace, whose own emoji it offers. */
+  workspaceId?: string | null
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const grid = useRef<HTMLDivElement>(null)
@@ -122,7 +128,7 @@ export function ReactionPicker({
   const [query, setQuery] = useState('')
   const [everyEmoji, setEveryEmoji] = useState<ReactionChoice[] | null>(null)
   const [adding, setAdding] = useState(false)
-  const custom = useCustomEmoji(Boolean(anchor))
+  const custom = useCustomEmoji(Boolean(anchor), workspaceId)
   useEffect(() => {
     if (!query.trim() || everyEmoji) return
     let cancelled = false
@@ -217,7 +223,7 @@ export function ReactionPicker({
           <Icon name="plus" size={14} /> Add an emoji
         </button>
       </Popover>
-      {adding ? <CustomEmojiDialog onClose={() => setAdding(false)} /> : null}
+      {adding ? <CustomEmojiDialog onClose={() => setAdding(false)} workspace={workspaceId} /> : null}
     </>
   )
 }

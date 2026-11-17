@@ -327,6 +327,17 @@ pub struct ProjectModulesUpdatedPayload {
     pub changed: std::collections::BTreeMap<String, bool>,
 }
 
+/// A workspace's own emoji changed (C2.19): one added, retired or brought
+/// back. Sent to each space of the workspace, whose reaction pickers read
+/// the list again. Ids only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CustomEmojiChangedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+    pub emoji_id: Uuid,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -351,6 +362,7 @@ pub enum OutboxEventPayload {
     CollectionUpdated(CollectionUpdatedPayload),
     SheetUpdated(SheetUpdatedPayload),
     ProjectModulesUpdated(ProjectModulesUpdatedPayload),
+    CustomEmojiChanged(CustomEmojiChangedPayload),
 }
 
 impl OutboxEventPayload {
@@ -378,6 +390,7 @@ impl OutboxEventPayload {
             Self::CollectionUpdated(_) => "collection.updated",
             Self::SheetUpdated(_) => "sheet.updated",
             Self::ProjectModulesUpdated(_) => "project.modules.updated",
+            Self::CustomEmojiChanged(_) => "custom_emoji.changed",
         }
     }
 
@@ -407,7 +420,8 @@ impl OutboxEventPayload {
             | Self::PageDiscussionUpdated(_)
             | Self::CollectionUpdated(_)
             | Self::SheetUpdated(_)
-            | Self::ProjectModulesUpdated(_) => None,
+            | Self::ProjectModulesUpdated(_)
+            | Self::CustomEmojiChanged(_) => None,
         }
     }
 
@@ -447,7 +461,9 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(_) => OutboxResourceKind::Page,
             Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
             Self::SheetUpdated(_) => OutboxResourceKind::Sheet,
-            Self::ProjectModulesUpdated(_) => OutboxResourceKind::Project,
+            Self::ProjectModulesUpdated(_) | Self::CustomEmojiChanged(_) => {
+                OutboxResourceKind::Project
+            }
         }
     }
 
@@ -478,6 +494,7 @@ impl OutboxEventPayload {
             Self::CollectionUpdated(payload) => payload.collection_id,
             Self::SheetUpdated(payload) => payload.sheet_id,
             Self::ProjectModulesUpdated(payload) => payload.project_id,
+            Self::CustomEmojiChanged(payload) => payload.project_id,
         }
     }
 
@@ -593,6 +610,7 @@ impl OutboxEventPayload {
             Self::CollectionUpdated(payload) => serde_json::to_value(payload),
             Self::SheetUpdated(payload) => serde_json::to_value(payload),
             Self::ProjectModulesUpdated(payload) => serde_json::to_value(payload),
+            Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -663,6 +681,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "sheet.updated" => Self::SheetUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "custom_emoji.changed" => Self::CustomEmojiChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "project.modules.updated" => Self::ProjectModulesUpdated(

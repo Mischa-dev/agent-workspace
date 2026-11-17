@@ -29,6 +29,38 @@ use crate::{
 
 pub mod ops;
 
+/// Tells every space of `workspace_id` that its emoji changed
+/// (`custom_emoji.changed`), in the change's transaction, so open reaction
+/// pickers read the list again.
+pub(crate) async fn announce(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    workspace_id: Uuid,
+    emoji_id: Uuid,
+) -> Result<(), AppError> {
+    let spaces = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM projects WHERE organization_id = $1 AND archived_at IS NULL \
+         ORDER BY created_at, id LIMIT 500",
+    )
+    .bind(workspace_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for space in spaces {
+        crate::outbox::enqueue_typed(
+            transaction,
+            space,
+            crate::outbox::OutboxEventPayload::CustomEmojiChanged(
+                crate::outbox::CustomEmojiChangedPayload {
+                    workspace_id,
+                    project_id: space,
+                    emoji_id,
+                },
+            ),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// The largest image kept.
 pub const MAX_IMAGE_BYTES: usize = 65_536;
 /// The most custom emoji one workspace lists.

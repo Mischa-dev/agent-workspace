@@ -220,6 +220,7 @@ impl OutboxPublisher for RealtimeHub {
                 | "collection.updated"
                 | "sheet.updated"
                 | "project.modules.updated"
+                | "custom_emoji.changed"
         );
         let project_scoped_event = matches!(
             envelope.event_type.as_str(),
@@ -234,6 +235,7 @@ impl OutboxPublisher for RealtimeHub {
                 | "collection.updated"
                 | "sheet.updated"
                 | "project.modules.updated"
+                | "custom_emoji.changed"
         );
         let invalid_conversation_scope = if project_scoped_event {
             envelope.conversation_id.is_some() || envelope.payload.get("conversationId").is_some()

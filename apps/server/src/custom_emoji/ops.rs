@@ -53,7 +53,7 @@ impl Operation for CustomEmojiCreate {
     const TITLE: &'static str = "Add custom emoji";
     const DESCRIPTION: &'static str = "Add one of this workspace's own emoji: a small PNG, GIF or \
         WebP (base64, at most 64 KB) under a name people react with as :name:.";
-    const EMITS: &'static [&'static str] = &["custom_emoji.created"];
+    const EMITS: &'static [&'static str] = &["custom_emoji.changed"];
 
     type Input = CustomEmojiCreateInput;
     type Output = CustomEmojiView;
@@ -120,6 +120,7 @@ impl Operation for CustomEmojiCreate {
             message: "This workspace already has an emoji by that name.".into(),
             current: None,
         })?;
+        super::announce(tx, workspace_id, id).await?;
         call.audit_target("custom_emoji", id, json!({ "name": name }));
         Ok(view)
     }
@@ -216,7 +217,7 @@ impl Operation for CustomEmojiUpdate {
     const DESCRIPTION: &'static str = "Retire one of this workspace's own emoji (retired: true), so \
         it leaves the picker but stays on the reactions that use it, or bring it back. Whoever \
         added it, or someone who manages the workspace's settings, can.";
-    const EMITS: &'static [&'static str] = &["custom_emoji.updated"];
+    const EMITS: &'static [&'static str] = &["custom_emoji.changed"];
 
     type Input = CustomEmojiUpdateInput;
     type Output = CustomEmojiView;
@@ -282,6 +283,7 @@ impl Operation for CustomEmojiUpdate {
             }
             _ => AppError::from(error).into(),
         })?;
+        super::announce(tx, workspace_id, id).await?;
         call.audit_target("custom_emoji", id, json!({ "retired": input.retired }));
         Ok(view)
     }

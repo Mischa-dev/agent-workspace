@@ -22,8 +22,9 @@ function base64Of(file: File): Promise<string> {
 }
 
 /** "Add an emoji": a name and a small image, for everyone in the workspace. */
-export function CustomEmojiDialog({ onClose }: { onClose: () => void }) {
-  const workspaceId = useHomeWorkspaceId()
+export function CustomEmojiDialog({ onClose, workspace }: { onClose: () => void; workspace?: string | null }) {
+  const home = useHomeWorkspaceId()
+  const workspaceId = workspace || home
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [file, setFile] = useState<File | null>(null)

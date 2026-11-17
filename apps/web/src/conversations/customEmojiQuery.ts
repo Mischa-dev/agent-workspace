@@ -7,9 +7,10 @@ import type { ReactionChoice } from './reactions'
 
 export const customEmojiKeys = { list: (workspaceId: string | null) => ['custom-emoji', workspaceId] as const }
 
-/** The workspace's live custom emoji, as picker choices; none until `enabled`. */
-export function useCustomEmoji(enabled: boolean): ReactionChoice[] {
-  const workspaceId = useHomeWorkspaceId()
+/** The live custom emoji of `workspace` (the message's; your home one when unknown), as picker choices; none until `enabled`. */
+export function useCustomEmoji(enabled: boolean, workspace?: string | null): ReactionChoice[] {
+  const home = useHomeWorkspaceId()
+  const workspaceId = workspace || home
   const query = useQuery({
     queryKey: customEmojiKeys.list(workspaceId),
     queryFn: () => callOp('custom_emoji_list', {}, { workspaceId: workspaceId ?? undefined }),

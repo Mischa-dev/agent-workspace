@@ -111,7 +111,7 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "custom_emoji.created"
+      "custom_emoji.changed"
     ],
     "idempotent": true,
     "kind": "create",
@@ -141,7 +141,7 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "custom_emoji.updated"
+      "custom_emoji.changed"
     ],
     "idempotent": true,
     "kind": "change",

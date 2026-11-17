@@ -113,10 +113,13 @@ pub async fn save(
         sqlx::query(
             r#"
             INSERT INTO message_drafts (
-                workspace_id, space_id, account_id, conversation_id, content
+                workspace_id, space_id, account_id, conversation_id, content, updated_at
             )
-            -- visibility: the caller checked the conversation is readable
-            SELECT project.organization_id, project.id, $1, conversation.id, $3
+            -- visibility: the caller checked the conversation is readable.
+            -- A draft is dated by when its device saved it (never later than
+            -- now), so saves compare in one time domain.
+            SELECT project.organization_id, project.id, $1, conversation.id, $3,
+                   LEAST(COALESCE($4::timestamptz, now()), now())
             FROM conversations conversation
             JOIN projects project ON project.id = conversation.project_id
             WHERE conversation.id = $2
@@ -130,12 +133,13 @@ pub async fn save(
                     THEN message_drafts.previous_updated_at
                     ELSE message_drafts.updated_at END,
                 content = EXCLUDED.content,
-                updated_at = now()
+                updated_at = EXCLUDED.updated_at
             "#,
         )
         .bind(account_id)
         .bind(conversation_id)
         .bind(draft)
+        .bind(saved_at)
         .execute(&mut **transaction)
         .await?;
     }
