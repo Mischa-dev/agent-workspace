@@ -59,18 +59,19 @@ pub async fn check_server(base: &str, code: &str) -> Report {
         return report;
     };
     let http = reqwest::Client::new();
-    let headerless = http
+    let unspoken = http
         .post(format!("{}/api/v1/host/heartbeat", client.base()))
         .bearer_auth(&token)
+        .header(PROTOCOL_HEADER, "1999-01")
         .json(&json!({}))
         .send()
         .await;
     report.record(
-        "refuses a call without the protocol header",
-        headerless
+        "refuses a protocol version it doesn't speak",
+        unspoken
             .as_ref()
             .is_ok_and(|response| response.status().is_client_error()),
-        headerless
+        unspoken
             .map(|response| response.status().to_string())
             .unwrap_or_else(|error| error.to_string()),
     );

@@ -57,7 +57,7 @@ pub fn description(agent: &str) -> Description {
             .into_iter()
             .map(|(name, on)| (name.to_owned(), Value::Bool(on)))
             .collect(),
-        report_interval_seconds: Some(10),
+        report_interval_seconds: Some(15),
         offers: vec![Offer {
             id: "echo-agent".to_owned(),
             title: "Add an echo agent".to_owned(),
