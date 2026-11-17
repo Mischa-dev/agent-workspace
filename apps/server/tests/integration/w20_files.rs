@@ -661,3 +661,157 @@ async fn link_previews_show_once_ready_and_stay_hidden() {
     let entry = timeline_entry(&setup, &rook, &channel, &message).await;
     assert!(entry["message"].get("linkPreviews").is_none(), "{entry}");
 }
+
+/// K5.11: an upload that isn't a picture streams into the store as it
+/// arrives, and whatever the server refuses (too big, over the workspace's
+/// room) leaves no bytes behind; bytes nothing ever recorded are swept.
+#[tokio::test]
+async fn streamed_uploads_keep_nothing_they_refuse() {
+    use std::{collections::BTreeMap, sync::Arc};
+
+    use agent_workspace_server::{
+        AppState, config::AppConfig, files, provider::SupervisorRegistry, rate_limit::RateLimiters,
+        realtime::RealtimeHub,
+    };
+    use sha2::{Digest, Sha256};
+
+    let Some((setup, root)) = with_data_root("w20_streamed").await else {
+        return;
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let channel = create_channel(&setup, &work, "general").await;
+    let owner = &setup.browser;
+    let stored = |root: &std::path::Path| {
+        let folder = root
+            .join("files")
+            .join(setup.organization_id.simple().to_string());
+        std::fs::read_dir(folder)
+            .map(|entries| entries.filter_map(Result::ok).count())
+            .unwrap_or(0)
+    };
+    let streamed = |uri: String, chunks: usize| {
+        let request = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("origin", "http://127.0.0.1:3100")
+            .header("cookie", &owner.cookie)
+            .header("x-csrf-token", &owner.csrf)
+            .header(header::CONTENT_TYPE, "text/csv")
+            .body(Body::from_stream(futures_util::stream::iter(
+                (0..chunks).map(|index| {
+                    Ok::<_, std::io::Error>(axum::body::Bytes::from(format!(
+                        "{index:08},{}\n",
+                        "x".repeat(16 * 1024 - 10)
+                    )))
+                }),
+            )))
+            .expect("upload");
+        send(&setup.app, request)
+    };
+
+    // Twenty chunks of 16 KiB arrive and are kept, with their digest.
+    let (status, file) = streamed(
+        format!("/api/v1/conversations/{channel}/files?name=big.csv"),
+        20,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{file}");
+    assert_eq!(file["size"], 20 * 16 * 1024);
+    assert_eq!(file["contentType"], "text/csv");
+    let id = file["id"].as_str().expect("file");
+    let bytes = read(&setup, owner, id).await.expect("read back");
+    assert_eq!(bytes.len(), 20 * 16 * 1024);
+    let (sha256, store_id): (String, String) =
+        sqlx::query_as("SELECT sha256, store_id FROM files WHERE id = $1::uuid")
+            .bind(id)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("row");
+    assert_eq!(sha256, hex::encode(Sha256::digest(&bytes)));
+    assert_eq!(store_id, "local");
+    assert_eq!(stored(root.path()), 1);
+
+    // A 1 MB cap and room: too big is refused mid-stream, over the room is
+    // refused once counted, and neither keeps a byte.
+    for key in ["files.max_upload_mb", "files.workspace_quota_mb"] {
+        sqlx::query(
+            r#"
+            INSERT INTO settings (id, organization_id, scope, key, value)
+            VALUES ($1, $2, 'workspace', $3, $4)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(setup.organization_id)
+        .bind(key)
+        .bind(json!(1))
+        .execute(&setup.pool)
+        .await
+        .expect("setting");
+    }
+    let (status, _) = streamed(
+        format!("/api/v1/conversations/{channel}/files?name=huge.csv"),
+        80,
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    let (status, refused) = streamed(
+        format!("/api/v1/conversations/{channel}/files?name=over.csv"),
+        50,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(stored(root.path()), 1, "refused uploads keep nothing");
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM file_objects_pending")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("pending");
+    assert_eq!(pending, 0);
+
+    // Bytes written an hour ago that no row claimed are swept; fresh ones
+    // (an upload still arriving) are left alone.
+    let folder = root
+        .path()
+        .join("files")
+        .join(setup.organization_id.simple().to_string());
+    for (name, age) in [("0a", 2), ("0b", 0)] {
+        let key = format!("{}/{name}", setup.organization_id.simple());
+        std::fs::write(folder.join(name), b"left behind").expect("orphan");
+        sqlx::query(
+            r#"
+            INSERT INTO file_objects_pending (storage_key, workspace_id, store_id, started_at)
+            VALUES ($1, $2, 'local', now() - make_interval(hours => $3))
+            "#,
+        )
+        .bind(&key)
+        .bind(setup.organization_id)
+        .bind(age)
+        .execute(&setup.pool)
+        .await
+        .expect("pending");
+    }
+    let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL");
+    let config = AppConfig::from_values(&BTreeMap::from([
+        ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), database_url),
+        (
+            "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
+            root.path().to_string_lossy().into_owned(),
+        ),
+    ]))
+    .expect("configuration");
+    let state = AppState {
+        supervisors: SupervisorRegistry::new(&config).expect("supervisors"),
+        config: Arc::new(config),
+        pool: setup.pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(8),
+    };
+    files::cleanup(&state).await.expect("cleanup");
+    assert!(!folder.join("0a").exists(), "an old orphan is swept");
+    assert!(folder.join("0b").exists(), "a fresh one is left");
+    assert!(read(&setup, owner, id).await.is_ok(), "a kept file stays");
+    let left: Vec<String> = sqlx::query_scalar("SELECT storage_key FROM file_objects_pending")
+        .fetch_all(&setup.pool)
+        .await
+        .expect("pending");
+    assert_eq!(left, [format!("{}/0b", setup.organization_id.simple())]);
+}

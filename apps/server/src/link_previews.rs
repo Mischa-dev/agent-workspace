@@ -321,6 +321,7 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
                         &mut connection,
                         organization_id,
                         u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                        0,
                     )
                     .await
                     .is_ok(),

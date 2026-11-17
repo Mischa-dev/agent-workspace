@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
-    Destination, FileRow, FileStore, FileView, MAX_UPLOAD_BYTES, Reader, Upload, readable_file,
-    remove_file, served_content_type, store_upload, task_files, upload_limit,
+    Destination, FileRow, FileStore, FileView, MAX_UPLOAD_BYTES, Reader, readable_file,
+    remove_file, served_content_type, store_body, task_files, upload_limit,
 };
 use crate::{
     AppState,
@@ -97,19 +97,17 @@ async fn upload_to_conversation(
     let limit = upload_limit(&mut transaction, conversation.project_id).await?;
     // Nothing stays locked while the bytes arrive.
     transaction.commit().await?;
-    let bytes = read_body(body, limit).await?;
-    let row = store_upload(
+    let row = store_body(
         &state,
         principal.actor_id,
         Destination::Conversation {
             project_id: conversation.project_id,
             conversation_id: conversation.id,
         },
-        Upload {
-            name: query.name,
-            declared_type: declared_type(&headers),
-            bytes,
-        },
+        query.name,
+        declared_type(&headers),
+        body,
+        limit,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(row.view())).into_response())
@@ -133,8 +131,7 @@ async fn upload_to_task(
     authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
     let limit = upload_limit(&mut transaction, project_id).await?;
     transaction.commit().await?;
-    let bytes = read_body(body, limit).await?;
-    let row = store_upload(
+    let row = store_body(
         &state,
         principal.actor_id,
         Destination::Task {
@@ -142,11 +139,10 @@ async fn upload_to_task(
             work_item_id,
             for_comment,
         },
-        Upload {
-            name: query.name,
-            declared_type: declared_type(&headers),
-            bytes,
-        },
+        query.name,
+        declared_type(&headers),
+        body,
+        limit,
     )
     .await?;
     if !for_comment {

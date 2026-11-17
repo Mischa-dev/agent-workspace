@@ -185,6 +185,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
+                "file_objects_pending",
+                "runtime state of this server (bytes being written to a store)",
+            ),
+            (
                 "link_previews",
                 "a cache or index derived from other rows, rebuilt on import",
             ),

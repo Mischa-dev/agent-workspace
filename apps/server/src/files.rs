@@ -434,27 +434,281 @@ pub(crate) async fn store_prepared(
         .saturating_add(thumbnail.as_ref().map_or(0, |thumbnail| {
             u64::try_from(thumbnail.len()).unwrap_or(u64::MAX)
         }));
-    // One upload at a time per workspace from the room check to the insert,
-    // so uploads side by side can't each see room and together overfill it.
+    hold_room(state, transaction, organization_id, incoming, 0).await?;
+
+    let id = Uuid::now_v7();
+    let storage_key = storage_key(organization_id, id);
+    let thumbnail_key = thumbnail.as_ref().map(|_| format!("{storage_key}.thumb"));
+    let store = FileStore::from_config(&state.config);
+    let keys = std::iter::once(storage_key.as_str())
+        .chain(thumbnail_key.as_deref())
+        .collect::<Vec<_>>();
+    // These bytes are written inside the row's transaction (they are small:
+    // a picture, or an agent's upload), so no pending entry is needed, and
+    // none is taken: that would hold a second connection.
+    let mut put = store.put(&storage_key, &bytes).await;
+    if let (Ok(()), Some(key), Some(thumbnail)) = (&put, &thumbnail_key, &thumbnail) {
+        put = store.put(key, thumbnail).await;
+    }
+    if let Err(error) = put {
+        delete_objects(&store, &keys).await;
+        return Err(error);
+    }
+    let inserted = insert_file(
+        transaction,
+        &NewFile {
+            id,
+            organization_id,
+            project_id,
+            destination,
+            uploader,
+            name: &name,
+            content_type: &content_type,
+            byte_size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            sha256: &hex::encode(Sha256::digest(&bytes)),
+            storage_key: &storage_key,
+            store_id: store.id(),
+            dimensions,
+            thumbnail_key: thumbnail_key.as_deref(),
+            thumbnail_bytes: thumbnail
+                .as_ref()
+                .map(|thumbnail| u64::try_from(thumbnail.len()).unwrap_or(u64::MAX)),
+        },
+    )
+    .await;
+    if inserted.is_err() {
+        delete_objects(&store, &keys).await;
+    }
+    inserted
+}
+
+/// Stores an upload as its body arrives (K5.11). A picture is read whole,
+/// since it is re-encoded without its location data; anything else streams
+/// into the store, never held whole, before any transaction opens, and is
+/// counted against the workspace's room once its size is known. A refused
+/// upload's bytes are deleted again.
+pub(crate) async fn store_body(
+    state: &AppState,
+    uploader: Uuid,
+    destination: Destination,
+    name: String,
+    declared_type: Option<String>,
+    body: axum::body::Body,
+    limit: usize,
+) -> Result<FileRow, AppError> {
+    use futures_util::StreamExt;
+
+    let mut chunks = body.into_data_stream();
+    let mut head = Vec::new();
+    while head.len() < SNIFF_BYTES {
+        match chunks.next().await {
+            Some(Ok(chunk)) => head.extend_from_slice(&chunk),
+            Some(Err(_)) => return Err(AppError::Validation("file")),
+            None => break,
+        }
+        if head.len() > limit {
+            return Err(AppError::PayloadTooLarge);
+        }
+    }
+    if head.is_empty() {
+        return Err(AppError::Validation("file"));
+    }
+    if image::sniff(&head).is_some() {
+        let mut bytes = head;
+        while let Some(chunk) = chunks.next().await {
+            let chunk = chunk.map_err(|_| AppError::Validation("file"))?;
+            if bytes.len().saturating_add(chunk.len()) > limit {
+                return Err(AppError::PayloadTooLarge);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        return store_upload(
+            state,
+            uploader,
+            destination,
+            Upload {
+                name,
+                declared_type,
+                bytes,
+            },
+        )
+        .await;
+    }
+
+    let name = clean_name(&name);
+    let content_type = file_content_type(&name, declared_type.as_deref(), &head);
+    let project_id = destination.project_id();
+    let organization_id = organization_of(crate::db::scoped(&state.pool), project_id).await?;
+    // A full workspace or disk refuses before a byte is written.
+    {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        require_room(
+            state,
+            &mut transaction,
+            organization_id,
+            u64::try_from(head.len()).unwrap_or(u64::MAX),
+            0,
+        )
+        .await?;
+    }
+    let store = FileStore::from_config(&state.config);
+    let id = Uuid::now_v7();
+    let storage_key = storage_key(organization_id, id);
+    begin_objects(state, &store, organization_id, &[&storage_key]).await?;
+    let first = futures_util::stream::iter([Ok::<_, axum::Error>(axum::body::Bytes::from(head))]);
+    let written = match store
+        .put_stream(
+            &storage_key,
+            first.chain(chunks),
+            u64::try_from(limit).unwrap_or(u64::MAX),
+        )
+        .await
+    {
+        Ok(written) => written,
+        Err(error) => {
+            drop_objects(state, &store, &[&storage_key]).await;
+            return Err(error);
+        }
+    };
+    let stored = async {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        hold_room(
+            state,
+            &mut transaction,
+            organization_id,
+            written.length,
+            written.length,
+        )
+        .await?;
+        let row = insert_file(
+            &mut transaction,
+            &NewFile {
+                id,
+                organization_id,
+                project_id,
+                destination,
+                uploader,
+                name: &name,
+                content_type: &content_type,
+                byte_size: written.length,
+                sha256: &written.sha256,
+                storage_key: &storage_key,
+                store_id: store.id(),
+                dimensions: None,
+                thumbnail_key: None,
+                thumbnail_bytes: None,
+            },
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(row)
+    }
+    .await;
+    if stored.is_err() {
+        drop_objects(state, &store, &[&storage_key]).await;
+    }
+    stored
+}
+
+/// Bytes read to tell a picture from anything else, and to guess a type.
+const SNIFF_BYTES: usize = 4096;
+/// Bytes written but never claimed by a file row are deleted after this.
+const PENDING_OBJECT_MINUTES: i32 = 60;
+
+fn storage_key(organization_id: Uuid, id: Uuid) -> String {
+    format!("{}/{}", organization_id.simple(), id.simple())
+}
+
+/// One upload at a time per workspace from the room check to the insert, so
+/// uploads side by side can't each see room and together overfill it.
+async fn hold_room(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    incoming: u64,
+    already_written: u64,
+) -> Result<(), AppError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("files-quota:{organization_id}"))
         .execute(&mut **transaction)
         .await?;
-    require_room(state, transaction, organization_id, incoming).await?;
+    require_room(
+        state,
+        transaction,
+        organization_id,
+        incoming,
+        already_written,
+    )
+    .await
+}
 
-    let id = Uuid::now_v7();
-    let storage_key = format!("{}/{}", organization_id.simple(), id.simple());
-    let thumbnail_key = thumbnail.as_ref().map(|_| format!("{storage_key}.thumb"));
-    let store = FileStore::from_config(&state.config);
-    store.put(&storage_key, &bytes).await?;
-    if let (Some(key), Some(thumbnail)) = (&thumbnail_key, &thumbnail)
-        && let Err(error) = store.put(key, thumbnail).await
-    {
-        let _ = store.delete(&storage_key).await;
-        return Err(error);
+/// Notes keys about to be written, so the sweep deletes their bytes if no
+/// file row ever claims them (a crash between the write and the insert).
+async fn begin_objects(
+    state: &AppState,
+    store: &FileStore,
+    organization_id: Uuid,
+    keys: &[&str],
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO file_objects_pending (storage_key, workspace_id, store_id)
+        SELECT key, $2, $3 FROM unnest($1::text[]) AS key
+        "#,
+    )
+    .bind(keys)
+    .bind(organization_id)
+    .bind(store.id())
+    .execute(crate::db::scoped(&state.pool))
+    .await?;
+    Ok(())
+}
+
+async fn delete_objects(store: &FileStore, keys: &[&str]) {
+    for key in keys {
+        let _ = store.delete(key).await;
     }
-    let sha256 = hex::encode(Sha256::digest(&bytes));
-    let (conversation_id, work_item_id, attached) = match destination {
+}
+
+/// Deletes bytes no file row will claim, and their pending entries.
+async fn drop_objects(state: &AppState, store: &FileStore, keys: &[&str]) {
+    let mut deleted = Vec::new();
+    for key in keys {
+        if store.delete(key).await.is_ok() {
+            deleted.push(*key);
+        }
+    }
+    // An entry whose bytes couldn't be deleted stays for the sweep.
+    let _ = sqlx::query("DELETE FROM file_objects_pending WHERE storage_key = ANY($1)")
+        .bind(&deleted)
+        .execute(crate::db::scoped(&state.pool))
+        .await;
+}
+
+/// A file row about to be written.
+struct NewFile<'a> {
+    id: Uuid,
+    organization_id: Uuid,
+    project_id: Uuid,
+    destination: Destination,
+    uploader: Uuid,
+    name: &'a str,
+    content_type: &'a str,
+    byte_size: u64,
+    sha256: &'a str,
+    storage_key: &'a str,
+    store_id: &'a str,
+    dimensions: Option<(u32, u32)>,
+    thumbnail_key: Option<&'a str>,
+    thumbnail_bytes: Option<u64>,
+}
+
+/// Writes a file's row and claims its bytes, in the caller's transaction.
+async fn insert_file(
+    transaction: &mut Transaction<'_, Postgres>,
+    file: &NewFile<'_>,
+) -> Result<FileRow, AppError> {
+    let (conversation_id, work_item_id, attached) = match file.destination {
         Destination::Conversation {
             conversation_id, ..
         } => (Some(conversation_id), None, false),
@@ -464,61 +718,65 @@ pub(crate) async fn store_prepared(
             ..
         } => (None, Some(work_item_id), !for_comment),
     };
-    let inserted = sqlx::query_as::<_, FileRow>(&format!(
+    let row = sqlx::query_as::<_, FileRow>(&format!(
         r#"
         INSERT INTO files AS file (
             id, organization_id, project_id, conversation_id, work_item_id,
             uploaded_by_actor_id, name, content_type, byte_size, sha256,
             storage_key, image_width, image_height, thumbnail_key,
-            thumbnail_bytes, attached_at
+            thumbnail_bytes, attached_at, store_id
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                CASE WHEN $16 THEN now() END)
+                CASE WHEN $16 THEN now() END, $17)
         RETURNING {FILE_COLUMNS}
         "#
     ))
-    .bind(id)
-    .bind(organization_id)
-    .bind(project_id)
+    .bind(file.id)
+    .bind(file.organization_id)
+    .bind(file.project_id)
     .bind(conversation_id)
     .bind(work_item_id)
-    .bind(uploader)
-    .bind(&name)
-    .bind(&content_type)
-    .bind(i64::try_from(bytes.len()).unwrap_or(i64::MAX))
-    .bind(&sha256)
-    .bind(&storage_key)
-    .bind(dimensions.map(|(width, _)| i32::try_from(width).unwrap_or(i32::MAX)))
-    .bind(dimensions.map(|(_, height)| i32::try_from(height).unwrap_or(i32::MAX)))
-    .bind(&thumbnail_key)
+    .bind(file.uploader)
+    .bind(file.name)
+    .bind(file.content_type)
+    .bind(i64::try_from(file.byte_size).unwrap_or(i64::MAX))
+    .bind(file.sha256)
+    .bind(file.storage_key)
     .bind(
-        thumbnail
-            .as_ref()
-            .map(|thumbnail| i64::try_from(thumbnail.len()).unwrap_or(i64::MAX)),
+        file.dimensions
+            .map(|(width, _)| i32::try_from(width).unwrap_or(i32::MAX)),
+    )
+    .bind(
+        file.dimensions
+            .map(|(_, height)| i32::try_from(height).unwrap_or(i32::MAX)),
+    )
+    .bind(file.thumbnail_key)
+    .bind(
+        file.thumbnail_bytes
+            .map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX)),
     )
     .bind(attached)
+    .bind(file.store_id)
     .fetch_one(&mut **transaction)
-    .await;
-    match inserted {
-        Ok(row) => Ok(row),
-        Err(error) => {
-            let _ = store.delete(&storage_key).await;
-            if let Some(key) = &thumbnail_key {
-                let _ = store.delete(key).await;
-            }
-            Err(error.into())
-        }
-    }
+    .await?;
+    let keys = std::iter::once(file.storage_key)
+        .chain(file.thumbnail_key)
+        .collect::<Vec<_>>();
+    sqlx::query("DELETE FROM file_objects_pending WHERE storage_key = ANY($1)")
+        .bind(&keys)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(row)
 }
 
 /// Takes away the bytes [`store_prepared`] stored, when the transaction
 /// that held its row didn't commit.
 pub(crate) async fn discard_stored(state: &AppState, row: &FileRow) {
     let store = FileStore::from_config(&state.config);
-    let _ = store.delete(&row.storage_key).await;
-    if let Some(key) = &row.thumbnail_key {
-        let _ = store.delete(key).await;
-    }
+    let keys = std::iter::once(row.storage_key.as_str())
+        .chain(row.thumbnail_key.as_deref())
+        .collect::<Vec<_>>();
+    drop_objects(state, &store, &keys).await;
 }
 
 /// Refuses an upload that would take the workspace over its file quota, or
@@ -530,6 +788,7 @@ pub(crate) async fn require_room(
     connection: &mut sqlx::PgConnection,
     organization_id: Uuid,
     incoming: u64,
+    already_written: u64,
 ) -> Result<(), AppError> {
     let effective = settings::resolve(
         &mut *connection,
@@ -588,7 +847,10 @@ pub(crate) async fn require_room(
         .saturating_add(u64::try_from(all_bytes).unwrap_or(0))
         .saturating_add(incoming);
     if allocated >= config.data_quota_bytes
-        || report.available_bytes.saturating_sub(incoming) <= config.minimum_free_bytes
+        || report
+            .available_bytes
+            .saturating_sub(incoming.saturating_sub(already_written))
+            <= config.minimum_free_bytes
     {
         return Err(AppError::Conflict(
             "storage",
@@ -917,8 +1179,34 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
             .await?;
         deleted += 1;
     }
+    deleted += sweep_pending_objects(state, &store).await?;
     deleted += crate::link_previews::cleanup(state, &store).await?;
     Ok(deleted)
+}
+
+/// Deletes bytes written more than an hour ago that no file row claimed:
+/// an upload that stopped between writing its bytes and recording them.
+pub(crate) async fn sweep_pending_objects(
+    state: &AppState,
+    store: &FileStore,
+) -> Result<u64, AppError> {
+    let due = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT storage_key FROM file_objects_pending
+        WHERE store_id = $1 AND started_at < now() - make_interval(mins => $2)
+        ORDER BY started_at
+        LIMIT $3
+        "#,
+    )
+    .bind(store.id())
+    .bind(PENDING_OBJECT_MINUTES)
+    .bind(CLEANUP_BATCH)
+    .fetch_all(crate::db::scoped(&state.pool))
+    .await?;
+    let keys = due.iter().map(String::as_str).collect::<Vec<_>>();
+    let before = keys.len();
+    drop_objects(state, store, &keys).await;
+    Ok(u64::try_from(before).unwrap_or(0))
 }
 
 #[cfg(test)]

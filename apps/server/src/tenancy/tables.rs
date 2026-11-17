@@ -72,6 +72,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("external_agent_events", WORKSPACE_ID),
     ("external_execution_requests", WORKSPACE_ID),
     ("field_definitions", WORKSPACE_ID),
+    ("file_objects_pending", WORKSPACE_ID),
     ("files", ORGANIZATION_ID),
     ("git_worktrees", WORKSPACE_ID),
     ("github_connect_attempts", ORGANIZATION_ID),

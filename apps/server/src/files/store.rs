@@ -9,7 +9,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
+use futures_util::{Stream, StreamExt};
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 use crate::{config::AppConfig, error::AppError};
@@ -28,6 +30,14 @@ pub struct LocalDisk {
     root: PathBuf,
 }
 
+/// What a streamed write stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Written {
+    pub length: u64,
+    /// Lowercase hex.
+    pub sha256: String,
+}
+
 /// Bytes read back from the store.
 pub struct StoredBytes {
     pub body: Body,
@@ -39,6 +49,31 @@ impl FileStore {
         Self::Local(LocalDisk {
             root: config.data_root.join(LOCAL_FOLDER),
         })
+    }
+
+    /// The store's name, kept with each file (`files.store_id`) so files
+    /// can move between stores (K5.13).
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::Local(_) => "local",
+        }
+    }
+
+    /// Streams bytes under a key that isn't in use yet, never holding more
+    /// than one chunk; past `limit` bytes it stops, keeps nothing, and
+    /// answers `PayloadTooLarge`.
+    pub async fn put_stream<S, E>(
+        &self,
+        key: &str,
+        chunks: S,
+        limit: u64,
+    ) -> Result<Written, AppError>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Send + Unpin,
+    {
+        match self {
+            Self::Local(disk) => disk.put_stream(key, chunks, limit).await,
+        }
     }
 
     /// Stores bytes under a key that isn't in use yet.
@@ -135,6 +170,61 @@ impl LocalDisk {
         Ok(())
     }
 
+    async fn put_stream<S, E>(
+        &self,
+        key: &str,
+        mut chunks: S,
+        limit: u64,
+    ) -> Result<Written, AppError>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Send + Unpin,
+    {
+        let path = self.path(key)?;
+        let parent = path
+            .parent()
+            .ok_or(AppError::Internal("file store key has no folder"))?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|_| AppError::Internal("create file store folder"))?;
+        let partial = partial_path(&path);
+        let result: Result<Written, AppError> = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&partial)
+                .await
+                .map_err(|_| AppError::Internal("write file to the file store"))?;
+            let mut hasher = Sha256::new();
+            let mut length = 0_u64;
+            while let Some(chunk) = chunks.next().await {
+                let chunk = chunk.map_err(|_| AppError::Validation("body"))?;
+                length = length.saturating_add(chunk.len() as u64);
+                if length > limit {
+                    return Err(AppError::PayloadTooLarge);
+                }
+                hasher.update(&chunk);
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|_| AppError::Internal("write file to the file store"))?;
+            }
+            file.sync_all()
+                .await
+                .map_err(|_| AppError::Internal("write file to the file store"))?;
+            tokio::fs::rename(&partial, &path)
+                .await
+                .map_err(|_| AppError::Internal("write file to the file store"))?;
+            Ok(Written {
+                length,
+                sha256: hex::encode(hasher.finalize()),
+            })
+        }
+        .await;
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(&partial).await;
+        }
+        result
+    }
+
     async fn get(&self, key: &str) -> Result<StoredBytes, AppError> {
         let path = self.path(key)?;
         let file = tokio::fs::File::open(&path).await.map_err(not_found)?;
@@ -213,6 +303,29 @@ mod tests {
         ));
         store.delete("aa/bb").await.expect("delete");
         store.delete("aa/bb").await.expect("delete twice");
+        // Streamed: kept whole within the limit, nothing kept past it.
+        let chunks = || {
+            futures_util::stream::iter(
+                ["hel", "lo"].map(|piece| Ok::<_, std::io::Error>(Bytes::from(piece))),
+            )
+        };
+        let written = store
+            .put_stream("aa/cc", chunks(), 5)
+            .await
+            .expect("stream");
+        assert_eq!(written.length, 5);
+        assert_eq!(written.sha256, hex::encode(Sha256::digest(b"hello")));
+        assert_eq!(store.read_all("aa/cc", 10).await.expect("read"), b"hello");
+        assert!(matches!(
+            store.put_stream("aa/dd", chunks(), 4).await,
+            Err(AppError::PayloadTooLarge)
+        ));
+        assert!(matches!(
+            store.read_all("aa/dd", 10).await,
+            Err(AppError::NotFound(_))
+        ));
+        let folder = std::fs::read_dir(root.path().join("aa")).expect("folder");
+        assert_eq!(folder.count(), 1, "no partial file is left behind");
         assert!(matches!(
             store.read_all("aa/bb", 10).await,
             Err(AppError::NotFound(_))
