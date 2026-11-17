@@ -61,6 +61,9 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "retry",
             "press",
             "remove",
+            // You go into or out of something, such as a channel (C2.7).
+            "join",
+            "leave",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",
             // A secret is replaced; the old one keeps working for a while.

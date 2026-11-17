@@ -1390,7 +1390,10 @@ async fn task_link_repositories_pull_requests_and_threads() {
     assert_eq!(thread_audits, 1);
     let unthreaded = link(json!({"conversationId": threads[0].1, "remove": true})).await;
     assert_eq!(unthreaded["value"]["version"], before + 2, "{unthreaded}");
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1::uuid) UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid",
+    )
         .bind(&threads[1].0)
         .execute(&setup.pool)
         .await

@@ -2458,3 +2458,102 @@ async fn only_an_account_and_its_managers_touch_its_connections() {
     assert!(body.to_string().contains(&connection.to_string()), "{body}");
     world.finish().await;
 }
+
+/// C2.6 and C2.7: someone outside a private channel can't read its details
+/// or members, join it, leave it or set its topic, and browsing doesn't
+/// list it; a role that can't post sets no topic anywhere.
+#[tokio::test]
+async fn channel_writes_keep_to_private_channels() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("omar", "member")
+        .person("nate", "member")
+        .custom_role("Read only", &["projects.view", "directory.view"])
+        .build("privacy_channel_writes")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = world.project("WORK").to_owned();
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    let lena = &world.people["lena"];
+    let omar = &world.people["omar"];
+    let nate = &world.people["nate"];
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Read only"]).expect("role id"))
+    .bind(Uuid::parse_str(&work).expect("work"))
+    .bind(nate.actor)
+    .execute(pool)
+    .await
+    .expect("narrow nate");
+
+    let made = |name: &'static str, private: bool| {
+        let request = lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/channels"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"name": name, "private": private}),
+        );
+        async move {
+            let (status, made) = send(app, request).await;
+            assert_eq!(status, StatusCode::CREATED, "{made}");
+            made["conversation"]["id"].as_str().expect("id").to_owned()
+        }
+    };
+    let secret = made("secret-plans", true).await;
+    let open = made("open-plans", false).await;
+
+    for (name, input) in [
+        ("channel_get", json!({"channelId": secret})),
+        (
+            "conversation_member_list",
+            json!({"conversationId": secret}),
+        ),
+        ("channel_join", json!({"channelId": secret})),
+        ("channel_leave", json!({"channelId": secret})),
+        (
+            "channel_update",
+            json!({"channelId": secret, "topic": "Mine now"}),
+        ),
+    ] {
+        let (status, body) = op(&omar.browser, name, input).await;
+        assert!(!status.is_success(), "{name}: {body}");
+        assert!(!body.to_string().contains("secret-plans"), "{name}: {body}");
+    }
+    let (status, listed) = op(&omar.browser, "channel_list", json!({"spaceId": work})).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(!listed.to_string().contains(&secret), "{listed}");
+    assert!(listed.to_string().contains(&open), "{listed}");
+
+    // Nate reads but can't post, so sets no topic, even on an open channel.
+    let (status, refused) = op(
+        &nate.browser,
+        "channel_update",
+        json!({"channelId": open, "topic": "Nate's now"}),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+    let topic =
+        sqlx::query_scalar::<_, Option<String>>("SELECT topic FROM conversations WHERE id = $1")
+            .bind(Uuid::parse_str(&open).expect("open"))
+            .fetch_one(pool)
+            .await
+            .expect("topic");
+    assert_eq!(topic, None);
+
+    world.finish().await;
+}

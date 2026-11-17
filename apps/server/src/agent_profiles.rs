@@ -691,6 +691,7 @@ pub(crate) async fn create_in(
     .bind(&handle)
     .execute(&mut **transaction)
     .await?;
+    crate::conversations::join_auto_channels(transaction, project_id, actor_id).await?;
     let worker_id = Uuid::now_v7();
     sqlx::query(
         r#"

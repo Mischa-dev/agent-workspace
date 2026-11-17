@@ -120,6 +120,11 @@ pub(super) struct ChannelCreateArguments {
     /// you. Add people with conversation_members.
     #[serde(default)]
     pub private: Option<bool>,
+    /// A public channel: false to have only you join it now, with others
+    /// joining as they choose (channel_join). Left out, everyone in the
+    /// project joins it, and so does everyone who arrives later.
+    #[serde(default)]
+    pub auto_join: Option<bool>,
 }
 
 pub(super) async fn channel_create(
@@ -190,7 +195,10 @@ pub(super) async fn channel_create(
             project_id,
             principal.actor_id,
             &name,
-            arguments.private.unwrap_or(false),
+            crate::conversations::NewChannel {
+                private: arguments.private.unwrap_or(false),
+                auto_join: arguments.auto_join.unwrap_or(true),
+            },
         )
         .await?;
         insert_audit(

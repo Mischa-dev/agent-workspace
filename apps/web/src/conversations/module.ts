@@ -10,6 +10,11 @@ export default {
       page: () => import('./ChannelPage').then((module) => ({ default: module.ChannelPage })),
     },
     {
+      path: '/projects/:projectId/conversations/channels',
+      space: 'project',
+      page: () => import('./ChannelBrowserPage').then((module) => ({ default: module.ChannelBrowserPage })),
+    },
+    {
       path: '/projects/:projectId/conversations/archived',
       space: 'project',
       page: () => import('./ConversationArchivePage').then((module) => ({ default: module.ConversationArchivePage })),
@@ -21,6 +26,7 @@ export default {
     },
   ],
   palette: [
+    { id: 'p:channels', space: 'project', rank: 149, label: 'Browse channels', icon: 'hash', path: '/conversations/channels' },
     { id: 'p:archived', space: 'project', rank: 150, label: 'Archived conversations', icon: 'archive', path: '/conversations/archived' },
   ],
   things: [

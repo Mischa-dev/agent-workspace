@@ -285,3 +285,191 @@ async fn private_channels_belong_to_their_members() {
 
     world.finish().await;
 }
+
+#[tokio::test]
+async fn channels_are_joined_left_and_browsed() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .build("c2_7_joining_channels")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let work = world.project("WORK");
+    let lena = &world.people["lena"];
+    let mara = &world.people["mara"];
+    let op = |by: &Person, name: &str, input: Value| {
+        let key = Uuid::now_v7().to_string();
+        by.browser
+            .request("POST", &format!("/api/v2/ops/{name}"), Some(&key), input)
+    };
+    let create = |by: &Person, name: &str, auto_join: bool| {
+        by.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/channels"),
+            Some(&format!("c2-7-{name}")),
+            json!({"name": name, "autoJoin": auto_join}),
+        )
+    };
+
+    let (status, lobby) = send(app, create(lena, "lobby", true)).await;
+    assert_eq!(status, StatusCode::CREATED, "{lobby}");
+    let lobby = lobby["conversation"]["id"]
+        .as_str()
+        .expect("lobby")
+        .to_owned();
+    let (status, quiet) = send(app, create(lena, "quiet", false)).await;
+    assert_eq!(status, StatusCode::CREATED, "{quiet}");
+    let quiet = quiet["conversation"]["id"]
+        .as_str()
+        .expect("quiet")
+        .to_owned();
+
+    // Everyone joins an auto-join channel; only its maker joins the other.
+    assert!(in_sidebar(app, mara, work, &lobby).await);
+    assert!(!in_sidebar(app, mara, work, &quiet).await);
+    // Still found, read and joined.
+    let (status, listed) = send(app, op(mara, "channel_list", json!({"spaceId": work}))).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let quiet_listed = listed["value"]["channels"]
+        .as_array()
+        .expect("channels")
+        .iter()
+        .find(|channel| channel["id"] == quiet.as_str())
+        .cloned()
+        .expect("quiet is listed");
+    assert_eq!(quiet_listed["joined"], false, "{listed}");
+    let (status, joined) = send(app, op(mara, "channel_join", json!({"channelId": quiet}))).await;
+    assert_eq!(status, StatusCode::OK, "{joined}");
+    assert_eq!(joined["value"]["joined"], true, "{joined}");
+    assert_eq!(joined["value"]["memberCount"], 2, "{joined}");
+    assert!(in_sidebar(app, mara, work, &quiet).await);
+
+    // Leaving takes it out of the sidebar, but its messages are still hers
+    // to find.
+    let (status, left) = send(app, op(mara, "channel_leave", json!({"channelId": lobby}))).await;
+    assert_eq!(status, StatusCode::OK, "{left}");
+    assert_eq!(left["value"]["stillVisible"], true, "{left}");
+    assert!(!in_sidebar(app, mara, work, &lobby).await);
+    let word = format!("zqlobby{}", &Uuid::now_v7().simple().to_string()[20..]);
+    let (status, sent) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{lobby}/messages"),
+            Some("c2-7-lobby-message"),
+            json!({"content": text(&format!("in the lobby {word}"))}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let found = get(app, mara, &format!("/api/v1/search?q={word}")).await;
+    assert!(found.to_string().contains(word.as_str()), "{found}");
+
+    // Anyone posting there sets the topic; who joins it is for its managers.
+    let (status, topic) = send(
+        app,
+        op(
+            mara,
+            "channel_update",
+            json!({"channelId": quiet, "topic": "Calm things"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{topic}");
+    assert_eq!(topic["value"]["topic"], "Calm things", "{topic}");
+    let (status, refused) = send(
+        app,
+        op(
+            mara,
+            "channel_update",
+            json!({"channelId": quiet, "autoJoin": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (status, opened) = send(
+        app,
+        op(
+            lena,
+            "channel_update",
+            json!({"channelId": quiet, "autoJoin": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert_eq!(opened["value"]["autoJoin"], true, "{opened}");
+
+    // Someone arriving in a space joins its auto-join channels only.
+    let (status, side) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("c2-7-side"),
+            json!({"organizationId": world.organization, "key": "SIDE", "name": "Side"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{side}");
+    let side = side["id"].as_str().expect("side").to_owned();
+    let (status, open) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{side}/channels"),
+            Some("c2-7-side-open"),
+            json!({"name": "open"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{open}");
+    let open = open["conversation"]["id"]
+        .as_str()
+        .expect("open")
+        .to_owned();
+    let (status, closed) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{side}/channels"),
+            Some("c2-7-side-closed"),
+            json!({"name": "closed", "autoJoin": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{closed}");
+    let closed = closed["conversation"]["id"]
+        .as_str()
+        .expect("closed")
+        .to_owned();
+    let (status, added) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{side}/members"),
+            None,
+            json!({"actorId": mara.actor, "role": "member"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{added}");
+    assert!(in_sidebar(app, mara, &side, &open).await);
+    assert!(!in_sidebar(app, mara, &side, &closed).await);
+
+    world.finish().await;
+}
+
+async fn in_sidebar(app: &axum::Router, who: &Person, project: &str, channel: &str) -> bool {
+    get(
+        app,
+        who,
+        &format!("/api/v1/projects/{project}/conversation-sidebar"),
+    )
+    .await
+    .to_string()
+    .contains(channel)
+}

@@ -1,4 +1,5 @@
 // K2.7: the message operations.
+pub mod channel_ops;
 pub mod ops;
 
 use std::{
@@ -206,6 +207,10 @@ struct CreateChannelRequest {
     /// older requests still replay.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     private: bool,
+    /// A public channel: whether everyone in the space joins it, and
+    /// everyone who arrives later (C2.7). Left out, they do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_join: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -956,6 +961,7 @@ async fn create_channel(
     let command = CreateChannelRequest {
         name,
         private: request.private,
+        auto_join: request.auto_join,
     };
     let request_hash = RequestHash::for_value(&command)?;
     let scope = idempotency::resource_bound_scope("project", project_id, "channel_create")?;
@@ -993,7 +999,10 @@ async fn create_channel(
         project_id,
         principal.actor_id,
         &command.name,
-        command.private,
+        NewChannel {
+            private: command.private,
+            auto_join: command.auto_join.unwrap_or(true),
+        },
     )
     .await?;
     insert_audit_event(
@@ -1031,38 +1040,99 @@ async fn create_channel(
     created_conversation_response(StatusCode::CREATED, &body)
 }
 
+/// Someone arriving in a space joins its auto-join channels (C2.7).
+pub(crate) async fn join_auto_channels(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        -- visibility: public channels of a space the member was just added to.
+        INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+        SELECT channel.project_id, channel.id, $2, $2
+        FROM conversations channel
+        WHERE channel.project_id = $1
+          AND channel.kind = 'channel'
+          AND channel.visibility = 'project'
+          AND channel.auto_join
+          AND channel.archived_at IS NULL
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// How a new channel is made.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NewChannel {
+    /// Its members only (C2.6).
+    pub(crate) private: bool,
+    /// A public channel that everyone in the space joins, now and on
+    /// arriving later (C2.7). Ignored for a private one.
+    pub(crate) auto_join: bool,
+}
+
+impl NewChannel {
+    /// A public channel everyone is in, as templates make them.
+    pub(crate) const EVERYONE: Self = Self {
+        private: false,
+        auto_join: true,
+    };
+}
+
 /// Create a channel in a Project, read up to date for its creator. The caller
-/// has already checked `Action::ChannelCreate`. Shared with MCP. A private
-/// one (C2.6) is for its members only, and its creator is its first member
-/// and manager.
+/// has already checked `Action::ChannelCreate`. Shared with MCP. Its creator
+/// is its first member and manager. A private one (C2.6) is for its members
+/// only; everyone in the space joins an auto-join one (C2.7).
 pub(crate) async fn insert_channel(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     creator_actor_id: Uuid,
     name: &str,
-    private: bool,
+    channel: NewChannel,
 ) -> Result<Uuid, AppError> {
     let conversation_id = Uuid::now_v7();
+    let auto_join = channel.auto_join && !channel.private;
     let inserted = sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, auto_join)
         VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'channel', $3,
-                CASE WHEN $4 THEN 'members' ELSE 'project' END)
+                CASE WHEN $4 THEN 'members' ELSE 'project' END, $5)
         "#,
     )
     .bind(conversation_id)
     .bind(project_id)
     .bind(name)
-    .bind(private)
+    .bind(channel.private)
+    .bind(auto_join)
     .execute(&mut **transaction)
     .await;
     map_conversation_insert(inserted)?;
-    if private {
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_members
+            (project_id, conversation_id, actor_id, added_by_actor_id, manager)
+        VALUES ($1, $2, $3, $3, true)
+        "#,
+    )
+    .bind(project_id)
+    .bind(conversation_id)
+    .bind(creator_actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    if auto_join {
         sqlx::query(
             r#"
-            INSERT INTO conversation_members
-                (project_id, conversation_id, actor_id, added_by_actor_id, manager)
-            VALUES ($1, $2, $3, $3, true)
+            INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+            SELECT $1, $2, membership.actor_id, $3
+            FROM project_memberships membership
+            WHERE membership.project_id = $1 AND membership.enabled
+            ON CONFLICT DO NOTHING
             "#,
         )
         .bind(project_id)
@@ -3474,6 +3544,11 @@ async fn project_conversation_sidebar(
           AND channel.kind = 'channel'
           AND ($3 OR channel.archived_at IS NULL)
           AND conversation_visible_to(channel.id, $2)
+          -- Only the channels you're in (C2.7), and the one you're looking
+          -- at; channel_list finds the rest.
+          AND (channel.id = $5
+               OR EXISTS (SELECT 1 FROM conversation_members member
+                          WHERE member.conversation_id = channel.id AND member.actor_id = $2))
         ORDER BY channel.archived_at NULLS FIRST, lower(channel.name), channel.id
         LIMIT $4
         "#,
@@ -3482,6 +3557,7 @@ async fn project_conversation_sidebar(
     .bind(principal.actor_id)
     .bind(include_archived)
     .bind(MAX_CHANNELS_PER_PROJECT)
+    .bind(query.selected_channel_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let threads = sqlx::query_as::<_, SidebarThreadRow>(&format!(

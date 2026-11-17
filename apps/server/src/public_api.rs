@@ -516,7 +516,9 @@ pub(crate) fn document() -> Value {
         responses.insert(
             "200".to_owned(),
             json!({
-                "description": "The result. Its `outcome` says whether it worked.",
+                // Short, since every operation repeats it; the introduction
+                // says how `outcome` reads.
+                "description": "The result.",
                 "content": { "application/json": { "schema": output.clone() } },
             }),
         );
@@ -528,7 +530,7 @@ pub(crate) fn document() -> Value {
         refusals.insert(
             refused.clone(),
             json!({
-                "description": "Refused: the status and the result's `outcome` and `message` say why.",
+                "description": "Refused: see `outcome` and `message`.",
                 "content": { "application/json": { "schema": output.clone() } },
             }),
         );

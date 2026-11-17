@@ -28,6 +28,8 @@ export type ArchiveParts = "archive" | "keep"
 
 export type AudienceInput = { accounts?: string[]; roles?: string[] }
 
+export type BrowsedChannel = { autoJoin: boolean; id: string; joined: boolean; memberCount: number; name: string; private: boolean; topic?: string | null }
+
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
 
 export type ButtonStepInput = { arguments?: Record<string, unknown>; operation: string }
@@ -249,6 +251,26 @@ export type ButtonGetOutput = { button: ButtonView; canPress: boolean; reason?: 
 export type ButtonPressInput = { collection: string; field: string; record: string }
 
 export type ButtonPressOutput = { record: PreviewRecord; steps: PressedStep[] }
+
+export type ChannelGetInput = { channelId: string }
+
+export type ChannelGetOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number }
+
+export type ChannelJoinInput = { channelId: string }
+
+export type ChannelJoinOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number }
+
+export type ChannelLeaveInput = { channelId: string }
+
+export type ChannelLeaveOutput = { channelId: string; stillVisible: boolean }
+
+export type ChannelListInput = { query?: string | null; spaceId: string }
+
+export type ChannelListOutput = { channels: BrowsedChannel[] }
+
+export type ChannelUpdateInput = { autoJoin?: boolean | null; channelId: string; description?: string | null; expectedVersion?: number | null; topic?: string | null }
+
+export type ChannelUpdateOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number }
 
 export type CommentCreateInput = { anchor?: unknown; attachmentIds?: string[]; content?: unknown; newThread?: boolean; replyToMessageId?: string | null; text?: string | null; thing: ThingInput; threadId?: string | null }
 
@@ -681,6 +703,11 @@ export type Operations = {
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   button_get: { input: ButtonGetInput; output: ButtonGetOutput }
   button_press: { input: ButtonPressInput; output: ButtonPressOutput }
+  channel_get: { input: ChannelGetInput; output: ChannelGetOutput }
+  channel_join: { input: ChannelJoinInput; output: ChannelJoinOutput }
+  channel_leave: { input: ChannelLeaveInput; output: ChannelLeaveOutput }
+  channel_list: { input: ChannelListInput; output: ChannelListOutput }
+  channel_update: { input: ChannelUpdateInput; output: ChannelUpdateOutput }
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
   comment_list: { input: CommentListInput; output: CommentListOutput }
   comment_thread_update: { input: CommentThreadUpdateInput; output: CommentThreadUpdateOutput }

@@ -90,6 +90,82 @@
     "title": "Press a button"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "channels",
+    "name": "channel_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Channel details"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "channel_join",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Join channel"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "channel_leave",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Leave channel"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "channels",
+    "name": "channel_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Browse channels"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "channel_update",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Change channel"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

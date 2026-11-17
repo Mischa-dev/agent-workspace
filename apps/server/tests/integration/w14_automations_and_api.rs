@@ -423,7 +423,10 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         .or_else(|| private.2["id"].as_str())
         .and_then(|id| id.parse::<Uuid>().ok())
         .expect("channel id");
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1) UPDATE conversations SET visibility = 'members' WHERE id = $1",
+    )
         .bind(private_id)
         .execute(&pool)
         .await

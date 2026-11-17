@@ -178,6 +178,48 @@
         },
         "type": "object"
       },
+      "BrowsedChannel": {
+        "description": "A channel as `channel_list` lists it.",
+        "properties": {
+          "autoJoin": {
+            "description": "Everyone who arrives in the space joins it.",
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "joined": {
+            "description": "You're in it: it's in your sidebar.",
+            "type": "boolean"
+          },
+          "memberCount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "private": {
+            "description": "Only its members see it.",
+            "type": "boolean"
+          },
+          "topic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "private",
+          "autoJoin",
+          "joined",
+          "memberCount"
+        ],
+        "type": "object"
+      },
       "ButtonInput": {
         "additionalProperties": false,
         "description": "A button as people and agents write it.",
@@ -5905,6 +5947,1566 @@
         "summary": "Press a button",
         "tags": [
           "collections"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/channel_get": {
+      "post": {
+        "description": "A channel's topic and description, whether it's private, whether you're in it, how many are, and what you can change.",
+        "operationId": "channel_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "channelId": {
+                    "description": "The channel: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "channelId"
+                ],
+                "title": "ChannelInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One channel, as its page and details show it.",
+                          "properties": {
+                            "archived": {
+                              "type": "boolean"
+                            },
+                            "autoJoin": {
+                              "type": "boolean"
+                            },
+                            "canEdit": {
+                              "description": "Whether you can set its topic and description.",
+                              "type": "boolean"
+                            },
+                            "canManage": {
+                              "description": "Whether you can change who joins it, and a private one's members.",
+                              "type": "boolean"
+                            },
+                            "description": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "joined": {
+                              "type": "boolean"
+                            },
+                            "memberCount": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "private": {
+                              "type": "boolean"
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "topic": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass as expectedVersion to channel_update.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "spaceId",
+                            "name",
+                            "private",
+                            "autoJoin",
+                            "archived",
+                            "joined",
+                            "memberCount",
+                            "version",
+                            "canEdit",
+                            "canManage"
+                          ],
+                          "title": "ChannelView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One channel, as its page and details show it.",
+                          "properties": {
+                            "archived": {
+                              "type": "boolean"
+                            },
+                            "autoJoin": {
+                              "type": "boolean"
+                            },
+                            "canEdit": {
+                              "description": "Whether you can set its topic and description.",
+                              "type": "boolean"
+                            },
+                            "canManage": {
+                              "description": "Whether you can change who joins it, and a private one's members.",
+                              "type": "boolean"
+                            },
+                            "description": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "joined": {
+                              "type": "boolean"
+                            },
+                            "memberCount": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "private": {
+                              "type": "boolean"
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "topic": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass as expectedVersion to channel_update.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "spaceId",
+                            "name",
+                            "private",
+                            "autoJoin",
+                            "archived",
+                            "joined",
+                            "memberCount",
+                            "version",
+                            "canEdit",
+                            "canManage"
+                          ],
+                          "title": "ChannelView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Channel details",
+        "tags": [
+          "channels"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/channel_join": {
+      "post": {
+        "description": "Join a public channel, so it's in your sidebar. You can read and post in any public channel without joining. A private channel's managers add people instead (conversation_members). Joining twice changes nothing.",
+        "operationId": "channel_join",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "channelId": {
+                    "description": "The channel: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "channelId"
+                ],
+                "title": "ChannelInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One channel, as its page and details show it.",
+                          "properties": {
+                            "archived": {
+                              "type": "boolean"
+                            },
+                            "autoJoin": {
+                              "type": "boolean"
+                            },
+                            "canEdit": {
+                              "description": "Whether you can set its topic and description.",
+                              "type": "boolean"
+                            },
+                            "canManage": {
+                              "description": "Whether you can change who joins it, and a private one's members.",
+                              "type": "boolean"
+                            },
+                            "description": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "joined": {
+                              "type": "boolean"
+                            },
+                            "memberCount": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "private": {
+                              "type": "boolean"
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "topic": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass as expectedVersion to channel_update.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "spaceId",
+                            "name",
+                            "private",
+                            "autoJoin",
+                            "archived",
+                            "joined",
+                            "memberCount",
+                            "version",
+                            "canEdit",
+                            "canManage"
+                          ],
+                          "title": "ChannelView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One channel, as its page and details show it.",
+                          "properties": {
+                            "archived": {
+                              "type": "boolean"
+                            },
+                            "autoJoin": {
+                              "type": "boolean"
+                            },
+                            "canEdit": {
+                              "description": "Whether you can set its topic and description.",
+                              "type": "boolean"
+                            },
+                            "canManage": {
+                              "description": "Whether you can change who joins it, and a private one's members.",
+                              "type": "boolean"
+                            },
+                            "description": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "joined": {
+                              "type": "boolean"
+                            },
+                            "memberCount": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "private": {
+                              "type": "boolean"
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "topic": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass as expectedVersion to channel_update.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "spaceId",
+                            "name",
+                            "private",
+                            "autoJoin",
+                            "archived",
+                            "joined",
+                            "memberCount",
+                            "version",
+                            "canEdit",
+                            "canManage"
+                          ],
+                          "title": "ChannelView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Join channel",
+        "tags": [
+          "channels"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/channel_leave": {
+      "post": {
+        "description": "Leave a channel, so it's no longer in your sidebar. A public one stays open to you: you can still find it, read it and join again. Leaving a private one means you no longer see it, until someone who manages it adds you back.",
+        "operationId": "channel_leave",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "channelId": {
+                    "description": "The channel: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "channelId"
+                ],
+                "title": "ChannelInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "channelId": {
+                              "type": "string"
+                            },
+                            "stillVisible": {
+                              "description": "A public channel: you can still find it, read it and join again.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "channelId",
+                            "stillVisible"
+                          ],
+                          "title": "ChannelLeft",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "channelId": {
+                              "type": "string"
+                            },
+                            "stillVisible": {
+                              "description": "A public channel: you can still find it, read it and join again.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "channelId",
+                            "stillVisible"
+                          ],
+                          "title": "ChannelLeft",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Leave channel",
+        "tags": [
+          "channels"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/channel_list": {
+      "post": {
+        "description": "List a project's channels you can see, joined or not, with their topics and member counts: every public channel, and the private ones you're in. Join one with channel_join.",
+        "operationId": "channel_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "Only channels whose name or topic holds these words.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "spaceId": {
+                    "description": "The project: its id, key or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spaceId"
+                ],
+                "title": "ChannelBrowseInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "channels": {
+                              "items": {
+                                "$ref": "#/components/schemas/BrowsedChannel"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "channels"
+                          ],
+                          "title": "BrowsedChannels",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "channels": {
+                              "items": {
+                                "$ref": "#/components/schemas/BrowsedChannel"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "channels"
+                          ],
+                          "title": "BrowsedChannels",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Browse channels",
+        "tags": [
+          "channels"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/channel_update": {
+      "post": {
+        "description": "Set a channel's topic (one line on what it's on now) or description, or, for someone who manages it or moderates the project, whether everyone joins it (autoJoin). Rename or archive a channel with conversation_update. Needs \"Post messages\" where it acts.",
+        "operationId": "channel_update",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoJoin": {
+                    "description": "A public channel: true has everyone in the project join it now, and\neveryone who arrives later; false stops taking in newcomers. Needs\nsomeone who manages the channel or moderates the project.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "channelId": {
+                    "description": "The channel: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "description": {
+                    "description": "What it's for, up to 2,000 characters; \"\" clears it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "description": "The version you last read; a change made since is refused.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "topic": {
+                    "description": "One line on what it's for now, up to 250 characters; \"\" clears it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "channelId"
+                ],
+                "title": "ChannelUpdateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One channel, as its page and details show it.",
+                          "properties": {
+                            "archived": {
+                              "type": "boolean"
+                            },
+                            "autoJoin": {
+                              "type": "boolean"
+                            },
+                            "canEdit": {
+                              "description": "Whether you can set its topic and description.",
+                              "type": "boolean"
+                            },
+                            "canManage": {
+                              "description": "Whether you can change who joins it, and a private one's members.",
+                              "type": "boolean"
+                            },
+                            "description": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "joined": {
+                              "type": "boolean"
+                            },
+                            "memberCount": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "private": {
+                              "type": "boolean"
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "topic": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass as expectedVersion to channel_update.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "spaceId",
+                            "name",
+                            "private",
+                            "autoJoin",
+                            "archived",
+                            "joined",
+                            "memberCount",
+                            "version",
+                            "canEdit",
+                            "canManage"
+                          ],
+                          "title": "ChannelView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One channel, as its page and details show it.",
+                          "properties": {
+                            "archived": {
+                              "type": "boolean"
+                            },
+                            "autoJoin": {
+                              "type": "boolean"
+                            },
+                            "canEdit": {
+                              "description": "Whether you can set its topic and description.",
+                              "type": "boolean"
+                            },
+                            "canManage": {
+                              "description": "Whether you can change who joins it, and a private one's members.",
+                              "type": "boolean"
+                            },
+                            "description": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "joined": {
+                              "type": "boolean"
+                            },
+                            "memberCount": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "private": {
+                              "type": "boolean"
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "topic": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass as expectedVersion to channel_update.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "spaceId",
+                            "name",
+                            "private",
+                            "autoJoin",
+                            "archived",
+                            "joined",
+                            "memberCount",
+                            "version",
+                            "canEdit",
+                            "canManage"
+                          ],
+                          "title": "ChannelView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Change channel",
+        "tags": [
+          "channels"
         ],
         "x-operation-kind": "change"
       }

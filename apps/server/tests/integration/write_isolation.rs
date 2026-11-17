@@ -455,6 +455,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "automation_write",
     "bug_report_link_write",
     "channel_create",
+    "channel_join",
+    "channel_leave",
+    "channel_update",
     "connection_create",
     "connection_remove",
     "connection_secret_rotate",
@@ -6527,6 +6530,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "channel_create",
             json!({"projectId": a.project, "name": "net-mcp"}),
             vec![json!({"projectId": b.project, "name": "net-mcp"})],
+        ),
+        mcp_case(
+            "channel_join",
+            json!({"channelId": a.channel}),
+            vec![json!({"channelId": b.channel})],
+        ),
+        mcp_case(
+            "channel_update",
+            json!({"channelId": a.channel, "topic": "Net topic"}),
+            vec![json!({"channelId": b.channel, "topic": "Net topic"})],
+        ),
+        mcp_case(
+            "channel_leave",
+            json!({"channelId": sp.channel}),
+            vec![json!({"channelId": b.channel})],
         ),
         mcp_case(
             "conversation_update",

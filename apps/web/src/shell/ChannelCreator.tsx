@@ -21,6 +21,7 @@ export default function ChannelCreator({
   const idempotencyKey = useRef(crypto.randomUUID())
   const [name, setName] = useState('')
   const [isPrivate, setPrivate] = useState(false)
+  const [everyone, setEveryone] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const value = name.trim().replace(/^#/, '')
@@ -30,11 +31,12 @@ export default function ChannelCreator({
     if (!value || busy) return
     setBusy(true)
     setError(null)
-    void createChannel({ projectId, name: value, private: isPrivate, idempotencyKey: idempotencyKey.current })
+    void createChannel({ projectId, name: value, private: isPrivate, autoJoin: everyone, idempotencyKey: idempotencyKey.current })
       .then((channel) => {
         idempotencyKey.current = crypto.randomUUID()
         setName('')
         setPrivate(false)
+        setEveryone(true)
         onClose()
         void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
         onCreated(`/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channel.id)}`)
@@ -73,6 +75,17 @@ export default function ChannelCreator({
             idempotencyKey.current = crypto.randomUUID()
           }}
         />
+        {isPrivate ? null : (
+          <Checkbox
+            checked={everyone}
+            description="They’ll find it in their sidebar, and so will everyone who joins the space later. Otherwise people join it from Browse channels."
+            label="Everyone joins it"
+            onChange={(checked) => {
+              setEveryone(checked)
+              idempotencyKey.current = crypto.randomUUID()
+            }}
+          />
+        )}
         <div className="aw-form__actions">
           <Button onClick={onClose}>Cancel</Button>
           <Button busy={busy} disabled={!value} type="submit" variant="primary">

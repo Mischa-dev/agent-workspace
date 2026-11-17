@@ -199,6 +199,15 @@ export function ProjectSidebar({
               to={`${base}/threads/${encodeURIComponent(thread.id)}`}
             />
           ) : null}
+          {experience.shows('channel.browse') ? (
+            <SidebarLink
+              icon="search"
+              key="browse-channels"
+              label={`Browse ${experience.label('channel', 'many').toLowerCase()}`}
+              onNavigate={onNavigate}
+              to={`${base}/conversations/channels`}
+            />
+          ) : null}
         </SidebarSection>
       ) : null}
       {chat && sidebar.isError ? <p className="aw-sidebar__note">Channels couldn’t load. They’ll retry on their own.</p> : null}
