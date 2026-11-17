@@ -33,8 +33,9 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     outbox::{
-        ConversationCreatedPayload, ConversationMemberRemovedPayload, ConversationUpdatedPayload,
-        OutboxConversationKind, OutboxEventPayload,
+        ConversationCreatedPayload, ConversationMemberAddedPayload,
+        ConversationMemberRemovedPayload, ConversationUpdatedPayload, OutboxConversationKind,
+        OutboxEventPayload,
     },
     policy::Action,
     replies::{self, Withdraw},
@@ -644,10 +645,19 @@ pub(crate) async fn change_group_members(
         },
     )
     .await?;
-    if conversation.kind != "group" {
+    // Groups, and private channels (K4.11), have members; nothing else does.
+    let private_channel = conversation.kind == "channel"
+        && sqlx::query_scalar::<_, String>(
+            "SELECT visibility FROM conversations WHERE id = $1 -- visibility: locked above",
+        )
+        .bind(conversation_id)
+        .fetch_one(&mut **transaction)
+        .await?
+            == "members";
+    if conversation.kind != "group" && !private_channel {
         return Err(AppError::Conflict(
             "conversation",
-            "only groups can change members",
+            "only groups and private channels have members",
         ));
     }
     if let Some(expected_version) = expected_version
@@ -685,8 +695,14 @@ pub(crate) async fn change_group_members(
     let added = if to_add.is_empty() {
         Vec::new()
     } else {
-        let people = lock_startable(transaction, editor.actor_id, workspace_id, &to_add).await?;
-        if current.len() + to_add.len() - to_remove.len() > MAX_GROUP_MEMBERS {
+        let people = if private_channel {
+            // A private channel's members read its space; who may add them
+            // is the channel's role, checked as it was locked.
+            space_readers(transaction, workspace_id, conversation.place(), &to_add).await?
+        } else {
+            lock_startable(transaction, editor.actor_id, workspace_id, &to_add).await?
+        };
+        if !private_channel && current.len() + to_add.len() - to_remove.len() > MAX_GROUP_MEMBERS {
             return Err(AppError::Conflict(
                 "group members",
                 "a group can have at most 20 members",
@@ -778,6 +794,18 @@ pub(crate) async fn change_group_members(
         }),
     )
     .await?;
+    for actor in &added {
+        enqueue_event(
+            transaction,
+            place,
+            OutboxEventPayload::ConversationMemberAdded(ConversationMemberAddedPayload {
+                conversation_id,
+                actor_id: actor.id,
+                version,
+            }),
+        )
+        .await?;
+    }
     for actor_id in &to_remove {
         enqueue_event(
             transaction,
@@ -799,6 +827,36 @@ pub(crate) async fn change_group_members(
         added,
         removed,
     })
+}
+
+/// These accounts, locked, if each reads `space`; `NotFound` names none
+/// that doesn't (a private channel's members read its space).
+async fn space_readers(
+    transaction: &mut Transaction<'_, Postgres>,
+    workspace_id: Uuid,
+    space: Uuid,
+    actor_ids: &[Uuid],
+) -> Result<Vec<PersonRow>, AppError> {
+    let people = sqlx::query_as::<_, PersonRow>(
+        r#"
+        SELECT actor.id, actor.kind, profile.display_name, profile.handle
+        FROM actors actor
+        CROSS JOIN LATERAL account_profile(actor.id, $1) profile
+        WHERE actor.id = ANY($2) AND actor.status = 'active'
+          AND space_readable_by($3, actor.id)
+        ORDER BY actor.id
+        FOR SHARE OF actor
+        "#,
+    )
+    .bind(workspace_id)
+    .bind(actor_ids)
+    .bind(space)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if people.len() != actor_ids.len() {
+        return Err(AppError::NotFound("person"));
+    }
+    Ok(people)
 }
 
 /// Everyone in a group, by name.

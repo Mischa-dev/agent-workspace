@@ -206,9 +206,29 @@ pub(super) async fn conversation_members(
         let Some(row) = visible_conversation(state, principal, conversation_id).await? else {
             return Ok(ToolResult::not_found("That conversation"));
         };
+        // Private channels have members too (K4.11); a thread under one
+        // follows it.
+        let channel = match (row.kind.as_str(), row.parent_kind.as_deref()) {
+            ("channel", _) => Some(row.id),
+            ("thread", Some("channel")) => row.parent_channel_id,
+            _ => None,
+        };
+        let private_channel = match channel {
+            Some(channel) => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT visibility FROM conversations WHERE id = $1 -- visibility: checked above",
+                )
+                .bind(channel)
+                .fetch_one(crate::db::scoped(&state.pool))
+                .await?
+                    == "members"
+            }
+            None => false,
+        };
         let group_id = match (row.kind.as_str(), row.effective_kind()) {
             ("group", _) => row.id,
             ("thread", "group") => row.membership_conversation_id(),
+            _ if private_channel => channel.unwrap_or(row.id),
             (_, "dm") => {
                 return Ok(ToolResult::invalid(
                     "conversationId",
@@ -218,7 +238,7 @@ pub(super) async fn conversation_members(
             _ => {
                 return Ok(ToolResult::invalid(
                     "conversationId",
-                    "Channels are open to everyone in the project. To add someone to the project, an owner or admin uses space_member_add.",
+                    "This channel is open to everyone in the project. To add someone to the project, an owner or admin uses space_member_add.",
                 ));
             }
         };

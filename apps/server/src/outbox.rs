@@ -144,6 +144,17 @@ pub struct ConversationMemberRemovedPayload {
     pub version: i64,
 }
 
+/// Someone was added to a group or private channel (K4.11). IDs and the
+/// conversation's version only; scoped to the conversation, so everyone who
+/// can see it now, the new member included, hears it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMemberAddedPayload {
+    pub conversation_id: Uuid,
+    pub actor_id: Uuid,
+    pub version: i64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentRunUpdatedPayload {
@@ -388,6 +399,7 @@ pub enum OutboxEventPayload {
     MessageReactionsUpdated(MessageReactionsUpdatedPayload),
     ReadStateUpdated(ReadStateUpdatedPayload),
     ConversationMemberRemoved(ConversationMemberRemovedPayload),
+    ConversationMemberAdded(ConversationMemberAddedPayload),
     AgentRunUpdated(AgentRunUpdatedPayload),
     RunChanged(RunChangedPayload),
     WorkItemUpdated(WorkItemUpdatedPayload),
@@ -419,6 +431,7 @@ impl OutboxEventPayload {
             Self::MessageReactionsUpdated(_) => "conversation.message.reactions.updated",
             Self::ReadStateUpdated(_) => "conversation.read_state.updated",
             Self::ConversationMemberRemoved(_) => "conversation.member.removed",
+            Self::ConversationMemberAdded(_) => "conversation.member.added",
             Self::AgentRunUpdated(_) => "conversation.agent_run.updated",
             Self::RunChanged(_) => "run.changed",
             Self::WorkItemUpdated(_) => "work_item.updated",
@@ -449,6 +462,7 @@ impl OutboxEventPayload {
             Self::MessageUpdated(payload) => Some(payload.conversation_id),
             Self::MessageReactionsUpdated(payload) => Some(payload.conversation_id),
             Self::ReadStateUpdated(payload) => Some(payload.conversation_id),
+            Self::ConversationMemberAdded(payload) => Some(payload.conversation_id),
             Self::AgentRunUpdated(payload) => Some(payload.conversation_id),
             Self::RunChanged(payload) => payload.conversation_id,
             // The removed actor can no longer see the group, so delivery must
@@ -494,7 +508,8 @@ impl OutboxEventPayload {
             | Self::ConversationUpdated(_)
             | Self::ReplyRequestsUpdated(_)
             | Self::ConversationArchived(_)
-            | Self::ConversationMemberRemoved(_) => OutboxResourceKind::Conversation,
+            | Self::ConversationMemberRemoved(_)
+            | Self::ConversationMemberAdded(_) => OutboxResourceKind::Conversation,
             Self::MessageCreated(_)
             | Self::MessageUpdated(_)
             | Self::MessageReactionsUpdated(_) => OutboxResourceKind::Message,
@@ -534,6 +549,7 @@ impl OutboxEventPayload {
             // already carries the Conversation, so the Actor is its resource ID.
             Self::ReadStateUpdated(payload) => payload.actor_id,
             Self::ConversationMemberRemoved(payload) => payload.conversation_id,
+            Self::ConversationMemberAdded(payload) => payload.conversation_id,
             Self::AgentRunUpdated(payload) => payload.agent_run_id,
             Self::RunChanged(payload) => payload.run_id,
             Self::WorkItemUpdated(payload) => payload.work_item_id,
@@ -584,6 +600,11 @@ impl OutboxEventPayload {
                 Err(OutboxEventError::MalformedPayload)
             }
             Self::ConversationMemberRemoved(payload)
+                if payload.actor_id.is_nil() || payload.version < 1 =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
+            Self::ConversationMemberAdded(payload)
                 if payload.actor_id.is_nil() || payload.version < 1 =>
             {
                 Err(OutboxEventError::MalformedPayload)
@@ -664,6 +685,7 @@ impl OutboxEventPayload {
             Self::MessageReactionsUpdated(payload) => serde_json::to_value(payload),
             Self::ReadStateUpdated(payload) => serde_json::to_value(payload),
             Self::ConversationMemberRemoved(payload) => serde_json::to_value(payload),
+            Self::ConversationMemberAdded(payload) => serde_json::to_value(payload),
             Self::AgentRunUpdated(payload) => serde_json::to_value(payload),
             Self::RunChanged(payload) => serde_json::to_value(payload),
             Self::WorkItemUpdated(payload) => serde_json::to_value(payload),
@@ -718,6 +740,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "conversation.member.removed" => Self::ConversationMemberRemoved(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "conversation.member.added" => Self::ConversationMemberAdded(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "conversation.agent_run.updated" => Self::AgentRunUpdated(

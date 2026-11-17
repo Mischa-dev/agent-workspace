@@ -124,6 +124,13 @@ pub static CONVERSATION_MEMBER_REMOVED: EventType = fact(
     "Someone left or was removed from a conversation",
 )
 .legacy(&["conversation.member.removed"]);
+pub static CONVERSATION_MEMBER_ADDED: EventType = fact(
+    "conversation.member.added",
+    "messages",
+    Some("conversation"),
+    "Someone was added to a conversation",
+)
+.legacy(&["conversation.member.added"]);
 pub static CONVERSATION_REPLY_REQUESTS_CHANGED: EventType = signal(
     "conversation.reply_requests_changed",
     "messages",
@@ -529,6 +536,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONVERSATION_UPDATED,
         &CONVERSATION_ARCHIVED,
         &CONVERSATION_MEMBER_REMOVED,
+        &CONVERSATION_MEMBER_ADDED,
         &CONVERSATION_REPLY_REQUESTS_CHANGED,
         &CONVERSATION_READ,
         &MESSAGE_CREATED,

@@ -123,6 +123,15 @@ pub async fn stage(
             Some(p.version),
             None,
         ),
+        P::ConversationMemberAdded(p) => (
+            &catalog::CONVERSATION_MEMBER_ADDED,
+            "conversation",
+            p.conversation_id,
+            None,
+            conversation(p.conversation_id),
+            Some(p.version),
+            None,
+        ),
         P::AgentRunUpdated(p) => (
             if p.state.is_some_and(|state| state.is_terminal()) {
                 &catalog::RUN_FINISHED

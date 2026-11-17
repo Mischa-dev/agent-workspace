@@ -242,6 +242,10 @@ impl ConversationAccessRow {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateChannelRequest {
     name: String,
+    /// A private channel (K4.11): only its members see it, and whoever makes
+    /// it starts as its only member.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    private: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -978,7 +982,10 @@ async fn create_channel(
     require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let name = normalize_conversation_name(&request.name)?;
-    let command = CreateChannelRequest { name };
+    let command = CreateChannelRequest {
+        name,
+        private: request.private,
+    };
     let request_hash = RequestHash::for_value(&command)?;
     let scope = idempotency::resource_bound_scope("project", project_id, "channel_create")?;
 
@@ -1015,6 +1022,7 @@ async fn create_channel(
         project_id,
         principal.actor_id,
         &command.name,
+        command.private,
     )
     .await?;
     insert_audit_event(
@@ -1024,7 +1032,7 @@ async fn create_channel(
         project_id,
         "conversation.channel_created",
         conversation_id,
-        serde_json::json!({}),
+        serde_json::json!({ "private": command.private }),
     )
     .await?;
     let body = ConversationCreateResponse {
@@ -1052,26 +1060,43 @@ async fn create_channel(
 }
 
 /// Create a channel in a Project, read up to date for its creator. The caller
-/// has already checked `Action::ChannelCreate`. Shared with MCP.
+/// has already checked `Action::ChannelCreate`. Shared with MCP. A private
+/// channel is seen by its members only, and its creator is the first.
 pub(crate) async fn insert_channel(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     creator_actor_id: Uuid,
     name: &str,
+    private: bool,
 ) -> Result<Uuid, AppError> {
     let conversation_id = Uuid::now_v7();
     let inserted = sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, workspace_id, kind, name)
-        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'channel', $3)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'channel', $3,
+                CASE WHEN $4 THEN 'members' ELSE 'project' END)
         "#,
     )
     .bind(conversation_id)
     .bind(project_id)
     .bind(name)
+    .bind(private)
     .execute(&mut **transaction)
     .await;
     map_conversation_insert(inserted)?;
+    if private {
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+            VALUES ($1, $2, $3, $3)
+            "#,
+        )
+        .bind(project_id)
+        .bind(conversation_id)
+        .bind(creator_actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
     sqlx::query(
         r#"
         INSERT INTO conversation_read_states (

@@ -112,6 +112,10 @@ pub(super) struct ChannelCreateArguments {
     pub project_id: String,
     /// The channel's name, such as "design" or "releases".
     pub name: String,
+    /// true makes a private channel: only its members see it, and you start
+    /// as its only member (add others with conversation_members).
+    #[serde(default)]
+    pub private: Option<bool>,
 }
 
 pub(super) async fn channel_create(
@@ -161,10 +165,12 @@ pub(super) async fn channel_create(
             SELECT id FROM conversations
             WHERE project_id = $1 AND kind = 'channel' AND archived_at IS NULL
               AND lower(name) = lower($2)
+              AND conversation_visible_to(id, $3)
             "#,
         )
         .bind(project_id)
         .bind(&name)
+        .bind(principal.actor_id)
         .fetch_optional(&mut *transaction)
         .await?
         {
@@ -175,8 +181,15 @@ pub(super) async fn channel_create(
             ));
         }
         mark_via(&mut transaction, principal).await?;
-        let channel_id =
-            insert_channel(&mut transaction, project_id, principal.actor_id, &name).await?;
+        let private = arguments.private.unwrap_or(false);
+        let channel_id = insert_channel(
+            &mut transaction,
+            project_id,
+            principal.actor_id,
+            &name,
+            private,
+        )
+        .await?;
         insert_audit(
             &mut transaction,
             principal,
@@ -184,7 +197,7 @@ pub(super) async fn channel_create(
             "conversation.channel_created",
             "conversation",
             channel_id,
-            serde_json::json!({}),
+            serde_json::json!({ "private": private }),
         )
         .await?;
         transaction.commit().await?;

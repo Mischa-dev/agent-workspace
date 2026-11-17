@@ -293,6 +293,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "conversation.message.reactions.updated"
                 | "conversation.read_state.updated"
                 | "conversation.member.removed"
+                | "conversation.member.added"
                 | "conversation.agent_run.updated"
                 | "work_item.updated"
                 | "project.membership.updated"

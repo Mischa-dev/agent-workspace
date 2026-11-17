@@ -921,7 +921,8 @@ pub(crate) async fn apply_to_new_project(
         {
             continue;
         }
-        crate::conversations::insert_channel(transaction, project_id, actor_id, &name).await?;
+        crate::conversations::insert_channel(transaction, project_id, actor_id, &name, false)
+            .await?;
         channel_names.push(name);
     }
     applied.channels = channel_names.len();
