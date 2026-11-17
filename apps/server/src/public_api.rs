@@ -76,15 +76,19 @@ async fn call(
     body: &[u8],
 ) -> Result<Response, AppError> {
     let authentication_key = mcp::exact_bearer_token(headers).unwrap_or("invalid");
-    state.rate_limits.check_mcp_auth(authentication_key)?;
+    state.rate_limits.check_mcp_auth(authentication_key).await?;
     let Some(principal) = mcp::resolve_bearer_principal(state, headers).await? else {
-        state.rate_limits.note_mcp_auth_failure();
+        state.rate_limits.note_mcp_auth_failure().await;
         return Err(AppError::AuthenticationRequired);
     };
-    state.rate_limits.note_mcp_auth_success(authentication_key);
     state
         .rate_limits
-        .check_mcp_request(principal.credential_id)?;
+        .note_mcp_auth_success(authentication_key)
+        .await;
+    state
+        .rate_limits
+        .check_mcp_request(principal.credential_id)
+        .await?;
     if body.len() > MAX_BODY_BYTES {
         return Err(AppError::PayloadTooLarge);
     }
@@ -239,13 +243,12 @@ fn hoist(tool: &str, schema: &Map<String, Value>, components: &mut Map<String, V
     value
 }
 
-/// An operation's result is one of its own `ok` shape and the same refusal
-/// shapes as every other operation's. Each refusal branch is kept once, in
-/// `components`, and referenced, so the document grows by an operation's own
-/// shapes only. A branch that differs from the one already kept under its
-/// name stays inline.
+/// An operation's result lists the same refusals as every other's (one
+/// branch per refusing `outcome`); each is kept once, as `Refusal<Outcome>`,
+/// and referenced, so the document grows by an operation's own value only.
+/// A branch that differs from the shared one stays inline.
 fn share_refusals(schema: &mut Value, components: &mut Map<String, Value>) {
-    let Some(Value::Array(branches)) = schema.get_mut("oneOf") else {
+    let Some(branches) = schema.get_mut("oneOf").and_then(Value::as_array_mut) else {
         return;
     };
     for branch in branches {
@@ -256,15 +259,13 @@ fn share_refusals(schema: &mut Value, components: &mut Map<String, Value>) {
         else {
             continue;
         };
-        let key = format!("Outcome{}", pascal(outcome));
-        match components.get(&key) {
-            Some(kept) if kept != branch => continue,
-            Some(_) => {}
-            None => {
-                components.insert(key.clone(), branch.clone());
-            }
+        let key = format!("Refusal{}", pascal(outcome));
+        let shared = components
+            .entry(key.clone())
+            .or_insert_with(|| branch.clone());
+        if shared == branch {
+            *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
         }
-        *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
     }
 }
 

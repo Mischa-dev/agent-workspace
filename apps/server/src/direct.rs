@@ -322,7 +322,7 @@ async fn open_dm(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<OpenDmRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.actor_id == principal.actor_id {
         return Err(AppError::Validation("DM recipient"));
     }
@@ -364,7 +364,7 @@ async fn create_group(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<CreateGroupRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let others = request
         .member_ids
@@ -476,7 +476,7 @@ async fn change_members_from_web(
     add: &[Uuid],
     remove: &[Uuid],
 ) -> Result<Json<MembersResponse>, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let change = change_group_members(
         &mut transaction,

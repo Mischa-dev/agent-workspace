@@ -1402,7 +1402,7 @@ async fn create_launches(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<LaunchRequest>,
 ) -> Result<(StatusCode, Json<LaunchResult>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = LaunchCaller::browser(&principal, &headers)?;
     let source = if request.dialog { "dialog" } else { "button" };
     let result = launch_tasks(
@@ -2688,7 +2688,7 @@ async fn cancel_launch(
     ApiPath((project_id, launch_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<LaunchView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = LaunchCaller::browser(&principal, &headers)?;
     Ok(Json(cancel(&state, &caller, project_id, launch_id).await?))
 }

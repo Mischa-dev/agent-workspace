@@ -91,6 +91,7 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
             .expect("serve loopback application");
     });
     let (outbox_shutdown_sender, outbox_shutdown_receiver) = watch::channel(false);
+    let (stop_log, log) = crate::support::live::follow_log(&pool, &realtime, None).await;
     let outbox_publisher = tokio::spawn(run_outbox_publisher(
         pool.clone(),
         realtime,
@@ -478,6 +479,8 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
         .expect("outbox publisher shutdown deadline")
         .expect("outbox publisher task")
         .expect("outbox publisher result");
+    let _ = stop_log.send(true);
+    let _ = log.await;
     let _ = server_shutdown_sender.send(());
     timeout(Duration::from_secs(3), server)
         .await

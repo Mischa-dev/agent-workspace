@@ -18,6 +18,7 @@ pub mod backup;
 pub mod bootstrap;
 pub mod bug_reports;
 pub mod client_config;
+pub mod cluster;
 pub mod code_host;
 pub mod collection_forms;
 pub mod collections;
@@ -47,6 +48,7 @@ pub mod github;
 pub mod harness_host;
 pub mod harnesses;
 pub mod health;
+pub mod history;
 pub mod home;
 pub mod hosts;
 pub mod idempotency;
@@ -56,7 +58,9 @@ pub mod keywords;
 pub mod later;
 pub mod launch;
 pub mod layouts;
+pub mod limits;
 pub mod link_previews;
+pub mod links;
 pub mod mail;
 pub mod maintenance_lease;
 pub mod mcp;
@@ -105,6 +109,7 @@ pub mod scheduler;
 pub mod search;
 pub mod secrets;
 pub mod seed;
+pub mod server;
 pub mod server_status;
 pub mod settings;
 pub mod sheets;
@@ -116,6 +121,7 @@ pub mod task_records;
 pub mod telemetry;
 pub mod tenancy;
 pub mod test_support;
+pub mod things;
 pub mod usage;
 pub mod views;
 #[cfg(test)]
@@ -164,6 +170,9 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    // Request budgets are counted in the database every instance shares
+    // (K5.6).
+    state.rate_limits.attach(&state.pool);
     state
         .supervisors
         .set_host(Arc::new(harness_host::ServerHost::new(

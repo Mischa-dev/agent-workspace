@@ -632,7 +632,7 @@ async fn change_reaction(
     name: &str,
     reacted: bool,
 ) -> Result<Json<MessageReactionsResponse>, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     if !could_be_reaction(name) {
         return Err(AppError::Validation("reaction"));
     }

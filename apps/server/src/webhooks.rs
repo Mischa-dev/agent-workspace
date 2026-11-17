@@ -1301,6 +1301,26 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
     }
 }
 
+/// The Standard Webhooks signature: base64 of the HMAC-SHA256 of
+/// `id.timestamp.body`, keyed by the secret's bytes after `whsec_` (or the
+/// whole secret when it isn't base64).
+fn standard_signature(secret: &str, id: &str, timestamp: &str, body: &str) -> Option<String> {
+    use base64::Engine as _;
+    use hmac::{Hmac, Mac};
+    let engine = base64::engine::general_purpose::STANDARD;
+    let key = secret
+        .strip_prefix("whsec_")
+        .and_then(|encoded| engine.decode(encoded).ok())
+        .unwrap_or_else(|| secret.as_bytes().to_vec());
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&key).ok()?;
+    mac.update(id.as_bytes());
+    mac.update(b".");
+    mac.update(timestamp.as_bytes());
+    mac.update(b".");
+    mac.update(body.as_bytes());
+    Some(engine.encode(mac.finalize().into_bytes()))
+}
+
 async fn send_post(
     url: &str,
     secret: &str,
@@ -1315,14 +1335,22 @@ async fn send_post(
     let timestamp = Utc::now().timestamp().to_string();
     let signature = crate::replies::sign(secret, &timestamp, &body)
         .ok_or((None, "could not sign the delivery"))?;
+    let delivery = due.id.to_string();
+    let standard = standard_signature(secret, &delivery, &timestamp, &body)
+        .ok_or((None, "could not sign the delivery"))?;
     let response = client
         .post(url)
         .header("content-type", "application/json")
         .header("user-agent", "AgentWorkspace-Webhooks/1")
-        .header("x-workspace-delivery", due.id.to_string())
+        .header("x-workspace-delivery", &delivery)
         .header("x-workspace-event", &due.event_type)
         .header("x-workspace-timestamp", &timestamp)
         .header("x-workspace-signature", format!("sha256={signature}"))
+        // Standard Webhooks (K3.4), beside the headers above: the id is the
+        // delivery's, the same on every retry.
+        .header("webhook-id", &delivery)
+        .header("webhook-timestamp", &timestamp)
+        .header("webhook-signature", format!("v1,{standard}"))
         .body(body)
         .send()
         .await
@@ -1654,7 +1682,7 @@ async fn create_route(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<CreateWebhook>,
 ) -> Result<(StatusCode, Json<CreatedWebhook>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok((
         StatusCode::CREATED,
@@ -1669,7 +1697,7 @@ async fn update_route(
     ApiPath(webhook_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateWebhook>,
 ) -> Result<Json<WebhookView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok(Json(update(&state, &caller, webhook_id, request).await?))
 }
@@ -1680,7 +1708,7 @@ async fn delete_route(
     principal: AuthenticatedActor,
     ApiPath(webhook_id): ApiPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     delete(&state, &caller, webhook_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -1692,7 +1720,7 @@ async fn rotate_route(
     principal: AuthenticatedActor,
     ApiPath(webhook_id): ApiPath<Uuid>,
 ) -> Result<Json<CreatedWebhook>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok(Json(rotate_secret(&state, &caller, webhook_id).await?))
 }
@@ -1703,7 +1731,7 @@ async fn test_route(
     principal: AuthenticatedActor,
     ApiPath(webhook_id): ApiPath<Uuid>,
 ) -> Result<(StatusCode, Json<DeliveryView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok((
         StatusCode::ACCEPTED,
@@ -1743,7 +1771,7 @@ async fn redeliver_route(
     principal: AuthenticatedActor,
     ApiPath((webhook_id, delivery_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<(StatusCode, Json<DeliveryView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok((
         StatusCode::ACCEPTED,
@@ -1753,7 +1781,22 @@ async fn redeliver_route(
 
 #[cfg(test)]
 mod tests {
-    use super::{new_secret, normalize_events, normalize_name};
+    use super::{new_secret, normalize_events, normalize_name, standard_signature};
+
+    #[test]
+    fn standard_webhooks_signature_matches_the_spec_example() {
+        // The example in the Standard Webhooks specification.
+        let signature = standard_signature(
+            "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            "msg_p5jXN8AQM9LWM0D4loKWxJek",
+            "1614265330",
+            r#"{"test": 2432232314}"#,
+        );
+        assert_eq!(
+            signature.as_deref(),
+            Some("g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=")
+        );
+    }
 
     #[test]
     fn events_must_be_known_and_names_short() {

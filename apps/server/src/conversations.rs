@@ -928,7 +928,7 @@ async fn create_channel(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreateChannelRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let name = normalize_conversation_name(&request.name)?;
     let command = CreateChannelRequest { name };
@@ -1058,7 +1058,7 @@ async fn create_thread(
     ApiPath(channel_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreateThreadRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let command = CreateThreadRequest {
         name: request
@@ -1491,7 +1491,7 @@ async fn patch_thread(
     ApiPath(thread_id): ApiPath<Uuid>,
     ApiJson(patch): ApiJson<ThreadPatch>,
 ) -> Result<Json<ConversationView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let view = update_thread(
         &mut transaction,
@@ -1561,7 +1561,7 @@ async fn send_direct_message(
 ) -> Result<Response, AppError> {
     // DMs and groups have no kind-specific route. Access still goes through
     // the shared visibility check in `lock_message_conversation`.
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let outcome = append_message_command_with(
         &state,
@@ -1594,7 +1594,7 @@ async fn send_message(
     expected_kind: &'static str,
     request: SendMessageRequest,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(headers)?;
     let outcome = append_message_command_with(
         state,
@@ -1736,6 +1736,11 @@ pub(crate) async fn append_message_command_with(
     };
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    crate::events::set_context(
+        &mut transaction,
+        &crate::events::EventContext::actor(actor.actor_id, actor.via_grant_id),
+    )
+    .await?;
     let conversation = lock_message_conversation(
         &mut transaction,
         &actor,
@@ -2729,7 +2734,7 @@ async fn mark_conversation_seen(
     ApiPath(conversation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<MarkSeenRequest>,
 ) -> Result<Json<ReadStateView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.highest_seen_sequence < 0 {
         return Err(AppError::Validation("highest seen sequence"));
     }
@@ -2805,7 +2810,7 @@ async fn mark_conversation_unread(
     ApiPath(conversation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<MarkUnreadRequest>,
 ) -> Result<Json<ReadStateView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let change = mark_unread_from(
         &mut transaction,
@@ -3000,7 +3005,7 @@ async fn archive_conversation(
     expected_kind: &'static str,
     request: ArchiveConversationRequest,
 ) -> Result<Json<ArchiveConversationResponse>, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (conversation, archived) = set_conversation_archived(
         &mut transaction,
@@ -3088,7 +3093,7 @@ async fn restore_conversation(
     expected_kind: &'static str,
     request: ArchiveConversationRequest,
 ) -> Result<Json<RestoreConversationResponse>, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (conversation, restored) = set_conversation_archived(
         &mut transaction,
@@ -3273,7 +3278,8 @@ async fn search_mentionable_actors(
 ) -> Result<Json<MentionActorResponse>, AppError> {
     state
         .rate_limits
-        .check_expensive_read(principal.session_id)?;
+        .check_expensive_read(principal.session_id)
+        .await?;
     let access = authorized_project(&state, &principal, project_id, Action::MentionSearch).await?;
     if access.project_archived {
         return Err(AppError::NotFound("project"));

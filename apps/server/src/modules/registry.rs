@@ -146,6 +146,12 @@ pub enum RegistryError {
     BadId {
         module: String,
     },
+    /// A kind of thing (declared, or at a link's end) that isn't a core
+    /// kind's name (ruling R54: `things::kind::valid_name`, unqualified).
+    BadKind {
+        module: String,
+        kind: String,
+    },
     Duplicate {
         module: String,
     },
@@ -170,6 +176,12 @@ impl fmt::Display for RegistryError {
                 error,
             } => write!(formatter, "module {source_index}'s manifest: {error}"),
             Self::BadId { module } => write!(formatter, "{module:?} isn't a core module id"),
+            Self::BadKind { module, kind } => {
+                write!(
+                    formatter,
+                    "{module} names {kind:?}, which isn't a core kind's name"
+                )
+            }
             Self::Duplicate { module } => write!(formatter, "two modules are called {module}"),
             Self::ToolClaimedTwice { tool, modules } => write!(
                 formatter,
@@ -223,6 +235,24 @@ impl Registry {
                 return Err(RegistryError::BadId {
                     module: manifest.id,
                 });
+            }
+            let kinds = manifest
+                .things
+                .iter()
+                .map(|thing| thing.kind.as_str())
+                .chain(
+                    manifest
+                        .links
+                        .iter()
+                        .flat_map(|link| [link.from.as_str(), link.to.as_str()]),
+                );
+            for kind in kinds {
+                if !crate::things::ThingKind::parse(kind).is_some_and(|kind| kind.is_core()) {
+                    return Err(RegistryError::BadKind {
+                        module: manifest.id.clone(),
+                        kind: kind.to_owned(),
+                    });
+                }
             }
             parsed.push((manifest, *module));
         }
@@ -603,6 +633,22 @@ mod tests {
             matches!(error, RegistryError::ToolClaimedTwice { .. }),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_core_module_names_only_core_kinds() {
+        for kind in ["acme.build", "Task", "x"] {
+            let source = serde_json::json!({
+                "id": "alpha", "name": "alpha", "description": "A test module.",
+                "version": 1, "kind": "core", "switchable": true,
+                "things": [{"kind": kind, "one": "thing", "many": "things", "href": "/things/{id}"}],
+            })
+            .to_string();
+            let module: &'static dyn CoreModule =
+                Box::leak(Box::new(Synthetic(Box::leak(source.into_boxed_str()))));
+            let error = Registry::build(&[module], &[]).err().expect("refused");
+            assert!(matches!(error, RegistryError::BadKind { .. }), "{error}");
+        }
     }
 
     #[test]

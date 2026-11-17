@@ -144,6 +144,10 @@ pub enum AppError {
     ModuleOff { module: &'static str },
     #[error("internal invariant failed: {0}")]
     Internal(&'static str),
+    /// Work under a lease (K5.2) found the lease gone: another instance
+    /// may hold it now. Never shown to clients beyond a server error.
+    #[error("the lease was lost")]
+    LeaseLost,
 }
 
 impl AppError {
@@ -180,6 +184,7 @@ impl AppError {
             Self::SecretsNotConfigured => "secrets_not_configured",
             Self::ModuleOff { .. } => "module_off",
             Self::Internal(_) => "internal",
+            Self::LeaseLost => "lease_lost",
         }
     }
 
@@ -422,6 +427,16 @@ impl IntoResponse for AppError {
             Self::Internal(invariant) => {
                 error!(invariant, "request invariant failed");
                 crate::metrics::server_error("internal");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "The request could not be completed.",
+                    None,
+                )
+            }
+            Self::LeaseLost => {
+                error!("work under a lease found it lost");
+                crate::metrics::server_error("lease_lost");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",

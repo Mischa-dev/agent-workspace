@@ -358,7 +358,7 @@ async fn start_connect(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ConnectRequest>,
 ) -> Result<(HeaderMap, Json<ConnectResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let (_, connect) = connect_config(&state).ok_or(AppError::Conflict(
         "github_integration",
         "connect_not_configured",
@@ -1007,7 +1007,7 @@ async fn add_repository(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<AddRepositoryRequest>,
 ) -> Result<(StatusCode, Json<Value>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let PickedRepository {
         mut transaction,
         repository_id,
