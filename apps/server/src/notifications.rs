@@ -1073,8 +1073,7 @@ async fn run_notifications(
         RunState::Failed | RunState::Interrupted => kind::RUN_FAILED,
         _ => return Ok(Vec::new()),
     };
-    let Some(run) = crate::runs::reads::notify_context(transaction, run_id).await?
-    else {
+    let Some(run) = crate::runs::reads::notify_context(transaction, run_id).await? else {
         return Ok(Vec::new());
     };
     let group_key = format!("run:{run_id}");

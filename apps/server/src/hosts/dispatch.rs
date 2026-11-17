@@ -196,7 +196,13 @@ impl Host for RemoteHost {
     ) -> Result<Uuid, AppError> {
         let body = json!({"hostRunRef": run.host_run_ref});
         Ok(self
-            .for_run(transaction, run, CommandKind::Answer, Some(request_id), body)
+            .for_run(
+                transaction,
+                run,
+                CommandKind::Answer,
+                Some(request_id),
+                body,
+            )
             .await?
             .id)
     }

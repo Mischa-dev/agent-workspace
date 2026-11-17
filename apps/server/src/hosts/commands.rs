@@ -407,7 +407,11 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
     }
     command.insert("issuedAt".into(), json!(timestamp(row.created_at)));
     command.insert("expiresAt".into(), json!(timestamp(row.expires_at)));
-    let runnable = row.kind == "start" && matches!(row.state.as_str(), "pending" | "fetched" | "uncertain" | "acked");
+    let runnable = row.kind == "start"
+        && matches!(
+            row.state.as_str(),
+            "pending" | "fetched" | "uncertain" | "acked"
+        );
     if runnable && let Some(run_id) = row.run_id {
         let active = crate::runs::ops::state_of(&mut *transaction, run_id)
             .await?
@@ -547,7 +551,8 @@ pub async fn ack(
     // Settled already: the first answer stands (a start acknowledged after
     // a person marked it as not started still revives its run).
     let settled = matches!(row.state.as_str(), "acked" | "refused" | "superseded");
-    let revives = row.state == "expired" && kind == CommandKind::Start && outcome == AckOutcome::Accepted;
+    let revives =
+        row.state == "expired" && kind == CommandKind::Start && outcome == AckOutcome::Accepted;
     if (settled || row.state == "expired") && !revives {
         let answer = reply(&mut transaction, &row, row.state.clone()).await?;
         transaction.commit().await?;
@@ -621,9 +626,14 @@ pub async fn ack(
             .await?;
         } else if revives {
             // Marked as not started, then the host said it had started it.
-            crate::runs::ops::revive_late_start(&mut transaction, run_id, host.id, ack.host_run_ref.clone())
-                .await
-                .map_err(app)?;
+            crate::runs::ops::revive_late_start(
+                &mut transaction,
+                run_id,
+                host.id,
+                ack.host_run_ref.clone(),
+            )
+            .await
+            .map_err(app)?;
         } else if let Some(answer) = answer {
             host_answered(&mut transaction, run_id, host.id, answer)
                 .await
@@ -719,7 +729,19 @@ pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
 /// A failure is retried by the job queue; the host fetches the command
 /// either way once it hears of it.
 async fn push(state: &AppState, command_id: Uuid) -> Result<(), JobError> {
-    let row = sqlx::query_as::<_, (Uuid, String, Option<Uuid>, Option<String>, Option<Uuid>, Option<Uuid>, String, String)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            Option<Uuid>,
+            Option<String>,
+            Option<Uuid>,
+            Option<Uuid>,
+            String,
+            String,
+        ),
+    >(
         r#"
         SELECT command.host_id, command.kind, command.run_id, host.push_url,
                host.push_secret_id, host.host_token_secret_id, command.state, host.status
@@ -728,17 +750,21 @@ async fn push(state: &AppState, command_id: Uuid) -> Result<(), JobError> {
         "#,
     )
     .bind(command_id);
-    let row = crate::db::scoped_one(&state.pool, async |connection| row.fetch_optional(connection).await)
-        .await
-        .map_err(|_: sqlx::Error| JobError::retry("database"))?;
-    let Some((_, kind, run_id, Some(url), Some(signing), host_token, command_state, host_status)) = row
+    let row = crate::db::scoped_one(&state.pool, async |connection| {
+        row.fetch_optional(connection).await
+    })
+    .await
+    .map_err(|_: sqlx::Error| JobError::retry("database"))?;
+    let Some((_, kind, run_id, Some(url), Some(signing), host_token, command_state, host_status)) =
+        row
     else {
         return Ok(());
     };
     if command_state != "pending" || host_status == "revoked" {
         return Ok(());
     }
-    let keys = crate::secrets::keyring(&state.config).map_err(|_| JobError::permanent("keyring"))?;
+    let keys =
+        crate::secrets::keyring(&state.config).map_err(|_| JobError::permanent("keyring"))?;
     let secret = crate::secrets::reveal(&state.pool, keys.as_ref(), signing, "host.push.sign")
         .await
         .map_err(|_| JobError::retry("push secret"))?;
@@ -753,9 +779,10 @@ async fn push(state: &AppState, command_id: Uuid) -> Result<(), JobError> {
     let now = Utc::now().timestamp();
     let signature = sign_push(secret.expose(), &id, now, &body)
         .ok_or_else(|| JobError::permanent("push secret"))?;
-    let (url, client) = crate::outbound::webhook_client(&url, &state.config.webhook_trusted_origins)
-        .await
-        .map_err(JobError::retry)?;
+    let (url, client) =
+        crate::outbound::webhook_client(&url, &state.config.webhook_trusted_origins)
+            .await
+            .map_err(JobError::retry)?;
     let mut request = client
         .post(url)
         .header("content-type", "application/json")
@@ -765,9 +792,10 @@ async fn push(state: &AppState, command_id: Uuid) -> Result<(), JobError> {
         .header(super::routes::PROTOCOL_HEADER, super::PROTOCOL)
         .body(body);
     if let Some(token_secret) = host_token {
-        let token = crate::secrets::reveal(&state.pool, keys.as_ref(), token_secret, "host.push.auth")
-            .await
-            .map_err(|_| JobError::retry("host token"))?;
+        let token =
+            crate::secrets::reveal(&state.pool, keys.as_ref(), token_secret, "host.push.auth")
+                .await
+                .map_err(|_| JobError::retry("host token"))?;
         request = request.bearer_auth(token.expose());
     }
     let response = request
@@ -775,7 +803,10 @@ async fn push(state: &AppState, command_id: Uuid) -> Result<(), JobError> {
         .await
         .map_err(|_| JobError::retry("push unreachable"))?;
     if !response.status().is_success() {
-        return Err(JobError::retry(format!("push answered {}", response.status().as_u16())));
+        return Err(JobError::retry(format!(
+            "push answered {}",
+            response.status().as_u16()
+        )));
     }
     // Pushed: the acknowledgement clock starts as if it was fetched.
     let started = sqlx::query(
@@ -788,9 +819,11 @@ async fn push(state: &AppState, command_id: Uuid) -> Result<(), JobError> {
     )
     .bind(command_id)
     .bind(ACK_SECONDS as f64);
-    crate::db::scoped_one(&state.pool, async |connection| started.execute(connection).await)
-        .await
-        .map_err(|_: sqlx::Error| JobError::retry("database"))?;
+    crate::db::scoped_one(&state.pool, async |connection| {
+        started.execute(connection).await
+    })
+    .await
+    .map_err(|_: sqlx::Error| JobError::retry("database"))?;
     Ok(())
 }
 

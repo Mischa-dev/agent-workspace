@@ -381,19 +381,13 @@ impl AppConfig {
         let codex_binary = PathBuf::from(optional(values, "CODEX_BINARY", "codex"));
         // Harness account homes live in the data root unless placed elsewhere
         // inside it.
-        // A1.6: the neutral names, with the old ones still read for a
-        // release (an old name is used only when the new one is unset).
-        let home_root_key = aliased(values, "PROVIDER_HOME_ROOT", "CODEX_HOME_ROOT");
+        let home_root_key = "PROVIDER_HOME_ROOT";
         let codex_home_root = PathBuf::from(optional(
             values,
             home_root_key,
             &data_root.join("codex/profiles").to_string_lossy(),
         ));
-        let concurrency_key = aliased(
-            values,
-            "HARNESS_HOST_CONCURRENCY_LIMIT",
-            "CODEX_HOST_CONCURRENCY_LIMIT",
-        );
+        let concurrency_key = "HARNESS_HOST_CONCURRENCY_LIMIT";
         let codex_host_concurrency_limit = parse(values, concurrency_key, "1")?;
         let codex_max_line_bytes = parse(values, "CODEX_MAX_LINE_BYTES", "1048576")?;
         let codex_max_stderr_bytes = parse(values, "CODEX_MAX_STDERR_BYTES", "262144")?;
@@ -1199,17 +1193,6 @@ fn required(values: &BTreeMap<String, String>, suffix: &str) -> Result<String, C
         .ok_or_else(|| ConfigError::Missing(format!("{PREFIX}{suffix}")))
 }
 
-/// The setting's name to read: `name`, or `old` (its name before A1.6)
-/// when only that one is set.
-fn aliased(values: &BTreeMap<String, String>, name: &'static str, old: &'static str) -> &'static str {
-    let set = |suffix: &str| {
-        values
-            .get(&format!("{PREFIX}{suffix}"))
-            .is_some_and(|value| !value.trim().is_empty())
-    };
-    if !set(name) && set(old) { old } else { name }
-}
-
 fn optional(values: &BTreeMap<String, String>, suffix: &str, default: &str) -> String {
     values
         .get(&format!("{PREFIX}{suffix}"))
@@ -1428,37 +1411,14 @@ mod tests {
     }
 
     #[test]
-    fn neutral_setting_names_win_and_old_ones_still_work() {
+    fn harness_concurrency_is_bounded() {
         let mut values = base_values();
-        values.insert(format!("{PREFIX}DATA_ROOT"), "/srv/aw/data".to_owned());
-        values.insert(
-            format!("{PREFIX}CODEX_HOST_CONCURRENCY_LIMIT"),
-            "3".to_owned(),
-        );
-        values.insert(
-            format!("{PREFIX}CODEX_HOME_ROOT"),
-            "/srv/aw/data/old-homes".to_owned(),
-        );
-        let config = AppConfig::from_values(&values).expect("old names");
-        assert_eq!(config.codex_host_concurrency_limit, 3);
-        assert_eq!(
-            config.codex_home_root,
-            std::path::Path::new("/srv/aw/data/old-homes")
-        );
         values.insert(
             format!("{PREFIX}HARNESS_HOST_CONCURRENCY_LIMIT"),
             "5".to_owned(),
         );
-        values.insert(
-            format!("{PREFIX}PROVIDER_HOME_ROOT"),
-            "/srv/aw/data/homes".to_owned(),
-        );
-        let config = AppConfig::from_values(&values).expect("new names");
+        let config = AppConfig::from_values(&values).expect("in range");
         assert_eq!(config.codex_host_concurrency_limit, 5);
-        assert_eq!(
-            config.codex_home_root,
-            std::path::Path::new("/srv/aw/data/homes")
-        );
         values.insert(
             format!("{PREFIX}HARNESS_HOST_CONCURRENCY_LIMIT"),
             "40".to_owned(),
@@ -1475,17 +1435,17 @@ mod tests {
         let mut values = base_values();
         values.insert(format!("{PREFIX}DATA_ROOT"), "/srv/aw/data".to_owned());
         values.insert(
-            format!("{PREFIX}CODEX_HOME_ROOT"),
+            format!("{PREFIX}PROVIDER_HOME_ROOT"),
             "/srv/aw/codex".to_owned(),
         );
         let error = AppConfig::from_values(&values).expect_err("home root outside the data root");
-        assert!(error.to_string().contains("CODEX_HOME_ROOT"), "{error}");
+        assert!(error.to_string().contains("PROVIDER_HOME_ROOT"), "{error}");
         values.insert(
-            format!("{PREFIX}CODEX_HOME_ROOT"),
+            format!("{PREFIX}PROVIDER_HOME_ROOT"),
             "/srv/aw/data/codex/profiles".to_owned(),
         );
         AppConfig::from_values(&values).expect("home root inside the data root");
-        values.remove(&format!("{PREFIX}CODEX_HOME_ROOT"));
+        values.remove(&format!("{PREFIX}PROVIDER_HOME_ROOT"));
         let config = AppConfig::from_values(&values).expect("default home root");
         assert_eq!(
             config.codex_home_root,
@@ -1801,13 +1761,13 @@ mod tests {
     fn codex_supervisor_limits_are_bounded() {
         let mut values = base_values();
         values.insert(
-            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
             "0".to_owned(),
         );
         assert!(AppConfig::from_values(&values).is_err());
 
         values.insert(
-            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
             "1".to_owned(),
         );
         values.insert(

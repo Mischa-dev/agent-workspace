@@ -81,7 +81,16 @@ pub async fn account_runs_by_project(
     account_id: Uuid,
     viewer: Uuid,
     days: i64,
-) -> Result<Vec<(Option<Uuid>, Option<String>, i64, Option<f64>, Option<String>)>, AppError> {
+) -> Result<
+    Vec<(
+        Option<Uuid>,
+        Option<String>,
+        i64,
+        Option<f64>,
+        Option<String>,
+    )>,
+    AppError,
+> {
     Ok(sqlx::query_as(
         r#"
         SELECT CASE WHEN actor_can_access_project($2, NULL, project.id) THEN project.id END,

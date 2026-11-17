@@ -1504,8 +1504,7 @@ async fn build_body(
             let Some(run_id) = subject.agent_run_id else {
                 return Ok(None);
             };
-            let Some(run) = crate::runs::reads::for_webhook(pool, run_id).await?
-            else {
+            let Some(run) = crate::runs::reads::for_webhook(pool, run_id).await? else {
                 return Ok(None);
             };
             let task = match (due.project_id, subject.work_item_id) {

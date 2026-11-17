@@ -1702,7 +1702,16 @@ pub async fn revive_late_start(
         0,
     )?;
     let seq = run.activity_seq
-        + i64::from(insert_activity_row(transaction, &run, run.activity_seq + 1, &note, run.account_id).await?);
+        + i64::from(
+            insert_activity_row(
+                transaction,
+                &run,
+                run.activity_seq + 1,
+                &note,
+                run.account_id,
+            )
+            .await?,
+        );
     let saved = save_state(transaction, &run, RunState::Accepted, true).await?;
     let saved = sqlx::query_as::<_, RunRow>(&format!(
         r#"

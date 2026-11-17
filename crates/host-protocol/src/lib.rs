@@ -227,7 +227,10 @@ fn signing_key(secret: &str) -> Option<Vec<u8>> {
 pub fn sign_push(secret: &str, id: &str, timestamp: i64, body: &str) -> Option<String> {
     let mut mac = Hmac::<Sha256>::new_from_slice(&signing_key(secret)?).ok()?;
     mac.update(format!("{id}.{timestamp}.{body}").as_bytes());
-    Some(format!("v1,{}", STANDARD.encode(mac.finalize().into_bytes())))
+    Some(format!(
+        "v1,{}",
+        STANDARD.encode(mac.finalize().into_bytes())
+    ))
 }
 
 /// Whether a push is the server's: one of the space-separated signatures

@@ -21,7 +21,9 @@ async fn run_get_and_run_list_show_a_self_reported_run_with_its_stage() {
     let fixer = initialize(app, &fixer_token).await.expect("Fixer MCP");
     let (_stranger, stranger_token) =
         create_agent(app, &setup.browser, &other, "Stranger", "stranger").await;
-    let stranger = initialize(app, &stranger_token).await.expect("Stranger MCP");
+    let stranger = initialize(app, &stranger_token)
+        .await
+        .expect("Stranger MCP");
     let call = |name: &'static str, arguments: Value| {
         let token = fixer_token.clone();
         let session = fixer.clone();
@@ -69,8 +71,8 @@ async fn run_get_and_run_list_show_a_self_reported_run_with_its_stage() {
     assert_eq!(listed["outcome"], "ok", "{listed}");
     let runs = listed["value"]["runs"].as_array().expect("runs");
     assert!(
-        runs.iter().any(|listed| listed["id"] == run_id.as_str()
-            && listed["stage"] == "working"),
+        runs.iter()
+            .any(|listed| listed["id"] == run_id.as_str() && listed["stage"] == "working"),
         "{listed}"
     );
 
@@ -96,7 +98,11 @@ async fn run_get_and_run_list_show_a_self_reported_run_with_its_stage() {
             .any(|listed| listed["id"] == run_id.as_str()),
         "a finished run isn't active: {active}"
     );
-    let finished = call("run_list", json!({"projectId": "WORK", "state": "finished"})).await;
+    let finished = call(
+        "run_list",
+        json!({"projectId": "WORK", "state": "finished"}),
+    )
+    .await;
     assert!(
         finished["value"]["runs"]
             .as_array()

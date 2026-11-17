@@ -634,12 +634,24 @@ async fn usage_reported_for_a_window_is_split_across_the_runs_going_then() {
     };
     let first_pass = shares().await;
     assert_eq!(first_pass.len(), 2, "{first_pass:?}");
-    assert_eq!((first_pass[0].0, first_pass[0].1, first_pass[0].2), (first, 1000, 200));
-    assert_eq!((first_pass[1].0, first_pass[1].1, first_pass[1].2), (second, 500, 100));
+    assert_eq!(
+        (first_pass[0].0, first_pass[0].1, first_pass[0].2),
+        (first, 1000, 200)
+    );
+    assert_eq!(
+        (first_pass[1].0, first_pass[1].1, first_pass[1].2),
+        (second, 500, 100)
+    );
     // The test's clock and the database's differ by a few milliseconds.
-    assert!((first_pass[0].3.expect("cost") - 0.6).abs() < 1e-4, "{first_pass:?}");
+    assert!(
+        (first_pass[0].3.expect("cost") - 0.6).abs() < 1e-4,
+        "{first_pass:?}"
+    );
     let total_cost: f64 = first_pass.iter().filter_map(|share| share.3).sum();
-    assert!((total_cost - 0.9).abs() < 1e-9, "the shares add up to the report");
+    assert!(
+        (total_cost - 0.9).abs() < 1e-9,
+        "the shares add up to the report"
+    );
     assert!(first_pass.iter().all(|share| share.4 == "estimated"));
     let unattributed = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM usage_reports WHERE report_key = 'w-2' AND attributed_at IS NULL",
@@ -647,7 +659,10 @@ async fn usage_reported_for_a_window_is_split_across_the_runs_going_then() {
     .fetch_one(&setup.pool)
     .await
     .expect("unattributed");
-    assert_eq!(unattributed, 1, "a window no run was going in stays unattributed");
+    assert_eq!(
+        unattributed, 1,
+        "a window no run was going in stays unattributed"
+    );
 
     // Running the job again changes nothing.
     assert_eq!(
@@ -745,7 +760,10 @@ async fn a_pull_request_a_run_reports_follows_its_task_and_shows_its_checks() {
     )
     .await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
-    let run = opened["value"]["run"]["runId"].as_str().expect("run").to_owned();
+    let run = opened["value"]["run"]["runId"]
+        .as_str()
+        .expect("run")
+        .to_owned();
 
     // One the space already has is tied to the run's task at once, the way
     // a pull request the built-in host opened is (address case aside).
@@ -767,7 +785,10 @@ async fn a_pull_request_a_run_reports_follows_its_task_and_shows_its_checks() {
         .await
         .expect("links")
     };
-    assert_eq!(links().await, vec![(known, "run_artifact".to_owned(), true)]);
+    assert_eq!(
+        links().await,
+        vec![(known, "run_artifact".to_owned(), true)]
+    );
 
     // The run view shows it with its checks.
     let workspace = setup.organization_id;
@@ -784,7 +805,10 @@ async fn a_pull_request_a_run_reports_follows_its_task_and_shows_its_checks() {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{viewed}");
-        viewed["value"]["pullRequests"].as_array().expect("pull requests").clone()
+        viewed["value"]["pullRequests"]
+            .as_array()
+            .expect("pull requests")
+            .clone()
     };
     let shown = view(run.clone()).await;
     assert_eq!(shown.len(), 1, "{shown:?}");
@@ -840,7 +864,11 @@ async fn a_pull_request_a_run_reports_follows_its_task_and_shows_its_checks() {
     .expect("tie");
     transaction.commit().await.expect("commit");
     assert_eq!(tied, 1);
-    let linked = links().await.into_iter().map(|link| link.0).collect::<Vec<_>>();
+    let linked = links()
+        .await
+        .into_iter()
+        .map(|link| link.0)
+        .collect::<Vec<_>>();
     assert_eq!(linked, vec![known, later]);
     assert_eq!(view(run).await.len(), 2);
 }

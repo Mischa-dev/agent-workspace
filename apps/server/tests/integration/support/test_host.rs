@@ -101,8 +101,17 @@ impl TestHost {
         }
     }
 
-    pub(crate) async fn call(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        send(&self.app, host_request(method, uri, Some(&self.token), body)).await
+    pub(crate) async fn call(
+        &self,
+        method: &str,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        send(
+            &self.app,
+            host_request(method, uri, Some(&self.token), body),
+        )
+        .await
     }
 
     pub(crate) async fn describe(&self, capabilities: Value, agents: Value) {
@@ -144,7 +153,10 @@ impl TestHost {
     pub(crate) async fn ack(&self, command_id: &Value, ack: Value) -> (StatusCode, Value) {
         self.call(
             "POST",
-            &format!("/api/v1/host/commands/{}/ack", command_id.as_str().expect("id")),
+            &format!(
+                "/api/v1/host/commands/{}/ack",
+                command_id.as_str().expect("id")
+            ),
             Some(ack),
         )
         .await
@@ -165,7 +177,11 @@ impl TestHost {
 
     pub(crate) async fn heartbeat(&self, runs: Value) -> Value {
         let (status, beat) = self
-            .call("POST", "/api/v1/host/heartbeat", Some(json!({"runs": runs})))
+            .call(
+                "POST",
+                "/api/v1/host/heartbeat",
+                Some(json!({"runs": runs})),
+            )
             .await;
         assert_eq!(status, StatusCode::OK, "{beat}");
         beat

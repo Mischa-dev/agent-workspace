@@ -470,12 +470,11 @@ pub async fn view(
     let Some(line) = visible_line(connection, viewer, run_id).await? else {
         return Ok(None);
     };
-    let total = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM run_activities WHERE run_id = $1",
-    )
-    .bind(run_id)
-    .fetch_one(&mut *connection)
-    .await?;
+    let total =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM run_activities WHERE run_id = $1")
+            .bind(run_id)
+            .fetch_one(&mut *connection)
+            .await?;
     let mut activities = sqlx::query_as::<_, ActivityLine>(
         r#"
         SELECT seq, kind, step_ref, parent_ref, summary, payload, occurred_at

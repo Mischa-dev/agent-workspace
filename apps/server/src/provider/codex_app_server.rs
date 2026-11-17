@@ -2280,7 +2280,7 @@ done
                 binary.to_string_lossy().into_owned(),
             ),
             (
-                "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+                "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
                 host_limit.to_string(),
             ),
             (

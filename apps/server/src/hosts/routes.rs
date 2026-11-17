@@ -229,7 +229,9 @@ fn command_stream(
                 if tokio::time::Instant::now() >= until {
                     return None;
                 }
-                let listed = commands::long_poll(&state.pool, &host, after, 15).await.ok()?;
+                let listed = commands::long_poll(&state.pool, &host, after, 15)
+                    .await
+                    .ok()?;
                 after = listed.next;
                 // Popped from the end, so queued newest first.
                 queued = listed
@@ -267,5 +269,7 @@ async fn ack_route(
     ApiJson(ack): ApiJson<Ack>,
 ) -> Result<Json<AckReply>, HostError> {
     let host = host_caller(&state, &headers).await?;
-    Ok(Json(commands::ack(&state.pool, &host, command_id, ack).await?))
+    Ok(Json(
+        commands::ack(&state.pool, &host, command_id, ack).await?,
+    ))
 }

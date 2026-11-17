@@ -132,7 +132,10 @@ pub fn split(total: i64, weights: &[f64]) -> Vec<i64> {
         .iter()
         .map(|weight| total as f64 * weight / sum)
         .collect::<Vec<_>>();
-    let mut shares = exact.iter().map(|share| share.floor() as i64).collect::<Vec<_>>();
+    let mut shares = exact
+        .iter()
+        .map(|share| share.floor() as i64)
+        .collect::<Vec<_>>();
     let mut left = total - shares.iter().sum::<i64>();
     let mut order = (0..weights.len()).collect::<Vec<_>>();
     order.sort_by(|a, b| {
@@ -206,7 +209,10 @@ pub async fn attribute_window_usage(pool: &PgPool) -> Result<u64, AppError> {
         if overlaps.is_empty() {
             continue;
         }
-        let weights = overlaps.iter().map(|overlap| overlap.seconds).collect::<Vec<_>>();
+        let weights = overlaps
+            .iter()
+            .map(|overlap| overlap.seconds)
+            .collect::<Vec<_>>();
         let sum: f64 = weights.iter().sum();
         let inputs = split(report.input_tokens, &weights);
         let outputs = split(report.output_tokens, &weights);

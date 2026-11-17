@@ -853,7 +853,7 @@ mod tests {
                 root.path().join("data").to_string_lossy().into_owned(),
             ),
             (
-                "AGENT_WORKSPACE_CODEX_HOME_ROOT".into(),
+                "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".into(),
                 root.path()
                     .join("data/codex/profiles")
                     .to_string_lossy()

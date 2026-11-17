@@ -16,8 +16,8 @@ use uuid::Uuid;
 use super::{
     agent_interface::{Browser, connect_app, create_agent, initialize, send, tool},
     mcp_admin::{create_project, setup},
-    support::app::last_tool,
     message_edits::add_person,
+    support::app::last_tool,
 };
 
 fn host_call(method: &str, uri: &str, token: Option<&str>, body: Value) -> Request<Body> {
@@ -885,8 +885,11 @@ async fn bound_host(
         json!({"connection": "dial_out"}),
     )
     .await;
-    host.describe(capabilities, json!([{"hostAgentRef": "fixer", "name": "Fixer"}]))
-        .await;
+    host.describe(
+        capabilities,
+        json!([{"hostAgentRef": "fixer", "name": "Fixer"}]),
+    )
+    .await;
     let (status, bound) = host_op(
         &setup.app,
         &setup.browser,
@@ -983,7 +986,10 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
             assert_eq!(run_state(&setup.pool, run).await, "start_uncertain");
         } else {
             let (status, acked) = host
-                .ack(&command_id, json!({"outcome": "accepted", "hostRunRef": reference}))
+                .ack(
+                    &command_id,
+                    json!({"outcome": "accepted", "hostRunRef": reference}),
+                )
                 .await;
             assert_eq!(status, StatusCode::OK, "{acked}");
             assert_eq!(acked["state"], "acked");
@@ -1001,15 +1007,19 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     assert_eq!(starts, 1);
     // Acknowledging again changes nothing.
     let (status, again) = host
-        .ack(&command_id, json!({"outcome": "accepted", "hostRunRef": "hr-1"}))
+        .ack(
+            &command_id,
+            json!({"outcome": "accepted", "hostRunRef": "hr-1"}),
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again["state"], "acked");
-    let reference = sqlx::query_scalar::<_, Option<String>>("SELECT host_run_ref FROM runs WHERE id = $1")
-        .bind(run)
-        .fetch_one(&setup.pool)
-        .await
-        .expect("reference");
+    let reference =
+        sqlx::query_scalar::<_, Option<String>>("SELECT host_run_ref FROM runs WHERE id = $1")
+            .bind(run)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("reference");
     assert_eq!(reference.as_deref(), Some("hr-1"));
 
     // The host reports as the run's agent with the credential it was
@@ -1067,13 +1077,20 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     );
     let (reference, _) = host.run_start(&command);
     let (status, acked) = host
-        .ack(&offered[0]["commandId"], json!({"outcome": "accepted", "hostRunRef": reference}))
+        .ack(
+            &offered[0]["commandId"],
+            json!({"outcome": "accepted", "hostRunRef": reference}),
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{acked}");
     host.heartbeat(json!([{"runId": second, "hostRunRef": reference, "state": "working"}]))
         .await;
     for beat in 1..=3 {
-        assert_eq!(run_state(&setup.pool, second).await, "accepted", "beat {beat}");
+        assert_eq!(
+            run_state(&setup.pool, second).await,
+            "accepted",
+            "beat {beat}"
+        );
         host.heartbeat(json!([])).await;
     }
     assert_eq!(run_state(&setup.pool, second).await, "interrupted");
@@ -1140,26 +1157,40 @@ async fn a_start_nobody_confirmed_is_never_run_twice_and_a_person_decides() {
     assert_eq!(asked.len(), 1, "{asked:?}");
     assert_eq!(asked[0]["kind"], "inspect");
     let (status, answered) = host
-        .ack(&asked[0]["commandId"], json!({"outcome": "done", "result": {"known": false}}))
+        .ack(
+            &asked[0]["commandId"],
+            json!({"outcome": "done", "result": {"known": false}}),
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{answered}");
     assert_eq!(run_state(&setup.pool, run).await, "start_uncertain");
     assert!(host.poll().await.is_empty());
 
     // A person marks it as not started.
-    let marked = tool(app, &person, &desk, "run_mark_not_started", json!({"runId": run})).await;
+    let marked = tool(
+        app,
+        &person,
+        &desk,
+        "run_mark_not_started",
+        json!({"runId": run}),
+    )
+    .await;
     assert_eq!(marked["outcome"], "ok", "{marked}");
     assert_eq!(run_state(&setup.pool, run).await, "failed");
-    let closed = sqlx::query_scalar::<_, String>("SELECT state FROM host_commands WHERE id = $1::uuid")
-        .bind(start_id.as_str().expect("id"))
-        .fetch_one(&setup.pool)
-        .await
-        .expect("start state");
+    let closed =
+        sqlx::query_scalar::<_, String>("SELECT state FROM host_commands WHERE id = $1::uuid")
+            .bind(start_id.as_str().expect("id"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("start state");
     assert_eq!(closed, "expired");
 
     // Then the host reports it after all: the run comes back.
     let (status, late) = host
-        .ack(&start_id, json!({"outcome": "accepted", "hostRunRef": reference}))
+        .ack(
+            &start_id,
+            json!({"outcome": "accepted", "hostRunRef": reference}),
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{late}");
     assert_eq!(late["runState"], "accepted");
@@ -1195,7 +1226,9 @@ async fn a_start_nobody_confirmed_is_never_run_twice_and_a_person_decides() {
     assert_eq!(status, StatusCode::OK, "{command}");
     assert_eq!(command["reason"], "Not now");
     assert_eq!(run_state(&setup.pool, run).await, "cancel_requested");
-    let (status, stopped) = host.ack(&cancel[0]["commandId"], json!({"outcome": "done"})).await;
+    let (status, stopped) = host
+        .ack(&cancel[0]["commandId"], json!({"outcome": "done"}))
+        .await;
     assert_eq!(status, StatusCode::OK, "{stopped}");
     assert_eq!(stopped["runState"], "cancelled");
     // Unknown and other hosts' commands are refused.
@@ -1254,7 +1287,10 @@ async fn a_push_host_is_sent_signed_commands_and_its_secrets_are_sealed() {
         app,
         setup.browser.request(
             "POST",
-            &format!("/api/v2/w/{}/ops/host_enrolment_create", setup.organization_id),
+            &format!(
+                "/api/v2/w/{}/ops/host_enrolment_create",
+                setup.organization_id
+            ),
             Some(&key),
             json!({"owner": "workspace"}),
         ),

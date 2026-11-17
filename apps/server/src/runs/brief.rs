@@ -217,11 +217,9 @@ pub fn stage(row: &BriefRow) -> Stage {
 /// A run on the built-in host, by its own states.
 fn builtin_stage(row: &BriefRow, detail: &str) -> Stage {
     match detail {
-        "created" | "queued" => stage_of(
-            "queued",
-            "Waiting for the harness to pick it up.",
-            Some(60),
-        ),
+        "created" | "queued" => {
+            stage_of("queued", "Waiting for the harness to pick it up.", Some(60))
+        }
         "blocked" if row.approvals_waiting > 0 => stage_of(
             "waiting_for_approval",
             "The run is waiting on an approval; answer it in the thread (approval_list shows it).",
@@ -260,11 +258,9 @@ fn reported_stage(row: &BriefRow) -> Stage {
         .as_deref()
         .filter(|line| !line.trim().is_empty());
     match state {
-        RunState::Queued | RunState::Starting | RunState::StartUncertain => stage_of(
-            "queued",
-            "Waiting for its agent to pick it up.",
-            Some(60),
-        ),
+        RunState::Queued | RunState::Starting | RunState::StartUncertain => {
+            stage_of("queued", "Waiting for its agent to pick it up.", Some(60))
+        }
         RunState::Accepted | RunState::Working if row.liveness == "not_responding" => stage_of(
             "not_responding",
             "Its agent hasn't reported for a while; it may have stopped. Ask again later, or stop the run.",
@@ -383,7 +379,10 @@ mod tests {
         let mut silent = row("working", None);
         silent.liveness = "not_responding".to_owned();
         assert_eq!(super::stage(&silent).key, "not_responding");
-        assert_eq!(super::stage(&row("waiting", None)).key, "waiting_for_answer");
+        assert_eq!(
+            super::stage(&row("waiting", None)).key,
+            "waiting_for_answer"
+        );
         assert_eq!(super::stage(&row("cancel_requested", None)).key, "stopping");
         let mut done = row("done", None);
         done.outcome_summary = Some("Opened the fix".to_owned());
@@ -397,7 +396,10 @@ mod tests {
         blocked.approvals_waiting = 1;
         assert_eq!(stage(&blocked).key, "waiting_for_approval");
         assert_eq!(stage(&row("done", Some("completed"))).key, "finished");
-        assert_eq!(stage(&row("interrupted", Some("canceled"))).key, "interrupted");
+        assert_eq!(
+            stage(&row("interrupted", Some("canceled"))).key,
+            "interrupted"
+        );
     }
 
     #[test]

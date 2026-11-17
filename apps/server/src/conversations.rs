@@ -4410,13 +4410,13 @@ async fn fetch_run_projection(
         return Ok((None, None, Vec::new()));
     }
     let active_run = sqlx::query_as::<_, RunRow>(&crate::runs::sql::thread_card(true))
-    .bind(conversation.id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?;
+        .bind(conversation.id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
     let latest_terminal_run = sqlx::query_as::<_, RunRow>(&crate::runs::sql::thread_card(false))
-    .bind(conversation.id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?;
+        .bind(conversation.id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
     // Whether the latest run published, for what may be done next, read
     // before its code is left out below.
     let latest_published = latest_terminal_run

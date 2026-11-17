@@ -58,7 +58,7 @@ done
             temporary_root.path().to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             temporary_root
                 .path()
                 .join("codex")

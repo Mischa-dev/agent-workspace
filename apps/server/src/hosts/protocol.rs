@@ -237,16 +237,29 @@ fn push_setup(
                 .as_ref()
                 .and_then(|push| push.get("url"))
                 .and_then(Value::as_str)
-                .ok_or_else(|| invalid("push.url", "Give push.url, the https address Workspace calls."))?;
-            let url = crate::outbound::validate_webhook_url(url, trusted_origins)
-                .map_err(|_| invalid("push.url", "Give a public https address without credentials."))?;
+                .ok_or_else(|| {
+                    invalid(
+                        "push.url",
+                        "Give push.url, the https address Workspace calls.",
+                    )
+                })?;
+            let url =
+                crate::outbound::validate_webhook_url(url, trusted_origins).map_err(|_| {
+                    invalid(
+                        "push.url",
+                        "Give a public https address without credentials.",
+                    )
+                })?;
             if url.scheme() != "https" {
                 return Err(invalid("push.url", "Give an https address."));
             }
             let host_token = match request.host_token.as_deref() {
                 None => None,
                 Some(token) if token.is_empty() || token.len() > 4096 => {
-                    return Err(invalid("hostToken", "Give a token of 1 to 4,096 characters."));
+                    return Err(invalid(
+                        "hostToken",
+                        "Give a token of 1 to 4,096 characters.",
+                    ));
                 }
                 Some(token) => Some(token.to_owned()),
             };
@@ -265,10 +278,7 @@ fn push_setup(
 /// Turn a one-time code into a linked host with its own account and
 /// credential. The code works once. A push host (one a workspace owns) also
 /// gets the secret Workspace signs its pushes with, shown once.
-pub async fn enrol(
-    state: &crate::AppState,
-    request: EnrolRequest,
-) -> Result<Enrolled, HostError> {
+pub async fn enrol(state: &crate::AppState, request: EnrolRequest) -> Result<Enrolled, HostError> {
     let pool = &state.pool;
     let Some(code) = normalize_code(&request.code) else {
         return Err(HostError::CodeRefused);
@@ -339,7 +349,17 @@ pub async fn enrol(
         .await?;
     let push_signing_secret = match push {
         None => None,
-        Some(push) => Some(store_push(state, &mut transaction, host_id, owner_workspace, created_by, push).await?),
+        Some(push) => Some(
+            store_push(
+                state,
+                &mut transaction,
+                host_id,
+                owner_workspace,
+                created_by,
+                push,
+            )
+            .await?,
+        ),
     };
     let owner = owner_view(&mut transaction, host.owner()).await?;
     transaction.commit().await?;

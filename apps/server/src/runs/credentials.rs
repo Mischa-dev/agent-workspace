@@ -152,8 +152,10 @@ pub async fn resolve(pool: &PgPool, token: &str) -> Result<Option<Holder>, AppEr
         "#,
     )
     .bind(prefix);
-    let holder = crate::db::scoped_one(pool, async |connection| holder.fetch_optional(connection).await)
-        .await?;
+    let holder = crate::db::scoped_one(pool, async |connection| {
+        holder.fetch_optional(connection).await
+    })
+    .await?;
     Ok(holder.filter(|holder| {
         holder.token_digest.len() == candidate.len()
             && bool::from(holder.token_digest.as_slice().ct_eq(&candidate))
