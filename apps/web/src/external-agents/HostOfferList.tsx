@@ -1,10 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { toastError } from '../app/mutations'
 import { useWorkspaceId } from '../app/workspace'
-import { opQuery, useOp } from '../api/ops'
-import { Button, Section, showToast } from '../ui'
+import { useOp } from '../api/ops'
+import { Button, showToast } from '../ui'
+import { useHostOffers } from './addPaths'
 
 /**
  * A2.20: "Start one on a linked host": the offers of the hosts you may use
@@ -14,18 +14,15 @@ import { Button, Section, showToast } from '../ui'
  * host) and then proposes it here, which asks you to approve it. Shown only
  * when a host offers something.
  */
-export function HostOffersSection() {
+
+export function HostOfferList() {
   const workspaceId = useWorkspaceId() ?? undefined
-  const offers = useQuery(opQuery('agent_offer_list', {}, { workspaceId }))
+  const listed = useHostOffers()
   const [page, setPage] = useState<{ hostName: string; url: string } | null>(null)
   const start = useOp('agent_offer_start', { workspaceId })
-  const listed = offers.data?.offers ?? []
   if (listed.length === 0) return null
   return (
-    <Section
-      description="Ways to get a new agent from the hosts you’ve linked. Each host walks you through its own steps."
-      title="Start one on a linked host"
-    >
+    <>
       <ul className="aw-agents__joinable">
         {listed.map(({ hostId, hostName, offer }) => {
           const id = String(offer.id ?? '')
@@ -74,6 +71,6 @@ export function HostOffersSection() {
           ; anything secret, like a model key, is entered there and never passes through here.
         </p>
       )}
-    </Section>
+    </>
   )
 }

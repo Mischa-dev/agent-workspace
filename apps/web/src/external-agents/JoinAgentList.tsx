@@ -1,21 +1,22 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 
 import { toastError } from '../app/mutations'
 import { useWorkspaceId } from '../app/workspace'
-import { opQuery, useOp } from '../api/ops'
+import { useOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
-import { Avatar, Button, Section, showToast } from '../ui'
+import { Avatar, Button, showToast } from '../ui'
+import { useJoinableAccounts } from './addPaths'
 
 /**
  * A2.18: "Add one you already have": agents and apps you manage in other
- * workspaces, added here with the workspace's role for new agents. Shown
- * only when there is one to add; a workspace that asks an admin first says
- * so, and the agent arrives once they approve.
+ * workspaces, added here with the workspace's role for new agents. A
+ * workspace that asks an admin first says so, and the agent arrives once
+ * they approve.
  */
-export function JoinAgentSection({ projectId }: { projectId: string }) {
+export function JoinAgentList({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
   const workspaceId = useWorkspaceId() ?? undefined
-  const joinable = useQuery(opQuery('account_joinable_list', {}, { workspaceId }))
+  const accounts = useJoinableAccounts()
   const add = useOp('account_workspace_add', {
     workspaceId,
     invalidates: ['account_joinable_list'],
@@ -28,14 +29,9 @@ export function JoinAgentSection({ projectId }: { projectId: string }) {
       )
     },
   })
-  const accounts = joinable.data?.accounts ?? []
   if (accounts.length === 0) return null
   return (
-    <Section
-      description="Agents you manage in other workspaces. Adding one keeps its identity, token and connections; it gets this workspace’s role for new agents."
-      title="Add one you already have"
-    >
-      <ul className="aw-agents__joinable">
+    <ul className="aw-agents__joinable">
         {accounts.map((account) => (
           <li className="aw-agents__joinable-row" key={account.accountId}>
             <Avatar kind="agent" name={account.displayName} seed={account.accountId} size={28} />
@@ -57,7 +53,6 @@ export function JoinAgentSection({ projectId }: { projectId: string }) {
             </Button>
           </li>
         ))}
-      </ul>
-    </Section>
+    </ul>
   )
 }

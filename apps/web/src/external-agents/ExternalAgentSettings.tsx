@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { HostOffersSection } from './HostOffersSection'
-import { JoinAgentSection } from './JoinAgentSection'
+import { useHostOffers, useJoinableAccounts } from './addPaths'
+import { HostOfferList } from './HostOfferList'
+import { JoinAgentList } from './JoinAgentList'
 import { WorkOsAgentSettings } from './WorkOsAgentSettings'
 import { toastError } from '../app/mutations'
 import { useWorkspaceId } from '../app/workspace'
@@ -293,10 +294,7 @@ export function ExternalAgentSettings({
           </div>
         )}
       </Section>
-      <Section
-        description="A runner answers when people tag it in a conversation (for example @reviewer). Any other agent connects over MCP: you get one setup message to paste into its app, or its token, shown once."
-        title="Connect an agent"
-      >
+      <AddAgentSection projectId={projectId}>
         {createError ? (
           <Banner className="aw-agents__error" tone="danger">
             {createError}
@@ -310,9 +308,7 @@ export function ExternalAgentSettings({
             createMutation.mutate(input)
           }}
         />
-      </Section>
-      <JoinAgentSection projectId={projectId} />
-      <HostOffersSection />
+      </AddAgentSection>
       <ConfirmDialog
         busy={confirmMutation.isPending}
         confirmLabel={confirming?.kind === 'rotate' ? 'Make a new token' : 'Remove'}
@@ -375,6 +371,58 @@ export function ExternalAgentSettings({
         ) : null}
       </Dialog>
     </div>
+  )
+}
+
+type AddPath = 'connect' | 'existing' | 'host'
+
+const ADD_PATHS: Record<AddPath, { label: string; description: string }> = {
+  connect: {
+    label: 'Connect one you run',
+    description:
+      'A runner answers when people tag it in a conversation (for example @reviewer). Any other agent connects over MCP: you get one setup message to paste into its app, or its token, shown once.',
+  },
+  existing: {
+    label: 'Add one you already have',
+    description:
+      'Agents you manage in other workspaces. Adding one keeps its identity, token and connections; it gets this workspace’s role for new agents.',
+  },
+  host: {
+    label: 'Start one on a linked host',
+    description: 'Ways to get a new agent from the hosts you’ve linked. Each host walks you through its own steps.',
+  },
+}
+
+/**
+ * A2.18: one place to add an agent, whichever way it comes: connect one you
+ * run, add one you manage elsewhere, or start one on a linked host (A2.20).
+ * A way shows only when it has something to offer. To reconnect one that
+ * lost its token, use its card's setup link or new token.
+ */
+function AddAgentSection({ children, projectId }: { children: ReactNode; projectId: string }) {
+  const joinable = useJoinableAccounts()
+  const offers = useHostOffers()
+  const available: AddPath[] = [
+    'connect',
+    ...(joinable.length > 0 ? (['existing'] as const) : []),
+    ...(offers.length > 0 ? (['host'] as const) : []),
+  ]
+  const [picked, setPicked] = useState<AddPath>('connect')
+  const path = available.includes(picked) ? picked : 'connect'
+  return (
+    <Section description={ADD_PATHS[path].description} title="Add an agent">
+      {available.length > 1 && (
+        <SegmentedControl<AddPath>
+          label="How it comes"
+          onChange={setPicked}
+          options={available.map((value) => ({ value, label: ADD_PATHS[value].label }))}
+          value={path}
+        />
+      )}
+      {path === 'connect' && children}
+      {path === 'existing' && <JoinAgentList projectId={projectId} />}
+      {path === 'host' && <HostOfferList />}
+    </Section>
   )
 }
 

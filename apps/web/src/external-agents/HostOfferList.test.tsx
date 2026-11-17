@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { HostOffersSection } from './HostOffersSection'
+import { HostOfferList } from './HostOfferList'
 
 const hostId = '019fd100-0000-7000-8000-00000000000b'
 
@@ -15,12 +15,12 @@ function jsonResponse(body: unknown) {
 function renderSection() {
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <HostOffersSection />
+      <HostOfferList />
     </QueryClientProvider>,
   )
 }
 
-describe('HostOffersSection', () => {
+describe('HostOfferList', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()

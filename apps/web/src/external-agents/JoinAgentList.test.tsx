@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { JoinAgentSection } from './JoinAgentSection'
+import { JoinAgentList } from './JoinAgentList'
 
 const accountId = '019fd100-0000-7000-8000-00000000000a'
 
@@ -15,12 +15,12 @@ function jsonResponse(body: unknown) {
 function renderSection() {
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <JoinAgentSection projectId="019fd100-0000-7000-8000-000000000001" />
+      <JoinAgentList projectId="019fd100-0000-7000-8000-000000000001" />
     </QueryClientProvider>,
   )
 }
 
-describe('JoinAgentSection', () => {
+describe('JoinAgentList', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
@@ -49,7 +49,7 @@ describe('JoinAgentSection', () => {
       }),
     )
     renderSection()
-    expect(await screen.findByText('Add one you already have')).toBeVisible()
+    expect(await screen.findByText('Rook')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))
     await waitFor(() => expect(added).toEqual([{ account: accountId }]))
     await waitFor(() => expect(screen.queryByText('Rook')).not.toBeInTheDocument())
