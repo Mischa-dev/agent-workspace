@@ -158,6 +158,30 @@ BEFORE INSERT OR UPDATE ON workspace_roles
 FOR EACH ROW
 EXECUTE FUNCTION workspace_roles_effective();
 
+-- A starting role's name, free in its workspace: its own name, or, when a
+-- custom role already has it, "<name> (starting role)", then
+-- "<name> (starting role 2)" and on until one is free.
+CREATE FUNCTION starting_role_name(target UUID, role_key TEXT, wanted TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    candidate TEXT := wanted;
+    attempt INT := 1;
+BEGIN
+    WHILE EXISTS (
+        SELECT 1 FROM workspace_roles taken
+        WHERE taken.organization_id = target AND lower(taken.name) = lower(candidate)
+          AND taken.key <> role_key
+    ) LOOP
+        candidate := wanted || CASE attempt WHEN 1 THEN ' (starting role)'
+                                            ELSE ' (starting role ' || attempt || ')' END;
+        attempt := attempt + 1;
+    END LOOP;
+    RETURN candidate;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION create_built_in_workspace_roles(target UUID)
 RETURNS void
 LANGUAGE sql
@@ -165,11 +189,7 @@ AS $$
     INSERT INTO workspace_roles (id, organization_id, key, built_in, base_role, name, description, is_default)
     SELECT gen_random_uuid(), target, role.key, true,
            CASE role.key WHEN 'guest' THEN 'viewer' ELSE role.key END,
-           CASE WHEN EXISTS (
-               SELECT 1 FROM workspace_roles taken
-               WHERE taken.organization_id = target AND lower(taken.name) = lower(role.name)
-                 AND taken.key <> role.key
-           ) THEN role.name || ' (starting role)' ELSE role.name END,
+           starting_role_name(target, role.key, role.name),
            role.description,
            role.key = 'member' AND NOT EXISTS (
                SELECT 1 FROM workspace_roles chosen
