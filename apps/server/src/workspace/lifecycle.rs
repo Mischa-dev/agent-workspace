@@ -770,6 +770,17 @@ struct ForeignKey {
     child_columns: Vec<String>,
     parent: String,
     parent_columns: Vec<String>,
+    /// Every child column may be null, so a row of another workspace can
+    /// let go of the reference instead of going with it.
+    detachable: bool,
+}
+
+/// The tenant column of a workspace-owned table.
+fn tenant_column(table: &str) -> Option<&'static str> {
+    crate::tenancy::tables::TENANT_TABLES
+        .iter()
+        .find(|(name, _)| *name == table)
+        .map(|(_, column)| *column)
 }
 
 /// Server-wide tables the deletion walks into: the hosts the workspace owns
@@ -854,7 +865,15 @@ async fn delete_rows(
                      ON attribute.attrelid = constraint_row.confrelid
                     AND attribute.attnum = key.attnum
                    ORDER BY key.position
-               ) AS parent_columns
+               ) AS parent_columns,
+               NOT EXISTS (
+                   SELECT 1
+                   FROM unnest(constraint_row.conkey) AS key(attnum)
+                   JOIN pg_attribute attribute
+                     ON attribute.attrelid = constraint_row.conrelid
+                    AND attribute.attnum = key.attnum
+                   WHERE attribute.attnotnull
+               ) AS detachable
         FROM pg_constraint constraint_row
         JOIN pg_class child ON child.oid = constraint_row.conrelid
         JOIN pg_namespace namespace ON namespace.oid = child.relnamespace
@@ -875,6 +894,7 @@ async fn delete_rows(
             parent: row.try_get("parent")?,
             child_columns: row.try_get("child_columns")?,
             parent_columns: row.try_get("parent_columns")?,
+            detachable: row.try_get("detachable")?,
         };
         if walkable(&key.child) && walkable(&key.parent) {
             foreign_keys.push(key);
@@ -987,14 +1007,24 @@ async fn delete_rows(
                 .map(|c| format!("parent.{column} = gone.{column}", column = ident(c)))
                 .collect::<Vec<_>>()
                 .join(" AND ");
+            // A row of another workspace that can let go of the reference
+            // stays; it is detached below, just before the delete.
+            let own_only = match tenant_column(&key.child) {
+                Some(column) if key.detachable => {
+                    format!("WHERE child.{} = $1", ident(column))
+                }
+                _ => "WHERE $1::uuid IS NOT NULL".to_owned(),
+            };
             let added = sqlx::query(&format!(
                 "INSERT INTO {child_temporary} SELECT {child_list} FROM {} child \
                  JOIN {} parent ON {reference} \
                  JOIN {parent_temporary} gone ON {gone} \
+                 {own_only} \
                  ON CONFLICT DO NOTHING",
                 ident(&key.child),
                 ident(&key.parent),
             ))
+            .bind(workspace)
             .execute(&mut *connection)
             .await?
             .rows_affected();
@@ -1003,6 +1033,46 @@ async fn delete_rows(
             }
         }
         grown = next;
+    }
+
+    // Rows of other workspaces that point at a row going let go of it: a
+    // request one workspace raised through another's host keeps itself.
+    for key in &foreign_keys {
+        let (Some(column), true) = (tenant_column(&key.child), key.detachable) else {
+            continue;
+        };
+        let Some(parent_temporary) = marked.get(&key.parent) else {
+            continue;
+        };
+        let clear = key
+            .child_columns
+            .iter()
+            .map(|c| format!("{} = NULL", ident(c)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let reference = key
+            .child_columns
+            .iter()
+            .zip(&key.parent_columns)
+            .map(|(child, parent)| format!("child.{} = parent.{}", ident(child), ident(parent)))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let gone = primary_keys[&key.parent]
+            .iter()
+            .map(|c| format!("parent.{column} = gone.{column}", column = ident(c)))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        sqlx::query(&format!(
+            "UPDATE {} child SET {clear} FROM {} parent \
+             JOIN {parent_temporary} gone ON {gone} \
+             WHERE {reference} AND child.{} IS DISTINCT FROM $1",
+            ident(&key.child),
+            ident(&key.parent),
+            ident(column),
+        ))
+        .bind(workspace)
+        .execute(&mut *connection)
+        .await?;
     }
 
     // One statement: every table's rows at once.

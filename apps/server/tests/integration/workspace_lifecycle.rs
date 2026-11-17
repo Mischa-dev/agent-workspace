@@ -313,6 +313,43 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .fetch_one(&t.pool)
     .await
     .expect("A's owner");
+    // A host A owns raised a request in B: B keeps the request.
+    let b_owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(b.organization)
+    .fetch_one(&t.pool)
+    .await
+    .expect("B's owner");
+    let host_account = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+    )
+    .fetch_one(&t.pool)
+    .await
+    .expect("host account");
+    let host = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version, \
+         enrolled_by_account_id) VALUES (gen_random_uuid(), $1, $2, 'A host', '2026-11', $3) \
+         RETURNING id",
+    )
+    .bind(host_account)
+    .bind(a.organization)
+    .bind(a_owner)
+    .fetch_one(&t.pool)
+    .await
+    .expect("host");
+    let b_request = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO requests (id, workspace_id, kind, raised_by_account_id, raised_via_host_id, \
+         title, answer_permission) \
+         VALUES (gen_random_uuid(), $1, 'question', $2, $3, 'Through A host', 'runs.answer') \
+         RETURNING id",
+    )
+    .bind(b.organization)
+    .bind(b_owner)
+    .bind(host)
+    .fetch_one(&t.pool)
+    .await
+    .expect("request in B");
     let (status, body) = op(
         &t,
         &a.browser,
@@ -384,6 +421,21 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     let files = t.data_root.join("files");
     assert!(!files.join(a.organization.simple().to_string()).exists());
     assert!(files.join(b.organization.simple().to_string()).exists());
+
+    // B's request is still there, no longer pointing at A's host.
+    let via = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT raised_via_host_id FROM requests WHERE id = $1",
+    )
+    .bind(b_request)
+    .fetch_one(&t.pool)
+    .await
+    .expect("B's request survives");
+    assert_eq!(via, None);
+    sqlx::query("DELETE FROM requests WHERE id = $1")
+        .bind(b_request)
+        .execute(&t.pool)
+        .await
+        .expect("set the request aside");
 
     // B: every row exactly as it was, and its agent still works.
     assert_eq!(sweep_ids(&t.pool, b.organization).await, b_ids);
