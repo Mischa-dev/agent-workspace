@@ -158,9 +158,13 @@ fn link_pull_request_out(_canonical: &str, value: Value, replayed: bool) -> Valu
 /// The rename plan of K2 section 3.6. Adapters beyond the identity land
 /// with each row's canonical operation, in its module's slice.
 pub const ALIASES: &[Alias] = &[
-    renamed!("projects_list" => "project_list"),
-    renamed!("project_open" => "project_get"),
-    renamed!("task_open" => "task_get"),
+    // K2.15: the read tools answered in the envelope already.
+    run_renamed!("projects_list" => "project_list"),
+    run_renamed!("project_open" => "project_get"),
+    run_renamed!("task_open" => "task_get"),
+    run_renamed!("my_work" => "my_work_get"),
+    run_renamed!("dependency_graph" => "dependency_graph_get"),
+    run_renamed!("search" => "workspace_search"),
     renamed!("conversation_open" => "conversation_get"),
     renamed!("thing_open" => "thing_get"),
     written!("page_write", "pageId" => "page_create", "page_update"),
@@ -226,7 +230,7 @@ pub const ALIASES: &[Alias] = &[
         sunset: None,
     },
     run_renamed!("mark_read" => "conversation_mark_read"),
-    renamed!("briefing" => "briefing_get"),
+    run_renamed!("briefing" => "briefing_get"),
     renamed!("settings_set" => "setting_update"),
     renamed!("project_member_set" => "member_update"),
     renamed!("project_layout_set" => "layout_update"),

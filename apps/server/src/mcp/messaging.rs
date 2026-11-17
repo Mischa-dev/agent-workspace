@@ -85,6 +85,7 @@ pub(crate) fn principal_of(ctx: &OpContext) -> McpPrincipal {
         authentication_class,
         account_wide: ctx.caller.confined_space.is_none(),
         project_explicit: true,
+        workspace_id: Some(ctx.workspace_id),
     }
 }
 

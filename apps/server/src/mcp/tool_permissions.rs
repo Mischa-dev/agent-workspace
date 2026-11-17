@@ -22,9 +22,6 @@ use crate::policy::Permission::{
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
-    ("briefing", None),
-    ("projects_list", None),
-    ("project_open", None),
     ("workflow_get", Some(TasksView)),
     ("settings_get", None),
     ("settings_set", None),
@@ -85,8 +82,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("reply_release", Some(ChannelsPost)),
     ("reply_stop", Some(ChannelsPost)),
     ("reply_retry", Some(ChannelsPost)),
-    ("task_list", Some(TasksView)),
-    ("task_open", Some(TasksView)),
     // Custom fields (AWD-89): reading them is seeing tasks; defining them
     // is the workflow's permission. Values are set through task_update.
     // Collections (AWD-90): anyone in the project reads them; records need
@@ -101,7 +96,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("sheet_list", None),
     ("sheet_read", None),
     ("sheet_write", Some(SheetsEdit)),
-    ("search", None),
     ("thing_open", None),
     ("page_list", None),
     ("page_get", None),
@@ -120,7 +114,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("whiteboard_render", None),
     ("whiteboard_trash_empty", Some(WhiteboardsEdit)),
     ("approval_list", None),
-    ("my_work", None),
     ("task_from_template", Some(TasksCreate)),
     ("project_export", Some(TasksView)),
     ("webhook_list", None),
@@ -129,8 +122,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("automation_list", None),
     ("automation_write", Some(TasksEdit)),
     ("automation_runs", None),
-    ("task_ready_list", Some(TasksView)),
-    ("dependency_graph", Some(TasksView)),
     ("ai_suggestions_list", Some(TasksView)),
     ("ai_suggestion_decide", Some(TasksEdit)),
     ("ai_analyze", Some(TasksEdit)),
@@ -244,8 +235,6 @@ mod tests {
     fn viewers_keep_the_read_tools_they_had() {
         let viewer = PermissionSet::built_in(MembershipRole::Viewer);
         for tool in [
-            "task_list",
-            "task_open",
             "repository_list",
             "workflow_get",
             "project_export",

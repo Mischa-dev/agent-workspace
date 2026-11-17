@@ -51,6 +51,7 @@ mod history_seam;
 mod hosting_limits;
 mod journey;
 mod k2_14_planning_ops;
+mod k2_15_task_reads;
 mod layouts;
 mod links_store;
 mod log_side_effects;

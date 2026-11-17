@@ -33,6 +33,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub mod lifecycle;
 pub mod ops;
+pub mod reads;
 pub mod slug;
 
 use crate::{

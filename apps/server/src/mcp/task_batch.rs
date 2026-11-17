@@ -840,6 +840,7 @@ pub(crate) async fn create_for_import(
         authentication_class: "ai_background",
         account_wide: false,
         project_explicit: true,
+        workspace_id: None,
     };
     let new_tasks = tasks
         .iter()

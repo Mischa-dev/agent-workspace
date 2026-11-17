@@ -586,7 +586,7 @@ pub(crate) async fn apply_view(
 // ---------------------------------------------------------------------------
 // My work
 
-#[derive(Clone, Debug, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct MyWorkArguments {
     /// Only this project (ID, link or key). Leave it out for all of yours.

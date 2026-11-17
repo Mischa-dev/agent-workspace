@@ -18,5 +18,6 @@ impl CoreModule for Module {
         module.operations(crate::modules::built::ops::register_ops);
         module.operations(crate::history::ops::register_ops);
         module.operations(crate::workspace::ops::register_ops);
+        module.operations(crate::workspace::reads::register_ops);
     }
 }

@@ -159,6 +159,9 @@ pub struct McpPrincipal {
     pub account_wide: bool,
     /// The call named its Project, directly or through a resource it passed.
     pub project_explicit: bool,
+    /// The workspace an operation acts in: a read that spans projects stays
+    /// in it. `None` for the older tools, which span every workspace.
+    pub workspace_id: Option<Uuid>,
 }
 
 impl McpPrincipal {
@@ -224,49 +227,6 @@ fn unauthenticated<T>() -> common::ToolResult<T> {
 #[tool_router]
 impl McpServer {
     // -- Orientation ---------------------------------------------------------
-
-    #[tool(
-        description = "Start here. What needs you right now: reply requests (agents), unread notifications (mentions, assignments, approvals, runs, pull requests), unread @mentions, conversations with unread messages, your open tasks and claims, and threads that recently settled. Each item is a pointer you can open.",
-        annotations(title = "Briefing", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn briefing(
-        &self,
-        Parameters(arguments): Parameters<briefing::BriefingArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<briefing::Briefing>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(briefing::briefing(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "List the projects you can work in, with their keys, your role, and open task and unread counts. The Messages space holds DMs and groups. includeArchived also lists archived ones, which project_archive can restore.",
-        annotations(
-            title = "List projects",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn projects_list(
-        &self,
-        Parameters(arguments): Parameters<briefing::ProjectsListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<briefing::ProjectsValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(briefing::projects_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Get oriented in one project: its guide page (read this first), other pages, recent decisions, what's next on the board, blocked and claimed tasks, open threads, channels, repositories, labels, and its layout (match its tone and the words it uses).",
-        annotations(title = "Open project", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn project_open(
-        &self,
-        Parameters(arguments): Parameters<briefing::ProjectOpenArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<briefing::ProjectOverview>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(briefing::project_open(&self.state, principal, arguments).await)
-    }
 
     // -- Projects and people -------------------------------------------------
 
@@ -1334,32 +1294,6 @@ impl McpServer {
 
     // -- Tasks ---------------------------------------------------------------
 
-    #[tool(
-        description = "List tasks, in board order by default (the order people set; boardPosition 1 is the top of its column). Filter by project (projectId, or several with projectIds), status, assignee (me, none, @handle), labels (tasks with all of them; anyLabels for any of them), type, priority, milestone, createdBy, updatedSince (a date, a timestamp, or 24h/7d), blocked, claimed (yes, no, me, @handle), due dates, words, or parent. Status, assignee, type, priority and milestone take several values (any of them), and notStatus, notAssignee, notLabels, notType, notPriority and notMilestone leave tasks out. Done and canceled tasks are left out unless includeDone or you name their status, and archived ones unless includeArchived. view lists a saved view's tasks (view_list). total counts every match; for the next page, pass the nextCursor you got as cursor.",
-        annotations(title = "List tasks", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn task_list(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<tasks::TaskListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(tasks::task_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Open a task by ID, link or key (such as AW-12): its fields and labels, acceptance criteria, who's working on it, subtasks, linked threads, messages, pages, decisions and pull requests, and the latest comments. Pass include: [\"history\"] for the task's full timeline: who changed what, when, and through which app (latest 30 by default; olderCursor for more).",
-        annotations(title = "Open task", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn task_open(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskOpenArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<tasks::TaskDetail>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(tasks::task_open(&self.state, principal, arguments).await)
-    }
-
     // -- Collections (AWD-90) ------------------------------------------------
 
     #[tool(
@@ -1511,19 +1445,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<module_tools::ThingOpenValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(module_tools::thing_open(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Search messages, threads, tasks, pages, decisions and collection records you can see. Settled things (decisions, pages, thread outcomes) rank first. Narrow by kind, project, conversation, author (from), or dates.",
-        annotations(title = "Search", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn search(
-        &self,
-        Parameters(arguments): Parameters<memory_tools::SearchArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<memory_tools::SearchValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(memory_tools::search_tool(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -1817,19 +1738,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Your work across your projects (or one, with projectId): tasks assigned to you that aren't finished (due first), tasks you or agents you set up are working on, and tasks in review that you made or watch.",
-        annotations(title = "My work", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn my_work(
-        &self,
-        Parameters(arguments): Parameters<views_data::MyWorkArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<views_data::MyWorkValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(views_data::my_work(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Create a task, with its subtasks, labels and acceptance criteria, from a task template (by name or ID). You can give it its own title, assignee, milestone and dates.",
         annotations(
             title = "Task from template",
@@ -1969,40 +1877,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<serde_json::Value>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(automation_tools::automation_runs(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "What to work on next in a project: open tasks ranked by priority, how many tasks each unblocks, and how close its milestone or due date is, each with readiness checks (blockers done, not marked blocked, acceptance criteria, a description, a repository). scope agents lists only tasks an agent can pick up now. taskId returns one task's checks.",
-        annotations(
-            title = "What to do next",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_ready_list(
-        &self,
-        Parameters(arguments): Parameters<ai_tools::TaskReadyListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(ai_tools::task_ready_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A project's dependency graph: open tasks and what blocks them (blockers in other projects you can see included), the tasks that can start now (frontier, best first), the longest chain of open work by estimate (criticalPath), and the AI's pending blocks suggestions as edges with a suggestionId.",
-        annotations(
-            title = "Dependency graph",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn dependency_graph(
-        &self,
-        Parameters(arguments): Parameters<ai_tools::DependencyGraphArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(ai_tools::dependency_graph(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -2896,8 +2770,6 @@ async fn caller_modules_anywhere(
 /// caller reaches (`common::scope_projects`) and leave out the projects where
 /// their module is off before counting or paging.
 const SPANNING_LISTS: &[&str] = &[
-    "task_list",
-    "my_work",
     "conversation_list",
     "agent_list",
     "repository_list",
@@ -4056,6 +3928,7 @@ pub(crate) async fn resolve_bearer_principal(
             authentication_class: "run_credential",
             account_wide: false,
             project_explicit: false,
+            workspace_id: None,
         }));
     }
     let Some(prefix) = token.get(..TOKEN_PREFIX_LENGTH) else {
@@ -4158,6 +4031,7 @@ pub(crate) async fn resolve_bearer_principal(
         authentication_class: "mcp_bearer",
         account_wide: false,
         project_explicit: false,
+        workspace_id: None,
     }))
 }
 
@@ -5647,7 +5521,7 @@ mod tests {
             (&task, Some("TaskHistory"), &["olderCursor"][..]),
             (
                 &task,
-                Some("HistoryEntry"),
+                Some("TaskHistoryEntry"),
                 &[
                     "via",
                     "textTruncated",

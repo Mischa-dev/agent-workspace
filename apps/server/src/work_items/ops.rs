@@ -28,6 +28,7 @@ use crate::{
 
 pub mod claims;
 pub mod planning;
+pub mod reads;
 
 pub fn register_ops(registry: &mut Registry) {
     registry
@@ -42,6 +43,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<claims::TaskClaim>()
         .add::<claims::TaskRelease>();
     planning::register_ops(registry);
+    reads::register_ops(registry);
 }
 
 /// The bookkeeping every task write shares: a keyed call is retry-safe

@@ -10,11 +10,11 @@
   "worksWith": [],
   "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage", "modules.build", "modules.manage", "workspace.delete"],
   "tools": {
-    "briefing": "query",
+    "briefing_get": "describe",
     "settings_get": "describe",
     "settings_set": "change",
     "people_search": "query",
-    "search": "query",
+    "workspace_search": "query",
     "notification_list": "query",
     "notification_update": "change",
     "file_upload": "create",

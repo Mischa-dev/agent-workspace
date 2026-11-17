@@ -381,7 +381,7 @@ pub(crate) async fn ai_analyze(
 // ---------------------------------------------------------------------------
 // task_ready_list
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TaskReadyListArguments {
     pub project_id: String,
@@ -458,7 +458,7 @@ pub(crate) async fn task_ready_list(
 // ---------------------------------------------------------------------------
 // dependency_graph
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DependencyGraphArguments {
     pub project_id: String,

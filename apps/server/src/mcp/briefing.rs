@@ -28,7 +28,7 @@ const GUIDE_CHARACTERS: usize = 20_000;
 /// The most label names project_open lists.
 const PROJECT_LABELS: i64 = 100;
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BriefingArguments {
     // Read by the MCP middleware, which scopes the call to this project.
@@ -343,7 +343,7 @@ pub(crate) struct ProjectsValue {
     pub projects: Vec<ProjectLine>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProjectsListArguments {
     /// Also list archived projects you belong to.
@@ -439,7 +439,7 @@ pub(crate) async fn projects_list(
 // ---------------------------------------------------------------------------
 // project_open
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProjectOpenArguments {
     /// The project's ID, link or key (such as "AWD"). projects_list shows them.

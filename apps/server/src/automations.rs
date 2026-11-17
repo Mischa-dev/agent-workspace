@@ -2601,6 +2601,7 @@ fn principal_for(rule: &RuleRow, acting: &Acting) -> McpPrincipal {
         authentication_class: "automation",
         account_wide: false,
         project_explicit: true,
+        workspace_id: None,
     }
 }
 

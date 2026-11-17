@@ -1,6 +1,30 @@
 {
   "components": {
     "schemas": {
+      "AcceptanceCriterionProjection": {
+        "properties": {
+          "completed": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "position": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "position",
+          "completed"
+        ],
+        "type": "object"
+      },
       "ActivityLine": {
         "description": "One activity as the run view draws it.",
         "properties": {
@@ -157,6 +181,25 @@
           }
         ]
       },
+      "AssigneeProjection": {
+        "properties": {
+          "actorId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actorId",
+          "displayName",
+          "handle"
+        ],
+        "type": "object"
+      },
       "AudienceInput": {
         "additionalProperties": false,
         "description": "Who a request is for.",
@@ -176,6 +219,25 @@
             "type": "array"
           }
         },
+        "type": "object"
+      },
+      "BlockedProjection": {
+        "properties": {
+          "blockedAt": {
+            "type": "string"
+          },
+          "blockedByActorId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "blockedAt",
+          "blockedByActorId"
+        ],
         "type": "object"
       },
       "CandidateField": {
@@ -280,6 +342,47 @@
         ],
         "type": "object"
       },
+      "ClaimValue": {
+        "description": "Who is working on a task right now.",
+        "properties": {
+          "claimedAt": {
+            "type": "string"
+          },
+          "claimedBy": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "handoff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HandoffNote"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On a claim you just took: the last handoff note left on the task.\nRead it before you start."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "claimedBy",
+          "claimedAt",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
       "ColumnWrite": {
         "additionalProperties": false,
         "properties": {
@@ -303,6 +406,49 @@
         },
         "required": [
           "field"
+        ],
+        "type": "object"
+      },
+      "CommentItem": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "files": {
+            "description": "Files posted with the comment: read them with file_read.",
+            "items": {
+              "$ref": "#/components/schemas/FileSummary"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "replyToCommentId": {
+            "description": "The comment on this task that this one replies to.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "author",
+          "text",
+          "at"
         ],
         "type": "object"
       },
@@ -402,6 +548,82 @@
             "type": "string"
           }
         ]
+      },
+      "ConversationSummary": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lastMessage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastMessage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "members": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parentName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unreadCount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "projectId",
+          "projectName",
+          "unreadCount",
+          "url"
+        ],
+        "type": "object"
       },
       "CreatedTask": {
         "properties": {
@@ -605,6 +827,29 @@
           "month"
         ],
         "type": "string"
+      },
+      "DecisionLine": {
+        "properties": {
+          "decidedAt": {
+            "type": "string"
+          },
+          "decidedBy": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "decidedBy",
+          "decidedAt"
+        ],
+        "type": "object"
       },
       "DecisionView": {
         "description": "A decision, as the web app, agents and scripts read it.",
@@ -913,6 +1158,32 @@
         ],
         "type": "object"
       },
+      "FieldFilterArgument": {
+        "additionalProperties": false,
+        "description": "One task_list field filter as an agent writes it.",
+        "properties": {
+          "field": {
+            "description": "The field, by name or ID (see field_list).",
+            "type": "string"
+          },
+          "op": {
+            "$ref": "#/components/schemas/FieldOp",
+            "description": "is (any of the values), isNot, empty, notEmpty, contains (text),\ngt, gte, lt, lte (numbers and dates)."
+          },
+          "values": {
+            "description": "What to compare with: option names, \"me\" or @handles, task keys,\nnumbers, YYYY-MM-DD dates, true or false. Not for empty and\nnotEmpty.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "field",
+          "op"
+        ],
+        "type": "object"
+      },
       "FieldOp": {
         "enum": [
           "is",
@@ -1134,6 +1405,58 @@
         },
         "type": "object"
       },
+      "FileSummary": {
+        "description": "A file on a message or task.",
+        "properties": {
+          "commentId": {
+            "description": "The task comment it was posted with.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "fileId": {
+            "type": "string"
+          },
+          "height": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "idempotentReplay": {
+            "description": "True when this answers a retry of file_upload: the file the first\ncall stored.",
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "description": "Bytes.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "width": {
+            "description": "Pixel size, for images.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "fileId",
+          "name",
+          "contentType",
+          "size"
+        ],
+        "type": "object"
+      },
       "FilterWrite": {
         "additionalProperties": false,
         "description": "A filter by field name, as agents write one.",
@@ -1205,6 +1528,42 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "GuidePage": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "pageId": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pageId",
+          "title",
+          "body",
+          "truncated",
+          "version",
+          "updatedAt",
+          "stale"
+        ],
         "type": "object"
       },
       "HandoffNote": {
@@ -1464,6 +1823,98 @@
           "canManage",
           "version",
           "createdAt"
+        ],
+        "type": "object"
+      },
+      "InboxItem": {
+        "properties": {
+          "conversationId": {
+            "type": "string"
+          },
+          "conversationKind": {
+            "type": "string"
+          },
+          "conversationName": {
+            "description": "Group name, or \"Direct message\".",
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "followsRequestId": {
+            "description": "A follow-up: a person wrote again in a thread while you held this\nclaim. Feed it into the work you're already doing there.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generation": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "leaseExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mentioned": {
+            "type": "boolean"
+          },
+          "messageAuthor": {
+            "type": "string"
+          },
+          "messageExcerpt": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "otherMembers": {
+            "description": "Everyone else in the conversation.",
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "replyConversationId": {
+            "description": "Where reply_send posts: the conversation itself, or for a tag in a\nproject channel the thread started from the message when you claim it.",
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "required": {
+            "description": "A required request needs a reply or a release; optional ones may be passed.",
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "threadId": {
+            "description": "The thread a channel tag is answered in, once claimed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "requestId",
+          "projectId",
+          "conversationId",
+          "conversationKind",
+          "conversationName",
+          "otherMembers",
+          "messageId",
+          "messageAuthor",
+          "messageExcerpt",
+          "required",
+          "mentioned",
+          "status",
+          "generation",
+          "createdAt",
+          "replyConversationId"
         ],
         "type": "object"
       },
@@ -1799,6 +2250,58 @@
         ],
         "type": "object"
       },
+      "LastMessage": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          },
+          "text": {
+            "description": "\"Message removed\" when it was removed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "author",
+          "text",
+          "at"
+        ],
+        "type": "object"
+      },
+      "LayoutLine": {
+        "properties": {
+          "fromWorkspace": {
+            "description": "True when the project follows the workspace's default layout.",
+            "type": "boolean"
+          },
+          "preset": {
+            "description": "The preset's name, such as \"Personal life\" or \"Software team\".",
+            "type": "string"
+          },
+          "tone": {
+            "description": "How to write for people in this project.",
+            "type": "string"
+          },
+          "words": {
+            "description": "Nouns this project calls something else, such as tasks called\n\"to-dos\". Use these words when you write to people here; tool names\nand arguments stay the same.",
+            "items": {
+              "$ref": "#/components/schemas/WordLine"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "preset",
+          "tone",
+          "fromWorkspace"
+        ],
+        "type": "object"
+      },
       "Lifecycle": {
         "description": "Where a workspace is in its life.",
         "oneOf": [
@@ -1956,6 +2459,90 @@
         ],
         "type": "object"
       },
+      "LinkedItem": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "title",
+          "text"
+        ],
+        "type": "object"
+      },
+      "LinkedRepositoryProjection": {
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/RepositoryProjection"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "role"
+        ],
+        "type": "object"
+      },
+      "Mention": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "conversation": {
+            "type": "string"
+          },
+          "conversationId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "sentAt": {
+            "type": "string"
+          },
+          "sequence": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversationId",
+          "conversation",
+          "project",
+          "sequence",
+          "messageId",
+          "author",
+          "text",
+          "sentAt"
+        ],
+        "type": "object"
+      },
       "MessageContent": {
         "additionalProperties": false,
         "properties": {
@@ -2032,6 +2619,28 @@
             "type": "object"
           }
         ]
+      },
+      "MilestoneRef": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "targetDate": {
+            "description": "YYYY-MM-DD, if it has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
       },
       "MilestoneValue": {
         "properties": {
@@ -2305,6 +2914,21 @@
         ],
         "type": "object"
       },
+      "NamedProjection": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "NavEntry": {
         "additionalProperties": false,
         "description": "A navigation entry, as written and as read.",
@@ -2501,6 +3125,80 @@
         },
         "required": [
           "title"
+        ],
+        "type": "object"
+      },
+      "NotificationLine": {
+        "properties": {
+          "approvalId": {
+            "description": "Answer with the web app or the run's thread; pending approvals only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "count": {
+            "description": "How many occurrences collapsed into this one.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "mention, comment_mention, assigned, approval_requested, run_waiting,\nrun_completed, run_failed, checks_failed, review_requested,\ntask_changed, or a kind added later.",
+            "type": "string"
+          },
+          "preview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": "string"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "snoozedUntil": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "description": "What it's about: a conversation, task, run or pull request.",
+            "type": "string"
+          },
+          "subjectId": {
+            "type": "string"
+          },
+          "subjectKind": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "project",
+          "subject",
+          "subjectKind",
+          "subjectId",
+          "count",
+          "read",
+          "at",
+          "url"
         ],
         "type": "object"
       },
@@ -2971,6 +3669,29 @@
           }
         ]
       },
+      "PageLine": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "updatedAt",
+          "stale"
+        ],
+        "type": "object"
+      },
       "PartRef": {
         "additionalProperties": false,
         "description": "An existing object to make a part of the module.",
@@ -3085,6 +3806,85 @@
         ],
         "type": "object"
       },
+      "ProjectHeader": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "name",
+          "role",
+          "url"
+        ],
+        "type": "object"
+      },
+      "ProjectLine": {
+        "properties": {
+          "archived": {
+            "description": "Only listed with includeArchived. Restore one with project_archive.",
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "messagesSpace": {
+            "description": "True for the Messages space that holds DMs and groups.",
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "openTasks": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "role": {
+            "type": "string"
+          },
+          "unreadConversations": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "url": {
+            "type": "string"
+          },
+          "version": {
+            "description": "Pass as expectedVersion to project_update or project_archive.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "name",
+          "role",
+          "messagesSpace",
+          "version",
+          "openTasks",
+          "unreadConversations",
+          "url"
+        ],
+        "type": "object"
+      },
       "Publisher": {
         "additionalProperties": false,
         "properties": {
@@ -3178,6 +3978,88 @@
           "headRef",
           "baseRef",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "PullRequestProjection": {
+        "properties": {
+          "baseRef": {
+            "type": "string"
+          },
+          "canonicalUrl": {
+            "type": "string"
+          },
+          "checksState": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "headRef": {
+            "type": "string"
+          },
+          "headSha": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "mergeabilityState": {
+            "type": "string"
+          },
+          "number": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "repositoryId": {
+            "type": "string"
+          },
+          "reviewState": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "suggested": {
+            "description": "Suggested because its branch, title or body names this task's key,\nand not confirmed yet: task_link with pullRequestId confirms it, and\nwith remove dismisses it. Confirmed pull requests leave this out.",
+            "type": "boolean"
+          },
+          "syncState": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "repositoryId",
+          "number",
+          "title",
+          "url",
+          "headRef",
+          "headSha",
+          "baseRef",
+          "draft",
+          "state",
+          "checksState",
+          "reviewState",
+          "mergeabilityState",
+          "syncState",
+          "version",
+          "canonicalUrl",
+          "suggested"
         ],
         "type": "object"
       },
@@ -3322,6 +4204,81 @@
           "key",
           "version",
           "boardPosition"
+        ],
+        "type": "object"
+      },
+      "RepositoryLine": {
+        "properties": {
+          "defaultBranch": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "defaultBranch"
+        ],
+        "type": "object"
+      },
+      "RepositoryProjection": {
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "canonicalUrl": {
+            "type": "string"
+          },
+          "cloneUrl": {
+            "type": "string"
+          },
+          "defaultBranch": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "preparationState": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "trusted": {
+            "type": "boolean"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "owner",
+          "name",
+          "cloneUrl",
+          "defaultBranch",
+          "trusted",
+          "enabled",
+          "preparationState",
+          "version",
+          "archived",
+          "canonicalUrl"
         ],
         "type": "object"
       },
@@ -3932,6 +4889,106 @@
         ],
         "type": "object"
       },
+      "SearchResult": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conversation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conversationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "project": {
+            "description": "The project's name, or \"Workspace\" for a workspace's own board.",
+            "type": "string"
+          },
+          "projectId": {
+            "description": "None for a workspace's own board, which is in no project.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "title",
+          "snippet",
+          "project",
+          "at",
+          "url"
+        ],
+        "type": "object"
+      },
+      "SkillLine": {
+        "properties": {
+          "description": {
+            "description": "When to use it.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Pass this to skill_get.",
+            "type": "string"
+          },
+          "pageId": {
+            "type": "string"
+          },
+          "stale": {
+            "description": "Not touched in months: check it's still right before relying on it.",
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "pageId",
+          "title",
+          "version",
+          "updatedAt",
+          "stale"
+        ],
+        "type": "object"
+      },
       "SortWrite": {
         "additionalProperties": false,
         "properties": {
@@ -3984,6 +5041,253 @@
         ],
         "type": "object"
       },
+      "StatusCount": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "category",
+          "count"
+        ],
+        "type": "object"
+      },
+      "StatusProjection": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "semanticCategory": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "semanticCategory"
+        ],
+        "type": "object"
+      },
+      "TaskFieldValue": {
+        "description": "One of a task's fields as task_open shows it.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/FieldType"
+          },
+          "value": {
+            "description": "The value: text, a number, YYYY-MM-DD, an option's name (a list of\nthem for multiple choice), a person's @handle, a URL, true, a task's\nkey or a page's title. null when it has none."
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "value"
+        ],
+        "type": "object"
+      },
+      "TaskHistory": {
+        "properties": {
+          "entries": {
+            "description": "Oldest first: the latest `historyLimit` entries, or those before\n`historyBefore`.",
+            "items": {
+              "$ref": "#/components/schemas/TaskHistoryEntry"
+            },
+            "type": "array"
+          },
+          "olderCursor": {
+            "description": "Pass as historyBefore for earlier entries.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many entries the task's history has in all.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entries",
+          "total"
+        ],
+        "type": "object"
+      },
+      "TaskHistoryEntry": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "description": "Who, by their name in the project.",
+            "type": "string"
+          },
+          "byHandle": {
+            "type": "string"
+          },
+          "byKind": {
+            "description": "person, agent, integration, system, or worker.",
+            "type": "string"
+          },
+          "changedFields": {
+            "description": "For an edit: the fields it changed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "criterionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fromStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fromTaskId": {
+            "description": "For a task moved here: the archived original, when you can reach its\nproject. Open it with history for what happened before the move.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "\"comment\", or what happened: work_item_created, work_item_updated\n(fields, status, labels, parent, board place, claims and links to\npages, messages, decisions and pull requests), work_item_archived,\nwork_item_restored, criterion_created, criterion_updated,\ncriterion_completed, criterion_reopened, criterion_removed,\nthread_linked, thread_unlinked, repository_linked,\nrepository_unlinked, repository_primary_changed, worker_invoked,\ngithub_automation_transition, dependency_added, dependency_removed,\nrelation_added, or relation_removed.",
+            "type": "string"
+          },
+          "sequence": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "text": {
+            "description": "What happened, or the comment's text.",
+            "type": "string"
+          },
+          "textTruncated": {
+            "description": "True when a comment was cut at 1,000 characters.",
+            "type": "boolean"
+          },
+          "toStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "via": {
+            "description": "The connected app they acted through, when they show it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sequence",
+          "at",
+          "kind",
+          "by",
+          "byHandle",
+          "byKind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "TaskLine": {
+        "properties": {
+          "claimedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "title",
+          "status",
+          "priority",
+          "project",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "TaskOverview": {
+        "properties": {
+          "blocked": {
+            "description": "Marked blocked, or waiting on a task that isn't finished.",
+            "items": {
+              "$ref": "#/components/schemas/TaskLine"
+            },
+            "type": "array"
+          },
+          "byStatus": {
+            "description": "Counts by status.",
+            "items": {
+              "$ref": "#/components/schemas/StatusCount"
+            },
+            "type": "array"
+          },
+          "claimed": {
+            "items": {
+              "$ref": "#/components/schemas/TaskLine"
+            },
+            "type": "array"
+          },
+          "next": {
+            "description": "The first open tasks in board order: what's next.",
+            "items": {
+              "$ref": "#/components/schemas/TaskLine"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "byStatus",
+          "next"
+        ],
+        "type": "object"
+      },
       "TaskRef": {
         "properties": {
           "finished": {
@@ -4014,6 +5318,141 @@
           "title",
           "status",
           "finished"
+        ],
+        "type": "object"
+      },
+      "TaskSummary": {
+        "properties": {
+          "archived": {
+            "description": "Only on archived tasks (includeArchived).",
+            "type": "boolean"
+          },
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blocked": {
+            "description": "Marked blocked, or waiting on an unfinished task.",
+            "type": "boolean"
+          },
+          "boardPosition": {
+            "description": "1 is the top of its status column on the board; 0 for an archived task.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "claimedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "criteriaDone": {
+            "description": "How many of its acceptance criteria are checked, out of\ncriteriaTotal. Both left out when it has none.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "criteriaTotal": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "dueDate": {
+            "description": "YYYY-MM-DD.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "additionalProperties": true,
+            "description": "Its custom field values by field name (only those it has), as\ntask_open reads them.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "labels": {
+            "description": "Its labels, by name.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "milestone": {
+            "description": "Its milestone, by name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "openBlockerCount": {
+            "default": 0,
+            "description": "How many unfinished tasks it waits on.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "overdue": {
+            "description": "Past its due date and not finished.",
+            "type": "boolean"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "ready": {
+            "default": false,
+            "description": "Not finished, not blocked, and nothing unfinished blocking it.",
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "statusGroup": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "description": "The task's type, such as Task or Bug.",
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "title",
+          "status",
+          "statusGroup",
+          "type",
+          "priority",
+          "boardPosition",
+          "blocked",
+          "project",
+          "version",
+          "updatedAt"
         ],
         "type": "object"
       },
@@ -4053,6 +5492,45 @@
           "id",
           "name",
           "status"
+        ],
+        "type": "object"
+      },
+      "ThreadUpdate": {
+        "properties": {
+          "changedAt": {
+            "type": "string"
+          },
+          "changedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "under": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "name",
+          "status",
+          "under",
+          "changedAt"
         ],
         "type": "object"
       },
@@ -4374,6 +5852,172 @@
           "deleted",
           "linkCount",
           "url"
+        ],
+        "type": "object"
+      },
+      "WordLine": {
+        "properties": {
+          "many": {
+            "type": "string"
+          },
+          "noun": {
+            "description": "The app's own noun, such as \"task\".",
+            "type": "string"
+          },
+          "one": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "noun",
+          "one",
+          "many"
+        ],
+        "type": "object"
+      },
+      "WorkItemProjection": {
+        "properties": {
+          "acceptanceCriteria": {
+            "items": {
+              "$ref": "#/components/schemas/AcceptanceCriterionProjection"
+            },
+            "type": "array"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssigneeProjection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocked": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlockedProjection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "canonicalUrl": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "descriptionTruncated": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "itemType": {
+            "$ref": "#/components/schemas/NamedProjection"
+          },
+          "key": {
+            "type": "string"
+          },
+          "labels": {
+            "description": "Its labels, by name; label_list has their colors.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "linkedPullRequests": {
+            "items": {
+              "$ref": "#/components/schemas/PullRequestProjection"
+            },
+            "type": "array"
+          },
+          "linkedRepositories": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedRepositoryProjection"
+            },
+            "type": "array"
+          },
+          "parentWorkItemId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusProjection"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "key",
+          "title",
+          "description",
+          "descriptionTruncated",
+          "itemType",
+          "status",
+          "priority",
+          "version",
+          "archived",
+          "labels",
+          "acceptanceCriteria",
+          "linkedRepositories",
+          "linkedPullRequests",
+          "canonicalUrl"
+        ],
+        "type": "object"
+      },
+      "You": {
+        "properties": {
+          "access": {
+            "description": "full or read",
+            "type": "string"
+          },
+          "actorId": {
+            "type": "string"
+          },
+          "connectedThrough": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "handle": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "person or agent",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actorId",
+          "name",
+          "handle",
+          "kind",
+          "access"
         ],
         "type": "object"
       }
@@ -5158,6 +6802,347 @@
           "runs"
         ],
         "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/briefing_get": {
+      "post": {
+        "description": "Start here. What needs you right now: reply requests (agents), unread notifications (mentions, assignments, approvals, runs, pull requests), unread @mentions, conversations with unread messages, your open tasks and claims, and threads that recently settled. Each item is a pointer you can open.",
+        "operationId": "briefing_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "projectId": {
+                    "description": "Only this project. Leave it out for everything.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "BriefingArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "claims": {
+                              "description": "Tasks you've claimed and are working on.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskLine"
+                              },
+                              "type": "array"
+                            },
+                            "mentions": {
+                              "description": "Messages that @mention you and that you haven't read.",
+                              "items": {
+                                "$ref": "#/components/schemas/Mention"
+                              },
+                              "type": "array"
+                            },
+                            "nextSteps": {
+                              "type": "string"
+                            },
+                            "notifications": {
+                              "description": "Unread notifications from your inbox: mentions, assignments,\napprovals, runs and pull requests. Change them with\nnotification_update; notification_list shows the rest.",
+                              "items": {
+                                "$ref": "#/components/schemas/NotificationLine"
+                              },
+                              "type": "array"
+                            },
+                            "replyRequests": {
+                              "description": "Agents only: messages people asked you to answer. Claim one with\nreply_claim.",
+                              "items": {
+                                "$ref": "#/components/schemas/InboxItem"
+                              },
+                              "type": "array"
+                            },
+                            "tasks": {
+                              "description": "Open tasks assigned to you, most recently changed first.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskLine"
+                              },
+                              "type": "array"
+                            },
+                            "threadUpdates": {
+                              "description": "Threads whose status or outcome changed in the last week.",
+                              "items": {
+                                "$ref": "#/components/schemas/ThreadUpdate"
+                              },
+                              "type": "array"
+                            },
+                            "unread": {
+                              "description": "Conversations with messages you haven't read, most recent first.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "you": {
+                              "$ref": "#/components/schemas/You"
+                            }
+                          },
+                          "required": [
+                            "you",
+                            "notifications",
+                            "mentions",
+                            "unread",
+                            "tasks",
+                            "threadUpdates",
+                            "nextSteps"
+                          ],
+                          "title": "Briefing",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "claims": {
+                              "description": "Tasks you've claimed and are working on.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskLine"
+                              },
+                              "type": "array"
+                            },
+                            "mentions": {
+                              "description": "Messages that @mention you and that you haven't read.",
+                              "items": {
+                                "$ref": "#/components/schemas/Mention"
+                              },
+                              "type": "array"
+                            },
+                            "nextSteps": {
+                              "type": "string"
+                            },
+                            "notifications": {
+                              "description": "Unread notifications from your inbox: mentions, assignments,\napprovals, runs and pull requests. Change them with\nnotification_update; notification_list shows the rest.",
+                              "items": {
+                                "$ref": "#/components/schemas/NotificationLine"
+                              },
+                              "type": "array"
+                            },
+                            "replyRequests": {
+                              "description": "Agents only: messages people asked you to answer. Claim one with\nreply_claim.",
+                              "items": {
+                                "$ref": "#/components/schemas/InboxItem"
+                              },
+                              "type": "array"
+                            },
+                            "tasks": {
+                              "description": "Open tasks assigned to you, most recently changed first.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskLine"
+                              },
+                              "type": "array"
+                            },
+                            "threadUpdates": {
+                              "description": "Threads whose status or outcome changed in the last week.",
+                              "items": {
+                                "$ref": "#/components/schemas/ThreadUpdate"
+                              },
+                              "type": "array"
+                            },
+                            "unread": {
+                              "description": "Conversations with messages you haven't read, most recent first.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "you": {
+                              "$ref": "#/components/schemas/You"
+                            }
+                          },
+                          "required": [
+                            "you",
+                            "notifications",
+                            "mentions",
+                            "unread",
+                            "tasks",
+                            "threadUpdates",
+                            "nextSteps"
+                          ],
+                          "title": "Briefing",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Briefing",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "describe"
       }
     },
     "/api/v2/w/{workspace}/ops/bug_report_link_create": {
@@ -6864,6 +8849,240 @@
           "pages"
         ],
         "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/dependency_graph_get": {
+      "post": {
+        "description": "A space's dependency graph: open tasks and what blocks them (blockers in other spaces you can see included), the tasks that can start now (frontier, best first), the longest chain of open work by estimate (criticalPath), and suggested blocks waiting for review as edges with a suggestionId. Narrow by milestone, label or parent task. Needs \"See tasks\" where it acts.",
+        "operationId": "dependency_graph_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "includeFinished": {
+                    "description": "Also finished tasks that block nothing open.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "label": {
+                    "description": "Only tasks with this label (name or ID), with what links to them.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "milestoneId": {
+                    "description": "Only tasks in this milestone (ID), with what links to them.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "parentId": {
+                    "description": "Only the subtasks of this task (key such as AWD-12, or ID), at any\ndepth, with what links to them.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "projectId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "projectId"
+                ],
+                "title": "DependencyGraphArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "title": "AnyValue"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "title": "AnyValue"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Dependency graph",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "describe"
       }
     },
     "/api/v2/w/{workspace}/ops/directory_list": {
@@ -18555,6 +20774,247 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/my_work_get": {
+      "post": {
+        "description": "Your tasks across the workspace (or one space): assigned to you and unfinished (due first), being worked on by you or agents you set up, and in review where you made or watch them.",
+        "operationId": "my_work_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "projectId": {
+                    "description": "Only this project (ID, link or key). Leave it out for all of yours.\nThe MCP middleware scopes the call to it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "MyWorkArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "assigned": {
+                              "description": "Tasks assigned to you that aren't finished, due first."
+                            },
+                            "claimed": {
+                              "description": "Tasks you, or agents you set up, are working on now."
+                            },
+                            "review": {
+                              "description": "Tasks in review that you made or watch, assigned to someone else."
+                            }
+                          },
+                          "required": [
+                            "assigned",
+                            "claimed",
+                            "review"
+                          ],
+                          "title": "MyWorkValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "assigned": {
+                              "description": "Tasks assigned to you that aren't finished, due first."
+                            },
+                            "claimed": {
+                              "description": "Tasks you, or agents you set up, are working on now."
+                            },
+                            "review": {
+                              "description": "Tasks in review that you made or watch, assigned to someone else."
+                            }
+                          },
+                          "required": [
+                            "assigned",
+                            "claimed",
+                            "review"
+                          ],
+                          "title": "MyWorkValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "My work",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
     "/api/v2/w/{workspace}/ops/package_export": {
       "post": {
         "description": "Export a space's setup (roles, channels, collections, forms, automations, skills) or the workspace's (switches, layout, roles) as one package document. It never holds a secret, token, member or form link: ids become part keys, and what the installer must choose again is named in needsSetup. The same setup exported twice has the same digest. Needs \"Manage settings\" where it acts.",
@@ -20320,6 +22780,660 @@
           "tasks"
         ],
         "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/project_get": {
+      "post": {
+        "description": "Get oriented in one space: its guide page (read this first), other pages, recent decisions, what's next on the board, blocked and claimed tasks, open threads, channels, repositories, labels, and its layout (match its tone and the words it uses).",
+        "operationId": "project_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "projectId": {
+                    "description": "The project's ID, link or key (such as \"AWD\"). projects_list shows them.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "projectId"
+                ],
+                "title": "ProjectOpenArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "channels": {
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "decisions": {
+                              "description": "Recent decisions that still hold.",
+                              "items": {
+                                "$ref": "#/components/schemas/DecisionLine"
+                              },
+                              "type": "array"
+                            },
+                            "guide": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/GuidePage"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The project's guide page: how this project works. Read it first."
+                            },
+                            "labels": {
+                              "description": "Labels used here; label_list has colors and counts.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "layout": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/LayoutLine"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The project's layout: what it's for, how to write for the people in\nit and the nouns it renames. Match its tone and words. Missing when\nnobody chose one."
+                            },
+                            "modulesOff": {
+                              "description": "Modules that are off here (AWD-75); what they hold is left out, and\ntheir tools say they're off. module_list says why.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "openThreads": {
+                              "description": "Threads still being worked out, across the project's channels.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "pages": {
+                              "description": "Other pages, titles only. Read one with page_get.",
+                              "items": {
+                                "$ref": "#/components/schemas/PageLine"
+                              },
+                              "type": "array"
+                            },
+                            "project": {
+                              "$ref": "#/components/schemas/ProjectHeader"
+                            },
+                            "repositories": {
+                              "items": {
+                                "$ref": "#/components/schemas/RepositoryLine"
+                              },
+                              "type": "array"
+                            },
+                            "skills": {
+                              "description": "Skills: instructions for a kind of work, each with when to use it.\nLoad the ones that fit your work with skill_get.",
+                              "items": {
+                                "$ref": "#/components/schemas/SkillLine"
+                              },
+                              "type": "array"
+                            },
+                            "taskCollections": {
+                              "description": "Collections whose records act like tasks, such as \"Bugs\": make one\nwith task_create (collection: \"Bugs\") and list them with task_list\n(collection); their fields are the collection's own\n(collection_describe).",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "taskFields": {
+                              "description": "The project's custom task fields, by name: task_create and\ntask_update set them with fields, such as {\"Risk\": \"High\"}.\nfield_list has their types and options.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "tasks": {
+                              "$ref": "#/components/schemas/TaskOverview"
+                            }
+                          },
+                          "required": [
+                            "project",
+                            "pages",
+                            "decisions",
+                            "tasks",
+                            "openThreads",
+                            "channels",
+                            "repositories"
+                          ],
+                          "title": "ProjectOverview",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "channels": {
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "decisions": {
+                              "description": "Recent decisions that still hold.",
+                              "items": {
+                                "$ref": "#/components/schemas/DecisionLine"
+                              },
+                              "type": "array"
+                            },
+                            "guide": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/GuidePage"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The project's guide page: how this project works. Read it first."
+                            },
+                            "labels": {
+                              "description": "Labels used here; label_list has colors and counts.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "layout": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/LayoutLine"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The project's layout: what it's for, how to write for the people in\nit and the nouns it renames. Match its tone and words. Missing when\nnobody chose one."
+                            },
+                            "modulesOff": {
+                              "description": "Modules that are off here (AWD-75); what they hold is left out, and\ntheir tools say they're off. module_list says why.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "openThreads": {
+                              "description": "Threads still being worked out, across the project's channels.",
+                              "items": {
+                                "$ref": "#/components/schemas/ConversationSummary"
+                              },
+                              "type": "array"
+                            },
+                            "pages": {
+                              "description": "Other pages, titles only. Read one with page_get.",
+                              "items": {
+                                "$ref": "#/components/schemas/PageLine"
+                              },
+                              "type": "array"
+                            },
+                            "project": {
+                              "$ref": "#/components/schemas/ProjectHeader"
+                            },
+                            "repositories": {
+                              "items": {
+                                "$ref": "#/components/schemas/RepositoryLine"
+                              },
+                              "type": "array"
+                            },
+                            "skills": {
+                              "description": "Skills: instructions for a kind of work, each with when to use it.\nLoad the ones that fit your work with skill_get.",
+                              "items": {
+                                "$ref": "#/components/schemas/SkillLine"
+                              },
+                              "type": "array"
+                            },
+                            "taskCollections": {
+                              "description": "Collections whose records act like tasks, such as \"Bugs\": make one\nwith task_create (collection: \"Bugs\") and list them with task_list\n(collection); their fields are the collection's own\n(collection_describe).",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "taskFields": {
+                              "description": "The project's custom task fields, by name: task_create and\ntask_update set them with fields, such as {\"Risk\": \"High\"}.\nfield_list has their types and options.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "tasks": {
+                              "$ref": "#/components/schemas/TaskOverview"
+                            }
+                          },
+                          "required": [
+                            "project",
+                            "pages",
+                            "decisions",
+                            "tasks",
+                            "openThreads",
+                            "channels",
+                            "repositories"
+                          ],
+                          "title": "ProjectOverview",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Open space",
+        "tags": [
+          "projects"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/project_list": {
+      "post": {
+        "description": "List the spaces you can work in, with their keys, your role, and open task and unread counts. The Messages space holds DMs and groups. includeArchived also lists archived ones, which project_archive can restore.",
+        "operationId": "project_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "includeArchived": {
+                    "description": "Also list archived projects you belong to.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "ProjectsListArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "projects": {
+                              "items": {
+                                "$ref": "#/components/schemas/ProjectLine"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "projects"
+                          ],
+                          "title": "ProjectsValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "projects": {
+                              "items": {
+                                "$ref": "#/components/schemas/ProjectLine"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "projects"
+                          ],
+                          "title": "ProjectsValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List spaces",
+        "tags": [
+          "projects"
+        ],
+        "x-operation-kind": "query"
       }
     },
     "/api/v2/w/{workspace}/ops/recurring_create": {
@@ -29270,6 +32384,606 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/task_get": {
+      "post": {
+        "description": "Open a task by ID, link or key (such as AW-12): its fields and labels, acceptance criteria, who's working on it, subtasks, linked threads, messages, pages, decisions and pull requests, and the latest comments. Pass include: [\"history\"] for the task's full timeline: who changed what, when, and through which app (latest 30 by default; olderCursor for more). Needs \"See tasks\" where it acts.",
+        "operationId": "task_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "historyBefore": {
+                    "description": "With include history: the olderCursor from a previous call, for\nearlier entries.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "historyLimit": {
+                    "description": "With include history: how many entries (default 30, at most 100).",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "include": {
+                    "description": "Extra parts to return. \"history\": what happened to the task (status\nchanges, edits, criteria, links and comments), with who, when, and\nthrough which app.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "taskId": {
+                    "description": "The task's ID, link, or key such as AW-12.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "taskId"
+                ],
+                "title": "TaskOpenArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "blockedBy": {
+                              "description": "Tasks that must finish first, each with its status. Tasks in projects\nyou can't reach are left out.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskRef"
+                              },
+                              "type": "array"
+                            },
+                            "blockedReason": {
+                              "description": "Why it's marked blocked (task_mark_blocked), if it is.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "blocks": {
+                              "description": "Tasks waiting on this one.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskRef"
+                              },
+                              "type": "array"
+                            },
+                            "claimedBy": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ClaimValue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "collection": {
+                              "description": "The collection that acts like a task it's a record of, such as\n\"Bugs\"; left out for a plain task. Its fields are that collection's.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "comments": {
+                              "description": "The latest comments and updates, oldest first.",
+                              "items": {
+                                "$ref": "#/components/schemas/CommentItem"
+                              },
+                              "type": "array"
+                            },
+                            "conversations": {
+                              "description": "Threads and conversations about this task.",
+                              "items": {
+                                "$ref": "#/components/schemas/LinkedItem"
+                              },
+                              "type": "array"
+                            },
+                            "dueDate": {
+                              "description": "YYYY-MM-DD.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "estimate": {
+                              "format": "double",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "estimateUnit": {
+                              "default": "",
+                              "description": "What estimates count in this project: points or hours.",
+                              "type": "string"
+                            },
+                            "fields": {
+                              "description": "The project's custom fields with this task's values (null when it\nhas none). Set them with task_update's fields, by name.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskFieldValue"
+                              },
+                              "type": "array"
+                            },
+                            "files": {
+                              "description": "Files attached to the task itself, oldest first; file_read opens one\nand file_upload (taskId) adds one. Comments list their own.",
+                              "items": {
+                                "$ref": "#/components/schemas/FileSummary"
+                              },
+                              "type": "array"
+                            },
+                            "guidePageId": {
+                              "description": "Where to read how this project works: project_open or page_get.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "handoffs": {
+                              "description": "Notes left by whoever last let go of this task (task_release with\nhandoff), newest first: where the work got to and what's left.",
+                              "items": {
+                                "$ref": "#/components/schemas/HandoffNote"
+                              },
+                              "type": "array"
+                            },
+                            "history": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/TaskHistory"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "With include: [\"history\"], what happened to the task."
+                            },
+                            "links": {
+                              "description": "Messages, pages and decisions linked to this task.",
+                              "items": {
+                                "$ref": "#/components/schemas/LinkedItem"
+                              },
+                              "type": "array"
+                            },
+                            "milestone": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/MilestoneRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "overdue": {
+                              "description": "Past its due date and not finished.",
+                              "type": "boolean"
+                            },
+                            "parent": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/TaskRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The task it's a subtask of."
+                            },
+                            "ready": {
+                              "default": false,
+                              "description": "Not finished, not marked blocked, and nothing unfinished blocking it\n(counting blockers you can't see).",
+                              "type": "boolean"
+                            },
+                            "relations": {
+                              "description": "Related and duplicate tasks (task_relate).",
+                              "items": {
+                                "$ref": "#/components/schemas/RelationRef"
+                              },
+                              "type": "array"
+                            },
+                            "startDate": {
+                              "description": "YYYY-MM-DD.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "subtasks": {
+                              "items": {
+                                "$ref": "#/components/schemas/TaskSummary"
+                              },
+                              "type": "array"
+                            },
+                            "task": {
+                              "$ref": "#/components/schemas/WorkItemProjection"
+                            },
+                            "watchers": {
+                              "description": "Who hears about its changes (task_watch).",
+                              "items": {
+                                "$ref": "#/components/schemas/WatcherRef"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "task"
+                          ],
+                          "title": "TaskDetail",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "blockedBy": {
+                              "description": "Tasks that must finish first, each with its status. Tasks in projects\nyou can't reach are left out.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskRef"
+                              },
+                              "type": "array"
+                            },
+                            "blockedReason": {
+                              "description": "Why it's marked blocked (task_mark_blocked), if it is.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "blocks": {
+                              "description": "Tasks waiting on this one.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskRef"
+                              },
+                              "type": "array"
+                            },
+                            "claimedBy": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ClaimValue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "collection": {
+                              "description": "The collection that acts like a task it's a record of, such as\n\"Bugs\"; left out for a plain task. Its fields are that collection's.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "comments": {
+                              "description": "The latest comments and updates, oldest first.",
+                              "items": {
+                                "$ref": "#/components/schemas/CommentItem"
+                              },
+                              "type": "array"
+                            },
+                            "conversations": {
+                              "description": "Threads and conversations about this task.",
+                              "items": {
+                                "$ref": "#/components/schemas/LinkedItem"
+                              },
+                              "type": "array"
+                            },
+                            "dueDate": {
+                              "description": "YYYY-MM-DD.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "estimate": {
+                              "format": "double",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "estimateUnit": {
+                              "default": "",
+                              "description": "What estimates count in this project: points or hours.",
+                              "type": "string"
+                            },
+                            "fields": {
+                              "description": "The project's custom fields with this task's values (null when it\nhas none). Set them with task_update's fields, by name.",
+                              "items": {
+                                "$ref": "#/components/schemas/TaskFieldValue"
+                              },
+                              "type": "array"
+                            },
+                            "files": {
+                              "description": "Files attached to the task itself, oldest first; file_read opens one\nand file_upload (taskId) adds one. Comments list their own.",
+                              "items": {
+                                "$ref": "#/components/schemas/FileSummary"
+                              },
+                              "type": "array"
+                            },
+                            "guidePageId": {
+                              "description": "Where to read how this project works: project_open or page_get.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "handoffs": {
+                              "description": "Notes left by whoever last let go of this task (task_release with\nhandoff), newest first: where the work got to and what's left.",
+                              "items": {
+                                "$ref": "#/components/schemas/HandoffNote"
+                              },
+                              "type": "array"
+                            },
+                            "history": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/TaskHistory"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "With include: [\"history\"], what happened to the task."
+                            },
+                            "links": {
+                              "description": "Messages, pages and decisions linked to this task.",
+                              "items": {
+                                "$ref": "#/components/schemas/LinkedItem"
+                              },
+                              "type": "array"
+                            },
+                            "milestone": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/MilestoneRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "overdue": {
+                              "description": "Past its due date and not finished.",
+                              "type": "boolean"
+                            },
+                            "parent": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/TaskRef"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The task it's a subtask of."
+                            },
+                            "ready": {
+                              "default": false,
+                              "description": "Not finished, not marked blocked, and nothing unfinished blocking it\n(counting blockers you can't see).",
+                              "type": "boolean"
+                            },
+                            "relations": {
+                              "description": "Related and duplicate tasks (task_relate).",
+                              "items": {
+                                "$ref": "#/components/schemas/RelationRef"
+                              },
+                              "type": "array"
+                            },
+                            "startDate": {
+                              "description": "YYYY-MM-DD.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "subtasks": {
+                              "items": {
+                                "$ref": "#/components/schemas/TaskSummary"
+                              },
+                              "type": "array"
+                            },
+                            "task": {
+                              "$ref": "#/components/schemas/WorkItemProjection"
+                            },
+                            "watchers": {
+                              "description": "Who hears about its changes (task_watch).",
+                              "items": {
+                                "$ref": "#/components/schemas/WatcherRef"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "task"
+                          ],
+                          "title": "TaskDetail",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Open task",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
     "/api/v2/w/{workspace}/ops/task_import": {
       "post": {
         "description": "Import tasks from Markdown, CSV (Linear and Jira exports work as they are) or a connected repository's issues. It previews first: each row's status, labels, assignee and milestone, and anything that doesn't match. Call again with the importId and commit: true to create them. Rows imported before from the same source are skipped. Needs \"Create tasks\" where it acts.",
@@ -30199,6 +33913,546 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/task_list": {
+      "post": {
+        "description": "List tasks, in board order by default (the order people set; boardPosition 1 is the top of its column). Filter by space (projectId, or several with projectIds), status, assignee (me, none, @handle), labels (tasks with all of them; anyLabels for any of them), type, priority, milestone, createdBy, updatedSince (a date, a timestamp, or 24h/7d), blocked, claimed (yes, no, me, @handle), due dates, words, or parent. Status, assignee, type, priority and milestone take several values (any of them), and notStatus, notAssignee, notLabels, notType, notPriority and notMilestone leave tasks out. Done and canceled tasks are left out unless includeDone or you name their status, and archived ones unless includeArchived. view lists a saved view's tasks (view_list). total counts every match; for the next page, pass the nextCursor you got as cursor. Needs \"See tasks\" where it acts.",
+        "operationId": "task_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "anyLabels": {
+                    "default": null,
+                    "description": "Tasks with at least one of these labels; \"none\" lets in tasks with\nno labels too.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "assignee": {
+                    "default": null,
+                    "description": "\"me\", \"none\", actor IDs, or @handles: tasks assigned to any of them.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "blocked": {
+                    "description": "true: only blocked tasks, whether marked blocked or waiting on an\nunfinished task (task_depend). false: leave them out.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "claimed": {
+                    "default": null,
+                    "description": "yes (someone is working on it), no, me, or an @handle. true and false\nwork too.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "collection": {
+                    "description": "Only the tasks of one collection that acts like a task, such as\n\"Bugs\", by name or ID (project_open lists them); \"Tasks\" for plain\ntasks. Needs projectId.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "createdBy": {
+                    "description": "Who created it: \"me\", an @handle, or an actor ID.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "cursor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dueAfter": {
+                    "description": "Only tasks due on or after this date (YYYY-MM-DD).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dueBefore": {
+                    "description": "Only tasks due on or before this date (YYYY-MM-DD).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "fieldFilters": {
+                    "description": "Filters on the project's custom fields (see field_list), all of\nwhich must match, such as [{\"field\": \"Risk\", \"op\": \"is\", \"values\":\n[\"High\"]}]. Needs projectId. With collection, that collection's\nfields.",
+                    "items": {
+                      "$ref": "#/components/schemas/FieldFilterArgument"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "includeArchived": {
+                    "description": "Also list archived tasks, each marked archived.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "includeDone": {
+                    "description": "Include completed and canceled tasks.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "labels": {
+                    "default": null,
+                    "description": "Only tasks that have all of these labels, by name or ID (at most 10).\nNames match in each project you're looking at.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "limit": {
+                    "description": "How many (default 50, at most 200).",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "milestone": {
+                    "default": null,
+                    "description": "Milestones by name or ID, or \"none\" for tasks in no milestone: any\nof them.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "notAssignee": {
+                    "default": null,
+                    "description": "Leave out tasks assigned to any of these; unassigned ones stay\nunless you list \"none\".",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "notLabels": {
+                    "default": null,
+                    "description": "Leave out tasks with any of these labels; \"none\" leaves out tasks\nwith no labels.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "notMilestone": {
+                    "default": null,
+                    "description": "Leave out tasks in any of these milestones; \"none\" leaves out tasks\nin no milestone.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "notPriority": {
+                    "default": null,
+                    "description": "Leave out tasks with any of these priorities.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "notStatus": {
+                    "default": null,
+                    "description": "Leave out tasks in any of these statuses or groups.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "notType": {
+                    "default": null,
+                    "description": "Leave out tasks of any of these types.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "overdue": {
+                    "description": "true: only unfinished tasks past their due date. false: the rest.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "parentId": {
+                    "description": "Only subtasks of this task, or \"none\" for top-level tasks.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "priority": {
+                    "default": null,
+                    "description": "no_priority (or none), low, medium, high, urgent: any of them.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "projectId": {
+                    "description": "Only this project (ID, link, or key such as AWD). Leave it out for\ntasks across all your projects. The MCP middleware also scopes the\ncall to it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "projectIds": {
+                    "description": "Several projects at once (IDs, links, or keys), 1 to 50. Not together\nwith projectId.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "query": {
+                    "description": "Words in the title or description, or a key such as AW-12.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "ready": {
+                    "description": "true: only tasks ready to start (not finished, not blocked, nothing\nunfinished blocking them). false: the rest.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "sort": {
+                    "description": "board (the order people set, the default), priority, updated, or number.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "status": {
+                    "default": null,
+                    "description": "Status names (such as \"In Progress\"), IDs, or groups: backlog,\nunstarted, started, review, verification, completed, canceled. Tasks\nin any of them, finished ones included when you name them.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "default": null,
+                    "description": "Type names such as Bug (any case), or type IDs: tasks of any of them.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "updatedSince": {
+                    "description": "Changed since: a date (YYYY-MM-DD), a timestamp such as\n2026-09-30T14:00:00Z, or a span such as 24h or 7d.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "view": {
+                    "description": "A saved view by name or ID (see view_list), such as \"Ready for\nagents\". Needs projectId. Its filters apply as on the task list; a\nfield you pass replaces the view's filter on that field.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "TaskListArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "nextCursor": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "tasks": {
+                              "items": {
+                                "$ref": "#/components/schemas/TaskSummary"
+                              },
+                              "type": "array"
+                            },
+                            "total": {
+                              "description": "Every task that matches, across all pages.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "tasks",
+                            "total"
+                          ],
+                          "title": "TaskListValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "nextCursor": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "tasks": {
+                              "items": {
+                                "$ref": "#/components/schemas/TaskSummary"
+                              },
+                              "type": "array"
+                            },
+                            "total": {
+                              "description": "Every task that matches, across all pages.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "tasks",
+                            "total"
+                          ],
+                          "title": "TaskListValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List tasks",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
     "/api/v2/w/{workspace}/ops/task_move": {
       "post": {
         "description": "Move a task, with its subtasks, to another space. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that space, acceptance criteria, labels (by name; missing ones are created there), and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Custom field values carry over into a field of the same name and type when they fit there; the rest stay on the original. Call first with preview: true to see what carries over and what needs a choice, then move with its snapshot and one resolution per issue (set it in a target field, or leave it). Moving it again returns where it went. Needs \"Edit tasks\" where it acts.",
@@ -30563,6 +34817,251 @@
           "tasks"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/task_ready_list": {
+      "post": {
+        "description": "What to work on next in a space: open tasks ranked by priority, how many tasks each unblocks, and how close its milestone or due date is, each with readiness checks (blockers done, not marked blocked, acceptance criteria, a description, a repository). scope agents lists only tasks an agent can pick up now. taskId returns one task's checks. Needs \"See tasks\" where it acts.",
+        "operationId": "task_ready_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "description": "At most 200; default 50.",
+                    "format": "uint",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "milestoneId": {
+                    "description": "Only tasks in this milestone (ID).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "offset": {
+                    "description": "nextOffset from the previous page.",
+                    "format": "uint",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "projectId": {
+                    "type": "string"
+                  },
+                  "scope": {
+                    "description": "ready (the default: not started, blockers done, not marked blocked),\nagents (ready, with criteria, a description and a repository, and\nunclaimed), or all (every open task, ranked).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "taskId": {
+                    "description": "One task's readiness checks instead of the list.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "projectId"
+                ],
+                "title": "TaskReadyListArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "title": "AnyValue"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "title": "AnyValue"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List tasks ready to start",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "query"
       }
     },
     "/api/v2/w/{workspace}/ops/task_release": {
@@ -36563,6 +41062,300 @@
           "workspace"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/workspace_search": {
+      "post": {
+        "description": "Search messages, threads, tasks, pages, decisions and collection records you can see. Settled things (decisions, pages, thread outcomes) rank first. Narrow by kind, space (projectId), conversation, author (from), or dates.",
+        "operationId": "workspace_search",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversationId": {
+                    "description": "Only this conversation (and its threads).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "from": {
+                    "description": "Only things written by this person: actor ID or @handle.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kinds": {
+                    "description": "Any of: messages, threads, tasks, pages, decisions, records, files, whiteboards, sheets. Default: all.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "limit": {
+                    "description": "How many results (default 20, at most 100).",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "projectId": {
+                    "description": "Only this project.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "query": {
+                    "description": "What to look for. Quotes match a phrase; -word excludes a word.",
+                    "type": "string"
+                  },
+                  "since": {
+                    "description": "Only after this date (YYYY-MM-DD or a timestamp).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "until": {
+                    "description": "Only before this date (YYYY-MM-DD or a timestamp).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "title": "SearchArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "hint": {
+                              "type": "string"
+                            },
+                            "results": {
+                              "items": {
+                                "$ref": "#/components/schemas/SearchResult"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "results",
+                            "hint"
+                          ],
+                          "title": "SearchValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "hint": {
+                              "type": "string"
+                            },
+                            "results": {
+                              "items": {
+                                "$ref": "#/components/schemas/SearchResult"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "results",
+                            "hint"
+                          ],
+                          "title": "SearchValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Search",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "query"
       }
     },
     "/api/v2/w/{workspace}/ops/workspace_shape_set": {

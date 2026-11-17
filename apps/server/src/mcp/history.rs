@@ -55,6 +55,7 @@ pub(crate) struct TaskHistory {
 
 #[derive(Clone, Debug, Default, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(rename = "TaskHistoryEntry")]
 pub(crate) struct HistoryEntry {
     pub sequence: i64,
     pub at: String,

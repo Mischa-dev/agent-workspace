@@ -64,7 +64,7 @@ const STATUS_GROUPS: [&str; 7] = [
 const UPDATED_SINCE_MESSAGE: &str = "Use a date (YYYY-MM-DD), a timestamp such as 2026-09-30T14:00:00Z, or a span such as 24h or 7d.";
 const CURSOR_MESSAGE: &str = "Pass the nextCursor you were given, as cursor.";
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TaskListArguments {
     /// Only this project (ID, link, or key such as AWD). Leave it out for
@@ -1721,7 +1721,7 @@ pub(crate) fn scoped(principal: &McpPrincipal, project_id: Uuid) -> McpPrincipal
 // ---------------------------------------------------------------------------
 // task_open
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TaskOpenArguments {
     /// The task's ID, link, or key such as AW-12.

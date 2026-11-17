@@ -44,6 +44,20 @@
     "title": "List usage by agent"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "briefing_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Briefing"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -134,6 +148,20 @@
     "preview": false,
     "proposable": false,
     "title": "Record decision"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "tasks",
+    "name": "dependency_graph_get",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Dependency graph"
   },
   {
     "automation": false,
@@ -699,6 +727,20 @@
     "destructive": false,
     "emits": [],
     "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "tasks",
+    "name": "my_work_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "My work"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
     "kind": "query",
     "long": false,
     "module": "workspace",
@@ -784,6 +826,34 @@
     "preview": false,
     "proposable": false,
     "title": "Import a plan"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "projects",
+    "name": "project_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Open space"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "projects",
+    "name": "project_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List spaces"
   },
   {
     "automation": true,
@@ -1178,6 +1248,20 @@
     "title": "Task acceptance criteria"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "tasks",
+    "name": "task_get",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Open task"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1226,6 +1310,20 @@
     "title": "Link many tasks"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "task_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List tasks"
+  },
+  {
     "automation": true,
     "destructive": true,
     "emits": [
@@ -1241,6 +1339,20 @@
     "preview": true,
     "proposable": false,
     "title": "Move task"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "task_ready_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List tasks ready to start"
   },
   {
     "automation": true,
@@ -1541,6 +1653,20 @@
     "preview": false,
     "proposable": false,
     "title": "Keep workspace"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_search",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Search"
   },
   {
     "automation": false,

@@ -42,7 +42,7 @@ pub(crate) fn writer(principal: &McpPrincipal) -> Writer {
 // ---------------------------------------------------------------------------
 // search
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SearchArguments {
     /// What to look for. Quotes match a phrase; -word excludes a word.

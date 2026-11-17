@@ -13,7 +13,7 @@
     "workflow_get": "describe",
     "workflow_update": "change",
     "task_list": "query",
-    "task_open": "describe",
+    "task_get": "describe",
     "task_create": "create",
     "task_update": "change",
     "task_create_many": "create",
@@ -46,7 +46,7 @@
     "view_list": "query",
     "view_create": "create",
     "view_update": "change",
-    "my_work": "query",
+    "my_work_get": "describe",
     "template_list": "query",
     "template_create": "create",
     "template_update": "change",
@@ -55,7 +55,7 @@
     "milestone_list": "query",
     "milestone_create": "create",
     "milestone_update": "change",
-    "dependency_graph": "query",
+    "dependency_graph_get": "describe",
     "plan_import": "create"
   },
   "routes": [
