@@ -419,45 +419,26 @@ async fn insert_recovery_event(
     dirty: bool,
     provider_resumed: bool,
 ) -> Result<(), AppError> {
-    let event_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (
-            id, agent_run_id, event_key, kind, summary, payload
-        )
-        VALUES ($1, $2, $3, 'recovery', $4, $5)
-        "#,
+    let Some(step) = crate::runs::steps::record(
+        transaction,
+        run.id,
+        &format!("startup-recovery:{result}"),
+        "recovery",
+        summary,
+        serde_json::json!({
+            "previous_state": run.previous_state,
+            "result": result,
+            "provider_resumed": provider_resumed,
+            "worktree_preserved": true,
+            "worktree_state": worktree_state,
+            "dirty": dirty
+        }),
     )
-    .bind(event_id)
-    .bind(run.id)
-    .bind(format!("startup-recovery:{result}"))
-    .bind(summary)
-    .bind(serde_json::json!({
-        "previous_state": run.previous_state,
-        "result": result,
-        "provider_resumed": provider_resumed,
-        "worktree_preserved": true,
-        "worktree_state": worktree_state,
-        "dirty": dirty
-    }))
-    .execute(&mut **transaction)
-    .await?;
-    let sequence =
-        crate::domain::allocate_conversation_sequence(transaction, run.conversation_id).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (
-            id, conversation_id, sequence, kind, agent_run_event_id
-        )
-        VALUES ($1, $2, $3, 'worker_event', $4)
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(run.conversation_id)
-    .bind(sequence)
-    .bind(event_id)
-    .execute(&mut **transaction)
-    .await?;
+    .await?
+    else {
+        return Ok(());
+    };
+    crate::runs::steps::show_in_thread(transaction, run.conversation_id, step).await?;
     Ok(())
 }
 

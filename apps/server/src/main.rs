@@ -272,13 +272,13 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
             return Ok(());
         }
-        Some("retention-external-events") => {
+        Some("retention-deliveries") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["apply"])?;
             let result =
-                retention::clean_external_events(&pool, optional_bool(&options, "apply", false)?)
+                retention::clean_deliveries(&pool, optional_bool(&options, "apply", false)?)
                     .await
-                    .context("clean expired external-agent events")?;
+                    .context("clean finished webhook deliveries")?;
             println!("{}", serde_json::to_string_pretty(&result)?);
             return Ok(());
         }

@@ -536,8 +536,8 @@ async fn render(state: &AppState) -> Result<String, AppError> {
             {EVENTS_LAG} AS events_lag_seconds,
             (SELECT count(*) FROM event_consumer_failures WHERE resolved_at IS NULL)
                 AS events_parked,
-            (SELECT count(*) FROM agent_webhook_deliveries
-             WHERE delivered_at IS NULL AND attempts > 0) AS webhooks_failing,
+            (SELECT count(*) FROM deliveries
+             WHERE state = 'pending' AND attempts > 0) AS webhooks_failing,
             (SELECT count(*) FROM github_jobs
              WHERE state IN ('failed', 'exhausted')
                AND updated_at > now() - interval '1 day') AS github_jobs_failing
@@ -664,8 +664,8 @@ pub async fn health_check(state: &AppState) -> Result<(), AppError> {
         r#"
         SELECT
             {EVENTS_LAG},
-            (SELECT count(*) FROM agent_webhook_deliveries
-             WHERE delivered_at IS NULL AND attempts >= 3)
+            (SELECT count(*) FROM deliveries
+             WHERE state = 'pending' AND attempts >= 3)
         "#
     ))
     .fetch_one(crate::db::scoped(&state.pool))

@@ -659,10 +659,6 @@ pub async fn cancel_raised_via_host(
 
 /// The most characters of a typed answer.
 pub const MAX_ANSWER_CHARS: usize = 4_000;
-/// The event each of the raiser's connections gets when a request settles.
-pub const ANSWERED_EVENT: &str = "request.answered";
-/// What an agent asked something hears on its connections.
-pub const RAISED_EVENT: &str = "request.raised";
 
 /// The option a `deny` expiry picks: the first styled deny.
 fn deny_option(options: &[Value]) -> Option<&Value> {
@@ -918,6 +914,21 @@ async fn holds_addressed_role(
     .await?)
 }
 
+/// The space a request lives in, unlocked and unchecked: only for holding
+/// its workspace open before the request's row is locked.
+pub async fn space_of(
+    executor: impl sqlx::PgExecutor<'_>,
+    request_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT space_id FROM requests WHERE id = $1")
+            .bind(request_id)
+            .fetch_optional(executor)
+            .await?
+            .flatten(),
+    )
+}
+
 /// Who may answer an open request they can see: an account it names; else
 /// a holder of one of the roles it names who has its permission; else,
 /// when it names nobody, anyone with its permission there. Never the
@@ -930,8 +941,10 @@ pub async fn may_answer(
     if row.status != "open" || row.raised_by_account_id == caller.account_id {
         return Ok(false);
     }
+    // Being asked by name still needs what answering it needs now: a
+    // sponsor who has lost `runs.approve` no longer approves their run.
     if row.addressed_account_ids.contains(&caller.account_id) {
-        return Ok(true);
+        return holds(transaction, caller, row, true).await;
     }
     if !row.addressed_role_keys.is_empty() {
         return Ok(
@@ -1271,50 +1284,6 @@ async fn tell_raiser(
     if crate::notifications::deliver(transaction, &notification).await? {
         crate::notifications::announce(transaction, space_id, row.raised_by_account_id).await?;
     }
-    tell_connections(
-        transaction,
-        row.raised_by_account_id,
-        space_id,
-        ANSWERED_EVENT,
-        "Your request was answered; read it with request_get",
-        row.id,
-    )
-    .await
-}
-
-/// An event on each of an account's agent connections that reach the space.
-async fn tell_connections(
-    transaction: &mut Transaction<'_, Postgres>,
-    account_id: Uuid,
-    space_id: Uuid,
-    kind: &str,
-    summary: &str,
-    request_id: Uuid,
-) -> Result<(), AppError> {
-    let connections = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id FROM external_agent_connections
-        WHERE actor_id = $1 AND status = 'active' AND agent_connection_can_access(id, $2)
-        ORDER BY id
-        "#,
-    )
-    .bind(account_id)
-    .bind(space_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for connection_id in connections {
-        crate::external_events::enqueue_external_event(
-            transaction,
-            connection_id,
-            space_id,
-            kind,
-            summary,
-            "request",
-            request_id,
-            &crate::addresses::Target::Inbox.legacy_path(),
-        )
-        .await?;
-    }
     Ok(())
 }
 
@@ -1393,15 +1362,6 @@ pub async fn announce_raised(
         };
         if crate::notifications::deliver(transaction, &notification).await? {
             crate::notifications::announce(transaction, space_id, account_id).await?;
-            tell_connections(
-                transaction,
-                account_id,
-                space_id,
-                RAISED_EVENT,
-                "A request waits on you; read it with request_get",
-                row.id,
-            )
-            .await?;
             told += 1;
         }
     }

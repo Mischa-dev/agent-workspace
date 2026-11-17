@@ -63,7 +63,7 @@
     "/api/v1/organizations/{organization_id}/harnesses*",
     "/api/v1/organizations/{organization_id}/model-catalog*"
   ],
-  "events": { "emits": ["run.updated", "run.finished", "request.raised", "request.answered", "request.cancelled", "request.expired"], "listens": ["task.created", "task.updated"] },
+  "events": { "emits": ["run.updated", "run.finished", "run.cancel", "request.raised", "request.answered", "request.cancelled", "request.expired"], "listens": ["task.created", "task.updated"] },
   "notifications": [
     "request_raised",
     "request_answered",

@@ -100,6 +100,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/agent-runs/{run_id}/diff",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
+    "/api/v1/events",
+    "/api/v1/events/catalogue",
     "/api/v1/files/{id}/content",
     "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
@@ -806,6 +808,22 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         case(
             "/api/v1/home",
             vec!["/api/v1/home".to_owned()],
+            vec![],
+            vec![],
+        ),
+        // A2: what the caller hears, across its own workspaces only.
+        case(
+            "/api/v1/events",
+            vec![
+                "/api/v1/events".to_owned(),
+                "/api/v1/events?limit=10".to_owned(),
+            ],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/events/catalogue",
+            vec!["/api/v1/events/catalogue".to_owned()],
             vec![],
             vec![],
         ),
@@ -2013,12 +2031,16 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "automation_runs",
     "briefing",
     "bug_report_link_list",
+    "connection_list",
+    "schedule_list",
     "conversation_list",
     "conversation_open",
     "conversation_read",
     "decision_list",
     "dependency_graph",
     "environment_list",
+    "event_kind_list",
+    "event_list",
     "external_event_poll",
     "file_list",
     "file_read",
@@ -2778,6 +2800,27 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case("external_event_poll", vec![json!({})], vec![], vec![]),
+        // A2: the caller's own events and connections; B's agent isn't
+        // one A's caller manages.
+        case(
+            "event_list",
+            vec![json!({}), json!({"limit": 10})],
+            vec![],
+            vec![],
+        ),
+        case("event_kind_list", vec![json!({})], vec![], vec![]),
+        case(
+            "connection_list",
+            vec![json!({})],
+            vec![json!({"account": b.agent})],
+            vec![],
+        ),
+        case(
+            "schedule_list",
+            vec![json!({}), json!({"includeFinished": true})],
+            vec![],
+            vec![],
+        ),
         case(
             "file_list",
             vec![

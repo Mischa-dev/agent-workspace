@@ -38,12 +38,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use agent_workspace_server::policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod};
 use agent_workspace_server::test_support::source::{
     routes as shared_routes, rust_files, server_src, strip_tests,
-};
-use agent_workspace_server::{
-    domain::allocate_conversation_sequence,
-    policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod},
 };
 use axum::{
     body::{Body, to_bytes},
@@ -465,6 +462,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "automation_write",
     "bug_report_link_write",
     "channel_create",
+    "connection_create",
+    "connection_remove",
+    "connection_secret_rotate",
+    "connection_update",
     "conversation_continue",
     "conversation_mark_read",
     "conversation_members",
@@ -491,6 +492,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sheet_write",
     "later_save",
     "later_update",
+    "schedule_create",
+    "schedule_update",
     "request_create",
     "request_respond",
     "request_cancel",
@@ -1313,6 +1316,10 @@ struct Targets {
     /// Runs the owner reports on themselves (A1.3): one to report on, one
     /// to stop, and one whose start is uncertain.
     reported_runs: [Uuid; 3],
+    /// The owner's own delivery connection, with a webhook (A2).
+    connection: Uuid,
+    /// A follow-up the owner set (A2.11).
+    schedule: Uuid,
     /// The workspace's own emoji (C2.19).
     custom_emoji: Uuid,
     /// A thread in the sheet's comments (C1.3).
@@ -1609,6 +1616,14 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         run_threads.push(thread);
     }
     let failed_run = Uuid::now_v7();
+    let net_worker =
+        sqlx::query_scalar::<_, Uuid>("SELECT execution_worker_id FROM agent_runs WHERE id = $1")
+            .bind(world.run)
+            .fetch_one(pool)
+            .await
+            .expect("worker");
+    crate::support::builtin_run_record(pool, failed_run, run_threads[2], net_worker, "failed")
+        .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -1630,33 +1645,21 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .execute(pool)
     .await
     .expect("failed run");
-    let failed_event = Uuid::now_v7();
     let mut transaction = pool.begin().await.expect("failure transaction");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (id, agent_run_id, event_key, kind, summary, payload)
-        VALUES ($1, $2, 'net:failed', 'run_failed', 'Net failure.', '{}'::jsonb)
-        "#,
+    let failed_event = agent_workspace_server::runs::steps::record_new(
+        &mut transaction,
+        failed_run,
+        "run_failed",
+        "Net failure.",
+        serde_json::json!({}),
     )
-    .bind(failed_event)
-    .bind(failed_run)
-    .execute(&mut *transaction)
     .await
     .expect("failure event");
-    let sequence = allocate_conversation_sequence(&mut transaction, run_threads[2])
-        .await
-        .expect("failure sequence");
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (id, conversation_id, sequence, kind, agent_run_event_id)
-        VALUES ($1, $2, $3, 'worker_event', $4)
-        "#,
+    agent_workspace_server::runs::steps::show_in_thread(
+        &mut transaction,
+        run_threads[2],
+        failed_event,
     )
-    .bind(Uuid::now_v7())
-    .bind(run_threads[2])
-    .bind(sequence)
-    .bind(failed_event)
-    .execute(&mut *transaction)
     .await
     .expect("failure entry");
     transaction.commit().await.expect("commit failure");
@@ -1768,6 +1771,34 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .expect("host agent");
         }
     }
+    // The owner's delivery connection, with a webhook to sign for (A2).
+    let connection = {
+        let mut database = pool.acquire().await.expect("connection");
+        let made = agent_workspace_server::delivery::connections::default_for(&mut database, owner)
+            .await
+            .expect("delivery connection");
+        sqlx::query(
+            "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/net', \
+             webhook_format = 'standard' WHERE id = $1",
+        )
+        .bind(made.id)
+        .execute(&mut *database)
+        .await
+        .expect("webhook");
+        made.id
+    };
+    // A follow-up the owner set (A2.11).
+    let schedule = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO agent_schedules (id, workspace_id, account_id, note, next_due_at) \
+         VALUES ($1, $2, $3, 'Net follow-up', now() + interval '1 day')",
+    )
+    .bind(schedule)
+    .bind(organization)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("follow-up");
     // C2.19: a custom emoji, to retire.
     let custom_emoji = Uuid::now_v7();
     sqlx::query(
@@ -1812,6 +1843,8 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
+        connection,
+        schedule,
         custom_emoji,
         comment_thread,
         hosts,
@@ -2385,6 +2418,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .await
         .expect("approval thread");
         let run = Uuid::now_v7();
+        crate::support::builtin_run_record(pool, run, thread, worker, "failed").await;
         sqlx::query(
             r#"
             INSERT INTO agent_runs (
@@ -2438,6 +2472,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await
     .expect("retry thread");
     let retry_run = Uuid::now_v7();
+    crate::support::builtin_run_record(pool, retry_run, retry_thread, worker, "failed").await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -3130,6 +3165,7 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
         .expect("thread");
         let run = Uuid::now_v7();
         // Made failed (no admission check), then blocked, as `spares` does.
+        crate::support::builtin_run_record(pool, run, thread, worker, "failed").await;
         sqlx::query(
             r#"
             INSERT INTO agent_runs (
@@ -6163,6 +6199,40 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": b.agent, "remove": [a.rook]}),
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
+        ),
+        // A2: an account's delivery connections are its own and its
+        // managers'. B's connection and B's agent aren't A's to change.
+        mcp_case(
+            "connection_create",
+            json!({"name": "Net connection", "clientRequestId": "net-connection"}),
+            vec![json!({"account": b.agent, "name": "Net taken"})],
+        ),
+        mcp_case(
+            "connection_update",
+            json!({"connectionId": ax.connection, "name": "Net renamed"}),
+            vec![json!({"connectionId": bx.connection, "name": "Net taken"})],
+        ),
+        mcp_case(
+            "connection_secret_rotate",
+            json!({"connectionId": ax.connection}),
+            vec![json!({"connectionId": bx.connection})],
+        ),
+        mcp_case(
+            "connection_remove",
+            json!({"connectionId": ax.connection}),
+            vec![json!({"connectionId": bx.connection})],
+        ),
+        // A2.11: a follow-up is its account's, in its workspace, and about
+        // a thing the account can see there.
+        mcp_case(
+            "schedule_create",
+            json!({"inMinutes": 60, "about": a.task, "clientRequestId": "net-schedule"}),
+            vec![json!({"inMinutes": 60, "about": b.task})],
+        ),
+        mcp_case(
+            "schedule_update",
+            json!({"scheduleId": ax.schedule, "note": "Net moved"}),
+            vec![json!({"scheduleId": bx.schedule, "cancel": true})],
         ),
         // C2.15: an agent's status is set by those who manage it; B's agent
         // isn't A's to set.

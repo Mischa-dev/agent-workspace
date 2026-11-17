@@ -149,7 +149,7 @@ impl RunState {
 
     /// Today's built-in run state as a run state. `interrupted` is
     /// `cancelled` when the person who asked for the run pressed Stop, which
-    /// `api::interrupt_run_in` records as the reason. Kept equal to the SQL
+    /// `hosts::builtin::http::interrupt_run_in` records as the reason. Kept equal to the SQL
     /// function `runs_state_from_legacy` (tested).
     pub fn from_legacy(state: LegacyRunState, failure_reason: Option<&str>) -> Self {
         match state {
@@ -168,7 +168,7 @@ impl RunState {
     }
 }
 
-/// The reason `api::interrupt_run_in` gives a built-in run a person stopped.
+/// The reason `hosts::builtin::http::interrupt_run_in` gives a built-in run a person stopped.
 pub const STOPPED_BY_REQUESTER: &str = "Interrupted by the requesting Actor.";
 
 impl fmt::Display for RunState {

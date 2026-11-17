@@ -108,7 +108,7 @@ async fn an_approval_reaches_the_owner_and_the_harness_hears_the_answer_once() {
         "the harness is handed an answer once"
     );
     let resolved = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM agent_run_events WHERE agent_run_id = $1 AND kind = 'approval_resolved'",
+        "SELECT count(*) FROM run_activities WHERE run_id = $1 AND payload->>'step' = 'approval_resolved'",
     )
     .bind(run_id)
     .fetch_one(pool)
@@ -126,14 +126,25 @@ async fn a_denied_approval_stops_the_run_and_its_other_requests() {
     let run_id = blocked_run(pool, &seed, "builtin-deny").await;
     let approval =
         crate::support::requests::approval(pool, run_id, "builtin-deny", "Force-push main?").await;
+    // A harness may name an option by its whole label, longer than a
+    // request's option ids go: it gets a number and keeps its label.
+    let long = "release/".repeat(12);
     let question = crate::support::requests::question(
         pool,
         run_id,
         "builtin-deny-question",
         "Which branch?",
-        &[("main", "main")],
+        &[("main", "main"), (&long, &long)],
     )
     .await;
+    let options =
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT options FROM requests WHERE id = $1")
+            .bind(question)
+            .fetch_one(pool)
+            .await
+            .expect("question options");
+    assert_eq!(options[1]["id"], "option-2", "{options}");
+    assert_eq!(options[1]["label"], long.as_str(), "{options}");
 
     let (status, denied) = send(
         &setup.app,

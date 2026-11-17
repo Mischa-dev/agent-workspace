@@ -316,14 +316,14 @@ pub async fn failure_notice(
         r#"
         SELECT event.id, run.project_id, run.conversation_id
           FROM agent_runs run
-          JOIN agent_run_events event ON event.agent_run_id = run.id
+          JOIN run_activities event ON event.run_id = run.id
           JOIN conversation_entries entry
-            ON entry.agent_run_event_id = event.id
+            ON entry.run_activity_id = event.id
            AND entry.conversation_id = run.conversation_id
          WHERE run.id = $1
            AND run.state = 'failed'
-           AND event.kind = 'run_failed'
-         ORDER BY event.id DESC
+           AND event.payload->>'step' = 'run_failed'
+         ORDER BY event.seq DESC
          LIMIT 1
         "#,
     )

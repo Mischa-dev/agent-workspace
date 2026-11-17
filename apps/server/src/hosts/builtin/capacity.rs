@@ -103,10 +103,11 @@ pub async fn account_runs_by_project(
         JOIN conversations conversation ON conversation.id = run.conversation_id
         JOIN projects project ON project.id = conversation.project_id
         LEFT JOIN LATERAL (
-            SELECT sum(COALESCE(estimated_cost, reported_cost_usd)) AS cost,
-                   min(COALESCE(currency, 'USD')) AS currency
-            FROM agent_run_usage
-            WHERE agent_run_id = run.id
+            SELECT sum(COALESCE(estimated_cost, reported_cost)) AS cost,
+                   min(COALESCE(CASE WHEN estimated_cost IS NOT NULL THEN currency
+                                     ELSE reported_currency END, 'USD')) AS currency
+            FROM run_usage
+            WHERE run_id = run.id
         ) usage ON true
         -- visibility: an account's owner sees what it ran; each project is
         -- named only where the viewer can open it, and nothing of a

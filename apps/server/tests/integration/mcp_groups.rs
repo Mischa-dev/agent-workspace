@@ -647,7 +647,7 @@ async fn member_changes_replay_without_undoing_later_ones() {
 }
 
 #[tokio::test]
-async fn continue_is_for_people_and_asks_each_agent_once() {
+async fn continue_follows_the_role_and_asks_each_agent_once() {
     let Some(setup) = setup("mcp_groups_continue").await else {
         return;
     };
@@ -674,14 +674,17 @@ async fn continue_is_for_people_and_asks_each_agent_once() {
     .await
     .expect("Mara's message");
 
-    let denied = mara_mcp
+    // Whoever's role holds replies.steer may continue, an agent too (A2.8):
+    // depth and turns end loops, not the kind of account.
+    let by_mara = mara_mcp
         .call(
             &setup,
             "conversation_continue",
             json!({"conversationId": group}),
         )
         .await;
-    assert_eq!(denied["outcome"], "permission_denied", "{denied}");
+    assert_eq!(by_mara["outcome"], "ok", "{by_mara}");
+    assert_eq!(handles(&by_mara["value"]["asked"]), ["rook"]);
 
     let continued = codex
         .call(
@@ -764,7 +767,7 @@ async fn continue_is_for_people_and_asks_each_agent_once() {
         0
     );
 
-    // DMs and channels have no turns.
+    // DMs and channels have turns too.
     let dm = codex
         .call(&setup, "conversation_start", json!({"people": ["@mara"]}))
         .await;
@@ -779,7 +782,7 @@ async fn continue_is_for_people_and_asks_each_agent_once() {
                 json!({"conversationId": conversation}),
             )
             .await;
-        assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+        assert_eq!(refused["outcome"], "ok", "{refused}");
     }
 }
 

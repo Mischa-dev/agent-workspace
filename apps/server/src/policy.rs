@@ -57,6 +57,9 @@ pub enum Action {
     /// Remove anyone's message (owners and admins; people only, checked by
     /// the caller).
     MessageModerate,
+    /// Continue, stop or retry the replies accounts were asked for in a
+    /// conversation (A2.8), whatever kind of account asks.
+    ReplySteer,
     ThreadCreate,
     ConversationArchive,
     ReadStateUpdate,
@@ -97,7 +100,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 47] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -120,6 +123,7 @@ impl Action {
         Self::ChannelCreate,
         Self::MessageSend,
         Self::MessageModerate,
+        Self::ReplySteer,
         Self::ThreadCreate,
         Self::ConversationArchive,
         Self::ReadStateUpdate,
@@ -173,6 +177,7 @@ impl Action {
                 Permission::ChannelsPost
             }
             Self::MessageModerate => Permission::ChannelsModerate,
+            Self::ReplySteer => Permission::RepliesSteer,
             Self::WorkItemView => Permission::TasksView,
             Self::WorkItemCreate => Permission::TasksCreate,
             Self::WorkItemArchive => Permission::TasksDelete,
@@ -613,6 +618,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::ChannelCreate
             | Action::MessageSend
             | Action::MessageModerate
+            | Action::ReplySteer
             | Action::ThreadCreate
             | Action::ConversationArchive
             | Action::ReadStateUpdate
@@ -815,6 +821,8 @@ mod tests {
                             // A1: every role reports its own runs.
                             | Action::RunReport
                             | Action::RequestRaise
+                            // A2.8: members steer the replies they asked for.
+                            | Action::ReplySteer
                     ),
                     MembershipRole::Viewer => {
                         matches!(

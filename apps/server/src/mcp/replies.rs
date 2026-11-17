@@ -1088,13 +1088,14 @@ async fn open_answer_thread(
     Ok(())
 }
 
-/// A person stops an agent's work on a request, as the Stop button does.
+/// Stop an account's work on a request, as the Stop button does
+/// (`replies.steer`).
 pub(super) async fn reply_stop(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReplyStopArguments,
 ) -> ReplyToolResult<StopProjection> {
-    if principal.actor_kind != ActorKind::Human || !principal.can_write() {
+    if !principal.can_write() {
         return ReplyToolResult::denied();
     }
     let Ok(request_id) = arguments.request_id.parse::<Uuid>() else {
@@ -1148,14 +1149,14 @@ pub(super) async fn reply_stop(
     }
 }
 
-/// People: ask an agent again about a request that expired, was released or
-/// was stopped, as the Retry button on its status line does.
+/// Ask an account again about a request that expired, was released or
+/// was stopped (`replies.steer`), as the Retry button on its status line does.
 pub(super) async fn reply_retry(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReplyRetryArguments,
 ) -> ReplyToolResult<RetryProjection> {
-    if principal.actor_kind != ActorKind::Human || !principal.can_write() {
+    if !principal.can_write() {
         return ReplyToolResult::denied();
     }
     let Ok(request_id) = arguments.request_id.parse::<Uuid>() else {

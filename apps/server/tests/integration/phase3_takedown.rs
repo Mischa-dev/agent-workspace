@@ -282,7 +282,7 @@ async fn an_owner_takes_down_a_pasted_token_through_a_connected_app() {
         "events",
         "event_staging",
         "audit_events",
-        "external_agent_events",
+        "deliveries",
         "reply_requests",
         "conversation_pins",
         "work_item_links",
