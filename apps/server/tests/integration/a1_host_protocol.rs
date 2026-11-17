@@ -17,6 +17,7 @@ use super::{
     agent_interface::{Browser, connect_app, create_agent, initialize, send, tool},
     mcp_admin::{create_project, setup},
     message_edits::add_person,
+    support::app::last_tool,
 };
 
 fn host_call(method: &str, uri: &str, token: Option<&str>, body: Value) -> Request<Body> {
@@ -774,7 +775,8 @@ async fn secrets_typed_into_runs_requests_and_hosts_are_never_kept() {
         "host_enrolments",
         "host_notices",
         "project_memberships",
-        "outbox_events",
+        "events",
+        "event_staging",
         "external_agent_events",
         "audit_events",
         "idempotency_keys",
@@ -788,4 +790,550 @@ async fn secrets_typed_into_runs_requests_and_hosts_are_never_kept() {
         .unwrap_or_else(|error| panic!("{table}: {error}"));
         assert_eq!(kept, 0, "{table} keeps a secret");
     }
+}
+
+// ------------------------------------------------------------------ A1.12
+
+use agent_workspace_server::runs::{
+    ops::{Cause, RunOpen, open_queued},
+    state::RunState,
+};
+
+use super::support::test_host::TestHost;
+
+/// A run for `agent` handed to its host, as A1.13's launch path will.
+async fn dispatch(pool: &sqlx::PgPool, space: Uuid, agent: Uuid, title: &str) -> Uuid {
+    let mut transaction = pool.begin().await.expect("transaction");
+    let opened = open_queued(
+        &mut transaction,
+        agent,
+        RunOpen {
+            space_id: space,
+            client_run_id: None,
+            title: title.to_owned(),
+            cause: Cause {
+                kind: "manual".to_owned(),
+                conversation_id: None,
+                work_item_id: None,
+                message_id: None,
+                reference: None,
+            },
+            parent_run_id: None,
+            report_interval_seconds: None,
+            settings: None,
+            initial: RunState::Queued,
+            requested_by: None,
+            via_app_id: None,
+            launch_id: None,
+        },
+    )
+    .await
+    .expect("queued");
+    assert_eq!(opened.run.state, "queued");
+    let (run, _) = hosts::dispatch::start_run(
+        &mut transaction,
+        opened.run.id,
+        hosts::dispatch::StartInput::default(),
+    )
+    .await
+    .expect("dispatched");
+    transaction.commit().await.expect("commit");
+    assert_eq!(run.state, "starting");
+    run.id
+}
+
+async fn run_state(pool: &sqlx::PgPool, run: Uuid) -> String {
+    sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
+        .bind(run)
+        .fetch_one(pool)
+        .await
+        .expect("run state")
+}
+
+/// The acknowledgement was lost: its time runs out.
+async fn lose_ack(pool: &sqlx::PgPool, run: Uuid) {
+    sqlx::query(
+        "UPDATE host_commands SET ack_due_at = now() - interval '1 second' WHERE run_id = $1 AND kind = 'start' AND state IN ('pending', 'fetched')",
+    )
+    .bind(run)
+    .execute(pool)
+    .await
+    .expect("overdue");
+    hosts::commands::sweep(pool).await.expect("sweep");
+}
+
+/// The re-offer schedule comes due now.
+async fn reoffer_due(pool: &sqlx::PgPool, run: Uuid) {
+    sqlx::query(
+        "UPDATE host_commands SET next_offer_at = now() - interval '1 second' WHERE run_id = $1 AND kind = 'start'",
+    )
+    .bind(run)
+    .execute(pool)
+    .await
+    .expect("due");
+}
+
+async fn bound_host(
+    setup: &super::support::world::Setup,
+    agent: Uuid,
+    capabilities: Value,
+) -> TestHost {
+    let host = TestHost::enrol(
+        &setup.app,
+        &setup.browser,
+        setup.organization_id,
+        "Team host",
+        json!({"connection": "dial_out"}),
+    )
+    .await;
+    host.describe(
+        capabilities,
+        json!([{"hostAgentRef": "fixer", "name": "Fixer"}]),
+    )
+    .await;
+    let (status, bound) = host_op(
+        &setup.app,
+        &setup.browser,
+        setup.organization_id,
+        "host_agent_bind",
+        json!({"hostId": host.id, "accountId": agent, "hostAgentRef": "fixer"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{bound}");
+    host
+}
+
+/// Nothing a host was handed (a run credential) is kept in a command, an
+/// acknowledgement or any event.
+async fn kept_nowhere(pool: &sqlx::PgPool, secret: &str) {
+    for table in [
+        "host_commands",
+        "run_credentials",
+        "run_activities",
+        "runs",
+        "events",
+        "event_staging",
+        "external_agent_events",
+        "audit_events",
+        "background_jobs",
+    ] {
+        let found = sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT count(*) FROM {table} row WHERE strpos(row::text, $1) > 0"
+        ))
+        .bind(secret)
+        .fetch_one(pool)
+        .await
+        .expect("search");
+        assert_eq!(found, 0, "a run credential is kept in {table}");
+    }
+}
+
+#[tokio::test]
+async fn a_host_runs_each_start_once_however_often_it_is_offered() {
+    let Some(setup) = setup("a1_host_commands").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = work.parse::<Uuid>().expect("space");
+    let (fixer, _) = create_agent(app, &setup.browser, &work, "Fixer", "fixer").await;
+    let mut host = bound_host(
+        &setup,
+        fixer,
+        json!({"start": true, "cancel": true, "idempotentStart": true}),
+    )
+    .await;
+    assert_eq!(host.enrolled["pushSigningSecret"], Value::Null);
+
+    let run = dispatch(&setup.pool, space, fixer, "Fix the build").await;
+    let offered = host.poll().await;
+    assert_eq!(offered.len(), 1, "{offered:?}");
+    assert_eq!(offered[0]["kind"], "start");
+    assert_eq!(offered[0]["runId"], run.to_string());
+    assert_eq!(offered[0]["offer"], 1);
+    let command_id = offered[0]["commandId"].clone();
+    let mut credentials = Vec::new();
+
+    // Offered three times (the acknowledgement lost twice): the same
+    // command, run once on the host.
+    for offer in 1..=3 {
+        if offer > 1 {
+            reoffer_due(&setup.pool, run).await;
+            let again = host.poll().await;
+            assert_eq!(again.len(), 1, "offer {offer}: {again:?}");
+            assert_eq!(again[0]["commandId"], command_id);
+            assert_eq!(again[0]["offer"], offer);
+        }
+        let (status, command) = host.fetch(&command_id).await;
+        assert_eq!(status, StatusCode::OK, "{command}");
+        assert_eq!(command["startKey"], format!("run-{run}"));
+        assert_eq!(command["agent"]["hostAgentRef"], "fixer");
+        assert_eq!(command["input"]["prompt"], "Fix the build");
+        let token = command["workspaceCredential"]["token"]
+            .as_str()
+            .expect("credential")
+            .to_owned();
+        assert!(token.starts_with("awr_"), "{token}");
+        assert!(
+            command["workspaceCredential"]["scope"]
+                .as_str()
+                .expect("scope")
+                .contains(&format!("run:{run}"))
+        );
+        credentials.push(token);
+        let (reference, first) = host.run_start(&command);
+        assert_eq!(first, offer == 1, "only the first offer starts a run");
+        if offer < 3 {
+            lose_ack(&setup.pool, run).await;
+            assert_eq!(run_state(&setup.pool, run).await, "start_uncertain");
+        } else {
+            let (status, acked) = host
+                .ack(
+                    &command_id,
+                    json!({"outcome": "accepted", "hostRunRef": reference}),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK, "{acked}");
+            assert_eq!(acked["state"], "acked");
+            assert_eq!(acked["runState"], "accepted");
+        }
+    }
+    assert_eq!(host.started.len(), 1);
+    let starts = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM host_commands WHERE run_id = $1 AND kind = 'start'",
+    )
+    .bind(run)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("starts");
+    assert_eq!(starts, 1);
+    // Acknowledging again changes nothing.
+    let (status, again) = host
+        .ack(
+            &command_id,
+            json!({"outcome": "accepted", "hostRunRef": "hr-1"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["state"], "acked");
+    let reference =
+        sqlx::query_scalar::<_, Option<String>>("SELECT host_run_ref FROM runs WHERE id = $1")
+            .bind(run)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("reference");
+    assert_eq!(reference.as_deref(), Some("hr-1"));
+
+    // The host reports as the run's agent with the credential it was
+    // handed: working, then done.
+    let token = credentials.last().expect("credential").clone();
+    let session = initialize(app, &token).await.expect("run credential MCP");
+    let started = tool(
+        app,
+        &token,
+        &session,
+        "run_activity",
+        json!({"runId": run, "activities": [
+            {"id": "s1", "kind": "run_started"},
+            {"id": "m1", "kind": "text_message", "payload": {"text": "On it."}}]}),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{started}");
+    assert_eq!(run_state(&setup.pool, run).await, "working");
+    let done = last_tool(
+        app,
+        &token,
+        &session,
+        "run_update",
+        json!({"runId": run, "state": "done"}),
+    )
+    .await;
+    assert_eq!(done["outcome"], "ok", "{done}");
+    let live = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM run_credentials WHERE run_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(run)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("credentials");
+    assert_eq!(live, 0, "the run's credentials end with it");
+    assert!(
+        initialize(app, &token).await.is_none(),
+        "a run's credential stops working when the run ends"
+    );
+    // A finished run's start is no longer handed a credential.
+    let (status, late) = host.fetch(&command_id).await;
+    assert_eq!(status, StatusCode::OK, "{late}");
+    assert_eq!(late["workspaceCredential"], Value::Null);
+
+    // A run the host stops listing for three heartbeats is interrupted.
+    let second = dispatch(&setup.pool, space, fixer, "Watch the deploy").await;
+    let offered = host.poll().await;
+    assert_eq!(offered.len(), 1, "{offered:?}");
+    let (_, command) = host.fetch(&offered[0]["commandId"]).await;
+    credentials.push(
+        command["workspaceCredential"]["token"]
+            .as_str()
+            .expect("credential")
+            .to_owned(),
+    );
+    let (reference, _) = host.run_start(&command);
+    let (status, acked) = host
+        .ack(
+            &offered[0]["commandId"],
+            json!({"outcome": "accepted", "hostRunRef": reference}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{acked}");
+    host.heartbeat(json!([{"runId": second, "hostRunRef": reference, "state": "working"}]))
+        .await;
+    for beat in 1..=3 {
+        assert_eq!(
+            run_state(&setup.pool, second).await,
+            "accepted",
+            "beat {beat}"
+        );
+        host.heartbeat(json!([])).await;
+    }
+    assert_eq!(run_state(&setup.pool, second).await, "interrupted");
+    let live = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM run_credentials WHERE run_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(second)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("credentials");
+    assert_eq!(live, 0);
+
+    for token in &credentials {
+        kept_nowhere(&setup.pool, token).await;
+    }
+    let digest_only = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM run_credentials WHERE token_digest = sha256(convert_to($1, 'UTF8'))",
+    )
+    .bind(&credentials[0])
+    .fetch_one(&setup.pool)
+    .await
+    .expect("digest");
+    assert_eq!(digest_only, 1);
+}
+
+#[tokio::test]
+async fn a_start_nobody_confirmed_is_never_run_twice_and_a_person_decides() {
+    let Some(setup) = setup("a1_host_uncertain").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = work.parse::<Uuid>().expect("space");
+    let (fixer, _) = create_agent(app, &setup.browser, &work, "Fixer", "fixer").await;
+    let person = connect_app(app, &setup.browser, "Desk", "full").await;
+    let desk = initialize(app, &person).await.expect("Desk MCP");
+    // No idempotentStart: an unconfirmed start is never offered again.
+    let mut host = bound_host(
+        &setup,
+        fixer,
+        json!({"start": true, "cancel": true, "inspect": true}),
+    )
+    .await;
+
+    let run = dispatch(&setup.pool, space, fixer, "Migrate the data").await;
+    let offered = host.poll().await;
+    let start_id = offered[0]["commandId"].clone();
+    let (status, command) = host.fetch(&start_id).await;
+    assert_eq!(status, StatusCode::OK, "{command}");
+    let (reference, _) = host.run_start(&command);
+    lose_ack(&setup.pool, run).await;
+    assert_eq!(run_state(&setup.pool, run).await, "start_uncertain");
+    let never = sqlx::query_scalar::<_, bool>(
+        "SELECT next_offer_at = 'infinity'::timestamptz FROM host_commands WHERE id = $1::uuid",
+    )
+    .bind(start_id.as_str().expect("id"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("schedule");
+    assert!(never, "a non-idempotent host's start is not offered again");
+
+    // It is asked whether it knows the run instead; it doesn't.
+    let asked = host.poll().await;
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(asked[0]["kind"], "inspect");
+    let (status, answered) = host
+        .ack(
+            &asked[0]["commandId"],
+            json!({"outcome": "done", "result": {"known": false}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+    assert_eq!(run_state(&setup.pool, run).await, "start_uncertain");
+    assert!(host.poll().await.is_empty());
+
+    // A person marks it as not started.
+    let marked = tool(
+        app,
+        &person,
+        &desk,
+        "run_mark_not_started",
+        json!({"runId": run}),
+    )
+    .await;
+    assert_eq!(marked["outcome"], "ok", "{marked}");
+    assert_eq!(run_state(&setup.pool, run).await, "failed");
+    let closed =
+        sqlx::query_scalar::<_, String>("SELECT state FROM host_commands WHERE id = $1::uuid")
+            .bind(start_id.as_str().expect("id"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("start state");
+    assert_eq!(closed, "expired");
+
+    // Then the host reports it after all: the run comes back.
+    let (status, late) = host
+        .ack(
+            &start_id,
+            json!({"outcome": "accepted", "hostRunRef": reference}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{late}");
+    assert_eq!(late["runState"], "accepted");
+    let (reason, revived_ref) = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT failure_reason, host_run_ref FROM runs WHERE id = $1",
+    )
+    .bind(run)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("revived");
+    assert_eq!(reason, None);
+    assert_eq!(revived_ref, Some(reference));
+
+    // A stop is asked of the host, and the run ends only when it confirms.
+    let stop = tool(
+        app,
+        &person,
+        &desk,
+        "run_cancel",
+        json!({"runId": run, "reason": "Not now", "clientRequestId": "stop-1"}),
+    )
+    .await;
+    assert_eq!(stop["outcome"], "ok", "{stop}");
+    assert_eq!(run_state(&setup.pool, run).await, "cancel_requested");
+    agent_workspace_server::runs::liveness::settle(&setup.pool)
+        .await
+        .expect("settle");
+    assert_eq!(run_state(&setup.pool, run).await, "cancel_requested");
+    let cancel = host.poll().await;
+    assert_eq!(cancel.len(), 1, "{cancel:?}");
+    assert_eq!(cancel[0]["kind"], "cancel");
+    let (status, command) = host.fetch(&cancel[0]["commandId"]).await;
+    assert_eq!(status, StatusCode::OK, "{command}");
+    assert_eq!(command["reason"], "Not now");
+    assert_eq!(run_state(&setup.pool, run).await, "cancel_requested");
+    let (status, stopped) = host
+        .ack(&cancel[0]["commandId"], json!({"outcome": "done"}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stopped}");
+    assert_eq!(stopped["runState"], "cancelled");
+    // Unknown and other hosts' commands are refused.
+    let (status, unknown) = host.fetch(&json!(Uuid::now_v7().to_string())).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{unknown}");
+    assert_eq!(unknown["error"], "command_unknown");
+}
+
+#[tokio::test]
+async fn a_push_host_is_sent_signed_commands_and_its_secrets_are_sealed() {
+    let Some(setup) = setup("a1_host_push").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = work.parse::<Uuid>().expect("space");
+    let (fixer, _) = create_agent(app, &setup.browser, &work, "Fixer", "fixer").await;
+    let host = TestHost::enrol(
+        app,
+        &setup.browser,
+        setup.organization_id,
+        "Push host",
+        json!({"connection": "push", "push": {"url": "https://host.example/aw"},
+               "hostToken": "host-side-token-0123456789"}),
+    )
+    .await;
+    let signing = host.enrolled["pushSigningSecret"]
+        .as_str()
+        .expect("signing secret")
+        .to_owned();
+    assert!(signing.starts_with("whsec_"), "{signing}");
+    let (connection, url, sealed) = sqlx::query_as::<_, (String, Option<String>, bool)>(
+        "SELECT connection, push_url, push_secret_id IS NOT NULL AND host_token_secret_id IS NOT NULL FROM hosts WHERE id = $1",
+    )
+    .bind(host.id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("host");
+    assert_eq!(connection, "push");
+    assert_eq!(url.as_deref(), Some("https://host.example/aw"));
+    assert!(sealed);
+    for secret in [signing.as_str(), "host-side-token-0123456789"] {
+        let plain = sqlx::query_scalar::<_, i64>(
+            "SELECT (SELECT count(*) FROM secrets row WHERE strpos(row::text, $1) > 0) + (SELECT count(*) FROM hosts row WHERE strpos(row::text, $1) > 0)",
+        )
+        .bind(secret)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("search");
+        assert_eq!(plain, 0, "a push secret is kept only sealed");
+    }
+
+    // An address that isn't public https is refused.
+    let key = Uuid::now_v7().to_string();
+    let (_, made) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!(
+                "/api/v2/w/{}/ops/host_enrolment_create",
+                setup.organization_id
+            ),
+            Some(&key),
+            json!({"owner": "workspace"}),
+        ),
+    )
+    .await;
+    let (status, refused) = send(
+        app,
+        host_call(
+            "POST",
+            "/api/v1/hosts/enrol",
+            None,
+            json!({"code": made["value"]["code"], "host": {"name": "Inside"},
+                   "connection": "push", "push": {"url": "http://127.0.0.1:9/aw"}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["field"], "push.url", "{refused}");
+
+    // A command for it is pushed by a job.
+    host.describe(
+        json!({"start": true, "idempotentStart": true}),
+        json!([{"hostAgentRef": "fixer", "name": "Fixer"}]),
+    )
+    .await;
+    let (status, bound) = host_op(
+        app,
+        &setup.browser,
+        setup.organization_id,
+        "host_agent_bind",
+        json!({"hostId": host.id, "accountId": fixer, "hostAgentRef": "fixer"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{bound}");
+    let run = dispatch(&setup.pool, space, fixer, "Ship it").await;
+    let pushes = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM background_jobs WHERE kind = 'hosts.push_command' AND payload->>'commandId' = (SELECT id::text FROM host_commands WHERE run_id = $1)",
+    )
+    .bind(run)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("push job");
+    assert_eq!(pushes, 1);
 }

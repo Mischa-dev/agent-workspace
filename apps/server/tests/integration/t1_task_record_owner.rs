@@ -261,10 +261,11 @@ async fn a_task_has_one_revision_whichever_side_writes_it() {
         let read = opened["value"]["task"]["version"]
             .as_i64()
             .expect("version");
-        let event = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT max((payload ->> 'version')::bigint) FROM outbox_events \
+        let event = sqlx::query_scalar::<_, Option<i64>>(&format!(
+            "SELECT max((payload ->> 'version')::bigint) FROM {n} outbox \
              WHERE payload ->> 'workItemId' = $1::text",
-        )
+            n = crate::support::NOTICES
+        ))
         .bind(task)
         .fetch_one(pool)
         .await

@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     cluster::{Cluster, Lease, LeaseName},
-    domain::{RunState, allocate_conversation_sequence, transition_run},
+    domain::{RunState, allocate_conversation_sequence},
     error::AppError,
     git_runtime::{
         self, RegisteredRepository, expected_repository_mirror_path, managed_worktree_path,
@@ -154,7 +154,7 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) -> Result
     loop {
         tokio::select! {
             // A database blip must not stop the server: log and try again
-            // on the next tick, as the outbox publisher does.
+            // on the next tick, as the log's consumers do.
             _ = interval.tick() => {
                 if let Err(error) = drain(&state, None).await {
                     tracing::error!(
@@ -402,6 +402,10 @@ async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
           ON repository.id = run.repository_id
          AND repository.project_id = run.project_id
         JOIN projects project ON project.id = run.project_id
+        -- H1.24: a suspended or deleting workspace's runs wait.
+        JOIN organizations workspace
+          ON workspace.id = project.organization_id
+         AND workspace.lifecycle NOT IN ('suspended', 'deleting')
         JOIN execution_profiles profile ON profile.id = run.execution_profile_id
         JOIN provider_accounts account ON account.id = profile.provider_account_id
         WHERE run.state = 'queued'
@@ -480,7 +484,7 @@ async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
     )
     .await?
     {
-        transition_run(
+        crate::hosts::builtin::transition(
             &mut transaction,
             candidate.run_id,
             RunState::Canceled,
@@ -514,7 +518,8 @@ async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
     .bind(lease_seconds as f64)
     .execute(&mut *transaction)
     .await?;
-    transition_run(&mut transaction, candidate.run_id, RunState::Starting, None).await?;
+    crate::hosts::builtin::transition(&mut transaction, candidate.run_id, RunState::Starting, None)
+        .await?;
     outbox::enqueue_agent_run_updated(
         &mut transaction,
         candidate.project_id,
@@ -896,7 +901,8 @@ async fn fail_admission(
         transaction.commit().await?;
         return Ok(());
     }
-    transition_run(&mut transaction, run.run_id, RunState::Failed, Some(reason)).await?;
+    crate::hosts::builtin::transition(&mut transaction, run.run_id, RunState::Failed, Some(reason))
+        .await?;
     provider::idle_provider_session_for_terminal_run(&mut transaction, run.run_id).await?;
     if let Some(worktree_id) = failed_worktree_id {
         sqlx::query("UPDATE git_worktrees SET state = 'failed', updated_at = now() WHERE id = $1")

@@ -168,6 +168,18 @@ pub struct AppConfig {
     /// Cloudflare). Unset, nothing is read from the request for the
     /// caller's address and there are no per-address limits.
     pub client_address_header: Option<String>,
+    /// MCP and public API calls one workspace's agents and apps may make
+    /// together each minute (`AGENT_WORKSPACE_WORKSPACE_CALLS_PER_MINUTE`,
+    /// H1.1).
+    pub workspace_calls_per_minute: u32,
+    /// Apps that registered but never finished connecting the server keeps
+    /// before it refuses new registrations
+    /// (`AGENT_WORKSPACE_OAUTH_MAX_UNCLAIMED_CLIENTS`).
+    pub oauth_max_unclaimed_clients: i64,
+    /// The server's own mail transport (`AGENT_WORKSPACE_MAIL_URL`, H1.17):
+    /// account mail (password resets, address confirmations) goes through
+    /// it, and so does notification mail of a workspace without its own.
+    pub server_mail: Option<ServerMail>,
     /// The operator's name for this instance (K5.2), shown with the
     /// server's instances; never taken from the machine.
     pub instance_label: Option<String>,
@@ -409,12 +421,14 @@ impl AppConfig {
         let codex_binary = PathBuf::from(optional(values, "CODEX_BINARY", "codex"));
         // Harness account homes live in the data root unless placed elsewhere
         // inside it.
+        let home_root_key = "PROVIDER_HOME_ROOT";
         let codex_home_root = PathBuf::from(optional(
             values,
-            "CODEX_HOME_ROOT",
+            home_root_key,
             &data_root.join("codex/profiles").to_string_lossy(),
         ));
-        let codex_host_concurrency_limit = parse(values, "CODEX_HOST_CONCURRENCY_LIMIT", "1")?;
+        let concurrency_key = "HARNESS_HOST_CONCURRENCY_LIMIT";
+        let codex_host_concurrency_limit = parse(values, concurrency_key, "1")?;
         let codex_max_line_bytes = parse(values, "CODEX_MAX_LINE_BYTES", "1048576")?;
         let codex_max_stderr_bytes = parse(values, "CODEX_MAX_STDERR_BYTES", "262144")?;
         let codex_max_buffered_events = parse(values, "CODEX_MAX_BUFFERED_EVENTS", "64")?;
@@ -490,7 +504,7 @@ impl AppConfig {
         }
         if !(1..=16).contains(&codex_host_concurrency_limit) {
             return Err(ConfigError::Invalid {
-                key: format!("{PREFIX}CODEX_HOST_CONCURRENCY_LIMIT"),
+                key: format!("{PREFIX}{concurrency_key}"),
                 reason: "must be between 1 and 16".into(),
             });
         }
@@ -539,7 +553,7 @@ impl AppConfig {
             .is_err()
         {
             return Err(ConfigError::Invalid {
-                key: format!("{PREFIX}CODEX_HOME_ROOT"),
+                key: format!("{PREFIX}{home_root_key}"),
                 reason: format!("must be a folder inside {PREFIX}DATA_ROOT"),
             });
         }
@@ -610,6 +624,26 @@ impl AppConfig {
             }
         }
         let client_address_header = client_address_header(values)?;
+        let workspace_calls_per_minute: u32 = parse(
+            values,
+            "WORKSPACE_CALLS_PER_MINUTE",
+            &crate::rate_limit::WORKSPACE_CALLS_PER_WINDOW.to_string(),
+        )?;
+        if workspace_calls_per_minute == 0 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}WORKSPACE_CALLS_PER_MINUTE"),
+                reason: "must be at least 1".into(),
+            });
+        }
+        let server_mail = server_mail(values)?;
+        let oauth_max_unclaimed_clients: i64 =
+            parse(values, "OAUTH_MAX_UNCLAIMED_CLIENTS", "1024")?;
+        if oauth_max_unclaimed_clients < 1 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}OAUTH_MAX_UNCLAIMED_CLIENTS"),
+                reason: "must be at least 1".into(),
+            });
+        }
         let instance_label = Some(optional(values, "INSTANCE_LABEL", "").trim().to_owned())
             .filter(|label| !label.is_empty());
         if instance_label
@@ -721,6 +755,9 @@ impl AppConfig {
             link_previews,
             secrets_key_missing,
             client_address_header,
+            workspace_calls_per_minute,
+            oauth_max_unclaimed_clients,
+            server_mail,
             instance_label,
             lease_ttl: Duration::from_secs(lease_seconds),
             access_modes,
@@ -1327,6 +1364,115 @@ pub enum ConfigError {
     Invalid { key: String, reason: String },
 }
 
+/// The server's own mail transport (H1.17).
+#[derive(Clone, Debug)]
+pub struct ServerMail {
+    pub smtp: crate::mail::smtp::Settings,
+    /// From the URL's password, if it has one.
+    pub password: Option<SecretString>,
+    pub from_address: String,
+    pub from_name: Option<String>,
+}
+
+/// `AGENT_WORKSPACE_MAIL_URL`: `smtps://user:password@host:465` (TLS from
+/// the first byte), `smtp://user:password@host:587` (STARTTLS, required),
+/// or `smtp+plain://localhost:25` (a relay on this machine only). Needs
+/// `AGENT_WORKSPACE_MAIL_FROM`; `AGENT_WORKSPACE_MAIL_FROM_NAME` is
+/// optional.
+fn server_mail(values: &BTreeMap<String, String>) -> Result<Option<ServerMail>, ConfigError> {
+    let invalid = |suffix: &str, reason: &str| ConfigError::Invalid {
+        key: format!("{PREFIX}{suffix}"),
+        reason: reason.to_owned(),
+    };
+    let Some(raw) = values
+        .get(&format!("{PREFIX}MAIL_URL"))
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let url = url::Url::parse(raw.trim()).map_err(|_| invalid("MAIL_URL", "not a URL"))?;
+    let (security, default_port) = match url.scheme() {
+        "smtps" => (crate::mail::smtp::Security::Tls, 465),
+        "smtp" => (crate::mail::smtp::Security::Starttls, 587),
+        "smtp+plain" => (crate::mail::smtp::Security::None, 25),
+        _ => {
+            return Err(invalid(
+                "MAIL_URL",
+                "expected smtps://, smtp:// or smtp+plain://",
+            ));
+        }
+    };
+    let host = url
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| invalid("MAIL_URL", "needs a host"))?
+        .to_owned();
+    let decode = |value: &str| {
+        percent_decode(value).ok_or_else(|| invalid("MAIL_URL", "bad percent-encoding"))
+    };
+    let username = match url.username() {
+        "" => None,
+        name => Some(decode(name)?),
+    };
+    let password = url
+        .password()
+        .map(decode)
+        .transpose()?
+        .map(SecretString::new);
+    let smtp = crate::mail::smtp::Settings {
+        host,
+        port: url.port().unwrap_or(default_port),
+        security,
+        username,
+    };
+    if let Err(field) = smtp.validate() {
+        return Err(invalid(
+            "MAIL_URL",
+            &format!("its {field} isn't usable (plain SMTP is for a relay on this machine)"),
+        ));
+    }
+    let from_address = values
+        .get(&format!("{PREFIX}MAIL_FROM"))
+        .and_then(|value| crate::mail::normalize_address(value))
+        .ok_or_else(|| invalid("MAIL_FROM", "an email address is needed with MAIL_URL"))?;
+    let from_name = values
+        .get(&format!("{PREFIX}MAIL_FROM_NAME"))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    if from_name
+        .as_deref()
+        .is_some_and(|name| name.len() > 120 || name.chars().any(char::is_control))
+    {
+        return Err(invalid(
+            "MAIL_FROM_NAME",
+            "at most 120 characters, on one line",
+        ));
+    }
+    Ok(Some(ServerMail {
+        smtp,
+        password,
+        from_address,
+        from_name,
+    }))
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
 pub const WORKOS_API_BASE: &str = "https://api.workos.com";
 
 fn workos_config(
@@ -1512,21 +1658,41 @@ mod tests {
     }
 
     #[test]
+    fn harness_concurrency_is_bounded() {
+        let mut values = base_values();
+        values.insert(
+            format!("{PREFIX}HARNESS_HOST_CONCURRENCY_LIMIT"),
+            "5".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("in range");
+        assert_eq!(config.codex_host_concurrency_limit, 5);
+        values.insert(
+            format!("{PREFIX}HARNESS_HOST_CONCURRENCY_LIMIT"),
+            "40".to_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("out of range");
+        assert!(
+            error.to_string().contains("HARNESS_HOST_CONCURRENCY_LIMIT"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn harness_account_homes_must_sit_inside_the_data_root() {
         let mut values = base_values();
         values.insert(format!("{PREFIX}DATA_ROOT"), "/srv/aw/data".to_owned());
         values.insert(
-            format!("{PREFIX}CODEX_HOME_ROOT"),
+            format!("{PREFIX}PROVIDER_HOME_ROOT"),
             "/srv/aw/codex".to_owned(),
         );
         let error = AppConfig::from_values(&values).expect_err("home root outside the data root");
-        assert!(error.to_string().contains("CODEX_HOME_ROOT"), "{error}");
+        assert!(error.to_string().contains("PROVIDER_HOME_ROOT"), "{error}");
         values.insert(
-            format!("{PREFIX}CODEX_HOME_ROOT"),
+            format!("{PREFIX}PROVIDER_HOME_ROOT"),
             "/srv/aw/data/codex/profiles".to_owned(),
         );
         AppConfig::from_values(&values).expect("home root inside the data root");
-        values.remove(&format!("{PREFIX}CODEX_HOME_ROOT"));
+        values.remove(&format!("{PREFIX}PROVIDER_HOME_ROOT"));
         let config = AppConfig::from_values(&values).expect("default home root");
         assert_eq!(
             config.codex_home_root,
@@ -1842,13 +2008,13 @@ mod tests {
     fn codex_supervisor_limits_are_bounded() {
         let mut values = base_values();
         values.insert(
-            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
             "0".to_owned(),
         );
         assert!(AppConfig::from_values(&values).is_err());
 
         values.insert(
-            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
             "1".to_owned(),
         );
         values.insert(
@@ -2023,6 +2189,68 @@ mod tests {
         );
         let error = AppConfig::from_values(&values).expect_err("oversized secret must fail");
         assert!(error.to_string().contains("between 1 and 4096 bytes"));
+    }
+
+    /// H1.17: the server's mail URL names a transport, its credentials stay
+    /// out of `Debug`, and plain SMTP is only for a relay on this machine.
+    #[test]
+    fn the_server_mail_url_is_parsed_and_its_password_redacted() {
+        let mut values = base_values();
+        assert!(
+            AppConfig::from_values(&values)
+                .expect("config")
+                .server_mail
+                .is_none()
+        );
+        values.insert(
+            "AGENT_WORKSPACE_MAIL_URL".to_owned(),
+            "smtps://mailer%40example.com:p%40ss-word@smtp.example.com".to_owned(),
+        );
+        assert!(
+            AppConfig::from_values(&values).is_err(),
+            "a from address is needed"
+        );
+        values.insert(
+            "AGENT_WORKSPACE_MAIL_FROM".to_owned(),
+            "no-reply@example.com".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("config");
+        let mail = config.server_mail.as_ref().expect("server mail");
+        assert_eq!(mail.smtp.host, "smtp.example.com");
+        assert_eq!(mail.smtp.port, 465);
+        assert_eq!(mail.smtp.security, crate::mail::smtp::Security::Tls);
+        assert_eq!(mail.smtp.username.as_deref(), Some("mailer@example.com"));
+        assert_eq!(
+            mail.password.as_ref().map(SecretString::expose),
+            Some("p@ss-word")
+        );
+        assert!(!format!("{config:?}").contains("p@ss-word"));
+
+        values.insert(
+            "AGENT_WORKSPACE_MAIL_URL".to_owned(),
+            "smtp://smtp.example.com".to_owned(),
+        );
+        let mail = AppConfig::from_values(&values)
+            .expect("config")
+            .server_mail
+            .expect("mail");
+        assert_eq!(
+            (mail.smtp.port, mail.smtp.security),
+            (587, crate::mail::smtp::Security::Starttls)
+        );
+        for invalid in [
+            "smtp+plain://mail.example.com",
+            "http://smtp.example.com",
+            "smtps://",
+        ] {
+            values.insert("AGENT_WORKSPACE_MAIL_URL".to_owned(), invalid.to_owned());
+            assert!(AppConfig::from_values(&values).is_err(), "{invalid}");
+        }
+        values.insert(
+            "AGENT_WORKSPACE_MAIL_URL".to_owned(),
+            "smtp+plain://127.0.0.1:2525".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_ok());
     }
 
     #[test]

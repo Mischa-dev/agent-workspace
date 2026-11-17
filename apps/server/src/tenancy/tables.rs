@@ -91,6 +91,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("github_webhook_deliveries", WORKSPACE_ID),
     ("harness_catalog_refreshes", ORGANIZATION_ID),
     ("harness_models", ORGANIZATION_ID),
+    ("host_commands", WORKSPACE_ID),
     ("launches", ORGANIZATION_ID),
     ("layout_presets", ORGANIZATION_ID),
     ("link_previews", ORGANIZATION_ID),
@@ -120,11 +121,9 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("operation_alias_usage", WORKSPACE_ID),
     ("organization_actor_profiles", ORGANIZATION_ID),
     ("organization_memberships", ORGANIZATION_ID),
-    ("outbox_events", WORKSPACE_ID),
     ("package_installs", WORKSPACE_ID),
     ("package_objects", WORKSPACE_ID),
     ("packages", WORKSPACE_ID),
-    ("person_questions", WORKSPACE_ID),
     ("project_counters", WORKSPACE_ID),
     ("project_decisions", WORKSPACE_ID),
     ("project_environments", ORGANIZATION_ID),
@@ -156,6 +155,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("repository_workspaces", WORKSPACE_ID),
     ("requests", WORKSPACE_ID),
     ("run_activities", WORKSPACE_ID),
+    ("run_credentials", WORKSPACE_ID),
     ("run_usage", WORKSPACE_ID),
     ("runs", WORKSPACE_ID),
     ("saved_items", ORGANIZATION_ID),
@@ -234,6 +234,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "actors",
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
+    ),
+    (
+        "deleted_workspaces",
+        "the one line a deleted workspace leaves, for billing and staff: its workspace is gone (H1.24)",
     ),
     (
         "directory_entries",

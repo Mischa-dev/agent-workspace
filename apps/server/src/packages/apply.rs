@@ -793,7 +793,14 @@ pub(crate) async fn use_template(
     };
     crate::workspace_templates::check(&template.definition).map_err(ApplyError::Problem)?;
     let place = Place::of(&package, None, None).map_err(op_to_apply)?;
-    let plan = install::plan(tx, who.workspace, who.actor, &package, &place).await?;
+    // Template routes refuse space-held connections before they get here, so
+    // the reader is the account itself.
+    let reader = crate::modules::built::Reader {
+        account: who.actor,
+        connection: None,
+        held: who.confined,
+    };
+    let plan = install::plan(tx, who.workspace, reader, &package, &place).await?;
     let who = Installer {
         template: Some((template.id.clone(), template.name.clone())),
         source,

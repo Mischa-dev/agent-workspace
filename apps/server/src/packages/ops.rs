@@ -260,9 +260,9 @@ impl Operation for PackagePreview {
         .await?;
         let place = input.target.place(call, &origin.package)?;
         let workspace = call.ctx.workspace_id;
-        let actor = call.account_id();
+        let reader = crate::modules::built::Reader::of(&call.ctx.caller);
         let tx = call.tx().await?;
-        Ok(install::plan(tx, workspace, actor, &origin.package, &place).await?)
+        Ok(install::plan(tx, workspace, reader, &origin.package, &place).await?)
     }
 }
 
@@ -348,6 +348,7 @@ pub(super) async fn install_planned(
     let principal = crate::mcp::messaging::principal_of(ctx);
     let maker = crate::events::Caller::from(ctx);
     let writer = crate::memory::Writer::from(ctx);
+    let reader = crate::modules::built::Reader::of(&ctx.caller);
     let tx = call.tx().await?;
 
     // One install at a time per workspace, taken before the plan is read
@@ -361,7 +362,7 @@ pub(super) async fn install_planned(
         .map_err(|error| OpError::logged(PackageInstall::NAME, &error.into()))?;
     // The plan the preview showed, read again in this transaction.
     let package = &origin.package;
-    let plan = install::plan(tx, workspace, actor, package, &place).await?;
+    let plan = install::plan(tx, workspace, reader, package, &place).await?;
     if plan_hash.is_some_and(|hash| plan.plan_hash != hash.trim()) {
         return Err(OpError::Conflict {
             reason: ConflictReason::State {
@@ -522,7 +523,7 @@ impl Operation for PackageList {
             (None, _) => None,
         };
         let workspace = call.ctx.workspace_id;
-        let reader = call.account_id();
+        let reader = crate::modules::built::Reader::of(&call.ctx.caller);
         let tx = call.tx().await?;
         Ok(PackageListOutput {
             installs: install::list(tx, workspace, space, reader).await?,
@@ -750,7 +751,7 @@ impl Operation for AgentTemplateList {
             (None, _) => None,
         };
         let workspace = call.ctx.workspace_id;
-        let reader = call.account_id();
+        let reader = crate::modules::built::Reader::of(&call.ctx.caller);
         let tx = call.tx().await?;
         Ok(AgentTemplateListOutput {
             templates: install::agent_templates(tx, workspace, space, reader).await?,

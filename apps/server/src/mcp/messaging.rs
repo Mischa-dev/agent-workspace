@@ -73,7 +73,12 @@ pub(crate) fn principal_of(ctx: &OpContext) -> McpPrincipal {
         oauth_grant_id: oauth_grant_id.or(ctx.caller.via_grant_id),
         actor_id: ctx.caller.account_id,
         actor_kind: ctx.caller.kind,
-        project_id: ctx.space_id.unwrap_or_else(Uuid::nil),
+        // A credential held to one space is that space's, as it was before
+        // the operation located the call at the workspace.
+        project_id: ctx
+            .space_id
+            .or(ctx.caller.confined_space)
+            .unwrap_or_else(Uuid::nil),
         external_agent_connection_id: ctx.caller.connection_id,
         client_name,
         scopes,

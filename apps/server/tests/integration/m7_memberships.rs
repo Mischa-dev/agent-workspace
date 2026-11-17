@@ -179,11 +179,11 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
             "action = 'project_membership.updated' AND target_id = $1",
         ),
         (
-            "outbox_events",
+            crate::support::NOTICES,
             "event_type = 'project.membership.updated' AND resource_id = $1",
         ),
     ] {
-        let query = format!("SELECT count(*) FROM {table} WHERE {predicate}");
+        let query = format!("SELECT count(*) FROM {table} notice WHERE {predicate}");
         let id = if table == "audit_events" {
             member_actor_id
         } else {
@@ -466,7 +466,7 @@ fn test_config(database_url: &str, root: &std::path::Path) -> AppConfig {
             root.join("data").to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             root.join("data/codex/profiles")
                 .to_string_lossy()
                 .into_owned(),

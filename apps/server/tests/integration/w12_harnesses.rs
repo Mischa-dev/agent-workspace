@@ -16,7 +16,7 @@ use agent_workspace_server::{
     launch,
     provider::{SupervisorRegistry, host::HarnessHost},
     rate_limit::RateLimiters,
-    realtime::{RealtimeHub, publish_ready_outbox_batch},
+    realtime::RealtimeHub,
     router,
     secrets::{self, FileKeyring, SecretValue},
     seed::dev_seed,
@@ -72,7 +72,7 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root
                 .join("codex/profiles")
                 .to_string_lossy()
@@ -383,7 +383,7 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     .await;
     assert_eq!(task.0, StatusCode::CREATED, "{}", task.1);
     for _ in 0..10 {
-        let published = publish_ready_outbox_batch(&state.pool, &state.realtime, "w12-test")
+        let published = agent_workspace_server::events::catch_up(&state.pool)
             .await
             .expect("publish outbox");
         let ran = jobs::run_due(&state, &jobs::default_registry(), &options())

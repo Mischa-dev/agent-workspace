@@ -80,7 +80,10 @@ fn element<'a>(scene: &'a Value, id: &str) -> Option<&'a Value> {
 
 async fn events(setup: &Setup, board: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events WHERE event_type = 'whiteboard.updated' AND payload->>'whiteboardId' = $1",
+        &format!(
+"SELECT count(*) FROM {n} outbox WHERE event_type = 'whiteboard.updated' AND payload->>'whiteboardId' = $1",
+ n = crate::support::NOTICES
+),
     )
     .bind(board)
     .fetch_one(&setup.pool)

@@ -264,10 +264,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
-                "outbox_events",
-                "runtime state of this server (queues, leases, retries)",
-            ),
-            (
                 "secrets",
                 "secret values never leave the server; their names go to needs/secrets.jsonl (H1.9)",
             ),
@@ -1356,19 +1352,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
-                kind: "person_questions",
-                table: "person_questions",
-                references: &[
-                    ("project_id", "projects"),
-                    ("asked_by_actor_id", "actors"),
-                    ("person_actor_id", "actors"),
-                    ("conversation_id", "conversations"),
-                    ("work_item_id", "work_items"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
                 kind: "saved_items",
                 table: "saved_items",
                 references: &[
@@ -1780,6 +1763,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a machine or session on this server; set up again after import",
             ),
             (
+                "host_commands",
+                "requests to a host for runs in flight; a run that moves ends rather than resumes",
+            ),
+            (
                 "provider_accounts",
                 "a connection to an outside service, reconnected after import (needs/connections.jsonl)",
             ),
@@ -1790,6 +1777,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "provider_sessions",
                 "a machine or session on this server; set up again after import",
+            ),
+            (
+                "run_credentials",
+                "short-lived credentials, kept as digests, that end with their run",
             ),
             (
                 "repository_workspaces",

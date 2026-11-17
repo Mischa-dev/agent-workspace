@@ -99,5 +99,6 @@ after any change to how backups are made, and now and then besides.
 Run the same image with the `backup` command beside the server, sharing its
 configuration and data volume and with a volume for the sets, for example
 `command: ["backup", "schedule", "--to", "/backups", "--at", "03:30"]`. The
-packaged Compose file and its `backup` profile come with the container image
-(H1.13).
+packaged Compose file (`deploy/container/compose.yml`) has this as its
+`backup` profile: `docker compose --profile backup up -d` writes a set to
+`deploy/container/backups` every day.

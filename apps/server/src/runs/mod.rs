@@ -29,15 +29,22 @@ use crate::{
 };
 
 pub mod activities;
+pub mod brief;
+pub mod credentials;
+pub mod finished;
 #[cfg(test)]
 mod guards;
 pub mod launch_paths;
 pub mod liveness;
 pub mod operations;
 pub mod ops;
+pub mod pages;
+pub mod reads;
+pub mod sql;
 pub mod state;
 pub mod store;
 pub mod usage;
+pub mod views;
 
 pub use state::{Liveness, RunState};
 
@@ -47,6 +54,7 @@ const BACKFILL_BATCH: i32 = 5000;
 
 pub fn register_jobs(registry: &mut JobRegistry) {
     liveness::register_jobs(registry);
+    usage::register_jobs(registry);
     registry.register_with_timeout(
         BACKFILL_ACTIVITIES_KIND,
         Duration::from_secs(300),
@@ -117,6 +125,60 @@ pub const ACTIVE_RUN_STATES: [&str; 6] = [
 /// The most active runs one person may have when starting, retrying or
 /// approving a run request through MCP. The web app has no cap.
 pub const MCP_ACTIVE_RUN_CAP: i64 = 5;
+
+/// The space a run is in, by the run's id: one row of `project_id`. For a
+/// check that refuses a write before the handler looks (H1.24).
+pub const SPACE_OF_RUN: &str = "SELECT conversation.project_id FROM agent_runs run \
+     JOIN conversations conversation ON conversation.id = run.conversation_id \
+     -- visibility: the space only, to refuse a write; the handler checks access\n \
+     WHERE run.id = $1";
+
+/// The space an approval's run lives in, unlocked and unchecked: only for
+/// holding its workspace open before the approval row is locked (H1.24).
+pub(crate) async fn approval_space(
+    connection: &mut sqlx::PgConnection,
+    approval_id: Uuid,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT conversation.project_id
+        FROM agent_approvals approval
+        JOIN agent_runs run ON run.id = approval.agent_run_id
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        WHERE approval.id = $1
+        -- visibility: finds the workspace to hold; the caller's locked read
+        -- applies conversation_visible_to and membership.
+        "#,
+    )
+    .bind(approval_id)
+    .fetch_optional(connection)
+    .await
+}
+
+/// The runs in `workspace` that haven't finished, locked, with where each
+/// lives: what suspending or deleting the workspace stops (H1.24).
+pub(crate) async fn active_in_workspace(
+    transaction: &mut Transaction<'_, Postgres>,
+    workspace: Uuid,
+) -> Result<Vec<crate::api::RunToStop>, AppError> {
+    sqlx::query_as::<_, crate::api::RunToStop>(
+        r#"
+        SELECT run.id AS run_id, conversation.project_id, run.conversation_id
+        FROM agent_runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        JOIN projects project ON project.id = conversation.project_id
+        -- visibility: the workspace's own runs, stopped by the workspace's lifecycle
+        WHERE project.organization_id = $1 AND run.state = ANY($2)
+        ORDER BY run.id
+        FOR UPDATE OF run
+        "#,
+    )
+    .bind(workspace)
+    .bind(&ACTIVE_RUN_STATES[..])
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(AppError::from)
+}
 
 /// Who is calling a shared run, approval or GitHub job core.
 #[derive(Clone, Debug)]

@@ -274,6 +274,45 @@ fn hoist(tool: &str, schema: &Map<String, Value>, components: &mut Map<String, V
     value
 }
 
+/// Each tool hoists its own copy of the types it shares with others (a
+/// field type, an inbox item, a run record): keep one of each identical
+/// schema, under the first of its names, and point every reference there.
+/// Repeated until nothing merges, since merging the leaves can make the
+/// schemas that refer to them identical too.
+fn merge_identical(components: &mut Map<String, Value>, others: &mut [&mut Map<String, Value>]) {
+    loop {
+        let mut names = components.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        let mut first: BTreeMap<String, String> = BTreeMap::new();
+        let mut renamed: BTreeMap<String, String> = BTreeMap::new();
+        for name in names {
+            let raw = serde_json::to_string(&components[&name]).unwrap_or_default();
+            match first.get(&raw) {
+                Some(kept) => {
+                    renamed.insert(name, kept.clone());
+                }
+                None => {
+                    first.insert(raw, name);
+                }
+            }
+        }
+        if renamed.is_empty() {
+            return;
+        }
+        for name in renamed.keys() {
+            components.remove(name);
+        }
+        for schema in components.values_mut() {
+            point_refs(schema, &renamed);
+        }
+        for map in others.iter_mut() {
+            for value in map.values_mut() {
+                point_refs(value, &renamed);
+            }
+        }
+    }
+}
+
 /// An operation's result is the envelope: its `ok` branch and one branch
 /// per refusal, the same for every operation. Each refusal branch is
 /// written once in `components.schemas` and referenced, which keeps the
@@ -297,6 +336,29 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
         if shared == branch {
             *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
         }
+    }
+}
+
+fn point_refs(value: &mut Value, renamed: &BTreeMap<String, String>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(Value::String(reference)) = object.get_mut("$ref")
+                && let Some(kept) = reference
+                    .strip_prefix("#/components/schemas/")
+                    .and_then(|name| renamed.get(name))
+            {
+                *reference = format!("#/components/schemas/{kept}");
+            }
+            for child in object.values_mut() {
+                point_refs(child, renamed);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                point_refs(child, renamed);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -458,6 +520,7 @@ pub(crate) fn document() -> Value {
             }),
         );
     }
+    merge_identical(&mut components, &mut [&mut paths, &mut refusals]);
     json!({
         "openapi": "3.1.0",
         "info": {

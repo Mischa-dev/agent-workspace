@@ -117,7 +117,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/later",
     "DELETE /api/v1/later/{id}",
     "PATCH /api/v1/later/{id}",
-    "POST /api/v1/questions/{id}/answer",
     "POST /api/v1/messages/{id}/forward",
     "PUT /api/v1/notification-settings/channels",
     "PUT /api/v1/notification-settings/mutes",
@@ -379,6 +378,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ),
     ("POST /api/v1/auth/login", SIGN_IN),
     (
+        "POST /api/v1/host/commands/{command_id}/ack",
+        "a host answering one of its own commands with its own token; another host's \
+         command is not found (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
         "POST /api/v1/host/describe",
         "a host's own call with its own token, about itself; no session and no workspace ID \
          (tests/integration/a1_host_protocol.rs)",
@@ -493,8 +497,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sheet_write",
     "later_save",
     "later_update",
-    "ask_person",
-    "question_answer",
+    "request_create",
+    "request_respond",
+    "request_cancel",
     "launch_cancel",
     "message_delete",
     "message_forward",
@@ -592,6 +597,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workspace_template_save",
     "project_template_write",
     "workspace_update",
+    "workspace_delete",
+    "workspace_delete_cancel",
 ];
 
 /// Write tools this suite deliberately doesn't call, and why.
@@ -1291,9 +1298,9 @@ struct Targets {
     trashed_whiteboard: Uuid,
     /// The collection's person, task link and page link fields (AWD-90).
     record_fields: [Uuid; 3],
-    /// Questions the agent asked the owner (AWD-62): one to answer over
-    /// HTTP, one through MCP.
-    questions: [Uuid; 2],
+    /// Requests (A1.8): two the agent asked the owner, and one the owner
+    /// asked the agent, to withdraw.
+    questions: [Uuid; 3],
     /// Runs the owner reports on themselves (A1.3): one to report on, one
     /// to stop, and one whose start is uncertain.
     reported_runs: [Uuid; 3],
@@ -1460,22 +1467,32 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .execute(pool)
     .await
     .expect("notification");
-    let mut questions = [Uuid::nil(); 2];
-    for question in &mut questions {
+    let mut questions = [Uuid::nil(); 3];
+    for (index, question) in questions.iter_mut().enumerate() {
         *question = Uuid::now_v7();
+        let (raiser, asked) = if index < 2 {
+            (agent, owner)
+        } else {
+            (owner, agent)
+        };
         sqlx::query(
             r#"
-            INSERT INTO person_questions (id, project_id, asked_by_actor_id, person_actor_id, question, options)
-            VALUES ($1, $2, $3, $4, 'Net: ship it?', '[{"id": "1", "label": "Yes"}]')
+            INSERT INTO requests (
+                id, workspace_id, space_id, kind, raised_by_account_id, title, options,
+                allow_text, answer_permission, addressed_account_ids
+            )
+            SELECT $1, organization_id, id, 'question', $3, 'Net: ship it?',
+                   '[{"id": "1", "label": "Yes"}]', true, 'requests.answer', ARRAY[$4]::uuid[]
+            FROM projects WHERE id = $2
             "#,
         )
         .bind(*question)
         .bind(project)
-        .bind(agent)
-        .bind(owner)
+        .bind(raiser)
+        .bind(asked)
         .execute(pool)
         .await
-        .expect("question");
+        .expect("request");
     }
     let delivery = Uuid::now_v7();
     sqlx::query(
@@ -2723,12 +2740,16 @@ pub(super) async fn digest_ignoring(
     digest_tables(pool, ids, ignored, &tables).await
 }
 
-/// Every table in the schema (partitions and their parents included).
+/// Every table in the schema (partitions and their parents included),
+/// except the shared limit counters: every call into a workspace spends its
+/// budget (H1.1), so a counter row changes on reads too. They hold numbers,
+/// never records; `hosting_limits` checks whose budget a call spends.
 async fn base_tables(pool: &PgPool) -> Vec<String> {
     sqlx::query_scalar::<_, String>(
         r#"
         SELECT table_name::text FROM information_schema.tables
         WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
+          AND table_name <> 'rate_limit_counters'
         ORDER BY 1
         "#,
     )
@@ -4007,11 +4028,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "DELETE /api/v1/later/{id}",
             &[id(sp.later, bx.later)],
             empty(),
-        ),
-        path_case(
-            "POST /api/v1/questions/{id}/answer",
-            &[id(ax.questions[0], bx.questions[0])],
-            json_body(json!({"optionId": "1"})),
         ),
         path_case(
             "PATCH /api/v1/scheduled-messages/{id}",
@@ -6096,6 +6112,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
         ),
+        // H1.24: deleting a workspace, or keeping it, only ever acts on the
+        // caller's own. A's own call would stop every later case here;
+        // workspace_lifecycle.rs runs it.
+        mcp_case(
+            "workspace_delete",
+            json!({}),
+            vec![json!({"workspace": b.organization, "confirm": b.slug})],
+        )
+        .without_own("deleting A would stop every later case; workspace_lifecycle.rs covers it"),
+        mcp_case(
+            "workspace_delete_cancel",
+            json!({}),
+            vec![json!({"workspace": b.organization})],
+        )
+        .without_own("A isn't being deleted; workspace_lifecycle.rs covers keeping it"),
         mcp_case(
             "agent_profile_write",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),
@@ -6311,21 +6342,27 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"id": bx.later, "text": "Net"})],
         ),
         mcp_case(
-            "ask_person",
-            json!({"projectId": a.project, "person": "@wren", "question": "Net?", "taskId": a.task}),
-            vec![
-                json!({"projectId": b.project, "person": "@wren", "question": "Net?"}),
-                json!({"person": "@wren", "question": "Net?", "taskId": b.task}),
-            ],
+            "request_create",
+            json!({"spaceId": a.project, "title": "Net?", "audience": {"accounts": ["@wren"]},
+                   "taskId": a.task}),
+            vec![json!({"spaceId": b.project, "title": "Net?", "audience": {"accounts": ["@wren"]}})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "person": bx.wren, "question": "Net?"}),
-            json!({"projectId": a.project, "person": "@wren", "question": "Net?", "conversationId": b.channel}),
+            json!({"spaceId": a.project, "title": "Net?", "audience": {"accounts": [bx.wren]}}),
+            json!({"spaceId": a.project, "title": "Net?", "audience": {"accounts": ["@wren"]},
+                   "conversationId": b.channel}),
+            json!({"spaceId": a.project, "title": "Net?", "audience": {"accounts": ["@wren"]},
+                   "taskId": b.task}),
         ]),
         mcp_case(
-            "question_answer",
-            json!({"questionId": ax.questions[1], "text": "Net answer"}),
-            vec![json!({"questionId": bx.questions[1], "text": "Net answer"})],
+            "request_respond",
+            json!({"requestId": ax.questions[1], "text": "Net answer"}),
+            vec![json!({"requestId": bx.questions[1], "text": "Net answer"})],
+        ),
+        mcp_case(
+            "request_cancel",
+            json!({"requestId": ax.questions[2]}),
+            vec![json!({"requestId": bx.questions[2]})],
         ),
         mcp_case(
             "message_schedule",

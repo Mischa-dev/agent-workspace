@@ -25,7 +25,7 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use super::format::{Content, ContentKind, Package, canonical};
-use crate::{error::AppError, ops::OpError};
+use crate::{error::AppError, modules::built::Reader, ops::OpError};
 
 /// The most bytes of one inline package an operation takes.
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
@@ -256,11 +256,14 @@ const RULE_BY_NAME: &str = "SELECT id FROM automation_rules WHERE project_id = $
 const PAGE_BY_TITLE: &str = "SELECT id FROM project_pages WHERE project_id = $1 \
      AND archived_at IS NULL AND lower(title) = lower($2) LIMIT 1";
 /// Whether the viewer may see a workspace-keyed thing that lives in a
-/// space (`found.space_id`): one in a space they aren't in is reused
+/// space (`found.space_id`): one in a space they don't reach is reused
 /// without its id shown.
-const SPACE_VISIBLE: &str = "(found.space_id IS NULL OR EXISTS (SELECT 1 \
-     FROM project_memberships membership WHERE membership.project_id = found.space_id \
-     AND membership.actor_id = $3 AND membership.enabled))";
+fn space_visible() -> String {
+    format!(
+        "(found.space_id IS NULL OR {})",
+        Reader::reaches_sql("found.space_id", 3)
+    )
+}
 const AGENT_BY_KEY: &str = "SELECT found.id, {visible} FROM agent_templates found \
      WHERE found.workspace_id = $1 AND found.archived_at IS NULL AND found.template_key = $2";
 const MODULE_BY_KEY: &str = "SELECT found.id, {visible} FROM modules found \
@@ -274,12 +277,14 @@ async fn existing_seen(
     sql: &str,
     workspace_id: Uuid,
     key: &str,
-    viewer: Uuid,
+    viewer: Reader,
 ) -> Result<(Option<Uuid>, bool), AppError> {
-    let held = sqlx::query_as::<_, (Uuid, bool)>(&sql.replace("{visible}", SPACE_VISIBLE))
+    let held = sqlx::query_as::<_, (Uuid, bool)>(&sql.replace("{visible}", &space_visible()))
         .bind(workspace_id)
         .bind(key)
-        .bind(viewer)
+        .bind(viewer.account)
+        .bind(viewer.connection)
+        .bind(viewer.held)
         .fetch_optional(&mut *connection)
         .await?;
     Ok((held.map(|(id, _)| id), held.is_some_and(|(_, seen)| !seen)))
@@ -290,7 +295,7 @@ async fn existing_seen(
 pub async fn plan(
     connection: &mut PgConnection,
     workspace_id: Uuid,
-    viewer: Uuid,
+    viewer: Reader,
     package: &Package,
     place: &Place,
 ) -> Result<Plan, AppError> {
@@ -380,7 +385,7 @@ pub async fn plan(
                             let held = sqlx::query_as::<_, (Uuid, bool)>(CHANNEL_BY_NAME)
                                 .bind(space)
                                 .bind(name)
-                                .bind(viewer)
+                                .bind(viewer.account)
                                 .fetch_optional(&mut *connection)
                                 .await?;
                             let mut line = found("channel", name, name, held.map(|(id, _)| id));
@@ -615,24 +620,25 @@ pub const INSTALL_SELECT: &str = r#"
 "#;
 
 /// The installs in a workspace (in one space, when named) the reader can
-/// see, newest first: one in a space only to the space's current members.
+/// see, newest first: one in a space only to a reader who reaches it.
 pub async fn list(
     connection: &mut PgConnection,
     workspace_id: Uuid,
     space_id: Option<Uuid>,
-    reader: Uuid,
+    reader: Reader,
 ) -> Result<Vec<InstallView>, AppError> {
     Ok(sqlx::query_as::<_, InstallView>(&format!(
         "{INSTALL_SELECT} WHERE install.workspace_id = $1 \
          AND ($2::uuid IS NULL OR install.space_id = $2) \
-         AND (install.space_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
-              WHERE membership.project_id = install.space_id AND membership.actor_id = $3 \
-              AND membership.enabled)) \
-         ORDER BY install.created_at DESC, install.id DESC LIMIT 200"
+         AND (install.space_id IS NULL OR {}) \
+         ORDER BY install.created_at DESC, install.id DESC LIMIT 200",
+        Reader::reaches_sql("install.space_id", 3)
     ))
     .bind(workspace_id)
     .bind(space_id)
-    .bind(reader)
+    .bind(reader.account)
+    .bind(reader.connection)
+    .bind(reader.held)
     .fetch_all(&mut *connection)
     .await?)
 }
@@ -691,30 +697,30 @@ pub struct AgentTemplateView {
 }
 
 /// The workspace's agent templates the reader can see: workspace-wide
-/// ones, and those in a space only to its current members.
+/// ones, and those in a space only to a reader who reaches it.
 pub async fn agent_templates(
     connection: &mut PgConnection,
     workspace_id: Uuid,
     space_id: Option<Uuid>,
-    reader: Uuid,
+    reader: Reader,
 ) -> Result<Vec<AgentTemplateView>, AppError> {
-    Ok(sqlx::query_as::<_, AgentTemplateView>(
+    Ok(sqlx::query_as::<_, AgentTemplateView>(&format!(
         r#"
         SELECT id, template_key AS key, name, purpose, definition, space_id, install_id
         FROM agent_templates template
         WHERE workspace_id = $1 AND archived_at IS NULL
           AND ($2::uuid IS NULL OR space_id = $2)
-          AND (template.space_id IS NULL OR EXISTS (
-              SELECT 1 FROM project_memberships membership
-              WHERE membership.project_id = template.space_id
-                AND membership.actor_id = $3 AND membership.enabled))
+          AND (template.space_id IS NULL OR {reaches})
         ORDER BY name, id
         LIMIT 200
         "#,
-    )
+        reaches = Reader::reaches_sql("template.space_id", 3)
+    ))
     .bind(workspace_id)
     .bind(space_id)
-    .bind(reader)
+    .bind(reader.account)
+    .bind(reader.connection)
+    .bind(reader.held)
     .fetch_all(&mut *connection)
     .await?)
 }

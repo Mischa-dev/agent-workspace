@@ -112,6 +112,10 @@ pub(crate) struct World {
 pub(crate) struct TwoWorkspaces {
     pub(crate) app: axum::Router,
     pub(crate) pool: PgPool,
+    /// The state behind `app`, for tests that run a job's work directly.
+    pub(crate) state: AppState,
+    /// Where uploaded files' bytes live.
+    pub(crate) data_root: std::path::PathBuf,
     pub(crate) realtime: RealtimeHub,
     pub(crate) a: World,
     pub(crate) b: World,
@@ -196,7 +200,7 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root.join("profiles").to_string_lossy().into_owned(),
         ),
         (
@@ -267,13 +271,14 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     config.minimum_free_bytes = 0;
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     let realtime = RealtimeHub::new(8192);
-    let app = router(AppState {
+    let state = AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: realtime.clone(),
         supervisors: supervisors.clone(),
-    });
+    };
+    let app = router(state.clone());
 
     // Workspace A: the first owner, through the normal bootstrap.
     let a_owner = bootstrap_admin(
@@ -313,6 +318,8 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     Some(TwoWorkspaces {
         app,
         pool,
+        state,
+        data_root: data_root.clone(),
         realtime,
         a,
         b,
@@ -1036,6 +1043,9 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("approval");
+    agent_workspace_server::requests::legacy::approval_written(pool, approval)
+        .await
+        .expect("the approval's request");
 
     // W12: what the run did and cost, an agent profile made from a
     // template, and a harness the workspace registered (a connected runner).

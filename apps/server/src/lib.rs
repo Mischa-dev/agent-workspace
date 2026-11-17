@@ -86,7 +86,6 @@ pub mod projects;
 pub mod provider;
 pub mod public_api;
 pub mod push;
-pub mod questions;
 pub mod rate_limit;
 pub mod reactions;
 pub mod read_state;
@@ -98,7 +97,6 @@ pub mod requests;
 pub mod retention;
 pub mod roles;
 pub mod run_log;
-pub mod run_views;
 pub mod runs;
 pub mod scheduled_messages;
 pub mod scheduler;
@@ -230,6 +228,11 @@ pub fn router(state: AppState) -> Router {
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             modules::gate::refuse_off_modules,
+        ))
+        // A suspended or deleting workspace refuses v1 writes (H1.24).
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            workspace::lifecycle::refuse_writes_when_closed,
         ))
         .fallback_service(
             ServeDir::new(web_root)

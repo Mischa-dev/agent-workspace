@@ -28,6 +28,7 @@ export const PERMISSION_KEYS = [
   'runs.accounts',
   'runs.report',
   'requests.raise',
+  'requests.answer',
   'code.view',
   'code.publish',
   'code.manage',
@@ -42,6 +43,7 @@ export const PERMISSION_KEYS = [
   'settings.manage',
   'modules.build',
   'modules.manage',
+  'workspace.delete',
 ] as const
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number]

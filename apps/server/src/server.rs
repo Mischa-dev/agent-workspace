@@ -39,7 +39,7 @@ impl Server {
         let state = AppState {
             config: Arc::clone(&config),
             pool: pool.clone(),
-            rate_limits: RateLimiters::default(),
+            rate_limits: RateLimiters::for_config(&config),
             realtime: RealtimeHub::new(256),
             supervisors,
         };
@@ -163,12 +163,6 @@ impl Server {
             receiver.clone(),
         ));
         let github = tokio::spawn(github::run_jobs(state.clone(), receiver.clone()));
-        let outbox = tokio::spawn(crate::realtime::run_outbox_publisher(
-            state.pool.clone(),
-            state.realtime.clone(),
-            crate::realtime::outbox_worker_id(),
-            receiver.clone(),
-        ));
         // Not supervised like the loops above: a failure here delays
         // wakeups and lease expiry but never loses data, so it must not
         // stop the server.
@@ -207,11 +201,19 @@ impl Server {
                 crate::events::Router,
                 receiver.clone(),
             );
+            // Notifications read the log too (K3.9).
+            let notifier = crate::events::run_consumer(
+                cluster.clone(),
+                crate::notifications::Notifier,
+                receiver.clone(),
+            );
             let heartbeat_cluster = cluster.clone();
             let heartbeat_shutdown = receiver.clone();
             async move {
                 let heartbeat = heartbeat_cluster.run_heartbeat(heartbeat_shutdown);
-                tokio::join!(replies, sequencer, tail, feed, listener, router, heartbeat);
+                tokio::join!(
+                    replies, sequencer, tail, feed, listener, router, notifier, heartbeat
+                );
             }
         });
         // Background jobs (F9). A job lost to a crash is retried once its
@@ -248,7 +250,6 @@ impl Server {
             http,
             scheduler,
             github,
-            outbox,
             replies,
             job_workers,
         }
@@ -265,7 +266,6 @@ pub struct RunningServer {
     http: JoinHandle<std::io::Result<()>>,
     scheduler: JoinHandle<Result<(), AppError>>,
     github: JoinHandle<Result<(), AppError>>,
-    outbox: JoinHandle<Result<(), AppError>>,
     replies: JoinHandle<()>,
     job_workers: JoinHandle<anyhow::Result<()>>,
 }
@@ -309,7 +309,6 @@ impl RunningServer {
         self.http.abort();
         self.scheduler.abort();
         self.github.abort();
-        self.outbox.abort();
         self.replies.abort();
         self.job_workers.abort();
     }
@@ -323,7 +322,6 @@ impl RunningServer {
             http,
             mut scheduler,
             mut github,
-            mut outbox,
             replies,
             job_workers,
             ..
@@ -334,35 +332,20 @@ impl RunningServer {
         let result = tokio::select! {
             served = &mut http => {
                 let _ = shutdown.send(true);
-                let outbox_result = outbox.await.context("join outbox publisher")?;
                 let scheduler_result = scheduler.await.context("join Agent Run scheduler")?;
                 let github_result = github.await.context("join GitHub job worker")?;
                 served.context("join HTTP application")?.context("serve HTTP application")?;
-                outbox_result.context("run outbox publisher")?;
                 scheduler_result.context("run Agent Run scheduler")?;
                 github_result.context("run GitHub job worker")
-            }
-            outbox_result = &mut outbox => {
-                let already_shutting_down = *shutdown.borrow();
-                let _ = shutdown.send(true);
-                http.await.context("join HTTP application")?.context("serve HTTP application")?;
-                let scheduler_result = scheduler.await.context("join Agent Run scheduler")?;
-                let github_result = github.await.context("join GitHub job worker")?;
-                outbox_result.context("join outbox publisher")?.context("run outbox publisher")?;
-                scheduler_result.context("run Agent Run scheduler")?;
-                github_result.context("run GitHub job worker")?;
-                if already_shutting_down { Ok(()) } else { unexpected("outbox publisher") }
             }
             scheduler_result = &mut scheduler => {
                 let already_shutting_down = *shutdown.borrow();
                 let _ = shutdown.send(true);
                 http.await.context("join HTTP application")?.context("serve HTTP application")?;
-                let outbox_result = outbox.await.context("join outbox publisher")?;
                 let github_result = github.await.context("join GitHub job worker")?;
                 scheduler_result
                     .context("join Agent Run scheduler")?
                     .context("run Agent Run scheduler")?;
-                outbox_result.context("run outbox publisher")?;
                 github_result.context("run GitHub job worker")?;
                 if already_shutting_down { Ok(()) } else { unexpected("Agent Run scheduler") }
             }
@@ -370,12 +353,10 @@ impl RunningServer {
                 let already_shutting_down = *shutdown.borrow();
                 let _ = shutdown.send(true);
                 http.await.context("join HTTP application")?.context("serve HTTP application")?;
-                let outbox_result = outbox.await.context("join outbox publisher")?;
                 let scheduler_result = scheduler.await.context("join Agent Run scheduler")?;
                 github_result
                     .context("join GitHub job worker")?
                     .context("run GitHub job worker")?;
-                outbox_result.context("run outbox publisher")?;
                 scheduler_result.context("run Agent Run scheduler")?;
                 if already_shutting_down { Ok(()) } else { unexpected("GitHub job worker") }
             }

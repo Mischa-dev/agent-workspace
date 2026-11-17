@@ -171,6 +171,13 @@ const KINDS: &[(&str, &str)] = &[
         "package_install",
         "SELECT workspace_id, space_id FROM package_installs WHERE id = $1 AND $2::uuid IS NOT NULL",
     ),
+    // A1.8: a request goes by request_visible_to, which holds its
+    // conversation's and run's visibility.
+    (
+        "request",
+        "SELECT request.workspace_id, request.space_id FROM requests request \
+         WHERE request.id = $1 AND request_visible_to(request.id, $2)",
+    ),
 ];
 
 /// The kinds `locate` knows; a test checks every operation's thing kind is
@@ -238,8 +245,8 @@ async fn thing(
         return Err(OpError::Unavailable);
     };
     // The space is NULL only for a thing that lives in the workspace itself
-    // (a workspace-wide built module, or a registry thing such as a
-    // workspace board).
+    // (a workspace-wide built module, a registry thing such as a workspace
+    // board, or a workspace-level request).
     let row = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(sql)
         .bind(id)
         .bind(viewer)
@@ -273,6 +280,7 @@ fn what_of(kind: &str) -> &'static str {
         "module" => "That module",
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",
+        "request" => "That request",
         _ => "That",
     }
 }

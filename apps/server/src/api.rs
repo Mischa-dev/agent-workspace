@@ -14,7 +14,7 @@ use crate::{
     conversations::{
         ApprovalCapabilities, ApprovalRow, ApprovalView, RunCapabilities, RunRow, RunView,
     },
-    domain::{RunState, allocate_conversation_sequence, resume_answered_run, transition_run},
+    domain::{RunState, allocate_conversation_sequence, resume_answered_run},
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     message_content::MessageContent,
@@ -183,7 +183,7 @@ pub(crate) struct StartRunResponse {
     pub(crate) queue_position: Option<i64>,
 }
 
-pub(crate) async fn start_agent_run(
+async fn start_agent_run(
     State(state): State<AppState>,
     headers: HeaderMap,
     principal: AuthenticatedActor,
@@ -248,6 +248,14 @@ pub(crate) async fn start_run_in(
         Action::WorkerInvoke,
     )
     .await?;
+    // H1.24: no run starts in a suspended or deleting workspace, and a
+    // suspension waits for this one to commit.
+    crate::workspace::lifecycle::hold_open_for_space(
+        &mut transaction,
+        conversation.project_id,
+        "run_start",
+    )
+    .await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
         principal.actor_id(),
@@ -264,35 +272,13 @@ pub(crate) async fn start_run_in(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    if principal.is_mcp()
-        && crate::runs::run_cap(&mut transaction, principal.actor_id())
-            .await?
-            .reached()
-    {
-        return Err(AppError::Conflict(
-            "agent_run",
-            "you already have 5 runs queued or working; wait for one to finish",
-        ));
-    }
-    if sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM agent_runs
-            WHERE conversation_id = $1
-              AND state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        )
-        "#,
+    // Through an app, the per-person cap applies (one rule for every start).
+    crate::hosts::builtin::admit(
+        &mut transaction,
+        conversation_id,
+        principal.is_mcp().then(|| principal.actor_id()),
     )
-    .bind(conversation_id)
-    .fetch_one(&mut *transaction)
-    .await?
-    {
-        return Err(AppError::Conflict(
-            "agent_run",
-            "Thread already has an active run",
-        ));
-    }
-
+    .await?;
     let launch = request.config.clone().unwrap_or_default();
     // The person's and project's run settings (S2) fill in what the launch
     // leaves out: the harness (the default environment's first), the
@@ -346,18 +332,8 @@ pub(crate) async fn start_run_in(
             result => break result?,
         }
     };
-    let account_defaults = match state.supervisors.manifest(&setup.adapter_kind) {
-        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, &defaults, &manifest),
-        None => setup.run_defaults.clone(),
-    };
-    let config = crate::provider::resolve_run_config(
-        state,
-        setup.organization_id,
-        &setup.adapter_kind,
-        &account_defaults,
-        &launch,
-    )
-    .await?;
+    let config =
+        crate::hosts::builtin::resolve_config_with(state, &defaults, &setup, &launch).await?;
     let bound = sqlx::query(
         r#"
         UPDATE conversations
@@ -408,58 +384,32 @@ pub(crate) async fn start_run_in(
     .execute(&mut *transaction)
     .await?;
 
-    let run_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_runs (
-            id, conversation_id, execution_worker_id, requesting_actor_id,
-            execution_profile_id, repository_id, state, prompt,
-            authorization_snapshot, prompt_message_id, config, made_through_app
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10, $11)
-        "#,
+    let created = crate::hosts::builtin::create(
+        &mut transaction,
+        crate::hosts::builtin::NewRun {
+            project_id: conversation.project_id,
+            conversation_id,
+            setup: &setup,
+            requested_by: principal.actor_id(),
+            sponsored_by: None,
+            external_execution_request_id: None,
+            predecessor_run_id: None,
+            prompt: &prompt,
+            prompt_message_id: Some(prompt_message_id),
+            authorization: serde_json::json!({
+                "actor_id": principal.actor_id(),
+                "project_id": conversation.project_id,
+                "scope": ["repository.read", "repository.write", "provider.turn"]
+            }),
+            config: &config,
+            // A person's app or script is in this call when its agent limit
+            // is set: if the run waits in the queue, it starts only within
+            // that limit as it is then (`scheduler::requester_refusal`).
+            made_through_app: made_through_app(principal, conversation.project_id),
+        },
     )
-    .bind(run_id)
-    .bind(conversation_id)
-    .bind(setup.execution_worker_id)
-    .bind(principal.actor_id())
-    .bind(setup.execution_profile_id)
-    .bind(setup.repository_id)
-    .bind(&prompt)
-    .bind(serde_json::json!({
-        "actor_id": principal.actor_id(),
-        "project_id": conversation.project_id,
-        "scope": ["repository.read", "repository.write", "provider.turn"]
-    }))
-    .bind(prompt_message_id)
-    .bind(serde_json::to_value(&config).map_err(|_| AppError::Internal("serialize run settings"))?)
-    // A person's app or script is in this call when its agent limit is set:
-    // if the run waits in the queue, it starts only within that limit as it
-    // is then (`scheduler::requester_refusal`).
-    .bind(
-        matches!(principal.actor_kind(), Ok(ActorKind::Human))
-            && (principal.made_through_app()
-                || crate::policy::current_agent_limit(
-                    principal.actor_id(),
-                    crate::policy::MembershipScope::Project(conversation.project_id),
-                )
-                .is_some()),
-    )
-    .execute(&mut *transaction)
     .await?;
-    transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
-    let queue_position = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT count(*)
-        FROM agent_runs queued
-        JOIN agent_runs current ON current.id = $1
-        WHERE queued.state = 'queued'
-          AND (queued.created_at, queued.id) <= (current.created_at, current.id)
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(&mut *transaction)
-    .await?;
+    let (run_id, queue_position) = (created.run_id, created.queue_position);
     outbox::enqueue_message_created(
         &mut transaction,
         conversation.project_id,
@@ -467,13 +417,6 @@ pub(crate) async fn start_run_in(
         prompt_message_id,
         prompt_sequence,
         principal.actor_id(),
-    )
-    .await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        conversation.project_id,
-        conversation_id,
-        run_id,
     )
     .await?;
     let response = StartRunResponse {
@@ -552,6 +495,14 @@ pub(crate) async fn retry_run_in(
         Action::WorkerInvoke,
     )
     .await?;
+    // H1.24: no run starts in a suspended or deleting workspace, and a
+    // suspension waits for this one to commit.
+    crate::workspace::lifecycle::hold_open_for_space(
+        &mut transaction,
+        conversation.project_id,
+        "run_start",
+    )
+    .await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
         principal.actor_id(),
@@ -568,17 +519,6 @@ pub(crate) async fn retry_run_in(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    // Through an app, a retry counts toward the same cap as run_start.
-    if principal.is_mcp()
-        && crate::runs::run_cap(&mut transaction, principal.actor_id())
-            .await?
-            .reached()
-    {
-        return Err(AppError::Conflict(
-            "agent_run",
-            "you already have 5 runs queued or working; wait for one to finish",
-        ));
-    }
     let (
         repository_id,
         prompt,
@@ -622,24 +562,13 @@ pub(crate) async fn retry_run_in(
             "only a terminal Agent Run can be retried",
         ));
     }
-    if sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM agent_runs
-             WHERE conversation_id = $1
-               AND state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        )
-        "#,
+    // Through an app, a retry counts toward the same cap as a start.
+    crate::hosts::builtin::admit(
+        &mut transaction,
+        conversation_id,
+        principal.is_mcp().then(|| principal.actor_id()),
     )
-    .bind(conversation_id)
-    .fetch_one(&mut *transaction)
-    .await?
-    {
-        return Err(AppError::Conflict(
-            "agent_run",
-            "Thread already has an active run",
-        ));
-    }
+    .await?;
     // A retry asks for the same settings again; whatever the account or the
     // catalog no longer offers falls back on its own, and a sandbox or
     // approval policy that is gone refuses the retry rather than loosening.
@@ -664,67 +593,32 @@ pub(crate) async fn retry_run_in(
         &predecessor_config,
     )
     .await?;
-    let run_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_runs (
-            id, conversation_id, execution_worker_id, requesting_actor_id,
-            execution_profile_id, repository_id, predecessor_run_id,
-            state, prompt, authorization_snapshot, prompt_message_id, config,
-            made_through_app
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9, $10, $11, $12)
-        "#,
-    )
-    .bind(run_id)
-    .bind(conversation_id)
-    .bind(setup.execution_worker_id)
-    .bind(principal.actor_id())
-    .bind(setup.execution_profile_id)
-    .bind(repository_id)
-    .bind(predecessor_run_id)
-    .bind(prompt)
-    .bind(serde_json::json!({
-        "actor_id": principal.actor_id(),
-        "project_id": conversation.project_id,
-        "scope": ["repository.read", "repository.write", "provider.turn"],
-        "retry_of": predecessor_run_id
-    }))
-    .bind(prompt_message_id)
-    .bind(serde_json::to_value(&config).map_err(|_| AppError::Internal("serialize run settings"))?)
-    // As in `start_run_in`: a retry through a person's app starts, if it
-    // waits in the queue, only within that app's agent limit as it is then.
-    .bind(
-        matches!(principal.actor_kind(), Ok(ActorKind::Human))
-            && (principal.made_through_app()
-                || crate::policy::current_agent_limit(
-                    principal.actor_id(),
-                    crate::policy::MembershipScope::Project(conversation.project_id),
-                )
-                .is_some()),
-    )
-    .execute(&mut *transaction)
-    .await?;
-    transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
-    let queue_position = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT count(*)
-          FROM agent_runs queued
-          JOIN agent_runs current ON current.id = $1
-         WHERE queued.state = 'queued'
-           AND (queued.created_at, queued.id) <= (current.created_at, current.id)
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    outbox::enqueue_agent_run_updated(
+    let created = crate::hosts::builtin::create(
         &mut transaction,
-        conversation.project_id,
-        conversation_id,
-        run_id,
+        crate::hosts::builtin::NewRun {
+            project_id: conversation.project_id,
+            conversation_id,
+            setup: &setup,
+            requested_by: principal.actor_id(),
+            sponsored_by: None,
+            external_execution_request_id: None,
+            predecessor_run_id: Some(predecessor_run_id),
+            prompt: &prompt,
+            prompt_message_id,
+            authorization: serde_json::json!({
+                "actor_id": principal.actor_id(),
+                "project_id": conversation.project_id,
+                "scope": ["repository.read", "repository.write", "provider.turn"],
+                "retry_of": predecessor_run_id
+            }),
+            config: &config,
+            // As for a start: through a person's app, a queued retry starts
+            // only within that app's agent limit as it is then.
+            made_through_app: made_through_app(principal, conversation.project_id),
+        },
     )
     .await?;
+    let (run_id, queue_position) = (created.run_id, created.queue_position);
     let response = StartRunResponse {
         run_id,
         state: RunState::Queued,
@@ -1141,6 +1035,15 @@ pub(crate) async fn answer_approval(
     }
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    // A suspended or closing workspace answers nothing: an approval would
+    // set its run going again. The workspace is held before the approval
+    // row is locked, in the order suspending and deleting take them (they
+    // hold the workspace, then cancel its pending approvals).
+    let space = crate::runs::approval_space(&mut transaction, approval_id)
+        .await?
+        .ok_or(AppError::NotFound("agent_approval"))?;
+    crate::workspace::lifecycle::hold_open_for_space(&mut transaction, space, "approval_respond")
+        .await?;
     let context = sqlx::query_as::<_, ApprovalContext>(
         r#"
         SELECT
@@ -1211,7 +1114,6 @@ pub(crate) async fn answer_approval(
             },
         },
     )?;
-
     let (response_json, approved) = match context.kind.as_str() {
         "approval" => {
             if response.answer.is_some()
@@ -1336,7 +1238,7 @@ pub(crate) async fn answer_approval(
     if approved {
         resume_answered_run(&mut transaction, context.run_id).await?;
     } else {
-        transition_run(
+        crate::hosts::builtin::transition(
             &mut transaction,
             context.run_id,
             RunState::Interrupted,
@@ -1511,36 +1413,15 @@ pub(crate) async fn interrupt_run_in(
         return Ok(context.project_id);
     }
 
-    transition_run(
+    interrupt_run_unchecked(
         &mut transaction,
-        run_id,
-        RunState::Interrupted,
-        Some("Interrupted by the requesting Actor."),
-    )
-    .await?;
-    retain_run_workspace(&mut transaction, run_id).await?;
-    crate::provider::idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
-    let event_id = insert_significant_event(
-        &mut transaction,
-        run_id,
-        "run_interrupted",
-        "The run was interrupted.",
+        RunToStop {
+            run_id,
+            project_id: context.project_id,
+            conversation_id: context.conversation_id,
+        },
+        "Interrupted by the requesting Actor.",
         serde_json::json!({"actor_id": principal.actor_id()}),
-    )
-    .await?;
-    insert_event_entry(&mut transaction, context.conversation_id, event_id).await?;
-    sqlx::query(
-        "UPDATE agent_approvals SET status = 'canceled' WHERE agent_run_id = $1 AND status = 'pending'",
-    )
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await?;
-    crate::requests::legacy::run_approvals_written(&mut *transaction, run_id).await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        context.project_id,
-        context.conversation_id,
-        run_id,
     )
     .await?;
     idempotency::complete(
@@ -1554,6 +1435,75 @@ pub(crate) async fn interrupt_run_in(
     .await?;
     transaction.commit().await?;
     Ok(context.project_id)
+}
+
+/// A run to stop, with where it lives.
+#[derive(Clone, Copy, Debug, FromRow)]
+pub(crate) struct RunToStop {
+    pub run_id: Uuid,
+    pub project_id: Uuid,
+    pub conversation_id: Uuid,
+}
+
+/// Interrupt a run that hasn't finished: its state (which its driver
+/// watches, and stops the harness's turn on), its workspace kept, its
+/// pending approvals cancelled and open screens told. The caller has
+/// decided it may, and holds the run's row.
+async fn interrupt_run_unchecked(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run: RunToStop,
+    reason: &str,
+    payload: serde_json::Value,
+) -> Result<(), AppError> {
+    let run_id = run.run_id;
+    crate::hosts::builtin::transition(transaction, run_id, RunState::Interrupted, Some(reason))
+        .await?;
+    retain_run_workspace(transaction, run_id).await?;
+    crate::provider::idle_provider_session_for_terminal_run(transaction, run_id).await?;
+    let event_id = insert_significant_event(
+        transaction,
+        run_id,
+        "run_interrupted",
+        "The run was interrupted.",
+        payload,
+    )
+    .await?;
+    insert_event_entry(transaction, run.conversation_id, event_id).await?;
+    sqlx::query(
+        "UPDATE agent_approvals SET status = 'canceled' WHERE agent_run_id = $1 AND status = 'pending'",
+    )
+    .bind(run_id)
+    .execute(&mut **transaction)
+    .await?;
+    crate::requests::legacy::run_approvals_written(&mut **transaction, run_id).await?;
+    outbox::enqueue_agent_run_updated(transaction, run.project_id, run.conversation_id, run_id)
+        .await?;
+    Ok(())
+}
+
+/// Interrupt every run in `workspace` that hasn't finished (H1.24): a
+/// suspended workspace, or one being deleted, runs nothing. Inside the
+/// caller's transaction, which must not hold the workspace's row: stopping
+/// a run writes to its thread, which run starts lock before the workspace.
+pub(crate) async fn interrupt_workspace_runs(
+    connection: &mut sqlx::PgConnection,
+    workspace: Uuid,
+    why: &'static str,
+) -> Result<usize, AppError> {
+    use sqlx::Connection;
+    let mut transaction = connection.begin().await?;
+    let runs = crate::runs::active_in_workspace(&mut transaction, workspace).await?;
+    for run in &runs {
+        interrupt_run_unchecked(
+            &mut transaction,
+            *run,
+            "Stopped because the workspace was suspended or is being deleted.",
+            serde_json::json!({ "reason": why }),
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(runs.len())
 }
 
 pub(crate) async fn insert_significant_event(
@@ -1952,6 +1902,18 @@ fn authorize_project_action(
 }
 
 /// Whoever starts or changes a run: a browser session or an MCP caller.
+/// Whether a person's app or script is in this call: through MCP, or under
+/// an agent limit set for this request (`scheduler::requester_refusal`).
+fn made_through_app(principal: &impl RunActor, project_id: Uuid) -> bool {
+    matches!(principal.actor_kind(), Ok(ActorKind::Human))
+        && (principal.made_through_app()
+            || crate::policy::current_agent_limit(
+                principal.actor_id(),
+                crate::policy::MembershipScope::Project(project_id),
+            )
+            .is_some())
+}
+
 pub(crate) trait RunActor {
     fn actor_id(&self) -> Uuid;
     fn actor_kind(&self) -> Result<ActorKind, AppError>;

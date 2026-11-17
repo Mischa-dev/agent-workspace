@@ -183,11 +183,11 @@ async fn a_package_installs_once_and_exports_back() {
     assert!(archived);
     // Open pages hear that the skill page went.
     let page_heard = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events event JOIN project_pages page \
-             ON page.id::text = event.payload->>'pageId' \
-         WHERE event.event_type = 'page.updated' AND page.title = 'Triage' \
-           AND page.archived_at IS NOT NULL \
-           AND (event.payload->>'version')::bigint = page.version",
+        "SELECT count(*) FROM (SELECT thing_id, thing_version, type FROM event_staging \
+                 UNION ALL SELECT thing_id, thing_version, type FROM events) event \
+         JOIN project_pages page ON page.id = event.thing_id \
+         WHERE event.type = 'page.content_saved' AND page.title = 'Triage' \
+           AND page.archived_at IS NOT NULL AND event.thing_version = page.version",
     )
     .fetch_one(&pool)
     .await

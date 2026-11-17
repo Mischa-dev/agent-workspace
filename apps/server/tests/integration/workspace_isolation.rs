@@ -41,7 +41,7 @@ use std::{
 
 use agent_workspace_server::{
     mcp::MCP_PATH,
-    realtime::{RealtimeHub, outbox_worker_id, run_outbox_publisher},
+    realtime::RealtimeHub,
     test_support::source::{routes as shared_routes, rust_files, server_src, strip_tests},
 };
 use axum::{
@@ -51,7 +51,7 @@ use axum::{
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use tokio::{net::TcpListener, sync::watch, time::timeout};
+use tokio::{net::TcpListener, time::timeout};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{Message as ClientMessage, client::IntoClientRequest, http::HeaderValue},
@@ -239,6 +239,16 @@ const HTTP_ROUTES: &[&str] = &[
 /// `/health/*`, `/auth.md`, `/connect.md`, OAuth and the WorkOS callback are
 /// sign-in plumbing, so the guard only looks under `/api/v1`.)
 const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
+    (
+        "/api/v1/host/commands",
+        "a host's own command queue (A1.12), signed in with the host's key, never a \
+         person's session; it lists only that host's commands; covered in a1_host_protocol",
+    ),
+    (
+        "/api/v1/host/commands/{command_id}",
+        "one of a host's own commands (A1.12), by the host's key; another host's command \
+         is not found; covered in a1_host_protocol",
+    ),
     (
         "/api/v1/realtime",
         "WebSocket upgrade; covered by the realtime part of the fixture test, which \
@@ -1978,7 +1988,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "label_list",
     "field_list",
     "later_list",
-    "question_list",
+    "request_list",
+    "request_get",
     "launch_list",
     "message_history",
     "milestone_list",
@@ -2008,10 +2019,13 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "repository_list",
     "role_get",
     "role_list",
+    "run_activity_list",
+    "run_detail_get",
     "run_get",
     "run_list",
     "run_steps",
     "run_usage",
+    "agent_usage_list",
     "search",
     "settings_get",
     "skill_get",
@@ -2433,12 +2447,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
             vec![],
         ),
+        // A1.8: a request (the run's approval) is read where its run is.
         case(
-            "question_list",
+            "request_get",
+            vec![json!({"requestId": a.approval.to_string()})],
+            vec![json!({"requestId": b.approval.to_string()})],
+            vec![],
+        ),
+        case(
+            "request_list",
             vec![
                 json!({}),
-                json!({"role": "for_me"}),
-                json!({"status": "answered"}),
+                json!({"role": "raised"}),
+                json!({"role": "raised", "status": "answered"}),
             ],
             vec![],
             vec![],
@@ -2578,6 +2599,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"runId": b.run.to_string()})],
             vec![],
         ),
+        // A1.5: the run view and its activities, for any run.
+        case(
+            "run_detail_get",
+            vec![json!({"runId": a.run.to_string()})],
+            vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
+        case(
+            "run_activity_list",
+            vec![json!({"runId": a.run.to_string(), "afterSeq": 0})],
+            vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
         case(
             "run_usage",
             vec![
@@ -2588,6 +2622,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![json!({"projectId": b.project})],
             vec![],
+        ),
+        // A1.15: usage by agent, only from runs in spaces the caller opens.
+        case(
+            "agent_usage_list",
+            vec![json!({})],
+            vec![],
+            vec![json!({"days": 400})],
         ),
         case(
             "repository_list",
@@ -2888,8 +2929,7 @@ pub(super) async fn list_tools(app: &axum::Router, token: &str, session: &str) -
 // Realtime
 // ---------------------------------------------------------------------------
 
-/// A subscribes over the real WebSocket, then the outbox publisher and the
-/// log's tail start: the whole fixture's backlog (both workspaces) is
+/// A subscribes over the real WebSocket, then the log's tail starts: the whole fixture's backlog (both workspaces) is
 /// delivered from the start of the log, B changes a
 /// few more things, and A posts a sentinel message. A must see its sentinel
 /// and nothing of B's.
@@ -2929,13 +2969,6 @@ async fn check_realtime(
     );
     let (mut socket, _) = connect_async(request).await.expect("A's WebSocket");
 
-    let (stop_publisher, publisher_stopped) = watch::channel(false);
-    let publisher = tokio::spawn(run_outbox_publisher(
-        pool.clone(),
-        realtime.clone(),
-        outbox_worker_id(),
-        publisher_stopped,
-    ));
     let (stop_log, log) = crate::support::live::follow_log(pool, realtime, Some(0)).await;
 
     // More changes in B while A listens.
@@ -3061,8 +3094,6 @@ async fn check_realtime(
         report.leak("realtime frame to A", "", frame, b_ids);
     }
 
-    let _ = stop_publisher.send(true);
-    let _ = publisher.await;
     let _ = stop_log.send(true);
     let _ = log.await;
     let _ = socket.close(None).await;

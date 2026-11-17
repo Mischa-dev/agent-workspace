@@ -101,7 +101,6 @@ mod page_discussion;
 pub(crate) mod planning;
 mod project_template_tools;
 mod publish_tools;
-mod question_tools;
 mod reactions;
 mod reads;
 mod replies;
@@ -1023,63 +1022,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<later_tools::LaterUpdateValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(later_tools::later_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Ask one person in a project something, on a card in their inbox: the question, up to 4 answers to pick from (they can always type their own), and optionally the conversation or task it's about. Use it when you need a person's call to go on, instead of a message they might miss. When they answer, your connection gets a question.answered event; read the answer with question_list.",
-        annotations(
-            title = "Ask a person",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn ask_person(
-        &self,
-        Parameters(arguments): Parameters<question_tools::AskPersonArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<question_tools::AskPersonValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(question_tools::ask_person(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "List questions you asked people with ask_person (role asked, the default), with their answers once given, or questions others asked you (role for_me). Filter by status (pending, answered) or one questionId.",
-        annotations(
-            title = "List questions",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn question_list(
-        &self,
-        Parameters(arguments): Parameters<question_tools::QuestionListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<question_tools::QuestionListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(question_tools::question_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Answer a question someone asked you (question_list role for_me lists them): pick an option by its id, type an answer, or both. An answer is final, and goes back to whoever asked.",
-        annotations(
-            title = "Answer a question",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn question_answer(
-        &self,
-        Parameters(arguments): Parameters<question_tools::QuestionAnswerArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<question_tools::QuestionAnswerValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(question_tools::question_answer(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -2758,7 +2700,7 @@ impl McpServer {
     async fn standup_prompt(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
             Role::User,
-            "In Agent Workspace, write my standup. Use task_list (updatedSince: 24h) for what moved, run_list for Codex runs, pull_request_list (needsMe) for PRs waiting on me, and briefing for what needs me. Three short sections: Done, Next, Blocked. Keys and links only, no filler.",
+            "In Agent Workspace, write my standup. Use task_list (updatedSince: 24h) for what moved, run_list for agent runs, pull_request_list (needsMe) for PRs waiting on me, and briefing for what needs me. Three short sections: Done, Next, Blocked. Keys and links only, no filler.",
         )]
     }
 
@@ -3029,6 +2971,41 @@ fn module_refusal(tool: &str, module: &str) -> rmcp::model::CallToolResponse {
     }
 }
 
+/// A call into a suspended workspace (or one being deleted), in the shape
+/// `refusal` uses, with the code operations answer with.
+fn suspended_refusal(tool: &str) -> rmcp::model::CallToolResponse {
+    let message = "This workspace is suspended or being deleted, so it can't be used. Its owners can see why in its settings.".to_owned();
+    match refusal(tool, message) {
+        rmcp::model::CallToolResponse::Complete(mut result) => {
+            if let Some(structured) = result.structured_content.as_mut() {
+                structured["retryCategory"] = serde_json::json!("do_not_retry");
+                structured["code"] = serde_json::json!("workspace_suspended");
+            }
+            rmcp::model::CallToolResponse::Complete(result)
+        }
+        other => other,
+    }
+}
+
+/// A call refused because the workspace's agents and apps together used up
+/// their calls for the minute (H1.1).
+fn workspace_busy_refusal(tool: &str, retry_after_seconds: u64) -> rmcp::model::CallToolResponse {
+    let message = format!(
+        "This workspace's agents and apps have made too many calls this minute. Try again in {retry_after_seconds} seconds."
+    );
+    match refusal(tool, message) {
+        rmcp::model::CallToolResponse::Complete(mut result) => {
+            if let Some(structured) = result.structured_content.as_mut() {
+                structured["retryCategory"] = serde_json::json!("wait");
+                structured["retryAfterSeconds"] = serde_json::json!(retry_after_seconds);
+                structured["code"] = serde_json::json!("rate_limited");
+            }
+            rmcp::model::CallToolResponse::Complete(result)
+        }
+        other => other,
+    }
+}
+
 /// Whether a tool shows in the caller's list.
 fn tool_listed(name: &str, reach: PermissionSet) -> bool {
     tool_permissions::reachable(name, reach)
@@ -3193,6 +3170,54 @@ async fn run_tool(
                     "Couldn't check your access just now. Try again.".to_owned(),
                 ));
             }
+        }
+    }
+    // H1.24: a call into a suspended workspace, or one being deleted, is
+    // refused. A list spanning every workspace of an account-wide app isn't
+    // a call into one; its writes are refused where they land (task writes
+    // in `work_item_commands::lock_membership`, messages in the send
+    // pipeline, new projects in `projects::insert_new_project`, operations
+    // in the dispatcher).
+    if principal.project_explicit || !principal.account_wide {
+        let open = match crate::db::scoped_one(&server.state.pool, async |connection| {
+            crate::workspace::lifecycle::ensure_open_for_space(
+                connection,
+                principal.project_id,
+                &request.name,
+            )
+            .await
+        })
+        .await
+        {
+            Ok(workspace) => {
+                // H1.1: the workspace's agents and apps share one budget.
+                if let Some(workspace) = workspace
+                    && let Err(AppError::RateLimited {
+                        retry_after_seconds,
+                    }) = server
+                        .state
+                        .rate_limits
+                        .check_workspace_call(workspace)
+                        .await
+                {
+                    return Ok(workspace_busy_refusal(&request.name, retry_after_seconds));
+                }
+                true
+            }
+            Err(AppError::WorkspaceSuspended) => false,
+            Err(error) => {
+                tracing::error!(
+                    category = error.log_category(),
+                    "MCP workspace lifecycle lookup failed"
+                );
+                return Ok(refusal(
+                    &request.name,
+                    "Couldn't check your access just now. Try again.".to_owned(),
+                ));
+            }
+        };
+        if !open {
+            return Ok(suspended_refusal(&request.name));
         }
     }
     let call = McpServer::tools().call(rmcp::handler::server::tool::ToolCallContext::new(
@@ -4009,6 +4034,30 @@ pub(crate) async fn resolve_bearer_principal(
     if token.starts_with("aw_oauth_") {
         return oauth::resolve_access_token(state, token).await;
     }
+    // A1.12: a host's short-lived credential for one run's agent, in the
+    // run's space (interim until K1.24).
+    if token.starts_with(crate::runs::credentials::TOKEN_PREFIX) {
+        let Some(holder) = crate::runs::credentials::resolve(&state.pool, token).await? else {
+            return Ok(None);
+        };
+        let Ok(actor_kind) = parse_mcp_actor_kind(&holder.account_kind) else {
+            return Ok(None);
+        };
+        return Ok(Some(McpPrincipal {
+            credential_id: holder.credential_id,
+            mcp_credential_id: None,
+            oauth_grant_id: None,
+            actor_id: holder.account_id,
+            actor_kind,
+            project_id: holder.space_id,
+            external_agent_connection_id: holder.connection_id,
+            client_name: holder.host_name,
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            authentication_class: "run_credential",
+            account_wide: false,
+            project_explicit: false,
+        }));
+    }
     let Some(prefix) = token.get(..TOKEN_PREFIX_LENGTH) else {
         return Ok(None);
     };
@@ -4484,6 +4533,7 @@ async fn validate_issue_command(
                             | Permission::DirectoryView
                             | Permission::RunsReport
                             | Permission::RequestsRaise
+                            | Permission::RequestsAnswer
                     )
                 })
             }))
@@ -5055,11 +5105,6 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
 ];
 
 const OTHER_SCOPES: &[(&str, &str)] = &[
-    // A question names its project only to who asked it and who it asks.
-    (
-        "questionId",
-        "SELECT project_id FROM person_questions WHERE id = $1 AND (asked_by_actor_id = $2 OR person_actor_id = $2)",
-    ),
     // A reply request names its project only to someone it's for, as the
     // reply tools check: the agent it asks, or a person who can see the
     // conversation (who may stop it). Anyone else, like a missing one, gets

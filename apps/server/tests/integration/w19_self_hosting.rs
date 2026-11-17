@@ -8,8 +8,9 @@
 use std::sync::{Arc, Mutex};
 
 use agent_workspace_server::{
-    config::AppConfig,
+    config::{AppConfig, SecretString, ServerMail},
     jobs::{self, WorkerOptions},
+    mail::smtp,
     notification_email, password_reset,
 };
 use axum::{
@@ -841,4 +842,137 @@ async fn a_reset_keeps_connected_apps_unless_asked_to_disconnect_them() {
     .await
     .expect("audit");
     assert_eq!(audited, 1);
+}
+
+/// H1.17: with the server's own transport set (`AGENT_WORKSPACE_MAIL_URL`),
+/// a reset email goes out through it though no workspace sends mail.
+#[tokio::test]
+async fn notification_mail_falls_back_to_the_server_transport() {
+    let (port, inbox) = fake_smtp().await;
+    let Some(fixture) = fixture_with("w19_server_notify", move |config| {
+        with_local_relay(config);
+        config.server_mail = Some(ServerMail {
+            smtp: smtp::Settings {
+                host: "127.0.0.1".to_owned(),
+                port,
+                security: smtp::Security::None,
+                username: None,
+            },
+            password: None,
+            from_address: "server@example.com".to_owned(),
+            from_name: None,
+        });
+    })
+    .await
+    else {
+        return;
+    };
+    let setup = &fixture.setup;
+    // The workspace never set up a mail server of its own.
+    let project = create_project(setup, "SRV", "Server mail").await;
+    let general = create_channel(setup, &project, "general").await;
+    let (mara_id, mara) = add_person(setup, &[&project], "mara").await;
+    let (mara_user, _) = user_of(setup, mara_id).await;
+    sqlx::query(
+        "INSERT INTO user_email_addresses (user_id, address, verified_at) VALUES ($1, 'mara@example.com', now())",
+    )
+    .bind(mara_user)
+    .execute(&setup.pool)
+    .await
+    .expect("confirmed address");
+    let settings = browser_settings(
+        setup,
+        &mara,
+        json!({"group": "mentions", "channel": "email", "enabled": true}),
+    )
+    .await;
+    assert_eq!(settings["mailConfigured"], true);
+    assert_eq!(settings["emailAvailable"], true);
+    let mention = json!({
+        "version": 1,
+        "nodes": [
+            {"type": "text", "text": "Over the server's mail "},
+            {"type": "mention", "actorId": mara_id}
+        ]
+    });
+    say(setup, &setup.browser, &general, "server-mention", mention).await;
+    drain(setup).await;
+    run_jobs(&fixture).await;
+    assert_eq!(mail_count(&inbox), 1);
+    let email = last_mail(&inbox);
+    assert_eq!(email.to, "mara@example.com");
+    assert!(email.data.contains("server@example.com"), "{}", email.data);
+    assert!(
+        email.body().contains("Over the server's mail"),
+        "{}",
+        email.body()
+    );
+}
+
+#[tokio::test]
+async fn a_reset_email_goes_out_through_the_server_transport() {
+    const SERVER_PASSWORD: &str = "w19-server-relay-password";
+    let (port, inbox) = fake_smtp().await;
+    let Some(fixture) = fixture_with("w19_server_mail", move |config| {
+        with_local_relay(config);
+        config.server_mail = Some(ServerMail {
+            smtp: smtp::Settings {
+                host: "127.0.0.1".to_owned(),
+                port,
+                security: smtp::Security::None,
+                username: Some("server-relay".to_owned()),
+            },
+            password: Some(SecretString::new(SERVER_PASSWORD)),
+            from_address: "server@example.com".to_owned(),
+            from_name: Some("Server mail".to_owned()),
+        });
+    })
+    .await
+    else {
+        return;
+    };
+    let setup = &fixture.setup;
+    let workspaces_with_mail =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM workspace_mail_settings")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("mail settings");
+    assert_eq!(workspaces_with_mail, 0);
+    let (_, available) = public(setup, "GET", "/api/v1/auth/password-reset", Value::Null).await;
+    assert_eq!(available["available"], true);
+
+    sqlx::query(
+        "INSERT INTO user_email_addresses (user_id, address, verified_at) \
+         SELECT id, 'owner@example.com', now() FROM users WHERE login_name = 'owner'",
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("confirmed address");
+    let (status, _) = public(
+        setup,
+        "POST",
+        "/api/v1/auth/password-reset",
+        json!({"login": "owner"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    run_jobs(&fixture).await;
+    assert_eq!(mail_count(&inbox), 1);
+    let reset = last_mail(&inbox);
+    assert_eq!(reset.to, "owner@example.com");
+    assert!(reset.data.contains("server@example.com"), "{}", reset.data);
+    assert_eq!(
+        reset.auth.as_deref(),
+        Some(format!("|server-relay|{SERVER_PASSWORD}").as_str())
+    );
+    let (status, inspected) = inspect(setup, &reset.token()).await;
+    assert_eq!(status, StatusCode::OK, "{inspected}");
+    // The relay's password is configuration, never stored.
+    for table in ["secrets", "audit_events", "background_jobs"] {
+        assert_eq!(
+            copies(&setup.pool, table, SERVER_PASSWORD).await,
+            0,
+            "{table}"
+        );
+    }
 }

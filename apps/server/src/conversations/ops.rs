@@ -657,9 +657,8 @@ impl Operation for ScheduledMessageUpdate {
         input: ScheduledMessageUpdateInput,
     ) -> Result<ScheduledUpdateValue, OpError> {
         let id = input.id.id();
-        // Sending or cancelling twice is refused the second time; a new
-        // text or time set again changes nothing.
-        let settles = input.send_now != Some(true) && input.cancel != Some(true);
+        // The scheduled-message command keeps no request ids, so a retry
+        // after a later edit would write again: replaySafe stays false.
         let updated = messaging::scheduled_update(
             call.state,
             call.ctx,
@@ -672,9 +671,6 @@ impl Operation for ScheduledMessageUpdate {
             },
         )
         .await?;
-        if settles {
-            call.key_honoured();
-        }
         call.audit_target("scheduled_message", id, json!({}));
         Ok(updated)
     }

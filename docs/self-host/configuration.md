@@ -70,6 +70,18 @@ variable that is set still wins.
 | `AGENT_WORKSPACE_DIRECTORY_URLS` | none | Package lists (`agent-workspace-directory/1` JSON over https), comma or space separated, every workspace can install from. Read again every hour. |
 | `AGENT_WORKSPACE_DIRECTORY_WORKSPACE_SOURCES` | `true` (`false` in the hosted profile) | Whether a workspace may add its own package lists. |
 | `AGENT_WORKSPACE_METRICS_TOKEN_PATH` | none (no `/metrics`) | An owner-only file holding the bearer token `/metrics` requires. |
+| `AGENT_WORKSPACE_WORKSPACE_CALLS_PER_MINUTE` | `3000` | MCP and public API calls one workspace's agents and apps may make together each minute, beside each credential's own 600. See `docs/operations/abuse-controls.md`. |
+| `AGENT_WORKSPACE_OAUTH_MAX_UNCLAIMED_CLIENTS` | `1024` | Apps that registered but never finished connecting, kept before new registrations are refused. |
+
+## Mail (optional)
+
+Without these, account mail (password resets, address confirmations) goes out through a workspace's own mail settings, and only to people who own that workspace or belong to no other.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AGENT_WORKSPACE_MAIL_URL` | none | The server's own mail transport, used for every account email: `smtps://user:password@host` (TLS from the first byte, port 465 unless given), `smtp://user:password@host` (STARTTLS, required; port 587 unless given) or `smtp+plain://localhost:25` (a relay on this machine only). Percent-encode `@` and `:` in the user name and password. The mail server must be a public address on a mail port unless private addresses are allowed. Workspaces' own mail settings still send their notification email. |
+| `AGENT_WORKSPACE_MAIL_FROM` | none (required with the URL) | The address account email comes from. |
+| `AGENT_WORKSPACE_MAIL_FROM_NAME` | none | The name shown with it. |
 
 ## Sign-in through WorkOS (optional)
 
@@ -109,8 +121,8 @@ container image does not need them.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AGENT_WORKSPACE_CODEX_BINARY` | `codex` | The Codex command line. |
-| `AGENT_WORKSPACE_CODEX_HOME_ROOT` | `<data root>/codex/profiles` | Where harness account homes live; must be inside the data root. |
-| `AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT` | `1` | Harness processes at once (1 to 16). |
+| `AGENT_WORKSPACE_PROVIDER_HOME_ROOT` | `<data root>/codex/profiles` | Where harness account homes live; must be inside the data root. |
+| `AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT` | `1` | Harness processes at once (1 to 16). |
 | `AGENT_WORKSPACE_CODEX_MAX_LINE_BYTES` | `1048576` | The longest line read from a harness. |
 | `AGENT_WORKSPACE_CODEX_MAX_STDERR_BYTES` | `262144` | Error output kept from a harness. |
 | `AGENT_WORKSPACE_CODEX_MAX_BUFFERED_EVENTS` | `64` | Events buffered from a harness. |
