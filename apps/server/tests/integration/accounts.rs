@@ -690,3 +690,46 @@ async fn assert_secret_unstored(pool: &sqlx::PgPool, secret: &str) {
         assert_eq!(found, 0, "{table} holds a one-time secret");
     }
 }
+
+/// No permission depends on the kind of account (rule 2): an agent whose
+/// role lets it create projects makes one, and owns it under its own name.
+#[tokio::test]
+async fn an_agent_that_may_create_projects_makes_one() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("ivy", "member")
+        .build("k4_agent_makes_space")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let ivy = &world.agents["ivy"];
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin' WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(ivy.actor)
+    .execute(pool)
+    .await
+    .expect("ivy runs the workspace");
+    let made = tool(
+        &world.app,
+        &ivy.token,
+        &ivy.session,
+        "project_create",
+        json!({"key": "IVY", "name": "Ivy space", "clientRequestId": "ivy-space"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT membership.actor_id FROM project_memberships membership \
+         JOIN projects project ON project.id = membership.project_id \
+         WHERE project.project_key = 'IVY' AND membership.role = 'owner'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("owner");
+    assert_eq!(owner, ivy.actor);
+    world.finish().await;
+}

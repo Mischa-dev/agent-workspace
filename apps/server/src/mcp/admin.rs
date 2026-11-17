@@ -693,7 +693,9 @@ pub(super) async fn project_create(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if !principal.account_wide {
+    // An older credential held to one project makes none; any other
+    // account, of whatever kind, may when its role does.
+    if super::common::confined_project(principal).is_some() {
         return ToolResult::denied(PROJECT_CREATE_ONLY);
     }
     let Ok(key) = crate::projects::normalize_project_key(&arguments.key) else {
@@ -738,18 +740,16 @@ pub(super) async fn project_create(
         // Lock the caller's workspace membership as the web app does, so a
         // removal can't race the new owner membership.
         let Some(creator) =
-            sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>, String, String)>(
+            sqlx::query_as::<_, (Uuid, String, Option<Vec<String>>)>(
                 r#"
             SELECT project.organization_id, organization_membership.role,
-                   workspace_role_permissions(organization_membership.role_id),
-                   user_account.display_name, user_account.login_name
+                   workspace_role_permissions(organization_membership.role_id)
             FROM projects project
             JOIN organization_memberships organization_membership
               ON organization_membership.organization_id = project.organization_id
              AND organization_membership.actor_id = $2
              AND organization_membership.enabled
             JOIN actors actor ON actor.id = $2 AND actor.status = 'active'
-            JOIN users user_account ON user_account.actor_id = $2 AND user_account.status = 'active'
             WHERE project.id = $1
             FOR UPDATE OF organization_membership
             "#,
@@ -761,13 +761,15 @@ pub(super) async fn project_create(
         else {
             return Ok(ToolResult::denied(PROJECT_CREATE_ONLY));
         };
-        let (
-            organization_id,
-            organization_role,
-            organization_role_permissions,
-            display_name,
-            login_name,
-        ) = creator;
+        let (organization_id, organization_role, organization_role_permissions) = creator;
+        // The new space's owner is named as they are here, whatever their
+        // kind.
+        let Some((display_name, login_name)) =
+            crate::accounts::names_in(&mut transaction, organization_id, principal.actor_id)
+                .await?
+        else {
+            return Ok(ToolResult::denied(PROJECT_CREATE_ONLY));
+        };
         if crate::projects::authorize_project_create(
             principal.actor_id,
             principal.actor_kind,

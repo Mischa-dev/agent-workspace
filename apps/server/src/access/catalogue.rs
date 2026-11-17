@@ -1009,6 +1009,16 @@ impl PermissionSet {
             .fold(Self::EMPTY, |set, info| set.with(info.permission))
     }
 
+    /// The permissions that act only on the workspace as a whole (members,
+    /// roles, new spaces, deleting it): never reachable from inside one
+    /// space.
+    pub fn workspace_only() -> Self {
+        PERMISSIONS
+            .iter()
+            .filter(|info| matches!(info.scope, PermissionScope::Workspace))
+            .fold(Self::EMPTY, |set, info| set.with(info.permission))
+    }
+
     /// The permissions every role holds.
     pub fn required() -> Self {
         PERMISSIONS
@@ -1032,6 +1042,10 @@ impl PermissionSet {
     #[must_use]
     pub const fn without(self, permission: Permission) -> Self {
         Self(self.0 & !permission.bit())
+    }
+
+    pub const fn without_all(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
     }
 
     pub const fn contains(self, permission: Permission) -> bool {

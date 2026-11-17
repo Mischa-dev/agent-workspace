@@ -100,6 +100,17 @@ pub async fn load(
     } else {
         grant.permissions()
     };
+    // A credential confined to one space acts at workspace level only
+    // within what it holds in that space, and never with a permission that
+    // reaches the whole workspace (members, roles, new spaces).
+    if let (Scope::Workspace(_), Reach::Space(confined)) = (scope, caller.reach()) {
+        let in_space = Box::pin(load(connection, caller, Scope::Space(confined), lock))
+            .await?
+            .map_or(PermissionSet::EMPTY, |holding| holding.permissions);
+        permissions = permissions
+            .intersect(in_space)
+            .intersect(PermissionSet::all().without_all(PermissionSet::workspace_only()));
+    }
     let delegated = caller.limits.is_some();
     if let Some(limits) = &caller.limits {
         let limit = match scope {

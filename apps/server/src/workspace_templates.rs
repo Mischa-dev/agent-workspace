@@ -1090,24 +1090,26 @@ async fn starter_project(
     if let Some(id) = existing {
         return Ok((id, false));
     }
-    let (role, role_permissions, display_name, login_name) =
-        sqlx::query_as::<_, (String, Option<Vec<String>>, String, String)>(
-            r#"
-            SELECT membership.role, workspace_role_permissions(membership.role_id),
-                   user_account.display_name, user_account.login_name
-            FROM organization_memberships membership
-            JOIN users user_account ON user_account.actor_id = membership.actor_id
-             AND user_account.status = 'active'
-            WHERE membership.organization_id = $1 AND membership.actor_id = $2
-              AND membership.enabled
-            FOR UPDATE OF membership
-            "#,
-        )
-        .bind(organization_id)
-        .bind(caller.actor_id)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or(AppError::NotFound("workspace"))?;
+    let (role, role_permissions) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
+        r#"
+        SELECT membership.role, workspace_role_permissions(membership.role_id)
+        FROM organization_memberships membership
+        JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
+        WHERE membership.organization_id = $1 AND membership.actor_id = $2
+          AND membership.enabled
+        FOR UPDATE OF membership
+        "#,
+    )
+    .bind(organization_id)
+    .bind(caller.actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("workspace"))?;
+    // The new space's owner is named as they are here, whatever their kind.
+    let (display_name, login_name) =
+        crate::accounts::names_in(transaction, organization_id, caller.actor_id)
+            .await?
+            .ok_or(AppError::NotFound("workspace"))?;
     crate::projects::authorize_project_create(
         caller.actor_id,
         caller.kind,

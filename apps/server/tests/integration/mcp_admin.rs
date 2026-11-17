@@ -1473,3 +1473,71 @@ async fn an_agent_with_a_managing_role_changes_a_project() {
     assert_eq!(renamed["outcome"], "ok", "{renamed}");
     world.finish().await;
 }
+
+/// A credential confined to one space acts at workspace level only within
+/// what it holds there, and never with a permission that reaches the whole
+/// workspace: an owner's credential held to SOURCE can't make an agent,
+/// add a person or make an invitation link, though it still works in SOURCE.
+#[tokio::test]
+async fn a_space_confined_credential_does_nothing_workspace_wide() {
+    use agent_workspace_server::mcp::{IssueCredentialCommand, issue_credential};
+    let Some(setup) = setup("mcp_confined_workspace").await else {
+        return;
+    };
+    let source = create_project(&setup, "SOURCE", "Source").await;
+    let actor =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'owner'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("owner");
+    let issued = issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            actor_id: actor,
+            project_id: source.parse().expect("source"),
+            client_name: "Confined".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("credential");
+    let session = initialize(&setup.app, &issued.token)
+        .await
+        .expect("session");
+    for (name, arguments) in [
+        (
+            "agent_create",
+            json!({"displayName": "Ivy", "handle": "ivy", "clientRequestId": "ivy"}),
+        ),
+        (
+            "person_create",
+            json!({"displayName": "Nia", "handle": "nia", "clientRequestId": "nia"}),
+        ),
+        ("invite_link_create", json!({"clientRequestId": "link"})),
+    ] {
+        let refused = tool(&setup.app, &issued.token, &session, name, arguments).await;
+        assert_ne!(
+            refused["outcome"], "ok",
+            "{name}: a confined credential acted on the whole workspace: {refused}"
+        );
+    }
+    let made: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM actors WHERE kind = 'agent') \
+              + (SELECT count(*) FROM users WHERE login_name IS NULL OR claimed_at IS NULL) \
+              + (SELECT count(*) FROM invite_tokens)",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(made, 0);
+    let created = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "task_create",
+        json!({"title": "Still works here"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+}
