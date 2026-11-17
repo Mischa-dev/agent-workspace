@@ -5,6 +5,8 @@
 # out once one has.
 ignore = [
   { id = "RUSTSEC-2026-0215", reason = "unmaintained, not vulnerable; a dependency of yrs (live pages)" },
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, not vulnerable (chrono)" },
+  { id = "RUSTSEC-2026-0555", reason = "unmaintained, not vulnerable (chrono-tz)" },
 ]
 
 [bans]
