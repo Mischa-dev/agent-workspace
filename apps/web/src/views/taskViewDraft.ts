@@ -47,5 +47,8 @@ export function draftFrom(state: ListState, actorId: string, fields: readonly Fi
  */
 export async function draftConfig(projectId: string, draft: ViewDraft): Promise<{ config: unknown; collectionId: string | null }> {
   const read = await listWorkItems(projectId, { ...draft.query, limit: 1 })
-  return { config: read.config ?? {}, collectionId: read.collectionId ?? null }
+  // The search box's words are kept with the view as its own search.
+  const search = draft.query.q?.trim()
+  const config = { ...((read.config ?? {}) as Record<string, unknown>), ...(search ? { search } : {}) }
+  return { config, collectionId: read.collectionId ?? null }
 }

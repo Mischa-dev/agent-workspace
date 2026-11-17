@@ -198,28 +198,6 @@ async fn listing(
         }
         config.search = saved.search;
     }
-    // The `q` words join the view's own search, so the read's settings
-    // (what a new view saves) keep them.
-    let searched = [config.search.take(), query.search.clone()]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if !searched.trim().is_empty() {
-        match query::search_words(&searched) {
-            Some(all) => config.search = Some(all.join(" ")),
-            None => {
-                return Ok(Err(invalid(
-                    "q",
-                    format!(
-                        "Search for at most {} words in {} characters, with the view's own.",
-                        query::MAX_SEARCH_WORDS,
-                        query::MAX_SEARCH_CHARACTERS
-                    ),
-                )));
-            }
-        }
-    }
     if let Err(message) = views::check(&config, &definitions) {
         return Ok(Err(invalid("filters", message)));
     }
