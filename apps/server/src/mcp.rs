@@ -4162,7 +4162,10 @@ async fn run_tool(
     }
     // H1.24: a call into a suspended workspace, or one being deleted, is
     // refused. A list spanning every workspace of an account-wide app isn't
-    // a call into one.
+    // a call into one; its writes are refused where they land (task writes
+    // in `work_item_commands::lock_membership`, messages in the send
+    // pipeline, new projects in `projects::insert_new_project`, operations
+    // in the dispatcher).
     if principal.project_explicit || !principal.account_wide {
         let open = match crate::db::scoped_one(&server.state.pool, async |connection| {
             crate::workspace::lifecycle::ensure_open_for_space(

@@ -458,8 +458,14 @@ pub async fn resume(connection: &mut PgConnection, workspace: Uuid) -> Result<()
     announce(connection, workspace, Lifecycle::Active).await
 }
 
-fn delete_job_key(workspace: Uuid) -> String {
-    format!("{DELETE_JOB_KIND}:{workspace}")
+/// One job per schedule: asking again after keeping the workspace makes a
+/// new job, even while an old one is still finishing (it finds the
+/// workspace kept, or not yet due, and ends).
+fn delete_job_key(workspace: Uuid, delete_after: DateTime<Utc>) -> String {
+    format!(
+        "{DELETE_JOB_KIND}:{workspace}:{}",
+        delete_after.timestamp_micros()
+    )
 }
 
 /// Schedule the workspace's deletion [`DELETION_GRACE_DAYS`] from now.
@@ -486,7 +492,9 @@ pub async fn request_deletion(
         }
         Lifecycle::Suspended => return Err(AppError::WorkspaceSuspended),
     }
-    let delete_after = Utc::now() + Duration::days(DELETION_GRACE_DAYS);
+    // Whole seconds, so the job key made from it matches the stored time.
+    let delete_after =
+        chrono::SubsecRound::trunc_subsecs(Utc::now() + Duration::days(DELETION_GRACE_DAYS), 0);
     sqlx::query(
         r#"
         UPDATE organizations
@@ -507,7 +515,7 @@ pub async fn request_deletion(
         &mut *connection,
         NewJob::new(DELETE_JOB_KIND)
             .payload(DeletePayload { workspace })
-            .unique(delete_job_key(workspace))
+            .unique(delete_job_key(workspace, delete_after))
             .run_at(delete_after)
             .max_attempts(20),
     )
@@ -524,18 +532,24 @@ pub async fn cancel_deletion(
     if lock(connection, workspace).await? != Lifecycle::Deleting {
         return Err(AppError::Conflict("workspace", "not being deleted"));
     }
-    sqlx::query(
+    let delete_after = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
         r#"
-        UPDATE organizations
+        UPDATE organizations organization
         SET lifecycle = 'active', lifecycle_changed_at = now(), delete_after = NULL,
-            deletion_requested_by_actor_id = NULL, version = version + 1, updated_at = now()
-        WHERE id = $1
+            deletion_requested_by_actor_id = NULL, version = organization.version + 1,
+            updated_at = now()
+        FROM (SELECT delete_after FROM organizations WHERE id = $1) previous
+        WHERE organization.id = $1
+        RETURNING previous.delete_after
         "#,
     )
     .bind(workspace)
-    .execute(&mut *connection)
+    .fetch_one(&mut *connection)
     .await?;
-    crate::jobs::cancel_queued(&mut *connection, &delete_job_key(workspace)).await?;
+    if let Some(delete_after) = delete_after {
+        crate::jobs::cancel_queued(&mut *connection, &delete_job_key(workspace, delete_after))
+            .await?;
+    }
     announce(connection, workspace, Lifecycle::Active).await
 }
 

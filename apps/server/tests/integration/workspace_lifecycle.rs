@@ -168,6 +168,27 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .await
     .expect("lifecycle event");
     assert_eq!(announced.as_deref(), Some("suspended"));
+    // An app connected for the owner's whole account gets past the MCP
+    // gate (it may span workspaces), but its write lands in A and is
+    // refused there.
+    let session = initialize(&t.app, &a.app_token).await.expect("app MCP");
+    let (_, body) = call_tool(
+        &t.app,
+        &a.app_token,
+        &session,
+        "project_create",
+        json!({"key": "SUSP", "name": "Made while suspended"}),
+    )
+    .await;
+    assert!(refused_as_suspended(&body), "{body}");
+    let made = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM projects WHERE organization_id = $1 AND project_key = 'SUSP'",
+    )
+    .bind(a.organization)
+    .fetch_one(&t.pool)
+    .await
+    .expect("projects");
+    assert_eq!(made, 0);
     // The session says why.
     let (_, session) = send(
         &t.app,

@@ -588,6 +588,10 @@ pub(crate) async fn insert_new_project(
     name: &str,
     owner: ProjectOwner<'_>,
 ) -> Result<Uuid, AppError> {
+    // H1.24: no new project in a suspended or deleting workspace, whichever
+    // edge asked.
+    crate::workspace::lifecycle::ensure_open(&mut *transaction, organization_id, "project_create")
+        .await?;
     let project_id = Uuid::now_v7();
     let insert = sqlx::query(
         r#"

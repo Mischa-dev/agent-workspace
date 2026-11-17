@@ -140,6 +140,13 @@ impl<T> ToolResult<T> {
                 Self::denied("You don't have permission to do that here.")
             }
             AppError::PayloadTooLarge => Self::invalid("text", "That's too long."),
+            // H1.24: refused where the write lands, as `run_tool` refuses.
+            AppError::WorkspaceSuspended => Self::PermissionDenied {
+                message: "This workspace is suspended or being deleted, so it can't be used. \
+                          Its owners can see why in its settings."
+                    .to_owned(),
+                retry_category: Some("do_not_retry".to_owned()),
+            },
             error => {
                 tracing::error!(
                     operation,
