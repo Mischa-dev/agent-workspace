@@ -16,7 +16,6 @@ export const KIND_ICON: Record<string, IconName> = {
   scheduled_send_failed: 'circle-alert',
   form_paused: 'circle-alert',
   assigned: 'work',
-  approval_requested: 'shield-check',
   request_raised: 'circle-help',
   request_answered: 'circle-check',
   run_waiting: 'clock',

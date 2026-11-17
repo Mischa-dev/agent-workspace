@@ -221,8 +221,8 @@ pub async fn working_for(
                COALESCE(run.config->>'harness', account.adapter_kind) AS harness,
                run.config->>'model' AS model,
                starter.display_name AS started_by, run.requesting_actor_id,
-               (SELECT count(*) FROM agent_approvals approval
-                 WHERE approval.agent_run_id = run.id AND approval.status = 'pending')
+               (SELECT count(*) FROM requests request
+                 WHERE request.run_id = run.id AND request.status = 'open')
                  AS approvals_waiting,
                run.created_at, run.started_at
         {WORKING_FROM}

@@ -33,7 +33,7 @@ import {
   postUpdate,
   needsYou,
   answerRequest,
-  respondToApproval,
+  approveOption,
   sectionsByNeed,
   snoozeChoices,
   unreadIds,
@@ -112,7 +112,6 @@ export function InboxPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
-  const [busyApproval, setBusyApproval] = useState<string | null>(null)
   const [marking, setMarking] = useState(false)
   // In Unread, rows you read stay put until you leave the view, so you can still act on them.
   const [kept, setKept] = useState<Map<string, InboxNotification>>(() => new Map())
@@ -338,20 +337,6 @@ export function InboxPage() {
     }
   }
 
-  const answer = async (item: InboxNotification, decision: 'approve' | 'deny') => {
-    if (!item.approval) return
-    setBusyApproval(`${item.id}:${decision}`)
-    try {
-      await respondToApproval(item.approval.id, decision)
-      showToast({ tone: 'success', title: decision === 'approve' ? 'Approved' : 'Denied' })
-      invalidateInbox(queryClient)
-    } catch (reason) {
-      toastError('Your answer wasn’t sent', reason)
-    } finally {
-      setBusyApproval(null)
-    }
-  }
-
   /** Answers a request card; the toast says it went back to whoever asked. */
   const answerAsked = async (item: InboxNotification, reply: { optionId?: string; text?: string }) => {
     if (!item.request) return
@@ -407,9 +392,9 @@ export function InboxPage() {
       } else if (key === 'I' && event.shiftKey && canMarkAll && !marking) {
         event.preventDefault()
         void markAllRead()
-      } else if (key === 'a' && current?.approval?.status === 'pending' && current.approval.kind === 'approval') {
+      } else if (key === 'a' && current?.request?.status === 'open' && approveOption(current.request)) {
         event.preventDefault()
-        void answer(current, 'approve')
+        void answerAsked(current, { optionId: approveOption(current.request) })
       } else if (key === 'Escape' && detailOpen) {
         setDetailOpen(false)
       } else if (key === 'Escape' && selected) {
@@ -540,9 +525,7 @@ export function InboxPage() {
             <aside aria-label="Preview" className="aw-inbox__detail">
               {selected ? (
                 <NotificationDetail
-                  busyApproval={busyApproval}
                   item={selected}
-                  onAnswer={(decision) => void answer(selected, decision)}
                   onAnswerRequest={(reply) => answerAsked(selected, reply)}
                   onArchive={() => archive(selected)}
                   onBack={() => setDetailOpen(false)}

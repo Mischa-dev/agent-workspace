@@ -20,8 +20,6 @@ EXPECTED_DEPENDENCY_SHA256 = (
     "cdd499d4ccdaa306d7e6ef1097f8efc79f40f60f58d1b118a4c5d15de55c7c9f"
 )
 EXPECTED_ALLOWLIST = (
-    "approval_get",
-    "approval_respond",
     "conversation_list",
     "conversation_read",
     "external_event_poll",
@@ -30,6 +28,8 @@ EXPECTED_ALLOWLIST = (
     "project_open",
     "pull_request_get",
     "repository_get",
+    "request_get",
+    "request_respond",
     "run_request",
     "task_comment",
     "task_create",

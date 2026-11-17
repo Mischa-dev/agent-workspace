@@ -1057,29 +1057,13 @@ async fn build_workspace(
         .execute(pool)
         .await
         .expect("run blocked");
-    let approval = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options, eligible_role, human_required
-        )
-        VALUES ($1, $2, $3, $4, 'approval', $5,
-                '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-                'any_authorized', false)
-        "#,
+    let approval = super::requests::approval(
+        pool,
+        run,
+        &format!("isolation-{run}"),
+        &format!("Launch approval{m}"),
     )
-    .bind(approval)
-    .bind(run)
-    .bind(rook)
-    .bind(format!("isolation-{approval}"))
-    .bind(format!("Launch approval{m}"))
-    .execute(pool)
-    .await
-    .expect("approval");
-    agent_workspace_server::requests::legacy::approval_written(pool, approval)
-        .await
-        .expect("the approval's request");
+    .await;
 
     // W12: what the run did and cost, an agent profile made from a
     // template, and a harness the workspace registered (a connected runner).

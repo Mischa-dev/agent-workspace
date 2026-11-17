@@ -461,11 +461,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/agent-approvals/{id}/respond",
-            Tool("approval_respond"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/browser",
             Person("signing in to a provider is a person's"),
         ),

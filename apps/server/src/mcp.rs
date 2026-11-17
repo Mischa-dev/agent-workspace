@@ -64,7 +64,6 @@ mod admin;
 mod agent_profile_tools;
 mod agents;
 mod ai_tools;
-mod approvals;
 mod automation_tools;
 mod batch_tools;
 mod briefing;
@@ -1033,7 +1032,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List the agents you share a project with: handle, status, when they last checked in, the projects you share, what they're working on (claimed tasks, and reply requests in conversations you can see). People who manage an agent also see how it connects, whether it gets wakeups, its access, whether it can ask for runs or answer approvals, and its last error. Never shows tokens or other secrets; agents are added and changed in the web app.",
+        description = "List the agents you share a project with: handle, status, when they last checked in, the projects you share, what they're working on (claimed tasks, and reply requests in conversations you can see). People who manage an agent also see how it connects, whether it gets wakeups, its access, whether it can ask for runs, and its last error. Never shows tokens or other secrets; agents are added and changed in the web app.",
         annotations(title = "List agents", read_only_hint = true, open_world_hint = false)
     )]
     async fn agent_list(
@@ -2030,23 +2029,6 @@ impl McpServer {
     }
 
     // -- Code, runs and approvals --------------------------------------------
-
-    #[tool(
-        description = "Approvals runs are waiting on that you can answer, oldest first (people only). Answer one with approval_respond. Approvals that need a person are answered in the web app, where the step is shown in full; inWebApp counts them.",
-        annotations(
-            title = "List approvals",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn approval_list(
-        &self,
-        Parameters(arguments): Parameters<approvals::ApprovalListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<approvals::ApprovalListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(approvals::list(&self.state, principal, arguments).await)
-    }
 
     #[tool(
         description = "Say which tasks block a task (blockedBy) or which it blocks (blocks), or remove them (remove: true). The other tasks may be in another project of the same workspace that you can reach; a dependency that would make a cycle is refused with the path. Returns the task's blockers with their status and whether it's ready.",
@@ -3065,48 +3047,6 @@ impl McpServer {
             )
             .await,
         )
-    }
-
-    #[tool(
-        description = "Read an approval a run is waiting on: what it asks, its options, and whether you can answer it. People see approvals addressed to them or their role; agents see ones addressed to them.",
-        annotations(
-            title = "Get approval",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn approval_get(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<approvals::ApprovalGetArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<approvals::ApprovalToolResult> {
-        let principal = principal_or!(parts, approvals::ApprovalToolResult::denied());
-        Json(approvals::get(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Answer an approval a run is waiting on (approve, deny, or answer a question), passing its version as expectedVersion. Approving lets the run continue. Approvals that need a person are answered in the web app.",
-        annotations(
-            title = "Answer approval",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn approval_respond(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<approvals::ApprovalRespondArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<approvals::ApprovalToolResult> {
-        let principal = principal_or!(parts, approvals::ApprovalToolResult::denied());
-        Json(approvals::respond(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -5544,19 +5484,6 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
     (
         "threadId",
         "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
-    ),
-    // An approval belongs to a run, or to an agent's run request (which has
-    // no run yet); either way its thread decides who can see it.
-    (
-        "approvalId",
-        r#"SELECT conversation.project_id
-           FROM agent_approvals approval
-           LEFT JOIN agent_runs run ON run.id = approval.agent_run_id
-           LEFT JOIN external_execution_requests request
-             ON request.id = approval.external_execution_request_id
-           JOIN conversations conversation
-             ON conversation.id = COALESCE(run.conversation_id, request.conversation_id)
-           WHERE approval.id = $1 AND conversation_visible_to(conversation.id, $2)"#,
     ),
     (
         "conversationId",

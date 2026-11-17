@@ -137,7 +137,7 @@ impl Operation for AgentCreate {
         .map_err(|_| {
             OpError::invalid(
                 "scopes",
-                "Include read, and only read, write, events, approval_respond or worker_request.",
+                "Include read, and only read, write, events or worker_request.",
             )
         })?;
         let workspace_id = call.ctx.workspace_id;

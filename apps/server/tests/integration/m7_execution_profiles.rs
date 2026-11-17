@@ -505,7 +505,7 @@ async fn effect_counts(pool: &PgPool) -> (i64, i64, i64, i64, i64, i64, i64) {
             (SELECT count(*) FROM repository_workspaces),
             (SELECT count(*) FROM git_worktrees),
             (SELECT count(*) FROM provider_sessions),
-            (SELECT count(*) FROM agent_approvals),
+            (SELECT count(*) FROM requests WHERE run_id IS NOT NULL),
             (SELECT count(*) FROM messages),
             (SELECT count(*) FROM {n} outbox)
         "#,
@@ -532,8 +532,8 @@ async fn conversation_effect_counts(
               WHERE workspace.conversation_id = $1),
             (SELECT count(*) FROM provider_sessions WHERE conversation_id = $1),
             (SELECT count(*)
-               FROM agent_approvals approval
-               JOIN agent_runs run ON run.id = approval.agent_run_id
+               FROM requests request
+               JOIN agent_runs run ON run.id = request.run_id
               WHERE run.conversation_id = $1),
             (SELECT count(*) FROM messages WHERE conversation_id = $1),
             (SELECT count(*) FROM conversation_entries WHERE conversation_id = $1),

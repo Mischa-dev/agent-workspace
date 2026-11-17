@@ -1066,9 +1066,9 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
         "mine means runs you started: {dana_mine}"
     );
 
-    // An approval Codex is waiting on: Dana (member) can answer it, the
-    // person who started the run can't answer their own, and one that needs a
-    // person stays in the web app.
+    // A question the run is waiting on: Dana (member) finds it in
+    // request_list and answers it with request_respond; a read-only app
+    // can't answer it, and the answer records the app it came through.
     let asking = thread(pool, &seed, seed.channel_id, "Which branch").await;
     let (blocked_run, _) = run(pool, &seed, asking, "which-branch").await;
     for next in ["starting", "working", "blocked"] {
@@ -1079,69 +1079,38 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
             .await
             .unwrap_or_else(|error| panic!("run to {next}: {error}"));
     }
-    let approval = Uuid::now_v7();
-    let human = Uuid::now_v7();
-    for (id, human_required) in [(approval, false), (human, true)] {
-        sqlx::query(
-            r#"
-            INSERT INTO agent_approvals (
-                id, agent_run_id, requesting_actor_id, eligible_role, human_required,
-                kind, summary, options, provider_request_id
-            ) VALUES ($1, $2, $3, 'member', $4, 'question', 'Which branch?',
-                      '["main", "develop"]'::jsonb, 'test-' || $1::text)
-            "#,
-        )
-        .bind(id)
-        .bind(blocked_run)
-        .bind(seed.human_actor_id)
-        .bind(human_required)
-        .execute(pool)
-        .await
-        .expect("approval");
-    }
-    let waiting = call(DANA, "approval_list", json!({})).await;
+    let approval = crate::support::requests::question(
+        pool,
+        blocked_run,
+        "which-branch",
+        "Which branch?",
+        &[("main", "main"), ("develop", "develop")],
+    )
+    .await;
+    let waiting = call(DANA, "request_list", json!({})).await;
     assert_eq!(waiting["outcome"], "ok", "{waiting}");
-    let listed = ids_of(&waiting["value"]["approvals"]);
-    assert!(listed.contains(&approval.to_string()), "{waiting}");
-    assert!(!listed.contains(&human.to_string()), "{waiting}");
-    assert_eq!(waiting["value"]["inWebApp"], 1, "{waiting}");
-    let own = call(OWNER, "approval_list", json!({})).await;
     assert!(
-        !ids_of(&own["value"]["approvals"]).contains(&approval.to_string()),
-        "no answering approvals on your own run: {own}"
+        ids_of(&waiting["value"]["requests"]).contains(&approval.to_string()),
+        "{waiting}"
     );
-    let agents = call(MARA, "approval_list", json!({})).await;
-    assert_eq!(agents["outcome"], "permission_denied", "{agents}");
-    let in_web = call(DANA, "approval_get", json!({"approvalId": human})).await;
-    assert_ne!(in_web["outcome"], "found", "{in_web}");
-    let dana_sees = waiting["value"]["approvals"]
-        .as_array()
-        .and_then(|rows| rows.iter().find(|row| row["id"] == approval.to_string()))
-        .expect("Dana's approval");
-    assert_eq!(dana_sees["canRespond"], true, "{waiting}");
-    // A read-only app sees the approval but isn't offered an answer it can't give.
-    let reader_sees = call(DANA_READER, "approval_get", json!({"approvalId": approval})).await;
-    assert_eq!(reader_sees["outcome"], "found", "{reader_sees}");
-    assert_eq!(
-        reader_sees["approval"]["canRespond"], false,
-        "{reader_sees}"
-    );
+    let reader_sees = call(DANA_READER, "request_get", json!({"requestId": approval})).await;
+    assert_eq!(reader_sees["outcome"], "ok", "{reader_sees}");
     let read_only = call(
         READER,
-        "approval_respond",
-        json!({"approvalId": approval, "expectedVersion": 1, "answer": "main", "clientRequestId": "a-0"}),
+        "request_respond",
+        json!({"requestId": approval, "optionId": "main", "clientRequestId": "a-0"}),
     )
     .await;
-    assert_ne!(read_only["outcome"], "applied", "{read_only}");
+    assert_ne!(read_only["outcome"], "ok", "{read_only}");
     let answered = call(
         DANA,
-        "approval_respond",
-        json!({"approvalId": approval, "expectedVersion": 1, "answer": "main", "clientRequestId": "a-1"}),
+        "request_respond",
+        json!({"requestId": approval, "optionId": "main", "clientRequestId": "a-1"}),
     )
     .await;
-    assert_eq!(answered["outcome"], "applied", "{answered}");
+    assert_eq!(answered["outcome"], "ok", "{answered}");
     let audited = sqlx::query_scalar::<_, bool>(
-        "SELECT mcp_oauth_grant_id IS NOT NULL FROM audit_events WHERE action = 'approval.external_responded' AND target_id = $1",
+        "SELECT mcp_oauth_grant_id IS NOT NULL FROM audit_events WHERE action = 'request_respond' AND target_id = $1",
     )
     .bind(approval)
     .fetch_one(pool)
@@ -1197,22 +1166,14 @@ async fn run_controls_stay_inside_a_private_thread() {
             .await
             .unwrap_or_else(|error| panic!("run to {next}: {error}"));
     }
-    let approval = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, eligible_role, human_required,
-            kind, summary, options, provider_request_id
-        ) VALUES ($1, $2, $3, 'member', false, 'question', 'Which branch?',
-                  '["main", "develop"]'::jsonb, 'test-' || $1::text)
-        "#,
+    let approval = crate::support::requests::question(
+        pool,
+        blocked_run,
+        "secret-branch",
+        "Which branch?",
+        &[("main", "main"), ("develop", "develop")],
     )
-    .bind(approval)
-    .bind(blocked_run)
-    .bind(seed.human_actor_id)
-    .execute(pool)
-    .await
-    .expect("approval");
+    .await;
 
     let interrupt = |browser: &Browser, key: &str| {
         browser.request(
@@ -1225,9 +1186,9 @@ async fn run_controls_stay_inside_a_private_thread() {
     let respond = |browser: &Browser, key: &str| {
         browser.request(
             "POST",
-            &format!("/api/v1/agent-approvals/{approval}/respond"),
+            "/api/v2/ops/request_respond",
             Some(key),
-            json!({"answer": "main"}),
+            json!({"requestId": approval, "text": "main"}),
         )
     };
 
@@ -1246,10 +1207,14 @@ async fn run_controls_stay_inside_a_private_thread() {
     .await;
     assert_eq!(missing_status, StatusCode::NOT_FOUND, "{missing}");
     assert_eq!(body["error"], missing["error"], "{body} vs {missing}");
-    let (status, body) = send(app, respond(&dana_browser, "dana-respond-1")).await;
+    let (status, body) = send(
+        app,
+        respond(&dana_browser, "0190b6a4-1c2d-7e3f-8a9b-0c1d2e3f4a61"),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let (state, approval_status) = sqlx::query_as::<_, (String, String)>(
-        "SELECT run.state, approval.status FROM agent_runs run JOIN agent_approvals approval ON approval.agent_run_id = run.id WHERE approval.id = $1",
+        "SELECT run.state, request.status FROM agent_runs run JOIN requests request ON request.run_id = run.id WHERE request.id = $1",
     )
     .bind(approval)
     .fetch_one(pool)
@@ -1257,12 +1222,16 @@ async fn run_controls_stay_inside_a_private_thread() {
     .expect("run and approval");
     assert_eq!(
         (state.as_str(), approval_status.as_str()),
-        ("blocked", "pending")
+        ("blocked", "open")
     );
 
     // Once Dana is in the channel, the same calls reach the run.
     execute(pool, join, &[seed.project_id, secret_channel, dana]).await;
-    let (status, body) = send(app, respond(&dana_browser, "dana-respond-2")).await;
+    let (status, body) = send(
+        app,
+        respond(&dana_browser, "0190b6a4-1c2d-7e3f-8a9b-0c1d2e3f4a62"),
+    )
+    .await;
     assert_ne!(status, StatusCode::NOT_FOUND, "{body}");
     let (status, body) = send(app, interrupt(&dana_browser, "dana-interrupt-2")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -1290,7 +1259,7 @@ async fn an_agent_cannot_read_or_answer_an_approval_in_a_hidden_thread() {
             None,
             json!({"connectionName": "Approver", "displayName": "Approver",
                    "handle": "approver", "role": "member",
-                   "scopes": ["read", "write", "approval_respond"]}),
+                   "scopes": ["read", "write"]}),
         ),
     )
     .await;
@@ -1311,31 +1280,43 @@ async fn an_agent_cannot_read_or_answer_an_approval_in_a_hidden_thread() {
             .await
             .expect("run state");
     }
-    let approval = Uuid::now_v7();
-    sqlx::query("INSERT INTO agent_approvals (id, agent_run_id, requesting_actor_id, eligible_role, human_required, kind, summary, options, provider_request_id) VALUES ($1, $2, $3, 'member', false, 'question', 'Private release secret', '[\"main\"]'::jsonb, 'private-approval')")
-        .bind(approval).bind(run_id).bind(seed.human_actor_id).execute(&setup.pool).await.expect("approval");
+    let approval = crate::support::requests::question(
+        &setup.pool,
+        run_id,
+        "private-approval",
+        "Private release secret",
+        &[("main", "main")],
+    )
+    .await;
     let read = tool(
         app,
         token,
         &session,
-        "approval_get",
-        json!({"approvalId": approval}),
+        "request_get",
+        json!({"requestId": approval}),
     )
     .await;
-    let write = tool(app, token, &session, "approval_respond", json!({
-        "approvalId": approval, "expectedVersion": 1, "answer": "main", "clientRequestId": "hidden-answer"
-    })).await;
+    let write = tool(
+        app,
+        token,
+        &session,
+        "request_respond",
+        json!({
+            "requestId": approval, "optionId": "main", "clientRequestId": "hidden-answer"
+        }),
+    )
+    .await;
     assert_eq!(
         read["outcome"], "not_found",
         "private approval leaked: {read}; write: {write}"
     );
     assert_eq!(write["outcome"], "not_found", "{write}");
-    let status: String = sqlx::query_scalar("SELECT status FROM agent_approvals WHERE id = $1")
+    let status: String = sqlx::query_scalar("SELECT status FROM requests WHERE id = $1")
         .bind(approval)
         .fetch_one(&setup.pool)
         .await
         .expect("approval state");
-    assert_eq!(status, "pending");
+    assert_eq!(status, "open");
 }
 
 #[tokio::test]
@@ -1657,9 +1638,9 @@ async fn removing_a_sponsored_prompt_scrubs_the_execution_request_too() {
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/agent-approvals/{approval}/respond"),
+            "/api/v2/ops/request_respond",
             Some("approve-secret"),
-            json!({"decision": "approve"}),
+            json!({"requestId": approval, "optionId": "approve"}),
         ),
     )
     .await;

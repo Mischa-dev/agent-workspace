@@ -6,7 +6,8 @@ import { runSettingsFrom } from '../execution/api'
 import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, formatFullDate, formatRelative, type ChipTone, type IconName } from '../ui'
 import { RUN_STATUS } from '../runs/runModel'
 import { runAgent } from './runAgent'
-import type { Approval, Run } from './threadTypes'
+import { answerKey } from './threadTimeline'
+import type { RequestAnswer, Run, ThreadRequest } from './threadTypes'
 import '../styles/conversation.css'
 
 function ordinal(position: number) {
@@ -136,7 +137,7 @@ export function RunCard({ actions, developerDetail = true, notes, run }: { actio
   )
 }
 
-/** A decision the run needs from you: allow or deny, or answer a question. */
+/** A request the run raised: allow or deny, or answer a question. */
 export function ApprovalCard({
   approval,
   busyAction,
@@ -144,16 +145,21 @@ export function ApprovalCard({
   onRespond,
   run,
 }: {
-  approval: Approval
+  approval: ThreadRequest
   /** The run asking, for its name. */
   run: Run | null
   busyAction: string | null
   canRespond: boolean
-  onRespond: (approvalId: string, response: { decision: 'approve' | 'deny' } | { answer: string }) => void
+  onRespond: (requestId: string, answer: RequestAnswer) => void
 }) {
   const [answer, setAnswer] = useState('')
-  const question = approval.kind === 'question'
+  const question = approval.kind !== 'approval'
   const agent = runAgent(run)
+  const styled = (style: string) =>
+    approval.options.find((option) => (option.style ?? option.id) === style)
+  const allow = styled('approve')
+  const deny = styled('deny')
+  const send = (reply: RequestAnswer) => onRespond(approval.id, reply)
   return (
     <section aria-labelledby={`approval-${approval.id}`} className="aw-card aw-approval is-open">
       <header className="aw-card__head">
@@ -167,14 +173,14 @@ export function ApprovalCard({
           Needs you
         </StatusChip>
       </header>
-      <p className="aw-approval__summary">{approval.summary}</p>
+      <p className="aw-approval__summary">{approval.title}</p>
       {canRespond && question ? (
         <form
           className="aw-approval__answer-form"
           onSubmit={(event) => {
             event.preventDefault()
             const value = answer.trim()
-            if (value) onRespond(approval.id, { answer: value })
+            if (value) send({ text: value })
           }}
         >
           {approval.options.length > 0 ? (
@@ -182,13 +188,10 @@ export function ApprovalCard({
               {/* A suggested answer is an answer: it sends straight away. */}
               {approval.options.map((option) => (
                 <Button
-                  busy={busyAction === `${approval.id}:answer` && answer === option.label}
+                  busy={busyAction === answerKey(approval.id, { optionId: option.id })}
                   disabled={Boolean(busyAction)}
                   key={option.id}
-                  onClick={() => {
-                    setAnswer(option.label)
-                    onRespond(approval.id, { answer: option.label })
-                  }}
+                  onClick={() => send({ optionId: option.id })}
                   size="sm"
                 >
                   {option.label}
@@ -196,43 +199,56 @@ export function ApprovalCard({
               ))}
             </div>
           ) : null}
-          <TextArea
-            disabled={Boolean(busyAction)}
-            id={`approval-answer-${approval.id}`}
-            label={approval.options.length > 0 ? 'Or write your own' : 'Your answer'}
-            maxLength={4000}
-            onChange={(event) => setAnswer(event.target.value)}
-            required
-            rows={3}
-            value={answer}
-          />
-          <div className="aw-card__actions">
-            <Button busy={busyAction === `${approval.id}:answer`} disabled={Boolean(busyAction) || !answer.trim()} type="submit" variant="primary">
-              Send answer
-            </Button>
-          </div>
+          {approval.allowText ? (
+            <>
+              <TextArea
+                disabled={Boolean(busyAction)}
+                id={`approval-answer-${approval.id}`}
+                label={approval.options.length > 0 ? 'Or write your own' : 'Your answer'}
+                maxLength={4000}
+                onChange={(event) => setAnswer(event.target.value)}
+                required
+                rows={3}
+                value={answer}
+              />
+              <div className="aw-card__actions">
+                <Button
+                  busy={busyAction === answerKey(approval.id, {})}
+                  disabled={Boolean(busyAction) || !answer.trim()}
+                  type="submit"
+                  variant="primary"
+                >
+                  Send answer
+                </Button>
+              </div>
+            </>
+          ) : null}
         </form>
       ) : null}
       {canRespond && !question ? (
         <footer className="aw-card__actions">
-          <Button
-            busy={busyAction === `${approval.id}:approve`}
-            disabled={Boolean(busyAction)}
-            onClick={() => onRespond(approval.id, { decision: 'approve' })}
-            variant="primary"
-          >
-            Allow once
-          </Button>
-          <Button
-            busy={busyAction === `${approval.id}:deny`}
-            disabled={Boolean(busyAction)}
-            onClick={() => onRespond(approval.id, { decision: 'deny' })}
-          >
-            Deny
-          </Button>
+          {allow ? (
+            <Button
+              busy={busyAction === answerKey(approval.id, { optionId: allow.id })}
+              disabled={Boolean(busyAction)}
+              onClick={() => send({ optionId: allow.id })}
+              variant="primary"
+            >
+              {allow.label}
+            </Button>
+          ) : null}
+          {deny ? (
+            <Button
+              busy={busyAction === answerKey(approval.id, { optionId: deny.id })}
+              disabled={Boolean(busyAction)}
+              onClick={() => send({ optionId: deny.id })}
+            >
+              {deny.label}
+            </Button>
+          ) : null}
         </footer>
       ) : null}
-      {!canRespond ? <p className="aw-approval__note">Only people who can run work in this project can answer.</p> : null}
+      {!canRespond ? <p className="aw-approval__note">This waits on whoever it asks; they answer it here or from their inbox.</p> : null}
     </section>
   )
 }

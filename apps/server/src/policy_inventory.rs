@@ -604,12 +604,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         ReadStateUpdate
     ),
     policy_route!(
-        "api",
-        Post,
-        "/api/v1/agent-approvals/{id}/respond",
-        ApprovalRespond
-    ),
-    policy_route!(
         "account",
         Post,
         "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/browser",

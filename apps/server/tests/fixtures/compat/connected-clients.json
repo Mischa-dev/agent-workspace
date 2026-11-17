@@ -27,8 +27,6 @@
     "hermes-0.20": {
       "wake": "poll",
       "tools": {
-        "approval_get": ["approvalId"],
-        "approval_respond": ["approvalId"],
         "conversation_list": [],
         "conversation_read": ["conversationId"],
         "external_event_poll": [],
@@ -37,6 +35,8 @@
         "project_open": [],
         "pull_request_get": [],
         "repository_get": [],
+        "request_get": ["requestId"],
+        "request_respond": ["requestId"],
         "run_request": [],
         "task_comment": ["taskId"],
         "task_create": ["title"],

@@ -59,7 +59,6 @@ pub mod kind {
     pub const MENTION: &str = "mention";
     pub const COMMENT_MENTION: &str = "comment_mention";
     pub const ASSIGNED: &str = "assigned";
-    pub const APPROVAL_REQUESTED: &str = "approval_requested";
     /// Someone asked you, or a role you hold, something: a question, an
     /// approval or a proposal (A1.8).
     pub const REQUEST_RAISED: &str = "request_raised";
@@ -130,7 +129,8 @@ impl Category {
             Self::Threads => Some(&[kind::THREAD_REPLY]),
             Self::Tasks => Some(&[kind::ASSIGNED, kind::COMMENT_MENTION, kind::TASK_CHANGED]),
             Self::Runs => Some(&[
-                kind::APPROVAL_REQUESTED,
+                kind::REQUEST_RAISED,
+                kind::REQUEST_ANSWERED,
                 kind::RUN_WAITING,
                 kind::RUN_COMPLETED,
                 kind::RUN_FAILED,
@@ -201,7 +201,6 @@ pub struct NewNotification {
     pub work_item_id: Option<Uuid>,
     pub comment_id: Option<Uuid>,
     pub agent_run_id: Option<Uuid>,
-    pub approval_id: Option<Uuid>,
     pub pull_request_id: Option<Uuid>,
     pub detail: serde_json::Value,
     pub group_key: String,
@@ -230,7 +229,6 @@ impl NewNotification {
             work_item_id: None,
             comment_id: None,
             agent_run_id: None,
-            approval_id: None,
             pull_request_id: None,
             detail: serde_json::json!({}),
             group_key,
@@ -337,22 +335,21 @@ pub async fn deliver(
         INSERT INTO notifications (
             id, project_id, recipient_actor_id, kind, subject_kind, subject_id,
             actor_id, conversation_id, message_id, work_item_id, comment_id,
-            agent_run_id, approval_id, pull_request_id, detail, group_key, archived_at,
+            agent_run_id, pull_request_id, detail, group_key, archived_at,
             read_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                  CASE WHEN $17 THEN NULL ELSE now() END,
-                  CASE WHEN $18 THEN now() END)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                  CASE WHEN $16 THEN NULL ELSE now() END,
+                  CASE WHEN $17 THEN now() END)
         ON CONFLICT (recipient_actor_id, group_key) WHERE archived_at IS NULL
         DO UPDATE SET
             kind = EXCLUDED.kind,
             actor_id = EXCLUDED.actor_id,
             message_id = EXCLUDED.message_id,
             comment_id = EXCLUDED.comment_id,
-            approval_id = EXCLUDED.approval_id,
             pull_request_id = COALESCE(EXCLUDED.pull_request_id, notifications.pull_request_id),
             detail = EXCLUDED.detail,
             repeat_count = notifications.repeat_count + 1,
-            read_at = CASE WHEN $18 THEN COALESCE(notifications.read_at, now()) END,
+            read_at = CASE WHEN $17 THEN COALESCE(notifications.read_at, now()) END,
             surfaced_at = GREATEST(now(), COALESCE(notifications.snoozed_until, now())),
             updated_at = now()
         RETURNING id
@@ -370,7 +367,6 @@ pub async fn deliver(
     .bind(notification.work_item_id)
     .bind(notification.comment_id)
     .bind(notification.agent_run_id)
-    .bind(notification.approval_id)
     .bind(notification.pull_request_id)
     .bind(&notification.detail)
     .bind(&notification.group_key)
@@ -1379,12 +1375,6 @@ async fn work_item_changes(
     Ok(notifications)
 }
 
-#[derive(FromRow)]
-struct ApproverRow {
-    approval_id: Uuid,
-    actor_id: Uuid,
-}
-
 async fn run_notifications(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
@@ -1415,66 +1405,42 @@ async fn run_notifications(
         notification
     };
     let mut notifications = Vec::new();
-    let mut approvers = BTreeSet::new();
-    if state == RunState::Blocked {
-        // The notification points at the approval's request (A1.7); make
-        // sure it has one, whoever wrote the approval.
-        crate::requests::legacy::run_approvals_written(&mut **transaction, run_id).await?;
-        // Everyone who may answer, as respond_to_approval decides it.
-        let rows = sqlx::query_as::<_, ApproverRow>(
-            r#"
-            SELECT approval.id AS approval_id, membership.actor_id
-            FROM agent_approvals approval
-            JOIN agent_runs run ON run.id = approval.agent_run_id
-            JOIN conversations conversation ON conversation.id = run.conversation_id
-            JOIN project_memberships membership
-              ON membership.project_id = conversation.project_id
-             AND membership.enabled
-             AND membership.role IN ('owner', 'admin', 'member')
-             AND custom_role_allows(membership.role_id, 'runs.approve')
-            WHERE approval.agent_run_id = $1
-              AND approval.status = 'pending'
-              AND (
-                  approval.eligible_actor_id = membership.actor_id
-                  OR (
-                      approval.eligible_actor_id IS NULL
-                      AND approval.eligible_role IN (membership.role, 'any_authorized')
-                  )
-              )
-              AND actor_can_access_project(membership.actor_id, NULL, conversation.project_id)
-              AND conversation_visible_to(conversation.id, membership.actor_id)
-            ORDER BY approval.id, membership.actor_id
-            "#,
+    // While it waits, the newest thing it asked for; whoever may answer that
+    // was told when it was raised (`requests::announce_raised`).
+    let waiting_on = if state == RunState::Blocked {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM requests WHERE run_id = $1 AND status = 'open' ORDER BY created_at DESC, id DESC LIMIT 1",
         )
         .bind(run_id)
-        .fetch_all(&mut **transaction)
-        .await?;
-        for row in rows {
-            approvers.insert(row.actor_id);
-            let mut notification = base(
-                row.actor_id,
-                kind::APPROVAL_REQUESTED,
-                format!("approval:{}", row.approval_id),
-            );
-            notification.approval_id = Some(row.approval_id);
-            notifications.push(notification);
+        .fetch_optional(&mut **transaction)
+        .await?
+    } else {
+        None
+    };
+    let told_already = match waiting_on {
+        Some(request_id) => {
+            sqlx::query_scalar::<_, bool>(
+                r#"
+            SELECT EXISTS (
+                SELECT 1 FROM notifications
+                WHERE subject_kind = 'request' AND subject_id = $1 AND recipient_actor_id = $2
+            )
+            "#,
+            )
+            .bind(request_id)
+            .bind(run.requesting_actor_id)
+            .fetch_one(&mut **transaction)
+            .await?
         }
-    }
-    if run.requester_reachable && !approvers.contains(&run.requesting_actor_id) {
+        None => false,
+    };
+    if run.requester_reachable && !told_already {
         let dedupe_key = match state {
-            // Each wait is its own occurrence; the approval says which.
-            RunState::Blocked => {
-                let approval_id = sqlx::query_scalar::<_, Uuid>(
-                    "SELECT id FROM agent_approvals WHERE agent_run_id = $1 AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
-                )
-                .bind(run_id)
-                .fetch_optional(&mut **transaction)
-                .await?;
-                match approval_id {
-                    Some(approval_id) => format!("run-waiting:{approval_id}"),
-                    None => return Ok(notifications),
-                }
-            }
+            // Each wait is its own occurrence; the request says which.
+            RunState::Blocked => match waiting_on {
+                Some(request_id) => format!("run-waiting:{request_id}"),
+                None => return Ok(notifications),
+            },
             _ => format!("run-ended:{run_id}"),
         };
         notifications.push(base(run.requesting_actor_id, kind, dedupe_key));
@@ -1691,9 +1657,6 @@ pub struct NotificationView {
     pub created_at: String,
     /// Where to open it in the web app (an https URL for a pull request).
     pub href: String,
-    /// Set when the notification is about an approval that can be answered.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approval: Option<ApprovalView>,
     /// Where its Launch action goes, for notifications that have one (a
     /// capacity alert opens the account's ready tasks).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1739,17 +1702,6 @@ pub struct NotificationActor {
     /// The actor's kind (human, external_agent, execution_worker, ...), so
     /// an agent reads as an agent.
     pub kind: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApprovalView {
-    pub id: Uuid,
-    /// approval or question
-    pub kind: String,
-    /// pending, resolved, superseded or canceled
-    pub status: String,
-    pub options: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1801,11 +1753,7 @@ struct NotificationRow {
     run_failure: Option<String>,
     run_state: Option<String>,
     run_agent_name: Option<String>,
-    approval_id: Option<Uuid>,
-    approval_kind: Option<String>,
-    approval_status: Option<String>,
-    approval_summary: Option<String>,
-    approval_options: Option<serde_json::Value>,
+    run_waiting_on: Option<String>,
     pull_request_number: Option<i64>,
     pull_request_title: Option<String>,
     pull_request_url: Option<String>,
@@ -1860,9 +1808,11 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                item.title AS work_item_title,
                left(run.failure_reason, {PREVIEW_CHARACTERS}) AS run_failure,
                run.state AS run_state, run_agent.display_name AS run_agent_name,
-               n.approval_id, approval.kind AS approval_kind, approval.status AS approval_status,
-               left(approval.summary, {PREVIEW_CHARACTERS}) AS approval_summary,
-               approval.options AS approval_options,
+               (SELECT left(waiting.title, {PREVIEW_CHARACTERS}) FROM requests waiting
+                 WHERE n.kind = 'run_waiting' AND waiting.run_id = n.agent_run_id
+                   AND waiting.status = 'open'
+                   AND request_visible_to(waiting.id, n.recipient_actor_id)
+                 ORDER BY waiting.created_at DESC LIMIT 1) AS run_waiting_on,
                pr.pull_request_number, pr.title AS pull_request_title,
                pr.html_url AS pull_request_url,
                request.kind AS request_kind, request.status AS request_status,
@@ -1889,7 +1839,6 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
         {run_join}
         LEFT JOIN project_memberships run_agent
           ON run_agent.project_id = n.project_id AND run_agent.actor_id = run_worker.actor_id
-        LEFT JOIN agent_approvals approval ON approval.id = n.approval_id
         LEFT JOIN github_pull_requests pr ON pr.id = n.pull_request_id
         LEFT JOIN requests request
           ON n.subject_kind = 'request' AND request.id = n.subject_id
@@ -2119,7 +2068,6 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         || "a pull request".to_owned(),
         |number| format!("PR #{number}"),
     );
-    let question = row.approval_kind.as_deref() == Some("question");
     let (title, preview) = match row.kind.as_str() {
         kind::MENTION => (
             format!("{who} mentioned you in {place}"),
@@ -2181,21 +2129,12 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
                 .clone()
                 .or_else(|| row.work_item_title.clone()),
         ),
-        kind::APPROVAL_REQUESTED => (
-            match (&row.run_agent_name, question) {
-                (Some(agent), true) => format!("{agent} has a question for you in {place}"),
-                (Some(agent), false) => format!("{agent} needs your approval in {place}"),
-                (None, true) => format!("A run in {place} has a question for you"),
-                (None, false) => format!("A run in {place} needs your approval"),
-            },
-            row.approval_summary.clone(),
-        ),
         kind::RUN_WAITING => (
             row.run_agent_name.as_ref().map_or_else(
                 || format!("Your run in {place} is waiting on you"),
                 |agent| format!("{agent} is waiting on you in {place}"),
             ),
-            row.approval_summary.clone(),
+            row.run_waiting_on.clone(),
         ),
         kind::REQUEST_RAISED => (
             {
@@ -2327,17 +2266,6 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
     // links, in the notification's workspace.
     let workspace = WorkspaceAddress::id(row.workspace_id);
     let href = addresses.from_legacy(&workspace, &href);
-    let approval = match (row.approval_id, row.approval_kind, row.approval_status) {
-        (Some(id), Some(kind), Some(status)) => Some(ApprovalView {
-            id,
-            kind,
-            status,
-            options: row
-                .approval_options
-                .unwrap_or_else(|| serde_json::json!([])),
-        }),
-        _ => None,
-    };
     let request = match (
         row.request_kind.clone(),
         row.request_status.clone(),
@@ -2438,7 +2366,6 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         at: row.at,
         created_at: row.created_at,
         href,
-        approval,
         request,
         launch_href,
         batch,
@@ -2695,7 +2622,7 @@ mod tests {
             kind::MENTION,
             kind::COMMENT_MENTION,
             kind::ASSIGNED,
-            kind::APPROVAL_REQUESTED,
+            kind::REQUEST_RAISED,
             kind::RUN_WAITING,
             kind::RUN_COMPLETED,
             kind::RUN_FAILED,

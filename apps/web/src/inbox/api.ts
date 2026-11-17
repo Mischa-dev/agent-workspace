@@ -21,13 +21,6 @@ export type InboxView = 'inbox' | 'unread' | 'snoozed' | 'archived'
 export type InboxCategory = 'all' | 'mentions' | 'threads' | 'tasks' | 'runs' | 'pull_requests' | 'usage'
 export type InboxAction = 'read' | 'unread' | 'archive' | 'restore' | 'snooze' | 'unsnooze'
 
-export type InboxApproval = {
-  id: string
-  kind: 'approval' | 'question'
-  status: string
-  options: Array<{ id: string; label: string }>
-}
-
 /** A request someone raised (a question, approval or proposal), and its answer once given. */
 export type InboxRequest = {
   id: string
@@ -60,7 +53,6 @@ export type InboxNotification = {
   launchHref: string | null
   /** Capacity alerts: the suggested batch, which Launch starts in one tap. */
   batch: { accountId: string; size: number; windowKey: string | null } | null
-  approval: InboxApproval | null
   request: InboxRequest | null
 }
 
@@ -93,20 +85,6 @@ function inAppPath(href: string | null) {
 
 export function isExternalHref(href: string) {
   return href.startsWith('https://')
-}
-
-function normalizeApproval(value: unknown): InboxApproval | null {
-  const record = asRecord(value)
-  const id = text(record.id)
-  const status = text(record.status)
-  if (!id || !status || (record.kind !== 'approval' && record.kind !== 'question')) return null
-  const options = Array.isArray(record.options)
-    ? record.options
-        .map(asRecord)
-        .filter((option) => typeof option.id === 'string' && typeof option.label === 'string')
-        .map((option) => ({ id: option.id as string, label: option.label as string }))
-    : []
-  return { id, kind: record.kind, status, options }
 }
 
 function normalizeRequest(value: unknown): InboxRequest | null {
@@ -173,7 +151,6 @@ export function normalizeNotification(value: unknown): InboxNotification | null 
     href: safeHref(text(record.href) ?? '', projectId),
     launchHref: inAppPath(text(record.launchHref)),
     batch: normalizeBatch(record.batch),
-    approval: normalizeApproval(record.approval),
     request: normalizeRequest(record.request),
   }
 }
@@ -324,12 +301,9 @@ export async function unreadIds(category: InboxCategory): Promise<string[]> {
   return ids
 }
 
-export function respondToApproval(approvalId: string, decision: 'approve' | 'deny') {
-  return requestJson<unknown>(`/api/v1/agent-approvals/${encodeURIComponent(approvalId)}/respond`, {
-    method: 'POST',
-    idempotencyKey: `approval-${approvalId}-${decision}`,
-    json: { decision },
-  })
+/** The option of a request that says yes (styled, or named, approve). */
+export function approveOption(request: InboxRequest): string | undefined {
+  return request.options.find((option) => (option.style ?? option.id) === 'approve')?.id
 }
 
 /** Answer a request asked of you or a role you hold: an option, words, or both. */
@@ -372,7 +346,7 @@ export function groupBySubject(notifications: InboxNotification[]) {
 
 /**
  * Kinds that ask something of you: someone mentioned or messaged you, gave
- * you a task or a review, an approval or a waiting run is yours to answer,
+ * you a task or a review, a request or a waiting run is yours to answer,
  * or something of yours failed. Everything else is for your information.
  */
 const NEEDS_YOU_KINDS = new Set([
@@ -381,7 +355,6 @@ const NEEDS_YOU_KINDS = new Set([
   'conversation_message',
   'direct_message',
   'assigned',
-  'approval_requested',
   'request_raised',
   'review_requested',
   'run_waiting',
@@ -393,9 +366,8 @@ const NEEDS_YOU_KINDS = new Set([
   'budget_warning',
 ])
 
-/** Whether a notification asks something of you; an approval someone already answered no longer does. */
+/** Whether a notification asks something of you; a request someone already answered no longer does. */
 export function needsYou(notification: InboxNotification) {
-  if (notification.approval && notification.approval.status !== 'pending') return false
   if (notification.request && notification.request.status !== 'open') return false
   return NEEDS_YOU_KINDS.has(notification.kind)
 }
