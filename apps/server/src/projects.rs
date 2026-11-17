@@ -18,10 +18,9 @@ use crate::{
         Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
     },
-    spaces::SpaceKind,
+    spaces::{SpaceKind, SpaceVisibility, manage},
 };
 
-const MAX_PROJECT_NAME_BYTES: usize = 120;
 const MAX_SEARCH_BYTES: usize = 120;
 const MAX_FILTER_BYTES: usize = 50_000;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 200;
@@ -52,6 +51,7 @@ struct ProjectRow {
     organization_id: Uuid,
     project_key: String,
     name: String,
+    icon: Option<String>,
     kind: String,
     role: String,
     role_permissions: Option<Vec<String>>,
@@ -81,6 +81,9 @@ pub struct ProjectView {
     organization_id: Uuid,
     key: String,
     name: String,
+    /// An emoji shown beside the name (K4.7), when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
     archived_at: Option<String>,
     role: String,
     version: i64,
@@ -215,7 +218,6 @@ struct ProjectMembershipRow {
     id: Uuid,
     role: String,
     role_permissions: Option<Vec<String>>,
-    version: i64,
     archived_at: Option<String>,
 }
 
@@ -266,6 +268,7 @@ async fn list_projects(
             p.id,
             p.organization_id,
             p.project_key,
+            p.icon,
             p.name,
             p.kind,
             pm.role,
@@ -382,8 +385,8 @@ async fn create_project(
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = idempotency_key(&headers)?;
-    let key = normalize_project_key(&request.key)?;
-    let name = normalize_project_name(&request.name)?;
+    let key = manage::normalize_key(&request.key)?;
+    let name = manage::normalize_name(&request.name)?;
     let request_hash: [u8; 32] = Sha256::digest(
         serde_json::to_vec(&serde_json::json!({
             "organizationId": request.organization_id,
@@ -491,15 +494,21 @@ async fn create_project(
     .execute(&mut *transaction)
     .await?;
 
-    let project_id = insert_new_project(
+    let project_id = manage::create(
         &mut transaction,
-        request.organization_id,
-        &key,
-        &name,
-        ProjectOwner {
-            actor_id: principal.actor_id,
-            display_name: &principal.display_name,
-            login_name: &principal.login_name,
+        manage::NewSpace {
+            workspace_id: request.organization_id,
+            kind: SpaceKind::Project,
+            key: &key,
+            name: &name,
+            description: "",
+            visibility: SpaceVisibility::Members,
+            icon: None,
+            owner: manage::Owner {
+                account_id: principal.actor_id,
+                display_name: &principal.display_name,
+                login_name: &principal.login_name,
+            },
         },
     )
     .await?;
@@ -521,6 +530,7 @@ async fn create_project(
         organization_id: request.organization_id,
         key,
         name,
+        icon: None,
         archived_at: None,
         role: "owner".to_owned(),
         version: 1,
@@ -582,94 +592,6 @@ async fn create_project(
     project_response(StatusCode::CREATED, project)
 }
 
-/// Who a new Project is created for: they become its owner.
-pub(crate) struct ProjectOwner<'a> {
-    pub actor_id: Uuid,
-    pub display_name: &'a str,
-    pub login_name: &'a str,
-}
-
-/// The rows every new Project starts with: the Project, its owner, its task
-/// counter, the default workflow, empty instructions and the owner's
-/// navigation state. The web app and the MCP project_create tool both create
-/// Projects through this, after checking the creator may.
-pub(crate) async fn insert_new_project(
-    transaction: &mut Transaction<'_, Postgres>,
-    organization_id: Uuid,
-    key: &str,
-    name: &str,
-    owner: ProjectOwner<'_>,
-) -> Result<Uuid, AppError> {
-    // H1.24: no new project in a suspended or deleting workspace, whichever
-    // edge asked.
-    crate::workspace::lifecycle::ensure_open(&mut *transaction, organization_id, "project_create")
-        .await?;
-    let project_id = Uuid::now_v7();
-    let insert = sqlx::query(
-        r#"
-        INSERT INTO projects (
-            id, organization_id, project_key, name
-        )
-        VALUES ($1, $2, $3, $4)
-        "#,
-    )
-    .bind(project_id)
-    .bind(organization_id)
-    .bind(key)
-    .bind(name)
-    .execute(&mut **transaction)
-    .await;
-    if let Err(error) = insert {
-        if database_constraint(&error) == Some("projects_organization_key_unique") {
-            return Err(AppError::ProjectKeyConflict);
-        }
-        return Err(error.into());
-    }
-    sqlx::query(
-        r#"
-        INSERT INTO project_memberships (
-            id, project_id, actor_id, role, display_name, handle
-        )
-        VALUES ($1, $2, $3, 'owner', $4, $5)
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(project_id)
-    .bind(owner.actor_id)
-    .bind(owner.display_name)
-    .bind(membership_handle(owner.login_name))
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query("INSERT INTO project_counters (project_id, next_work_item_number) VALUES ($1, 1)")
-        .bind(project_id)
-        .execute(&mut **transaction)
-        .await?;
-    crate::work_items::ensure_default_workflow(transaction, project_id).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO project_instructions (project_id, content)
-        VALUES ($1, '')
-        "#,
-    )
-    .bind(project_id)
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO project_navigation_states (
-            project_id, actor_id, location_kind, context_drawer_open,
-            filters, last_opened_at, version
-        )
-        VALUES ($1, $2, 'project_overview', false, '{}'::jsonb, now(), 1)
-        "#,
-    )
-    .bind(project_id)
-    .bind(owner.actor_id)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(project_id)
-}
-
 async fn get_project(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
@@ -678,9 +600,8 @@ async fn get_project(
     Ok(Json(fetch_project(&state, &principal, project_id).await?))
 }
 
-/// Renames a project from its settings, as `project_update` does over MCP:
-/// whoever may manage it, against the version they read. The key stays, and
-/// the Messages space keeps its name.
+/// Renames a project from its settings, as `space_update` does for agents:
+/// whoever may manage it, against the version they read. The key stays.
 async fn update_project(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -689,37 +610,36 @@ async fn update_project(
     ApiJson(request): ApiJson<UpdateProjectRequest>,
 ) -> Result<Json<ProjectView>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let name = normalize_project_name(&request.name)?;
+    let name = manage::normalize_name(&request.name)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_project_action(&principal, &project, Action::ProjectManage)?;
-    if project.archived_at.is_some() {
+    let current = manage::lock(&mut transaction, project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if current.archived {
         return Err(AppError::ProjectArchived);
     }
-    if project.version != request.expected_version {
+    if current.version != request.expected_version {
         return Err(AppError::VersionConflict {
             resource: "project",
-            current_version: project.version,
+            current_version: current.version,
         });
     }
-    let (kind, current_name) =
-        sqlx::query_as::<_, (String, String)>("SELECT kind, name FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_one(&mut *transaction)
-            .await?;
-    if kind == "direct" {
-        return Err(AppError::Forbidden);
-    }
-    if current_name != name {
-        sqlx::query(
-            "UPDATE projects SET name = $2, version = version + 1, updated_at = now() WHERE id = $1",
-        )
-        .bind(project_id)
-        .bind(&name)
-        .execute(&mut *transaction)
-        .await?;
+    let (changed, _) = manage::update(
+        &mut transaction,
+        principal.actor_id,
+        project_id,
+        &current,
+        manage::Changes {
+            name: Some(name),
+            ..manage::Changes::default()
+        },
+    )
+    .await?;
+    if !changed.is_empty() {
         insert_audit_event(
             &mut transaction,
             &headers,
@@ -729,8 +649,8 @@ async fn update_project(
             "project",
             project_id,
             serde_json::json!({
-                "previous_name": current_name,
-                "previous_version": project.version,
+                "previous_name": current.name,
+                "previous_version": current.version,
             }),
         )
         .await?;
@@ -739,6 +659,8 @@ async fn update_project(
     Ok(Json(fetch_project(&state, &principal, project_id).await?))
 }
 
+/// Archives a project for whoever may manage it, against the version they
+/// read, as `space_archive` does.
 async fn archive_project(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -746,56 +668,12 @@ async fn archive_project(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ArchiveProjectRequest>,
 ) -> Result<Json<ProjectView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
-    authorize_project_action(&principal, &project, Action::ProjectManage)?;
-    if project.archived_at.is_some() {
-        transaction.commit().await?;
-        return Ok(Json(fetch_project(&state, &principal, project_id).await?));
-    }
-    if project.version != request.expected_version {
-        return Err(AppError::VersionConflict {
-            resource: "project",
-            current_version: project.version,
-        });
-    }
-    let has_active_run =
-        crate::runs::store::active_under_space(&mut *transaction, project_id).await?;
-    if has_active_run {
-        return Err(AppError::ProjectHasActiveRuns);
-    }
-    sqlx::query(
-        r#"
-        UPDATE projects
-        SET archived_at = now(), archived_by_actor_id = $2,
-            version = version + 1, updated_at = now()
-        WHERE id = $1
-        "#,
-    )
-    .bind(project_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        "project.archived",
-        "project",
-        project_id,
-        serde_json::json!({"previous_version": project.version}),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(fetch_project(&state, &principal, project_id).await?))
+    set_archived(state, headers, principal, project_id, request, true).await
 }
 
 /// Brings an archived project back, for whoever may manage it, against the
-/// version they read. Its channels, tasks and settings were kept as they were.
+/// version they read, as `space_restore` does. Its channels, tasks and
+/// settings were kept as they were.
 async fn restore_project(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -803,46 +681,54 @@ async fn restore_project(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ArchiveProjectRequest>,
 ) -> Result<Json<ProjectView>, AppError> {
+    set_archived(state, headers, principal, project_id, request, false).await
+}
+
+async fn set_archived(
+    state: AppState,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    project_id: Uuid,
+    request: ArchiveProjectRequest,
+    archive: bool,
+) -> Result<Json<ProjectView>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_project_action(&principal, &project, Action::ProjectManage)?;
-    if project.archived_at.is_none() {
+    let current = manage::lock(&mut transaction, project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if current.archived == archive {
         transaction.commit().await?;
         return Ok(Json(fetch_project(&state, &principal, project_id).await?));
     }
-    if project.version != request.expected_version {
+    if current.version != request.expected_version {
         return Err(AppError::VersionConflict {
             resource: "project",
-            current_version: project.version,
+            current_version: current.version,
         });
     }
-    let restored = sqlx::query(
-        r#"
-        UPDATE projects
-        SET archived_at = NULL, archived_by_actor_id = NULL,
-            version = version + 1, updated_at = now()
-        WHERE id = $1 AND kind = 'standard'
-        "#,
-    )
-    .bind(project_id)
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected();
-    if restored == 0 {
-        return Err(AppError::Forbidden);
+    if archive {
+        manage::archive(&mut transaction, principal.actor_id, project_id, &current).await?;
+    } else {
+        manage::restore(&mut transaction, principal.actor_id, project_id, &current).await?;
     }
     insert_audit_event(
         &mut transaction,
         &headers,
         &principal,
         Some(project_id),
-        "project.restored",
+        if archive {
+            "project.archived"
+        } else {
+            "project.restored"
+        },
         "project",
         project_id,
-        serde_json::json!({"previous_version": project.version}),
+        serde_json::json!({"previous_version": current.version}),
     )
     .await?;
     transaction.commit().await?;
@@ -962,6 +848,7 @@ async fn update_navigation(
               WHERE project_id = $1 AND actor_id = $2) AS role_permissions,
             (SELECT version FROM projects WHERE id = $1) AS version,
             (SELECT archived_at::text FROM projects WHERE id = $1) AS archived_at,
+            (SELECT icon FROM projects WHERE id = $1) AS icon,
             location_kind,
             conversation_id,
             page_id,
@@ -1198,6 +1085,7 @@ async fn fetch_project_row(
             p.id,
             p.organization_id,
             p.project_key,
+            p.icon,
             p.name,
             p.kind,
             pm.role,
@@ -1276,6 +1164,7 @@ async fn fetch_project_row_in_transaction(
             p.id,
             p.organization_id,
             p.project_key,
+            p.icon,
             p.name,
             p.kind,
             pm.role,
@@ -1344,7 +1233,6 @@ async fn lock_project_membership(
             p.id,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
-            p.version,
             p.archived_at::text AS archived_at
         FROM projects p
         JOIN project_memberships pm
@@ -1378,6 +1266,7 @@ fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
         organization_id: row.organization_id,
         key: row.project_key,
         name: row.name,
+        icon: row.icon,
         archived_at: row.archived_at,
         role: row.role,
         version: row.version,
@@ -1636,55 +1525,6 @@ fn allowed(decision: Decision) -> Result<(), AppError> {
     }
 }
 
-pub(crate) fn normalize_project_key(value: &str) -> Result<String, AppError> {
-    let key = value.trim().to_ascii_uppercase();
-    let mut characters = key.chars();
-    let Some(first) = characters.next() else {
-        return Err(AppError::Validation("Project key"));
-    };
-    if !(2..=10).contains(&key.len())
-        || !first.is_ascii_uppercase()
-        || !characters.all(|character| character.is_ascii_uppercase() || character.is_ascii_digit())
-    {
-        return Err(AppError::Validation("Project key"));
-    }
-    Ok(key)
-}
-
-pub(crate) fn normalize_project_name(value: &str) -> Result<String, AppError> {
-    let name = value.trim();
-    if name.is_empty() || name.len() > MAX_PROJECT_NAME_BYTES || name.chars().any(char::is_control)
-    {
-        return Err(AppError::Validation("Project name"));
-    }
-    Ok(name.to_owned())
-}
-
-pub(crate) fn membership_handle(login_name: &str) -> String {
-    let mut handle = login_name
-        .chars()
-        .filter_map(|character| {
-            character
-                .is_ascii_alphanumeric()
-                .then_some(character.to_ascii_lowercase())
-                .or_else(|| matches!(character, '_' | '-').then_some(character))
-                .or_else(|| (character == '.').then_some('_'))
-        })
-        .take(32)
-        .collect::<String>();
-    if handle.len() < 2 {
-        handle.push_str("_user");
-    }
-    handle
-}
-
-fn database_constraint(error: &sqlx::Error) -> Option<&str> {
-    match error {
-        sqlx::Error::Database(database) => database.constraint(),
-        _ => None,
-    }
-}
-
 fn idempotency_key(headers: &HeaderMap) -> Result<String, AppError> {
     let value = headers
         .get("idempotency-key")
@@ -1750,30 +1590,8 @@ async fn insert_audit_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        NavigationLocation, membership_handle, navigation_href, normalize_project_key,
-        normalize_project_name,
-    };
+    use super::{NavigationLocation, navigation_href};
     use uuid::Uuid;
-
-    #[test]
-    fn project_keys_are_normalized_and_bounded() {
-        assert_eq!(normalize_project_key(" tri ").expect("key"), "TRI");
-        assert!(normalize_project_key("1TRI").is_err());
-        assert!(normalize_project_key("A").is_err());
-        assert!(normalize_project_key("TOO-LONG-KEY").is_err());
-    }
-
-    #[test]
-    fn project_names_reject_empty_control_or_oversized_input() {
-        assert_eq!(
-            normalize_project_name(" Agent Workspace ").expect("name"),
-            "Agent Workspace"
-        );
-        assert!(normalize_project_name("").is_err());
-        assert!(normalize_project_name("bad\nname").is_err());
-        assert!(normalize_project_name(&"x".repeat(121)).is_err());
-    }
 
     #[test]
     fn navigation_hrefs_are_generated_from_structured_locations() {
@@ -1856,11 +1674,5 @@ mod tests {
             format!("/projects/{project_id}")
         );
         assert!(place("somewhere", None).is_err());
-    }
-
-    #[test]
-    fn membership_handles_are_safe_and_bounded() {
-        assert_eq!(membership_handle("Mischa.Nelson"), "mischa_nelson");
-        assert!(membership_handle(&"a".repeat(64)).len() <= 32);
     }
 }

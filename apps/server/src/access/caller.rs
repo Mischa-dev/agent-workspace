@@ -28,6 +28,9 @@ pub struct Caller {
     /// caller's own.
     pub requested_by: Option<Uuid>,
     pub run_id: Option<Uuid>,
+    /// The credential the call came through (a secret, a token, an app's
+    /// grant), recorded on what it writes (K1.25). `None` in the browser.
+    pub credential_id: Option<Uuid>,
 }
 
 /// The credential a call came through, as far as a decision cares.
@@ -64,6 +67,7 @@ impl Caller {
             limits: None,
             requested_by: None,
             run_id: None,
+            credential_id: None,
         }
     }
 
@@ -84,6 +88,7 @@ impl Caller {
             limits,
             requested_by: None,
             run_id: None,
+            credential_id: Some(principal.credential_id),
         }
     }
 

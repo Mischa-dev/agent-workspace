@@ -229,7 +229,7 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
         &t.app,
         &a.app_token,
         &session,
-        "project_create",
+        "space_create",
         json!({"key": "SUSP", "name": "Made while suspended"}),
     )
     .await;

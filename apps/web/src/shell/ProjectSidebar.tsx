@@ -126,7 +126,7 @@ export function ProjectSidebar({
       menu={menu}
       mobileOpen={mobileOpen}
       space={`project:${project.id}`}
-      title={project.name}
+      title={project.icon ? `${project.icon} ${project.name}` : project.name}
     >
       <ul className="aw-section__list aw-sidebar__top">
         <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />

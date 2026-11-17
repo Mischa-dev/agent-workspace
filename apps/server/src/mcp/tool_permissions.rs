@@ -16,10 +16,9 @@
 
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
-    CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesComment, PagesSuggest,
-    ProjectsCreate, ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch,
-    SettingsManage, SheetsEdit, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow,
-    WhiteboardsEdit,
+    CollectionsEdit, MembersInvite, MembersView, PagesComment, PagesSuggest, RolesManage,
+    RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage, SheetsEdit, TasksCreate, TasksDelete,
+    TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -35,7 +34,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("usage_batch", None),
     ("usage_batch_launch", Some(RunsLaunch)),
     ("project_members", Some(MembersView)),
-    ("project_member_set", Some(MembersManage)),
     ("invitation_list", Some(MembersInvite)),
     ("invitation_write", Some(MembersInvite)),
     ("role_list", None),
@@ -48,11 +46,8 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("workspace_template_list", None),
     ("workspace_template_apply", Some(SettingsManage)),
     ("workspace_template_save", Some(SettingsManage)),
-    ("project_create", Some(ProjectsCreate)),
     ("project_template_list", None),
     ("project_template_write", None),
-    ("project_update", Some(ProjectsManage)),
-    ("project_archive", Some(ProjectsManage)),
     ("project_layout_set", Some(SettingsManage)),
     ("layout_preset_write", Some(SettingsManage)),
     ("conversation_list", None),

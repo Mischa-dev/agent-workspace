@@ -16,7 +16,12 @@ struct RoleRow {
     workspace_id: Uuid,
     role: String,
     role_permissions: Option<Vec<String>>,
+    act_within_requester: bool,
 }
+
+/// Whether the membership's role is held to its requester (K1.25).
+const WITHIN_REQUESTER: &str = "COALESCE((SELECT held.act_within_requester FROM workspace_roles held \
+     WHERE held.id = membership.role_id), false) AS act_within_requester";
 
 /// The caller's holding in `scope`, or `None` when they can't act there at
 /// all (no enabled membership, an inactive account, an archived space, or
@@ -27,6 +32,27 @@ pub async fn load(
     caller: &Caller,
     scope: Scope,
     lock: bool,
+) -> Result<Option<Holding>, AppError> {
+    load_with(connection, caller, scope, lock, false).await
+}
+
+/// [`load`], also for an archived space: what its members held there, for
+/// the one thing they may do to it (bring it back, K4.7).
+pub async fn load_archived(
+    connection: &mut PgConnection,
+    caller: &Caller,
+    space: Uuid,
+    lock: bool,
+) -> Result<Option<Holding>, AppError> {
+    load_with(connection, caller, Scope::Space(space), lock, true).await
+}
+
+async fn load_with(
+    connection: &mut PgConnection,
+    caller: &Caller,
+    scope: Scope,
+    lock: bool,
+    archived: bool,
 ) -> Result<Option<Holding>, AppError> {
     let lock_clause = if lock { "FOR SHARE OF membership" } else { "" };
     let row = match scope {
@@ -39,7 +65,8 @@ pub async fn load(
             sqlx::query_as::<_, RoleRow>(&format!(
                 r#"
                 SELECT project.organization_id AS workspace_id, membership.role,
-                       workspace_role_permissions(membership.role_id) AS role_permissions
+                       workspace_role_permissions(membership.role_id) AS role_permissions,
+                       {WITHIN_REQUESTER}
                 FROM project_memberships membership
                 JOIN projects project ON project.id = membership.project_id
                 JOIN organization_memberships workspace_membership
@@ -48,14 +75,29 @@ pub async fn load(
                  AND workspace_membership.enabled
                 JOIN actors actor ON actor.id = $1 AND actor.status = 'active'
                 WHERE membership.project_id = $2 AND membership.actor_id = $1 AND membership.enabled
-                  AND project.archived_at IS NULL
-                  AND actor_can_access_project($1, $3, $2)
+                  AND (project.archived_at IS NULL OR $4)
+                  AND (
+                      actor_can_access_project($1, $3, $2)
+                      -- An archived space, for bringing it back: its members
+                      -- with an active sign-in, as they were.
+                      OR ($4 AND project.archived_at IS NOT NULL
+                          AND NOT EXISTS (
+                              SELECT 1 FROM users user_account
+                              WHERE user_account.actor_id = $1
+                                AND user_account.status <> 'active')
+                          AND ($3::uuid IS NULL OR EXISTS (
+                              SELECT 1 FROM external_agent_connections agent_connection
+                              WHERE agent_connection.id = $3
+                                AND agent_connection.status = 'active'
+                                AND agent_connection.workspace_id = project.organization_id)))
+                  )
                 {lock_clause}
                 "#
             ))
             .bind(caller.account_id)
             .bind(space)
             .bind(caller.connection_id)
+            .bind(archived)
             .fetch_optional(&mut *connection)
             .await?
         }
@@ -75,7 +117,8 @@ pub async fn load(
             sqlx::query_as::<_, RoleRow>(&format!(
                 r#"
                 SELECT membership.organization_id AS workspace_id, membership.role,
-                       workspace_role_permissions(membership.role_id) AS role_permissions
+                       workspace_role_permissions(membership.role_id) AS role_permissions,
+                       {WITHIN_REQUESTER}
                 FROM organization_memberships membership
                 JOIN actors actor ON actor.id = membership.actor_id AND actor.status = 'active'
                 WHERE membership.organization_id = $2 AND membership.actor_id = $1
@@ -120,6 +163,18 @@ pub async fn load(
         .copied()
         .unwrap_or(PermissionSet::EMPTY);
         permissions = permissions.intersect(limit);
+    }
+    // K1 §3.5 step 7: a role held to its requester acts, on someone's
+    // request, only within what that account holds here too.
+    if row.act_within_requester
+        && let Some(requester) = caller.requested_by
+        && requester != caller.account_id
+    {
+        let as_requester = Caller::person(requester, caller.kind);
+        let theirs = Box::pin(load_with(connection, &as_requester, scope, lock, archived))
+            .await?
+            .map_or(PermissionSet::EMPTY, |holding| holding.permissions);
+        permissions = permissions.intersect(theirs);
     }
     let modules = match scope {
         Scope::Space(space) => {

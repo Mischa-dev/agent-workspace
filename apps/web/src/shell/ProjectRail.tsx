@@ -308,7 +308,7 @@ export function ProjectRail({
                   onDragEnd={() => setDrag(null)}
                   onDragStart={(event) => startDrag(event, project)}
                 >
-                  <TileFace swatch={swatchFor(project.id)}>{project.key.slice(0, 2)}</TileFace>
+                  <TileFace swatch={swatchFor(project.id)}>{project.icon || project.key.slice(0, 2)}</TileFace>
                   {project.attentionCount > 0 ? (
                     <Badge className="aw-tile__badge" count={project.attentionCount} max={9} />
                   ) : null}

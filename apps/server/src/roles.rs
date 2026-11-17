@@ -426,6 +426,7 @@ struct RoleRow {
     defaults: Value,
     /// Modules off for holders (AWD-75).
     modules_off: Vec<String>,
+    act_within_requester: bool,
     is_default: bool,
     version: i64,
     updated_at: DateTime<Utc>,
@@ -479,6 +480,9 @@ pub(crate) struct RoleView {
     /// Modules holders don't get, on top of what the workspace has off
     /// (AWD-75). Never any for the owner role.
     pub modules_off: Vec<String>,
+    /// Holders acting on someone's request (a run's requester) do only what
+    /// that account could also do (K1.25).
+    pub act_within_requester: bool,
     pub is_default: bool,
     pub version: i64,
     pub updated_at: DateTime<Utc>,
@@ -549,6 +553,7 @@ fn role_view(caller: Standing, row: RoleRow) -> Result<RoleView, AppError> {
             .map(|keys| PermissionSet::from_keys(keys).keys()),
         defaults,
         modules_off: row.modules_off,
+        act_within_requester: row.act_within_requester,
         is_default: row.is_default,
         version: row.version,
         updated_at: row.updated_at,
@@ -561,7 +566,7 @@ fn role_view(caller: Standing, row: RoleRow) -> Result<RoleView, AppError> {
 const ROLE_SELECT: &str = r#"
     SELECT role.id, role.key, role.built_in, role.base_role, role.name, role.description,
            role.permissions, role.customized, role.agent_limit, role.defaults, role.modules_off,
-           role.is_default,
+           role.act_within_requester, role.is_default,
            role.version,
            role.updated_at,
            (SELECT count(*) FROM organization_memberships holder
@@ -984,6 +989,7 @@ fn audit_shape(view: &RoleView) -> Value {
         "agentLimit": view.agent_limit,
         "defaults": view.defaults,
         "modulesOff": view.modules_off,
+        "actWithinRequester": view.act_within_requester,
         "isDefault": view.is_default,
     })
 }
@@ -1006,6 +1012,10 @@ pub(crate) struct RoleInput {
     /// Modules off for holders (AWD-75).
     #[serde(default)]
     pub modules_off: Vec<String>,
+    /// Holders acting on someone's request stay within what that account
+    /// could do (K1.25).
+    #[serde(default)]
+    pub act_within_requester: bool,
     #[serde(default)]
     pub is_default: bool,
 }
@@ -1153,8 +1163,8 @@ pub(crate) async fn create(
         INSERT INTO workspace_roles (
             id, organization_id, key, built_in, base_role, name, description, permissions,
             agent_limit, defaults, is_default, created_by_actor_id, updated_by_actor_id,
-            modules_off
-        ) VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12)
+            modules_off, act_within_requester
+        ) VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13)
         "#,
     )
     .bind(id)
@@ -1169,6 +1179,7 @@ pub(crate) async fn create(
     .bind(input.is_default)
     .bind(caller.actor_id)
     .bind(&modules_off)
+    .bind(input.act_within_requester)
     .execute(&mut **transaction)
     .await
     .map_err(name_taken)?;
@@ -1222,6 +1233,10 @@ pub(crate) struct RoleChange {
     /// Modules off for holders (AWD-75); left out, they stay.
     #[serde(default)]
     pub modules_off: Option<Vec<String>>,
+    /// Holders acting on someone's request stay within what that account
+    /// could do (K1.25); left out, it stays.
+    #[serde(default)]
+    pub act_within_requester: Option<bool>,
     #[serde(default)]
     pub is_default: Option<bool>,
 }
@@ -1305,6 +1320,9 @@ pub(crate) async fn change(
         Some(modules) => checked_modules_off(modules)?,
     };
     let is_default = change.is_default.unwrap_or(before.is_default);
+    let act_within_requester = change
+        .act_within_requester
+        .unwrap_or(before.act_within_requester);
     if is_default && !before.is_default {
         if matches!(base, MembershipRole::Owner | MembershipRole::Admin) {
             return Err(AppError::Refused {
@@ -1333,7 +1351,8 @@ pub(crate) async fn change(
         SET name = $3, description = $4, permissions = COALESCE($5, permissions),
             customized = customized OR (built_in AND $5 IS NOT NULL),
             agent_limit = $6, defaults = $7, is_default = $8, updated_by_actor_id = $9,
-            modules_off = $10, version = version + 1, updated_at = now()
+            modules_off = $10, act_within_requester = $11,
+            version = version + 1, updated_at = now()
         WHERE organization_id = $1 AND id = $2
         "#,
     )
@@ -1347,6 +1366,7 @@ pub(crate) async fn change(
     .bind(is_default)
     .bind(caller.actor_id)
     .bind(&modules_off)
+    .bind(act_within_requester)
     .execute(&mut **transaction)
     .await
     .map_err(name_taken)?;

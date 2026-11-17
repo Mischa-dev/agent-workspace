@@ -803,14 +803,7 @@ async fn readable_conversation(
         return Ok(Err(ToolResult::not_found("That conversation")));
     };
     if row.project_id != principal.project_id
-        || authorize_conversation_row_for(
-            principal.actor_id,
-            principal.actor_kind,
-            &row,
-            Action::McpRead,
-            false,
-        )
-        .is_err()
+        || authorize_conversation_row_for(principal.actor_id, &row, Action::McpRead, false).is_err()
     {
         return Ok(Err(ToolResult::not_found("That conversation")));
     }
@@ -1479,14 +1472,8 @@ async fn mark_unread(
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     mark_via(&mut transaction, principal).await?;
-    let change = match mark_unread_from(
-        &mut transaction,
-        principal.actor_id,
-        principal.actor_kind,
-        conversation.id,
-        from,
-    )
-    .await
+    let change = match mark_unread_from(&mut transaction, principal.actor_id, conversation.id, from)
+        .await
     {
         Ok(change) => change,
         Err(AppError::NotFound("message")) => {
@@ -1849,20 +1836,12 @@ pub(super) async fn conversation_start(
             principal.external_agent_connection_id,
         )
         .await?;
-        let subject = crate::policy::Subject::new(
+        if !crate::access::membership_allows(
             principal.actor_id,
-            principal.actor_kind,
+            space_id,
+            role,
             true,
-            Some(crate::policy::Membership::project(space_id, role, true)),
-            None,
-        );
-        if !matches!(
-            crate::policy::authorize(
-                &subject,
-                Action::ChannelCreate,
-                crate::policy::Resource::Project(crate::policy::ProjectScope::project(space_id)),
-            ),
-            crate::policy::Decision::Allow
+            Action::ChannelCreate.permission(),
         ) {
             return Ok(ToolResult::denied("You can't start conversations."));
         }
@@ -2072,7 +2051,6 @@ pub(super) async fn thread_start(
         let parent = match lock_conversation_for(
             &mut transaction,
             principal.actor_id,
-            principal.actor_kind,
             parent_id,
             Action::ThreadCreate,
             false,
@@ -2335,30 +2313,23 @@ pub(super) async fn thread_update(
     let result = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
-        let view = match update_thread(
-            &mut transaction,
-            principal.actor_id,
-            principal.actor_kind,
-            thread_id,
-            &patch,
-        )
-        .await
-        {
-            Ok(view) => view,
-            Err(AppError::Validation("thread change")) => {
-                return Ok(ToolResult::invalid(
-                    "status",
-                    "Change at least one of name, status, or outcome.",
-                ));
-            }
-            Err(AppError::Validation(field)) => {
-                return Ok(ToolResult::invalid(
-                    field,
-                    "Statuses are up to 40 characters; outcomes up to 1,000.",
-                ));
-            }
-            Err(error) => return Err(error),
-        };
+        let view =
+            match update_thread(&mut transaction, principal.actor_id, thread_id, &patch).await {
+                Ok(view) => view,
+                Err(AppError::Validation("thread change")) => {
+                    return Ok(ToolResult::invalid(
+                        "status",
+                        "Change at least one of name, status, or outcome.",
+                    ));
+                }
+                Err(AppError::Validation(field)) => {
+                    return Ok(ToolResult::invalid(
+                        field,
+                        "Statuses are up to 40 characters; outcomes up to 1,000.",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
         insert_audit(
             &mut transaction,
             principal,

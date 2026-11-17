@@ -1246,7 +1246,7 @@ async fn list_api_tokens(
         r#"
         SELECT {TOKEN_COLUMNS}
         WHERE credential.actor_id = $1 AND credential.external_agent_connection_id IS NULL
-          AND credential.token_prefix LIKE 'aw\_mcp\_%'
+          AND (credential.token_prefix LIKE 'aw\_mcp\_%' OR credential.token_prefix LIKE 'aw\_sk\_%')
         ORDER BY (credential.status = 'active' AND credential.expires_at > now()) DESC,
                  credential.created_at DESC, credential.id DESC
         LIMIT 200

@@ -44,8 +44,6 @@ const KNOWN: &[(&str, &[&str])] = &[
     ("conversation_continue", &["people only"]),  // K1.13
     ("conversation_update", &["codex"]),          // P0.32
     ("environment_list", &["codex"]),             // P0.32
-    ("project_archive", &["codex"]),              // P0.32
-    ("project_create", &["people only"]),         // K1.13
     ("repository_list", &["codex"]),              // P0.32
     ("run_get", &["codex"]),                      // P0.32
     ("run_list", &["codex"]),                     // P0.32

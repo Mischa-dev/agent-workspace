@@ -975,9 +975,12 @@ fn tenant_column(table: &str) -> Option<&'static str> {
 }
 
 /// Server-wide tables the deletion walks into: the hosts the workspace owns
-/// and what hangs off them. Every other server-wide table is never
-/// touched (accounts stay, R19).
+/// and what hangs off them, and the credentials narrowed to it (one space's
+/// secret, or a connection's). Every other server-wide table is never
+/// touched (accounts stay, R19), so a credential that reaches every
+/// workspace its account is in stays too.
 const OWNED_GLOBAL_TABLES: &[(&str, &str)] = &[
+    ("account_credentials", "workspace_id"),
     ("hosts", "owner_workspace_id"),
     ("host_enrolments", "owner_workspace_id"),
     ("host_agents", ""),

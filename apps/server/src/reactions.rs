@@ -32,7 +32,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
         ActorView, ConversationAccessRow, MessageCommandActor, TimelineEntryView, enqueue_event,
-        lock_message_conversation, parse_actor_kind,
+        lock_message_conversation,
     },
     error::{ApiPath, AppError},
     outbox::{MessageReactionsUpdatedPayload, OutboxEventPayload},
@@ -284,8 +284,7 @@ pub(crate) async fn set_reaction(
     if conversation.project_archived {
         return Err(AppError::ProjectArchived.into());
     }
-    let actor_kind = parse_actor_kind(&actor.actor_kind)?;
-    if !conversation.allows(actor.actor_id, actor_kind, Action::MessageSend)? {
+    if !conversation.allows(actor.actor_id, Action::MessageSend)? {
         return Err(ReactionError::Refused(ReactionRefused::RoleCannotReact));
     }
     if conversation.is_archived() {

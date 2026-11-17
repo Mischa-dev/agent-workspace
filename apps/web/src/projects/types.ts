@@ -40,6 +40,8 @@ export type Project = {
   organizationId: string
   key: string
   name: string
+  /** An emoji shown beside the name (K4.7), when it has one. */
+  icon?: string | null
   archivedAt: string | null
   role: string
   version: number

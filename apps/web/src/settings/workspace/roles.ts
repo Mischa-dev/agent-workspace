@@ -98,6 +98,8 @@ export type WorkspaceRoleView = {
   defaults: RoleDefaults
   /** Modules holders don't get, on top of what the workspace has off (AWD-75). */
   modulesOff: string[]
+  /** Holders acting on someone's request stay within what that account could do (K1.25). */
+  actWithinRequester?: boolean
   isDefault: boolean
   version: number
   updatedAt: string

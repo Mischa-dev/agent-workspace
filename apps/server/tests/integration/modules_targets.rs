@@ -95,10 +95,17 @@ async fn task_and_board_tools_check_the_module_where_they_act() {
         .expect("board")
         .to_owned();
     // Before anything is off: with no project or workspace named, a board
-    // and a project go into this workspace (the app's own).
+    // goes into this workspace (the app's own). A space is made where the
+    // call names, since this app reaches two workspaces.
     let default_board = call("whiteboard_create", json!({"title": "Default board"})).await;
     assert_eq!(default_board["outcome"], "ok", "{default_board}");
-    let made_project = call("project_create", json!({"key": "PRE", "name": "Before"})).await;
+    let unnamed = call("space_create", json!({"key": "PRE", "name": "Before"})).await;
+    assert_eq!(unnamed["outcome"], "invalid_request", "{unnamed}");
+    let made_project = call(
+        "space_create",
+        json!({"key": "PRE", "name": "Before", "workspace": setup.organization_id}),
+    )
+    .await;
     assert_eq!(made_project["outcome"], "ok", "{made_project}");
     for (table, id) in [
         ("whiteboards", &default_board["value"]["whiteboard"]["id"]),
@@ -212,7 +219,11 @@ async fn task_and_board_tools_check_the_module_where_they_act() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    let refused = call("project_create", json!({"key": "OFF", "name": "Off"})).await;
+    let refused = call(
+        "space_create",
+        json!({"key": "OFF", "name": "Off", "workspace": setup.organization_id}),
+    )
+    .await;
     assert_module_off(&refused, "Projects");
     let made =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects WHERE project_key = 'OFF'")

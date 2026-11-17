@@ -1,7 +1,7 @@
 //! Making an agent at workspace level (K1.6). An agent is an account of the
 //! workspace, like a person: it holds a workspace role, is first added to
 //! the workspace's own space, and joins further spaces the way anyone does
-//! (`project_member_set`). Its creator is named as one of its managers, and
+//! (`space_member_add`). Its creator is named as one of its managers, and
 //! the workspace owns it unless an owner is named. What it may do is decided
 //! by its role, never by its kind.
 

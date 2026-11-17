@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { requestJson } from '../../api/client'
 import { isApiError } from '../../api/errors'
+import { callOp } from '../../api/ops'
 import { queryKeys } from '../../api/queryKeys'
 import { describeError } from '../../app/mutations'
 import { roleLabel } from '../../projects/format'
@@ -81,6 +82,7 @@ export default function GeneralPage({ project: given, workspace }: SettingsPageP
         )}
       </Section>
       {current.capabilities.manage && !current.archivedAt && <RenameSection project={current} />}
+      {current.capabilities.manage && !current.archivedAt && <IconSection project={current} />}
       {current.capabilities.archive && !current.archivedAt && (
         <Section
           description="Archiving takes it out of everyone’s sidebar and stops new messages, tasks and runs. Everything already in it is kept and stays readable."
@@ -166,6 +168,71 @@ function RenameSection({ project }: { project: Project }) {
         <Button busy={rename.isPending} disabled={!trimmed || trimmed === project.name} type="submit" variant="primary">
           Rename
         </Button>
+      </form>
+      {error && <Banner tone="warning">{error}</Banner>}
+    </Section>
+  )
+}
+
+/** The project's icon: an emoji shown beside its name in the rail, the sidebar and the command menu. */
+function IconSection({ project }: { project: Project }) {
+  const queryClient = useQueryClient()
+  const [draft, setDraft] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const icon = draft ?? project.icon ?? ''
+  const trimmed = icon.trim()
+  const save = useMutation({
+    mutationFn: (next: string) =>
+      callOp(
+        'space_update',
+        { spaceId: project.id, icon: next },
+        { workspaceId: project.organizationId, expectedVersion: project.version },
+      ),
+    onSuccess: async (_, next) => {
+      setDraft(null)
+      setError(null)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.project(project.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectLists }),
+      ])
+      showToast({ tone: 'success', title: next ? 'Icon saved' : 'Icon removed' })
+    },
+    onError: async (reason) => {
+      if (isApiError(reason) && reason.code === 'version_conflict') {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project(project.id) })
+        setError('Someone changed this project while you were here. Try again.')
+        setDraft(null)
+      } else {
+        setError(`The icon wasn’t saved. ${describeError(reason).message}`)
+      }
+    },
+  })
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (trimmed !== (project.icon ?? '')) save.mutate(trimmed)
+  }
+  return (
+    <Section
+      description="An emoji shown in place of the key on the project’s tile in the rail, beside its name in the sidebar, and in the command menu."
+      id="project-icon-heading"
+      title="Icon"
+    >
+      <form className="aw-inline-form" onSubmit={submit}>
+        <TextField
+          id="project-icon"
+          label="Emoji"
+          maxLength={16}
+          onChange={(event) => setDraft(event.target.value)}
+          value={icon}
+        />
+        <Button busy={save.isPending} disabled={trimmed === (project.icon ?? '')} type="submit" variant="primary">
+          Save
+        </Button>
+        {project.icon ? (
+          <Button busy={save.isPending} onClick={() => save.mutate('')} type="button">
+            Remove
+          </Button>
+        ) : null}
       </form>
       {error && <Banner tone="warning">{error}</Banner>}
     </Section>

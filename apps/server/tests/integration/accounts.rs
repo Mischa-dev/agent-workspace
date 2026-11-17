@@ -717,7 +717,7 @@ async fn an_agent_that_may_create_projects_makes_one() {
         &world.app,
         &ivy.token,
         &ivy.session,
-        "project_create",
+        "space_create",
         json!({"key": "IVY", "name": "Ivy space", "clientRequestId": "ivy-space"}),
     )
     .await;

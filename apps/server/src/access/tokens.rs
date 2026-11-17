@@ -53,6 +53,10 @@ pub struct ScopedTokenRequest {
     /// The account that asked for it, when not the account itself.
     pub requested_by: Option<Uuid>,
     pub run: Option<RunBinding>,
+    /// The secret it was exchanged from: revoking that stops it at once.
+    pub credential_id: Option<Uuid>,
+    /// `read`, and `write` when it may change things; `None` is both.
+    pub scopes: Option<Vec<String>>,
 }
 
 /// A token just issued: the token itself is in no row.
@@ -139,10 +143,12 @@ pub async fn issue_scoped(
         r#"
         INSERT INTO access_tokens (
             id, workspace_id, space_id, run_id, account_id, host_id, command_id,
-            token_prefix, token_digest, permissions, spaces, requested_by_actor_id, expires_at
+            token_prefix, token_digest, permissions, spaces, requested_by_actor_id, expires_at,
+            credential_id, scopes
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                now() + make_interval(mins => $13::int))
+                now() + make_interval(mins => $13::int), $14,
+                COALESCE($15, ARRAY['read', 'write']::TEXT[]))
         RETURNING expires_at
         "#,
     )
@@ -159,6 +165,8 @@ pub async fn issue_scoped(
     .bind(spaces)
     .bind(request.requested_by)
     .bind(request.minutes as i32)
+    .bind(request.credential_id)
+    .bind(request.scopes.as_deref())
     .fetch_one(&mut **transaction)
     .await?;
     Ok(Issued {
@@ -230,6 +238,7 @@ pub struct Holder {
     /// The agent's own connection in the workspace, when it has one: the
     /// token reaches what that connection reaches, no more.
     pub connection_id: Option<Uuid>,
+    pub scopes: Vec<String>,
     token_digest: Vec<u8>,
 }
 
@@ -246,7 +255,7 @@ pub async fn resolve(pool: &PgPool, token: &str) -> Result<Option<Holder>, AppEr
         r#"
         SELECT token.id AS token_id, token.account_id, account.kind AS account_kind,
                token.workspace_id, token.space_id, token.run_id,
-               host.name AS host_name, token.token_digest,
+               host.name AS host_name, token.token_digest, token.scopes,
                (SELECT connection.id FROM external_agent_connections connection
                 JOIN projects home ON home.id = connection.project_id
                 WHERE connection.actor_id = token.account_id AND connection.status = 'active'
@@ -261,15 +270,16 @@ pub async fn resolve(pool: &PgPool, token: &str) -> Result<Option<Holder>, AppEr
         JOIN projects space ON space.id = token.space_id
         JOIN project_memberships membership
           ON membership.project_id = token.space_id AND membership.actor_id = token.account_id
-        LEFT JOIN runs run ON run.id = token.run_id
         LEFT JOIN hosts host ON host.id = token.host_id
         LEFT JOIN host_agents binding
           ON binding.host_id = token.host_id AND binding.account_id = token.account_id
+        LEFT JOIN account_credentials credential ON credential.id = token.credential_id
         WHERE token.token_prefix = $1
           AND token.revoked_at IS NULL AND token.expires_at > now()
           AND account.status = 'active'
           AND space.archived_at IS NULL AND membership.enabled
-          AND (token.run_id IS NULL OR run.finished_at IS NULL)
+          AND (token.credential_id IS NULL
+               OR (credential.status = 'active' AND credential.expires_at > now()))
           AND (token.host_id IS NULL
                OR (host.status <> 'revoked' AND binding.status <> 'gone'))
         "#,
@@ -279,10 +289,19 @@ pub async fn resolve(pool: &PgPool, token: &str) -> Result<Option<Holder>, AppEr
         holder.fetch_optional(connection).await
     })
     .await?;
-    Ok(holder.filter(|holder| {
+    let Some(holder) = holder.filter(|holder| {
         holder.token_digest.len() == candidate.len()
             && bool::from(holder.token_digest.as_slice().ct_eq(&candidate))
-    }))
+    }) else {
+        return Ok(None);
+    };
+    // A run's token stops when its run does, even before it is revoked.
+    if let Some(run_id) = holder.run_id
+        && !crate::runs::credentials::run_open(pool, run_id).await?
+    {
+        return Ok(None);
+    }
+    Ok(Some(holder))
 }
 
 /// How far a token reaches: its workspace, and in it the spaces and
@@ -343,6 +362,21 @@ impl TokenScope {
         }
         (reach.intersect(allowed), narrowed)
     }
+}
+
+/// The run a token is for and who asked for it (K1.25), so what it writes
+/// says so.
+pub async fn acting_of(
+    connection: &mut PgConnection,
+    token_id: Uuid,
+) -> Result<(Option<Uuid>, Option<Uuid>), AppError> {
+    Ok(sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>)>(
+        "SELECT run_id, requested_by_actor_id FROM access_tokens WHERE id = $1",
+    )
+    .bind(token_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or_default())
 }
 
 #[derive(FromRow)]

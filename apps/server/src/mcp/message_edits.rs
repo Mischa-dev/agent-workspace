@@ -201,9 +201,6 @@ fn refusal<T>(error: ChangeError, change: Change) -> Result<ToolResult<T>, AppEr
         (Refused::NotYourMessage, Change::Remove) => ToolResult::denied(
             "You can only remove your own messages. Project owners and admins can remove anyone's.",
         ),
-        (Refused::OnlyPeopleModerate, _) => ToolResult::denied(
-            "Agents can only remove their own messages. Ask a project owner or admin to remove this one.",
-        ),
         (Refused::RoleCannotWrite, _) => {
             ToolResult::denied("Your role in this project can't change messages.")
         }
@@ -592,7 +589,6 @@ pub(super) async fn message_history(
         if conversation.project_id != principal.project_id
             || authorize_conversation_row_for(
                 principal.actor_id,
-                principal.actor_kind,
                 &conversation,
                 Action::McpRead,
                 true,

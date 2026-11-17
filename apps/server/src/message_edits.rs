@@ -34,14 +34,14 @@ use crate::{
         ResolvedContent, TimelineEntryView, authorize_conversation_row_for, enqueue_event,
         enqueue_external_message_events, fetch_conversation_access, fetch_timeline_entry,
         finish_idempotent_command, insert_audit_event_for, insert_message_projections,
-        lock_message_conversation, message_content_error, parse_actor_kind,
-        resolve_message_content, suggested_thread_name, web_suggested_thread_name,
+        lock_message_conversation, message_content_error, resolve_message_content,
+        suggested_thread_name, web_suggested_thread_name,
     },
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     message_content::MessageContent,
     outbox::{ConversationUpdatedPayload, MessageUpdatedPayload, OutboxEventPayload},
-    policy::{Action, ActorKind},
+    policy::Action,
     reactions,
     replies::{self, Withdraw},
 };
@@ -96,8 +96,6 @@ pub(crate) enum Refused {
     NotYourMessage,
     /// The caller's role can't send here (a Viewer, for example).
     RoleCannotWrite,
-    /// Agents remove only their own messages, whatever their role.
-    OnlyPeopleModerate,
     Removed,
     /// Edits wait until the conversation is restored.
     Archived,
@@ -127,9 +125,7 @@ impl From<sqlx::Error> for ChangeError {
 impl From<Refused> for AppError {
     fn from(refused: Refused) -> Self {
         match refused {
-            Refused::NotYourMessage | Refused::RoleCannotWrite | Refused::OnlyPeopleModerate => {
-                AppError::Forbidden
-            }
+            Refused::NotYourMessage | Refused::RoleCannotWrite => AppError::Forbidden,
             Refused::Removed => AppError::Conflict("message", "removed"),
             Refused::Archived => AppError::Conflict("conversation", "archived"),
             Refused::RevisionMoved(current) => AppError::VersionConflict {
@@ -336,9 +332,8 @@ pub(crate) async fn lock_message_for_change(
     if conversation.project_archived {
         return Err(AppError::ProjectArchived.into());
     }
-    let actor_kind = parse_actor_kind(&actor.actor_kind)?;
     let is_author = message.author_actor_id == actor.actor_id;
-    let can_write = conversation.allows(actor.actor_id, actor_kind, Action::MessageSend)?;
+    let can_write = conversation.allows(actor.actor_id, Action::MessageSend)?;
     let as_moderator = match change {
         Change::Edit => {
             if !is_author {
@@ -355,14 +350,10 @@ pub(crate) async fn lock_message_for_change(
         Change::Remove => {
             if is_author && can_write {
                 false
-            } else if actor_kind == ActorKind::Human
-                && conversation.allows(actor.actor_id, actor_kind, Action::MessageModerate)?
-            {
+            } else if conversation.allows(actor.actor_id, Action::MessageModerate)? {
                 true
             } else if is_author {
                 return Err(ChangeError::Refused(Refused::RoleCannotWrite));
-            } else if actor_kind != ActorKind::Human {
-                return Err(ChangeError::Refused(Refused::OnlyPeopleModerate));
             } else {
                 return Err(ChangeError::Refused(Refused::NotYourMessage));
             }
@@ -1156,7 +1147,6 @@ async fn readable_conversation(
         .ok_or(AppError::NotFound("message"))?;
     match authorize_conversation_row_for(
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         &conversation,
         Action::ProjectView,
         true,

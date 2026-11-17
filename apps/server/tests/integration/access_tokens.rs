@@ -25,6 +25,8 @@ fn request(account: Uuid, workspace: Uuid, home: Uuid) -> ScopedTokenRequest {
         minutes: 30,
         requested_by: None,
         run: None,
+        credential_id: None,
+        scopes: None,
     }
 }
 
@@ -176,5 +178,126 @@ async fn a_narrow_token_holds_only_what_it_was_given() {
         initialize(&world.app, &whole).await.is_none(),
         "a revoked token still works"
     );
+    world.finish().await;
+}
+
+/// K1.25: what an agent writes with a token someone asked for says who
+/// asked and which credential it came through, and a role held to its
+/// requester does only what the requester could.
+#[tokio::test]
+async fn a_token_carries_who_asked_and_holds_to_them() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("vic", "viewer")
+        .agent("rook", "member")
+        .dm("lena", "rook")
+        .build("k125_acting_context")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let rook = &world.agents["rook"];
+    let lena = world.people["lena"].actor;
+    let vic = world.people["vic"].actor;
+    let work: Uuid = world.project("WORK").parse().expect("work");
+
+    // Asked for by Lena: the message rook sends records her and the token.
+    // The token starts where their DM lives.
+    let dm_space =
+        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM conversations WHERE id = $1::uuid")
+            .bind(&world.conversations["lena+rook"])
+            .fetch_one(pool)
+            .await
+            .expect("the DM's space");
+    let token = issue(
+        &world,
+        ScopedTokenRequest {
+            requested_by: Some(lena),
+            ..request(rook.actor, world.organization, dm_space)
+        },
+    )
+    .await
+    .expect("token");
+    let token_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM access_tokens WHERE token_digest = sha256(convert_to($1, 'UTF8'))",
+    )
+    .bind(&token)
+    .fetch_one(pool)
+    .await
+    .expect("token row");
+    let session = initialize(&world.app, &token).await.expect("session");
+    let sent = tool(
+        &world.app,
+        &token,
+        &session,
+        "message_send",
+        json!({"conversationId": world.conversations["lena+rook"], "text": "done", "clientRequestId": "k125-sent"}),
+    )
+    .await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+    let recorded = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>)>(
+        "SELECT requested_by_account_id, via_credential_id FROM events \
+         WHERE actor_account_id = $1 AND requested_by_account_id IS NOT NULL \
+         UNION ALL \
+         SELECT requested_by_account_id, via_credential_id FROM event_staging \
+         WHERE actor_account_id = $1 AND requested_by_account_id IS NOT NULL \
+         LIMIT 1",
+    )
+    .bind(rook.actor)
+    .fetch_optional(pool)
+    .await
+    .expect("events");
+    assert_eq!(recorded, Some((Some(lena), Some(token_id))), "{sent}");
+
+    // Held to its requester: asked for by a viewer, rook can't make tasks,
+    // though its own role could.
+    sqlx::query(
+        "UPDATE workspace_roles SET act_within_requester = true WHERE id = \
+         (SELECT role_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2)",
+    )
+    .bind(work)
+    .bind(rook.actor)
+    .execute(pool)
+    .await
+    .expect("rook's role is held to its requester");
+    let mut caller = agent_workspace_server::access::Caller::person(
+        rook.actor,
+        agent_workspace_server::policy::ActorKind::ExternalAgent,
+    );
+    caller.connection_id = Some(rook.connection);
+    let mut connection = scoped_tx(pool).await.expect("begin");
+    let create = Permission::from_key("tasks.create").expect("key");
+    let own = agent_workspace_server::access::holding(
+        &mut connection,
+        &caller,
+        agent_workspace_server::access::Scope::Space(work),
+    )
+    .await
+    .expect("holding")
+    .expect("in the space");
+    assert!(own.permissions.contains(create));
+    caller.requested_by = Some(vic);
+    let for_vic = agent_workspace_server::access::holding(
+        &mut connection,
+        &caller,
+        agent_workspace_server::access::Scope::Space(work),
+    )
+    .await
+    .expect("holding")
+    .expect("in the space");
+    assert!(!for_vic.permissions.contains(create));
+    caller.requested_by = Some(lena);
+    let for_lena = agent_workspace_server::access::holding(
+        &mut connection,
+        &caller,
+        agent_workspace_server::access::Scope::Space(work),
+    )
+    .await
+    .expect("holding")
+    .expect("in the space");
+    assert!(for_lena.permissions.contains(create));
+    drop(connection);
     world.finish().await;
 }

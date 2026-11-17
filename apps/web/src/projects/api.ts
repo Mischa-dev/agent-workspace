@@ -80,6 +80,7 @@ export function normalizeProject(value: unknown): Project {
     organizationId: asString(record.organizationId),
     key: asString(record.key, asString(record.projectKey)),
     name: asString(record.name),
+    icon: typeof record.icon === 'string' && record.icon ? record.icon : null,
     archivedAt,
     role: asString(record.role),
     version: Math.max(0, asNumber(record.version)),

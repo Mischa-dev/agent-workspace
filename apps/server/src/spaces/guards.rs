@@ -29,14 +29,10 @@ const NOT_SPACE_KINDS: [(&str, &str); 1] = [(
 
 /// Files that may insert a space row today, and why. Only ever shrinks:
 /// `spaces::create` becomes the one way to make a space.
-const SPACE_CREATORS: [(&str, &str); 3] = [
+const SPACE_CREATORS: [(&str, &str); 2] = [
     (
         "direct.rs",
         "makes the hidden Messages project for direct conversations; K4.17 removes it",
-    ),
-    (
-        "projects.rs",
-        "project create, until it calls spaces::create (K4 section 3.4)",
     ),
     (
         "seed.rs",

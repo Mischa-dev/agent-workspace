@@ -1099,3 +1099,188 @@ pub(crate) async fn add_member(
         inserted,
     })
 }
+
+/// What joining or leaving did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SelfChange {
+    /// Nothing to do: already a member (or already gone).
+    Unchanged,
+    Changed,
+}
+
+/// K4.8: someone joins a project or team space open to the workspace, as a
+/// member (or a viewer, when their workspace role holds less than a
+/// member's). A space only its members find is joined by being added. Someone
+/// removed from it isn't let back in this way.
+pub(crate) async fn join(
+    tx: &mut Transaction<'_, Postgres>,
+    account: Uuid,
+    space: Uuid,
+) -> Result<SelfChange, AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("m7-membership:{space}"))
+        .execute(&mut **tx)
+        .await?;
+    let open = sqlx::query_as::<_, (Uuid, String, String)>(
+        r#"
+        SELECT space.workspace_id, profile.display_name, profile.handle
+        FROM spaces space
+        JOIN organization_actor_profiles profile
+          ON profile.organization_id = space.workspace_id AND profile.actor_id = $2
+        WHERE space.id = $1 AND space.archived_at IS NULL
+          AND space.visibility = $3 AND space.kind = ANY($4)
+          AND space_readable_by(space.id, $2)
+        FOR SHARE OF space
+        "#,
+    )
+    .bind(space)
+    .bind(account)
+    .bind(crate::spaces::SpaceVisibility::Workspace.stored())
+    .bind([
+        crate::spaces::SpaceKind::Project.stored(),
+        crate::spaces::SpaceKind::Team.stored(),
+    ])
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((workspace, display_name, handle)) = open else {
+        return Err(AppError::NotFound("space"));
+    };
+    if let Some(enabled) = sqlx::query_scalar::<_, bool>(
+        "SELECT enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(space)
+    .bind(account)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        return if enabled {
+            Ok(SelfChange::Unchanged)
+        } else {
+            Err(AppError::Refused {
+                field: "spaceId",
+                message: "You were removed from this space. Ask someone who manages it to add you back.",
+            })
+        };
+    }
+    let held = crate::roles::standing(tx, workspace, account).await?;
+    let member = RoleGrant::stored("member", None::<&[String]>)?;
+    let role = if crate::roles::project_checked(member.permissions()).is_subset_of(held.permissions)
+    {
+        "member"
+    } else {
+        "viewer"
+    };
+    let membership = sqlx::query_scalar::<_, i64>(
+        r#"
+        INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING version
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(space)
+    .bind(account)
+    .bind(role)
+    .bind(display_name)
+    .bind(handle)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(map_membership_database_error)?;
+    crate::roles::apply_arrival_defaults(tx, space, account, account).await?;
+    enqueue_typed(
+        tx,
+        space,
+        OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
+            project_id: space,
+            actor_id: account,
+            version: membership,
+        }),
+    )
+    .await?;
+    Ok(SelfChange::Changed)
+}
+
+/// K4.8: someone leaves a project or team space they're in. A space always
+/// keeps an enabled owner, so its last owner hands it over first. Their
+/// credentials held to it stop.
+pub(crate) async fn leave(
+    tx: &mut Transaction<'_, Postgres>,
+    account: Uuid,
+    space: Uuid,
+) -> Result<SelfChange, AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("m7-membership:{space}"))
+        .execute(&mut **tx)
+        .await?;
+    let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM spaces WHERE id = $1 FOR SHARE")
+        .bind(space)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(AppError::NotFound("space"))?;
+    if !matches!(
+        crate::spaces::SpaceKind::from_stored(&kind),
+        Some(crate::spaces::SpaceKind::Project | crate::spaces::SpaceKind::Team)
+    ) {
+        return Err(AppError::Refused {
+            field: "spaceId",
+            message: "Only a project or team space can be left; everyone in the workspace is in its own space.",
+        });
+    }
+    let Some((role, enabled)) = sqlx::query_as::<_, (String, bool)>(
+        "SELECT role, enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2 FOR UPDATE",
+    )
+    .bind(space)
+    .bind(account)
+    .fetch_optional(&mut **tx)
+    .await?
+    else {
+        return Ok(SelfChange::Unchanged);
+    };
+    if !enabled {
+        return Ok(SelfChange::Unchanged);
+    }
+    let owner = crate::policy::MembershipRole::Owner.key();
+    // The owner tier, by its stored key: a space keeps one.
+    if crate::policy::MembershipRole::parse(&role) == Some(crate::policy::MembershipRole::Owner) {
+        let others = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM project_memberships \
+             WHERE project_id = $1 AND role = $3 AND enabled AND actor_id <> $2",
+        )
+        .bind(space)
+        .bind(account)
+        .bind(owner)
+        .fetch_one(&mut **tx)
+        .await?;
+        if others == 0 {
+            return Err(AppError::Conflict(
+                "project_membership",
+                "the last enabled owner cannot leave",
+            ));
+        }
+    }
+    let version = sqlx::query_scalar::<_, i64>(
+        r#"
+        UPDATE project_memberships
+        SET enabled = false, disabled_by_actor_id = $2, disabled_at = now(),
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND actor_id = $2
+        RETURNING version
+        "#,
+    )
+    .bind(space)
+    .bind(account)
+    .fetch_one(&mut **tx)
+    .await?;
+    revoke_project_credentials(tx, space, account).await?;
+    enqueue_typed(
+        tx,
+        space,
+        OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
+            project_id: space,
+            actor_id: account,
+            version,
+        }),
+    )
+    .await?;
+    Ok(SelfChange::Changed)
+}

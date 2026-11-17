@@ -1509,12 +1509,13 @@ async fn people_save_project_templates_and_start_projects_from_them() {
         archived["value"]["template"]["archived"], true,
         "{archived}"
     );
+    // An archived template starts nothing, and no space is made.
     let blocked = person(
-        "project_create",
-        json!({"key": "SHIP", "name": "Ship", "template": template_id}),
+        "space_create",
+        json!({"key": "SHIP", "name": "Ship", "templateId": template_id}),
     )
     .await;
-    assert_eq!(blocked["outcome"], "conflict", "{blocked}");
+    assert_eq!(blocked["outcome"], "not_found", "{blocked}");
     let restored = person(
         "project_template_write",
         json!({"projectId": project, "template": "Release setup", "archived": false, "name": "Ship setup"}),
@@ -1534,8 +1535,8 @@ async fn people_save_project_templates_and_start_projects_from_them() {
 
     // A project started from it gets its workflow.
     let created = person(
-        "project_create",
-        json!({"key": "SHIP", "name": "Ship", "template": "Ship setup"}),
+        "space_create",
+        json!({"key": "SHIP", "name": "Ship", "templateId": template_id}),
     )
     .await;
     assert_eq!(created["outcome"], "ok", "{created}");

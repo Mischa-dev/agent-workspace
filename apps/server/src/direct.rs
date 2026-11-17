@@ -32,11 +32,9 @@ use crate::{
         ConversationCreatedPayload, ConversationMemberRemovedPayload, ConversationUpdatedPayload,
         OutboxConversationKind, OutboxEventPayload,
     },
-    policy::{
-        Action, ActorKind, Membership, ProjectScope, Resource, RoleGrant, Subject, authorize,
-    },
-    projects::membership_handle,
+    policy::{Action, ActorKind, RoleGrant},
     replies::{self, Withdraw},
+    spaces::manage::membership_handle,
 };
 
 const DIRECT_PROJECT_KEY: &str = "DMSPACE";
@@ -559,7 +557,6 @@ pub(crate) async fn change_group_members(
     let conversation = lock_conversation_for(
         transaction,
         editor.actor_id,
-        editor.actor_kind,
         conversation_id,
         if leaving_only {
             Action::ProjectView
@@ -1435,27 +1432,13 @@ fn allows(
     space: &DirectSpace,
     action: Action,
 ) -> Result<bool, AppError> {
-    let actor_kind = match principal.actor_kind.as_str() {
-        "human" => ActorKind::Human,
-        _ => return Ok(false),
-    };
-    let subject = Subject::new(
+    Ok(crate::access::membership_allows(
         principal.actor_id,
-        actor_kind,
-        true,
-        Some(Membership::project(
-            space.project_id,
-            space.role,
-            space.enabled,
-        )),
-        None,
-    );
-    Ok(authorize(
-        &subject,
-        action,
-        Resource::Project(ProjectScope::project(space.project_id)),
-    )
-    .is_allowed())
+        space.project_id,
+        space.role,
+        space.enabled,
+        action.permission(),
+    ))
 }
 
 fn require(

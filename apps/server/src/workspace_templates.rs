@@ -462,13 +462,13 @@ pub fn check(definition: &TemplateDefinition) -> Result<(), Problem> {
         return Err(problem("defaultRole", "Name the default role."));
     }
     if let Some(project) = &definition.project {
-        if crate::projects::normalize_project_name(&project.name).is_err() {
+        if crate::spaces::manage::normalize_name(&project.name).is_err() {
             return Err(problem(
                 "project.name",
                 "Give the project a name of 1 to 120 bytes, on one line.",
             ));
         }
-        if crate::projects::normalize_project_key(&project.key).is_err() {
+        if crate::spaces::manage::normalize_key(&project.key).is_err() {
             return Err(problem(
                 "project.key",
                 "Use 2 to 10 letters or digits, starting with a letter, such as \"ENG\".",
@@ -874,6 +874,7 @@ pub(crate) async fn apply(
                         agent_limit: Some(role.agent_limit.clone()),
                         defaults,
                         modules_off: Some(role.modules_off.clone()),
+                        act_within_requester: None,
                         ..RoleChange::default()
                     },
                 )
@@ -903,6 +904,7 @@ pub(crate) async fn apply(
                         agent_limit: role.agent_limit.clone(),
                         defaults: defaults.unwrap_or_default(),
                         modules_off: role.modules_off.clone(),
+                        act_within_requester: false,
                         is_default: false,
                     },
                 )
@@ -1063,8 +1065,8 @@ async fn starter_project(
     organization_id: Uuid,
     project: &TemplateProject,
 ) -> Result<(Uuid, bool), ApplyError> {
-    let name = crate::projects::normalize_project_name(&project.name)?;
-    let key = crate::projects::normalize_project_key(&project.key)?;
+    let name = crate::spaces::manage::normalize_name(&project.name)?;
+    let key = crate::spaces::manage::normalize_key(&project.key)?;
     let candidates = key_candidates(&key);
     // A project made by an earlier use may carry a numbered key (ENG2 when
     // ENG was taken), so any of the candidates counts.
@@ -1136,15 +1138,21 @@ async fn starter_project(
                 "Every key like this one is taken. Use the template from settings with another key.",
             ))
         })?;
-    let id = crate::projects::insert_new_project(
+    let id = crate::spaces::manage::create(
         transaction,
-        organization_id,
-        &free,
-        &name,
-        crate::projects::ProjectOwner {
-            actor_id: caller.actor_id,
-            display_name: &display_name,
-            login_name: &login_name,
+        crate::spaces::manage::NewSpace {
+            workspace_id: organization_id,
+            kind: crate::spaces::SpaceKind::Project,
+            key: &free,
+            name: &name,
+            description: "",
+            visibility: crate::spaces::SpaceVisibility::Members,
+            icon: None,
+            owner: crate::spaces::manage::Owner {
+                account_id: caller.actor_id,
+                display_name: &display_name,
+                login_name: &login_name,
+            },
         },
     )
     .await?;

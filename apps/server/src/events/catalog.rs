@@ -401,9 +401,33 @@ pub static PULL_REQUEST_CLOSED: EventType = fact(
 .automatable();
 
 // --- spaces (today's projects) ---------------------------------------------
+pub static SPACE_CREATED: EventType = fact(
+    "space.created",
+    "workspace",
+    Some("space"),
+    "A space was made",
+);
+pub static SPACE_UPDATED: EventType = fact(
+    "space.updated",
+    "workspace",
+    Some("space"),
+    "A space's name, description, icon or visibility changed",
+);
+pub static SPACE_ARCHIVED: EventType = fact(
+    "space.archived",
+    "workspace",
+    Some("space"),
+    "A space was archived",
+);
+pub static SPACE_RESTORED: EventType = fact(
+    "space.restored",
+    "workspace",
+    Some("space"),
+    "An archived space was brought back",
+);
 pub static SPACE_MEMBER_CHANGED: EventType = fact(
     "space.member.changed",
-    "projects",
+    "workspace",
     Some("space"),
     "Someone joined, left or changed role in a space",
 )
@@ -502,6 +526,10 @@ pub fn catalog() -> &'static [&'static EventType] {
         &PULL_REQUEST_CHECKS_PASSED,
         &PULL_REQUEST_MERGED,
         &PULL_REQUEST_CLOSED,
+        &SPACE_CREATED,
+        &SPACE_UPDATED,
+        &SPACE_ARCHIVED,
+        &SPACE_RESTORED,
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
         &WORKSPACE_LIFECYCLE_CHANGED,

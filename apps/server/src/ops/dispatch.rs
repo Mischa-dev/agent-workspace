@@ -102,6 +102,29 @@ async fn space_keys_to_ids(
     mut input: Value,
 ) -> Result<Value, OpError> {
     for field in ["spaceId", "projectId"] {
+        // K4.9: "me" is the caller's personal space in the named workspace,
+        // made on first use; a credential held to one space never reaches it.
+        if input.get(field).and_then(Value::as_str) == Some("me") {
+            if let (Some(workspace), None) = (request.workspace, request.caller.confined_space) {
+                let mut tx = crate::db::scoped_tx(&state.pool)
+                    .await
+                    .map_err(|error| OpError::logged("personal space", &error.into()))?;
+                let space = crate::spaces::personal::personal(
+                    &mut tx,
+                    workspace,
+                    request.caller.account_id,
+                )
+                .await
+                .map_err(|error| OpError::logged("personal space", &error))?;
+                tx.commit()
+                    .await
+                    .map_err(|error| OpError::logged("personal space", &error.into()))?;
+                if let Some(space) = space {
+                    input[field] = Value::String(space.to_string());
+                }
+            }
+            continue;
+        }
         let Some(key) = input
             .get(field)
             .and_then(Value::as_str)
@@ -488,6 +511,7 @@ pub(super) async fn begin(
         &crate::events::EventContext {
             actor: Some(ctx.caller.account_id),
             via_credential: ctx.caller.via_grant_id,
+            credential: ctx.caller.credential_id,
             requested_by: ctx.caller.requested_by,
             run: ctx.caller.run_id,
             request_id: ctx.request_id.clone(),
@@ -611,10 +635,11 @@ async fn audit_row(
             id, actor_id, project_id, organization_id, session_id,
             authentication_class, action, target_kind, target_id, outcome,
             request_id, correlation_id, metadata, channel, client_name,
-            mcp_credential_id, mcp_oauth_grant_id, external_agent_connection_id
+            mcp_credential_id, mcp_oauth_grant_id, external_agent_connection_id,
+            via_credential_id, requested_by_account_id, run_id
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, 'succeeded',
-            $10, $11, $12, $13, $14, $15, $16, $17
+            $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
         )
         "#,
     )
@@ -639,6 +664,9 @@ async fn audit_row(
     .bind(columns.credential_id)
     .bind(columns.oauth_grant_id)
     .bind(columns.connection_id)
+    .bind(ctx.caller.credential_id)
+    .bind(ctx.caller.requested_by)
+    .bind(ctx.caller.run_id)
     .execute(&mut **tx)
     .await
     .map_err(|error| OpError::logged(ctx.op, &error.into()))?;

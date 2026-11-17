@@ -56,6 +56,13 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "retry",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",
+            // A credential gets a new value; the old one lapses (K1.23).
+            "rotate",
+            // Someone joins or leaves a space, or is added or taken out (K4.8).
+            "add",
+            "remove",
+            "join",
+            "leave",
         ],
     ),
     (

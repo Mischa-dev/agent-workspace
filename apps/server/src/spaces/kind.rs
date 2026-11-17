@@ -2,9 +2,10 @@
 //! K4.22 renames it; `direct` (the hidden Messages projects) is not a space
 //! kind and goes in K4.17.
 
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpaceKind {
     /// The workspace's own space: every workspace member is in it.
@@ -40,7 +41,10 @@ impl SpaceKind {
     pub const fn starting_modules(self) -> Option<&'static [&'static str]> {
         match self {
             Self::Workspace => Some(&["pages", "whiteboards", "channels"]),
-            Self::Project | Self::Team | Self::Personal => None,
+            // Drafts and notes: pages, boards, sheets and collections; no
+            // chat, since nobody else is there.
+            Self::Personal => Some(&["pages", "whiteboards", "sheets", "collections"]),
+            Self::Project | Self::Team => None,
         }
     }
 
@@ -56,7 +60,7 @@ impl SpaceKind {
 }
 
 /// Who may find and read a space.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpaceVisibility {
     /// Only its members.

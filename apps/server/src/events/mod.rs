@@ -38,6 +38,8 @@ pub struct EventContext {
     pub actor: Option<Uuid>,
     /// The connected app's OAuth grant, until K1's credentials (K1.22).
     pub via_credential: Option<Uuid>,
+    /// The credential the call came through, whatever its kind (K1.25).
+    pub credential: Option<Uuid>,
     pub requested_by: Option<Uuid>,
     pub run: Option<Uuid>,
     pub request_id: Option<String>,
@@ -63,19 +65,23 @@ pub async fn set_context(
     context: &EventContext,
 ) -> Result<(), AppError> {
     let text = |value: Option<Uuid>| value.map(|value| value.to_string()).unwrap_or_default();
+    // K1.25: what the edge said this call acts as fills what the write path
+    // didn't.
+    let acting = crate::access::acting::current();
     sqlx::query(
         r#"
         SELECT set_config('aw.actor', $1, true),
                CASE WHEN $2 <> '' THEN set_config('aw.via_grant', $2, true) END,
                set_config('aw.requested_by', $3, true),
                set_config('aw.run', $4, true),
-               set_config('aw.request_id', $5, true)
+               set_config('aw.request_id', $5, true),
+               set_config('aw.via_credential', $6, true)
         "#,
     )
     .bind(text(context.actor))
     .bind(text(context.via_credential))
-    .bind(text(context.requested_by))
-    .bind(text(context.run))
+    .bind(text(context.requested_by.or(acting.requested_by)))
+    .bind(text(context.run.or(acting.run)))
     .bind(
         context
             .request_id
@@ -83,6 +89,7 @@ pub async fn set_context(
             .map(|id| id.chars().take(128).collect::<String>())
             .unwrap_or_default(),
     )
+    .bind(text(context.credential.or(acting.credential)))
     .execute(&mut **transaction)
     .await?;
     Ok(())
@@ -277,8 +284,8 @@ pub async fn emit_on(connection: &mut PgConnection, event: NewEvent<'_>) -> Resu
                     THEN COALESCE($14, COALESCE(parent.visibility, conversation.visibility) <> 'project') END,
                $15,
                COALESCE(NULLIF(current_setting('aw.actor', true), '')::uuid, $16),
-               NULLIF(current_setting('aw.via_grant', true), '')::uuid,
-               NULLIF(current_setting('aw.requested_by', true), '')::uuid,
+               current_via_credential(),
+               current_requested_by(),
                NULLIF(current_setting('aw.run', true), '')::uuid,
                NULLIF(current_setting('aw.request_id', true), ''),
                $17, $18

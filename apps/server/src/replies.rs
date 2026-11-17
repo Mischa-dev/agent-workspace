@@ -862,7 +862,6 @@ pub(crate) async fn continue_conversation_in(
     let conversation = lock_conversation_for(
         transaction,
         actor_id,
-        actor_kind,
         conversation_id,
         Action::MessageSend,
         false,
@@ -967,13 +966,7 @@ async fn retry_request(
 ) -> Result<Json<RetryResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    retry_request_in(
-        &mut transaction,
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        request_id,
-    )
-    .await?;
+    retry_request_in(&mut transaction, principal.actor_id, request_id).await?;
     transaction.commit().await?;
     Ok(Json(RetryResponse {
         id: request_id,
@@ -995,7 +988,6 @@ pub(crate) struct RetryOutcome {
 pub(crate) async fn retry_request_in(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     request_id: Uuid,
 ) -> Result<RetryOutcome, AppError> {
     let (conversation_id, agent_actor_id, thread_id) =
@@ -1009,7 +1001,6 @@ pub(crate) async fn retry_request_in(
     let conversation = lock_conversation_for(
         transaction,
         actor_id,
-        actor_kind,
         conversation_id,
         Action::MessageSend,
         false,
@@ -1170,7 +1161,6 @@ pub(crate) async fn stop_request_in(
     let conversation = match lock_conversation_for(
         transaction,
         actor_id,
-        actor_kind,
         conversation_id,
         Action::MessageSend,
         false,

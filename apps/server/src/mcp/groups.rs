@@ -256,7 +256,7 @@ pub(super) async fn conversation_members(
             _ => {
                 return Ok(ToolResult::invalid(
                     "conversationId",
-                    "Channels are open to everyone in the project. To add someone to the project, an owner or admin uses project_member_set.",
+                    "Channels are open to everyone in the project. To add someone to the project, an owner or admin uses space_member_add.",
                 ));
             }
         };

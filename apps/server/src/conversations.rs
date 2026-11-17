@@ -152,34 +152,16 @@ impl ConversationAccessRow {
     /// action here (a thread is its own scope). Archived state isn't
     /// considered, and visibility was settled when the row was loaded: every
     /// lookup that returns this row goes through `conversation_visible_to`.
-    pub(crate) fn allows(
-        &self,
-        actor_id: Uuid,
-        actor_kind: ActorKind,
-        action: Action,
-    ) -> Result<bool, AppError> {
-        let scope = if self.kind == "thread" {
-            ProjectScope::thread(self.project_id, self.id)
-        } else {
-            ProjectScope::project(self.project_id)
-        };
-        let subject = Subject::new(
+    pub(crate) fn allows(&self, actor_id: Uuid, action: Action) -> Result<bool, AppError> {
+        Ok(crate::access::membership_allows(
             actor_id,
-            actor_kind,
-            true,
-            Some(Membership::project(
-                self.project_id,
-                RoleGrant::stored(
-                    &self.membership_role,
-                    self.membership_role_permissions.as_deref(),
-                )?,
-                self.membership_enabled,
-            )),
-            None,
-        );
-        Ok(matches!(
-            authorize(&subject, action, Resource::Project(scope)),
-            Decision::Allow
+            self.project_id,
+            RoleGrant::stored(
+                &self.membership_role,
+                self.membership_role_permissions.as_deref(),
+            )?,
+            self.membership_enabled,
+            action.permission(),
         ))
     }
 }
@@ -892,7 +874,6 @@ async fn list_channels(
         access.membership_enabled,
         project_id,
         Action::ChannelCreate,
-        ProjectScope::project(project_id),
     )?;
     Ok(Json(ChannelListResponse {
         channels,
@@ -1382,7 +1363,6 @@ fn normalize_thread_outcome(value: &str) -> Result<Option<String>, AppError> {
 pub(crate) async fn update_thread(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     thread_id: Uuid,
     patch: &ThreadPatch,
 ) -> Result<ConversationView, AppError> {
@@ -1412,7 +1392,6 @@ pub(crate) async fn update_thread(
     let thread = lock_conversation_for(
         transaction,
         actor_id,
-        actor_kind,
         thread_id,
         Action::ThreadCreate,
         false,
@@ -1479,7 +1458,6 @@ pub(crate) async fn update_thread(
 pub(crate) async fn rename_conversation(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     conversation_id: Uuid,
     name: &str,
 ) -> Result<ConversationView, AppError> {
@@ -1487,7 +1465,6 @@ pub(crate) async fn rename_conversation(
     let conversation = lock_conversation_for(
         transaction,
         actor_id,
-        actor_kind,
         conversation_id,
         Action::MessageSend,
         false,
@@ -1498,7 +1475,7 @@ pub(crate) async fn rename_conversation(
         "group" => Action::MessageSend,
         _ => return Err(AppError::Validation("conversation kind")),
     };
-    authorize_conversation_row_for(actor_id, actor_kind, &conversation, action, false)?;
+    authorize_conversation_row_for(actor_id, &conversation, action, false)?;
     let mut view = ConversationView::from(&conversation);
     if conversation.name == name {
         return Ok(view);
@@ -1534,14 +1511,7 @@ async fn patch_thread(
 ) -> Result<Json<ConversationView>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let view = update_thread(
-        &mut transaction,
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        thread_id,
-        &patch,
-    )
-    .await?;
+    let view = update_thread(&mut transaction, principal.actor_id, thread_id, &patch).await?;
     insert_audit_event(
         &mut transaction,
         &headers,
@@ -2081,13 +2051,17 @@ pub(crate) async fn append_message_command_with(
             INSERT INTO audit_events (
                 id, actor_id, project_id, authentication_class, action,
                 target_kind, target_id, outcome, channel, client_name,
-                mcp_credential_id, external_agent_connection_id, metadata
+                mcp_credential_id, external_agent_connection_id, metadata,
+                via_credential_id, requested_by_account_id, run_id
             )
             SELECT $1, $2, $3, 'mcp_bearer', 'conversation.message_sent',
-                   'message', $4, 'succeeded', 'mcp', credential.client_name,
-                   credential.id, $5, jsonb_build_object('conversation_id', $6)
-            FROM account_credentials credential
-            WHERE credential.id = $7
+                   'message', $4, 'succeeded', 'mcp',
+                   COALESCE(credential.client_name, 'access token'),
+                   credential.id, $5, jsonb_build_object('conversation_id', $6),
+                   $7, current_requested_by(),
+                   NULLIF(current_setting('aw.run', true), '')::uuid
+            FROM (SELECT 1) AS one
+            LEFT JOIN account_credentials credential ON credential.id = $7
             "#,
         )
         .bind(Uuid::now_v7())
@@ -2278,26 +2252,33 @@ pub(crate) async fn lock_message_conversation(
             sqlx::query_scalar::<_, Uuid>(
                 r#"
                 SELECT target.project_id
-                FROM conversations target, account_credentials credential
-                JOIN external_agent_connections connection
-                  ON connection.id = credential.external_agent_connection_id
-                JOIN actors actor ON actor.id = credential.actor_id
+                FROM conversations target
+                JOIN external_agent_connections connection ON connection.id = $2
+                JOIN actors actor ON actor.id = $3
                 WHERE target.id = $4 AND conversation_visible_to(target.id, $3)
                   AND agent_connection_can_access(connection.id, target.project_id)
-                  AND credential.id = $1
-                  AND connection.id = $2
-                  AND credential.actor_id = $3
-                  AND actor.kind = 'external_agent'
-                  AND actor.status = 'active'
-                  AND credential.status = 'active'
-                  AND credential.revoked_at IS NULL
-                  AND credential.expires_at > now()
-                  AND credential.scopes @> ARRAY['write']::text[]
-                  AND connection.actor_id = credential.actor_id
-                  AND connection.project_id = credential.project_id
+                  AND connection.actor_id = $3
                   AND connection.status = 'active'
-                  AND connection.scopes = credential.scopes
-                FOR SHARE OF credential, connection, actor
+                  AND actor.status = 'active'
+                  -- The credential the call came through still works and
+                  -- may write: the connection's own secret, or a short-lived
+                  -- token for the account (K1.24).
+                  AND (EXISTS (
+                          SELECT 1 FROM account_credentials credential
+                          WHERE credential.id = $1 AND credential.actor_id = $3
+                            AND credential.external_agent_connection_id = connection.id
+                            AND credential.status = 'active'
+                            AND credential.revoked_at IS NULL
+                            AND credential.expires_at > now()
+                            AND credential.scopes @> ARRAY['write']::text[]
+                            AND connection.scopes = credential.scopes)
+                       OR EXISTS (
+                          SELECT 1 FROM access_tokens token
+                          WHERE token.id = $1 AND token.account_id = $3
+                            AND token.revoked_at IS NULL
+                            AND token.expires_at > now()
+                            AND token.scopes @> ARRAY['write']::text[]))
+                FOR SHARE OF connection, actor
                 "#,
             )
             .bind(proof.credential_id)
@@ -2368,28 +2349,15 @@ pub(crate) async fn lock_message_conversation(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
-    let scope = if row.kind == "thread" {
-        ProjectScope::thread(row.project_id, row.id)
-    } else {
-        ProjectScope::project(row.project_id)
-    };
-    let subject = Subject::new(
+    if !crate::access::membership_allows(
         actor.actor_id,
-        parse_actor_kind(&actor.actor_kind)?,
-        true,
-        Some(Membership::project(
-            row.project_id,
-            RoleGrant::stored(
-                &row.membership_role,
-                row.membership_role_permissions.as_deref(),
-            )?,
-            row.membership_enabled,
-        )),
-        None,
-    );
-    if !matches!(
-        authorize(&subject, action, Resource::Project(scope)),
-        Decision::Allow
+        row.project_id,
+        RoleGrant::stored(
+            &row.membership_role,
+            row.membership_role_permissions.as_deref(),
+        )?,
+        row.membership_enabled,
+        action.permission(),
     ) {
         return Err(AppError::NotFound("conversation"));
     }
@@ -2834,7 +2802,6 @@ async fn mark_conversation_unread(
     let change = mark_unread_from(
         &mut transaction,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         conversation_id,
         request
             .message_id
@@ -2876,14 +2843,12 @@ pub(crate) struct ReadMarkChange {
 pub(crate) async fn mark_unread_from(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     conversation_id: Uuid,
     from: UnreadFrom,
 ) -> Result<ReadMarkChange, AppError> {
     let conversation = lock_conversation_for(
         transaction,
         actor_id,
-        actor_kind,
         conversation_id,
         Action::ReadStateUpdate,
         true,
@@ -3034,7 +2999,6 @@ async fn archive_conversation(
     let (conversation, archived) = set_conversation_archived(
         &mut transaction,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         conversation_id,
         &[expected_kind],
         true,
@@ -3122,7 +3086,6 @@ async fn restore_conversation(
     let (conversation, restored) = set_conversation_archived(
         &mut transaction,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         conversation_id,
         &[expected_kind],
         false,
@@ -3162,7 +3125,6 @@ async fn restore_conversation(
 pub(crate) async fn set_conversation_archived(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     conversation_id: Uuid,
     allowed_kinds: &[&str],
     archive: bool,
@@ -3171,7 +3133,6 @@ pub(crate) async fn set_conversation_archived(
     let conversation = lock_conversation_for(
         transaction,
         actor_id,
-        actor_kind,
         conversation_id,
         Action::ConversationArchive,
         true,
@@ -3345,13 +3306,17 @@ async fn search_mentionable_actors(
         WHERE membership.project_id = $1
           AND membership.enabled
           AND actor.status = 'active'
-          AND actor.kind IN ('human', 'external_agent', 'execution_worker')
-          -- Only offer agents that could answer: viewers cannot send, and a
-          -- read-only connection cannot claim a reply.
+          -- An account that answers through a connection is offered only
+          -- when it could answer here: its role lets it post, and one of its
+          -- connections writes in this space. Everyone else reads mentions
+          -- where they are.
           AND (
-              actor.kind <> 'external_agent'
+              NOT EXISTS (
+                  SELECT 1 FROM external_agent_connections connection
+                  WHERE connection.actor_id = actor.id AND connection.status = 'active'
+              )
               OR (
-                  membership.role <> 'viewer'
+                  role_allows(membership.role, membership.role_id, 'channels.post')
                   AND EXISTS (
                       SELECT 1 FROM external_agent_connections connection
                       WHERE connection.actor_id = actor.id
@@ -3564,7 +3529,6 @@ async fn project_conversation_sidebar(
         access.membership_enabled,
         project_id,
         Action::ChannelCreate,
-        ProjectScope::project(project_id),
     )?;
     Ok(Json(SidebarResponse {
         project_id,
@@ -3736,7 +3700,6 @@ async fn authorized_project(
         row.membership_enabled,
         row.project_id,
         action,
-        ProjectScope::project(row.project_id),
     )?;
     Ok(row)
 }
@@ -3789,7 +3752,6 @@ async fn lock_project_access(
         row.membership_enabled,
         row.project_id,
         action,
-        ProjectScope::project(row.project_id),
     )?;
     Ok(row)
 }
@@ -3873,7 +3835,6 @@ pub(crate) async fn lock_conversation_access(
     lock_conversation_for(
         transaction,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         conversation_id,
         action,
         include_archived,
@@ -3927,7 +3888,6 @@ async fn lock_conversation_scope(
 pub(crate) async fn lock_conversation_for(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     conversation_id: Uuid,
     action: Action,
     include_archived: bool,
@@ -3984,7 +3944,7 @@ pub(crate) async fn lock_conversation_for(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
-    authorize_conversation_row_for(actor_id, actor_kind, &row, action, include_archived)?;
+    authorize_conversation_row_for(actor_id, &row, action, include_archived)?;
     if let Some(parent_channel_id) = row.parent_channel_id {
         let parent_active = sqlx::query_scalar::<_, bool>(
             r#"
@@ -4012,18 +3972,11 @@ fn authorize_conversation_row(
     action: Action,
     include_archived: bool,
 ) -> Result<(), AppError> {
-    authorize_conversation_row_for(
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        row,
-        action,
-        include_archived,
-    )
+    authorize_conversation_row_for(principal.actor_id, row, action, include_archived)
 }
 
 pub(crate) fn authorize_conversation_row_for(
     actor_id: Uuid,
-    actor_kind: ActorKind,
     row: &ConversationAccessRow,
     action: Action,
     include_archived: bool,
@@ -4031,7 +3984,7 @@ pub(crate) fn authorize_conversation_row_for(
     if row.project_archived || (!include_archived && row.is_archived()) {
         return Err(AppError::NotFound("conversation"));
     }
-    if row.allows(actor_id, actor_kind, action)? {
+    if row.allows(actor_id, action)? {
         Ok(())
     } else {
         Err(AppError::NotFound("conversation"))
@@ -4064,7 +4017,6 @@ fn require_policy(
     enabled: bool,
     project_id: Uuid,
     action: Action,
-    scope: ProjectScope,
 ) -> Result<(), AppError> {
     if policy_allows(
         principal,
@@ -4073,7 +4025,6 @@ fn require_policy(
         enabled,
         project_id,
         action,
-        scope,
     )? {
         Ok(())
     } else {
@@ -4083,6 +4034,8 @@ fn require_policy(
     }
 }
 
+/// Whether the caller's membership, read with the row, allows `action` in
+/// the space (`access::membership_allows`).
 fn policy_allows(
     principal: &AuthenticatedActor,
     role: &str,
@@ -4090,22 +4043,13 @@ fn policy_allows(
     enabled: bool,
     project_id: Uuid,
     action: Action,
-    scope: ProjectScope,
 ) -> Result<bool, AppError> {
-    let subject = Subject::new(
+    Ok(crate::access::membership_allows(
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        true,
-        Some(Membership::project(
-            project_id,
-            RoleGrant::stored(role, role_permissions)?,
-            enabled,
-        )),
-        None,
-    );
-    Ok(matches!(
-        authorize(&subject, action, Resource::Project(scope)),
-        Decision::Allow
+        project_id,
+        RoleGrant::stored(role, role_permissions)?,
+        enabled,
+        action.permission(),
     ))
 }
 
@@ -4119,7 +4063,7 @@ fn conversation_capabilities(
 ) -> Result<ConversationCapabilities, AppError> {
     let active = !conversation.project_archived && !conversation.is_archived();
     let actor_kind = parse_actor_kind(&principal.actor_kind)?;
-    let allows = |action| conversation.allows(principal.actor_id, actor_kind, action);
+    let allows = |action| conversation.allows(principal.actor_id, action);
     Ok(ConversationCapabilities {
         view: allows(Action::ProjectView)?,
         send_message: active && allows(Action::MessageSend)?,
@@ -4217,7 +4161,8 @@ pub(crate) async fn sees_tasks_in<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    if crate::policy::agent_limit_hides(viewer, project_id, crate::policy::Permission::TasksView) {
+    let need = crate::policy::Permission::TasksView;
+    if crate::access::limit_hides(viewer, project_id, need) {
         return Ok(false);
     }
     Ok(sqlx::query_scalar::<_, bool>(
@@ -4225,19 +4170,20 @@ where
         SELECT EXISTS (
             SELECT 1 FROM project_memberships
             WHERE project_id = $1 AND actor_id = $2 AND enabled
-              AND custom_role_allows(role_id, 'tasks.view')
+              AND role_allows(role, role_id, $3)
         )
         "#,
     )
     .bind(project_id)
     .bind(viewer)
+    .bind(need.key())
     .fetch_one(executor)
     .await?)
 }
 
 /// Whether a message `author` sends or edits now may notify everyone in a
-/// large conversation (`@everyone` past the small-audience allowance): an
-/// owner or admin whose role keeps "moderate channels", and, while an app
+/// large conversation (`@everyone` past the small-audience allowance): a
+/// role that holds "moderate channels" (owners and admins), and, while an app
 /// acts for them, whose agent limit keeps it too. Stored on the message
 /// (`may_notify_everyone`), since the notifications are worked out later.
 pub(crate) async fn may_notify_everyone<'e, E>(
@@ -4248,25 +4194,24 @@ pub(crate) async fn may_notify_everyone<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    if crate::policy::agent_limit_hides(
-        author,
-        project_id,
-        crate::policy::Permission::ChannelsModerate,
-    ) {
+    let need = crate::policy::Permission::ChannelsModerate;
+    if crate::access::limit_hides(author, project_id, need) {
         return Ok(false);
     }
+    // "Moderate" is held by owners and admins only (its catalogue default),
+    // so holding it is the tier as well.
     Ok(sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
             SELECT 1 FROM project_memberships
             WHERE project_id = $1 AND actor_id = $2 AND enabled
-              AND role IN ('owner', 'admin')
-              AND custom_role_allows(role_id, 'channels.moderate')
+              AND role_allows(role, role_id, $3)
         )
         "#,
     )
     .bind(project_id)
     .bind(author)
+    .bind(need.key())
     .fetch_one(executor)
     .await?)
 }
@@ -4530,12 +4475,6 @@ async fn fetch_run_projection(
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let active_run = active_run.map(|run| {
-        let scope = ProjectScope::run(
-            conversation.project_id,
-            conversation.id,
-            run.id,
-            run.repository_id,
-        );
         let interrupt = policy_allows(
             principal,
             &conversation.membership_role,
@@ -4543,7 +4482,6 @@ async fn fetch_run_projection(
             conversation.membership_enabled,
             conversation.project_id,
             Action::RunInterrupt,
-            scope,
         )
         .unwrap_or(false);
         RunView {
@@ -4567,12 +4505,6 @@ async fn fetch_run_projection(
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::WorkerInvoke,
-                ProjectScope::run(
-                    conversation.project_id,
-                    conversation.id,
-                    run.id,
-                    run.repository_id,
-                ),
             )
             .unwrap_or(false);
         let publish = active_run.is_none()
@@ -4585,12 +4517,6 @@ async fn fetch_run_projection(
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::RepositoryPublish,
-                ProjectScope::run(
-                    conversation.project_id,
-                    conversation.id,
-                    run.id,
-                    run.repository_id,
-                ),
             )
             .unwrap_or(false);
         let create_pull_request = active_run.is_none()
@@ -4604,12 +4530,6 @@ async fn fetch_run_projection(
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::PullRequestCreate,
-                ProjectScope::run(
-                    conversation.project_id,
-                    conversation.id,
-                    run.id,
-                    run.repository_id,
-                ),
             )
             .unwrap_or(false);
         let refresh_pull_request = run.pull_request_id.is_some()
@@ -4621,12 +4541,6 @@ async fn fetch_run_projection(
                 conversation.membership_enabled,
                 conversation.project_id,
                 Action::PullRequestRefresh,
-                ProjectScope::run(
-                    conversation.project_id,
-                    conversation.id,
-                    run.id,
-                    run.repository_id,
-                ),
             )
             .unwrap_or(false);
         RunView {

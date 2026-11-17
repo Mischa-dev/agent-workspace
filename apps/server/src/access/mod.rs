@@ -3,12 +3,14 @@
 //! to decide what a caller may do (ruling R2: allow, suggest only, deny).
 //!
 //! - `catalogue`: every permission, its kind and level or capability (K1.9).
+//! - `acting`: who a call acts for, for its writes (K1.25).
 //! - `caller`: who is calling, resolved at the edge (`Caller`, `Via`,
 //!   `Reach`).
 //! - `decide`: the pure core, with no database and no account kind.
 //! - `holding`: what a caller holds in one scope.
 //! - `compare`: old and new checks side by side while areas move (K1 §4.3).
 //! - `http`: the operators' view of recorded disagreements.
+//! - `credentials`: an account's secrets: made, rotated, revoked (K1.23).
 //! - `tokens`: short-lived narrow tokens for one account (K1.24).
 //! - `manage`: the one rule for managing an agent or app account, and
 //!   `may_grant` (nobody grants more than they hold).
@@ -19,8 +21,10 @@
 //! permissions"). `write_mode` (K1.12) answers the three-way question for
 //! writes on kinds with levels. Everything else calls these.
 
+pub mod acting;
 pub mod caller;
 pub mod catalogue;
+pub mod credentials;
 pub mod decide;
 pub mod holding;
 pub mod manage;
@@ -262,6 +266,18 @@ pub async fn check_locked(
     check_with(tx, caller, need, target, true).await
 }
 
+/// `check` against an archived space, for bringing it back: what its
+/// members held there as it was archived, locked inside the write.
+pub async fn check_archived_space(
+    tx: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    need: Need,
+    space: Uuid,
+) -> Result<Result<Grant, Denied>, AppError> {
+    let held = holding::load_archived(tx, caller, space, true).await?;
+    Ok(decide(held.as_ref(), &need, credential_of(caller)))
+}
+
 async fn check_with(
     connection: &mut PgConnection,
     caller: &Caller,
@@ -387,6 +403,32 @@ pub async fn write_mode_locked(
         module,
         credential_of(caller),
     ))
+}
+
+/// A membership read with the row it governs (a conversation looked up
+/// with the caller's membership joined in): whether it lets `account` use
+/// `permission` in `space`, the answer `check` gives from the same
+/// membership. The role's permissions, an enabled membership, and the
+/// delegation limit of an app acting for the account. A worker's
+/// membership acts only through its run's delegated scope, never here.
+pub fn membership_allows(
+    account: Uuid,
+    space: Uuid,
+    grant: crate::policy::RoleGrant,
+    enabled: bool,
+    permission: Permission,
+) -> bool {
+    enabled
+        && grant.role() != MembershipRole::Worker
+        && grant.permissions().contains(permission)
+        && !limit_hides(account, space, permission)
+}
+
+/// Whether the delegation limit of an app acting for `account` keeps it
+/// from `permission` in `space`; false outside such a call. For SQL that
+/// checks the role itself (`role_allows`) and needs the limit beside it.
+pub fn limit_hides(account: Uuid, space: Uuid, permission: Permission) -> bool {
+    crate::policy::agent_limit_hides(account, space, permission)
 }
 
 /// A list filter: SQL true for rows whose space (`space_column`) the

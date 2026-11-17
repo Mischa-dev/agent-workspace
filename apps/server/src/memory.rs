@@ -1153,7 +1153,6 @@ pub async fn set_pin(
     let conversation = crate::conversations::lock_conversation_for(
         transaction,
         writer.actor_id,
-        writer.actor_kind,
         conversation_id,
         Action::MessageSend,
         false,
@@ -1558,13 +1557,7 @@ async fn list_pins_http(
     let row = fetch_conversation_access(&state.pool, principal.actor_id, conversation_id)
         .await?
         .ok_or(AppError::NotFound("conversation"))?;
-    authorize_conversation_row_for(
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        &row,
-        Action::ProjectView,
-        false,
-    )?;
+    authorize_conversation_row_for(principal.actor_id, &row, Action::ProjectView, false)?;
     Ok(Json(PinsResponse {
         pins: list_pins(&state.pool, conversation_id, principal.actor_id).await?,
     }))

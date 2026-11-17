@@ -71,6 +71,8 @@ pub async fn mint(
                 host_id,
                 command_id,
             }),
+            credential_id: None,
+            scopes: None,
         },
     )
     .await;
@@ -92,6 +94,15 @@ pub async fn mint(
         expires_at: issued.expires_at,
         scope: scope.join(" "),
     }))
+}
+
+/// Whether a run is still going, for its token (K1.24).
+pub async fn run_open(pool: &sqlx::PgPool, run_id: Uuid) -> Result<bool, AppError> {
+    let query = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1 AND finished_at IS NULL)",
+    )
+    .bind(run_id);
+    Ok(crate::db::scoped_one(pool, async |connection| query.fetch_one(connection).await).await?)
 }
 
 /// The run's tokens stop working: it ended.

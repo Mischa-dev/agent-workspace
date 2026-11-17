@@ -298,7 +298,6 @@ pub(super) async fn conversation_update(
             let (_, restored) = set_conversation_archived(
                 &mut transaction,
                 principal.actor_id,
-                principal.actor_kind,
                 conversation_id,
                 &["channel", "thread"],
                 false,
@@ -331,7 +330,6 @@ pub(super) async fn conversation_update(
                 update_thread(
                     &mut transaction,
                     principal.actor_id,
-                    principal.actor_kind,
                     conversation_id,
                     &ThreadPatch {
                         name: arguments.name.clone(),
@@ -348,7 +346,6 @@ pub(super) async fn conversation_update(
                 rename_conversation(
                     &mut transaction,
                     principal.actor_id,
-                    principal.actor_kind,
                     conversation_id,
                     name,
                 )
@@ -361,7 +358,6 @@ pub(super) async fn conversation_update(
             let (current, archived) = set_conversation_archived(
                 &mut transaction,
                 principal.actor_id,
-                principal.actor_kind,
                 conversation_id,
                 &["channel", "thread"],
                 true,

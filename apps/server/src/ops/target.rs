@@ -128,6 +128,24 @@ const KINDS: &[(&str, &str)] = &[
                                WHERE parent.id = thing.access_parent_id) \
                 OR conversation_visible_to(thing.access_parent_id, $2))",
     ),
+    // K4.7: a space its member may bring back, archived or not. Archived
+    // spaces are closed to everything else, so only the workspace comes
+    // back; `space_restore` checks the space as it was.
+    (
+        "member_space",
+        "SELECT space.organization_id, NULL::uuid FROM projects space \
+         WHERE space.id = $1 AND EXISTS ( \
+             SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = space.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
+    ),
+    // K4.8: a space the caller may read, to join it: only its workspace
+    // comes back, since they aren't in it yet.
+    (
+        "readable_space",
+        "SELECT space.organization_id, NULL::uuid FROM projects space \
+         WHERE space.id = $1 AND space_readable_by(space.id, $2)",
+    ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
     // A1.8: a request goes by request_visible_to, which holds its
@@ -228,7 +246,7 @@ fn not_found_what(target: &Target) -> &'static str {
 
 fn what_of(kind: &str) -> &'static str {
     match kind {
-        "project" => "That space",
+        "project" | "member_space" | "readable_space" => "That space",
         "conversation" => "That conversation",
         "message" => "That message",
         "decision" => "That decision",

@@ -28,6 +28,12 @@ export type Content = { body?: Record<string, unknown> | null; key: string; kind
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
 
+export type CreatableKind = "project" | "team"
+
+export type CredentialReach = "space" | "account"
+
+export type CredentialView = { accountId: string; clientName: string; createdAt: string; expiresAt: string; id: string; lastUsedAt?: string | null; reach: string; replacedBy?: string | null; scopes: string[]; spaceId: string; status: string; tokenPrefix: string }
+
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
 
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
@@ -78,6 +84,14 @@ export type RunRecord = { activityCount: number; cancelRequestedAt?: string | nu
 
 export type RunResultInput = { branch?: string | null; id?: string | null; kind: string; number?: number | null; thingKind?: string | null; title?: string | null; url?: string | null }
 
+export type SpaceKind = "workspace" | "project" | "team" | "personal"
+
+export type SpaceView = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceVisibility = "members" | "workspace"
+
+export type StoredKind = SpaceKind
+
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
 export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
@@ -91,6 +105,22 @@ export type AgentManagersSetOutput = { agent: string; managers: string[] }
 export type AgentUsageListInput = { days?: number | null }
 
 export type AgentUsageListOutput = { accounts: AgentUsageLine[]; days: number; notTiedToARun: UnattributedUsageLine[] }
+
+export type CredentialCreateInput = { account?: string | null; days?: number | null; name: string; reach?: CredentialReach | null; space?: string | null; write?: boolean | null }
+
+export type CredentialCreateOutput = { credential: CredentialView; oldSecretValidUntil?: string | null; secret?: string | null }
+
+export type CredentialListInput = { account?: string | null }
+
+export type CredentialListOutput = { credentials: CredentialView[] }
+
+export type CredentialRevokeInput = { credential: string }
+
+export type CredentialRevokeOutput = { accountId: string; clientName: string; createdAt: string; expiresAt: string; id: string; lastUsedAt?: string | null; reach: string; replacedBy?: string | null; scopes: string[]; spaceId: string; status: string; tokenPrefix: string }
+
+export type CredentialRotateInput = { credential: string; days?: number | null; graceMinutes?: number | null }
+
+export type CredentialRotateOutput = { credential: CredentialView; oldSecretValidUntil?: string | null; secret?: string | null }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -208,6 +238,54 @@ export type RunUsageReportInput = { cachedInputTokens?: number | null; cost?: nu
 
 export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId?: string | null }
 
+export type SpaceArchiveInput = { expectedVersion?: number | null; spaceId: string }
+
+export type SpaceArchiveOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceCreateInput = { description?: string | null; icon?: string | null; key: string; kind?: CreatableKind | null; name: string; templateId?: string | null; visibility?: SpaceVisibility | null }
+
+export type SpaceCreateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceJoinInput = { spaceId: string }
+
+export type SpaceJoinOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+
+export type SpaceLeaveInput = { spaceId: string }
+
+export type SpaceLeaveOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+
+export type SpaceListInput = { includeArchived?: boolean; kinds?: SpaceKind[] | null }
+
+export type SpaceListOutput = { spaces: SpaceView[] }
+
+export type SpaceMemberAddInput = { account: string; role?: string | null; spaceId: string }
+
+export type SpaceMemberAddOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+
+export type SpaceMemberRemoveInput = { account: string; expectedVersion?: number | null; spaceId: string }
+
+export type SpaceMemberRemoveOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+
+export type SpaceMemberUpdateInput = { account: string; expectedVersion?: number | null; role: string; spaceId: string }
+
+export type SpaceMemberUpdateOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+
+export type SpaceOpenInput = { spaceId: string }
+
+export type SpaceOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpacePersonalOpenInput = Record<string, never>
+
+export type SpacePersonalOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceRestoreInput = { expectedVersion?: number | null; spaceId: string }
+
+export type SpaceRestoreOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
+export type SpaceUpdateInput = { description?: string | null; expectedVersion?: number | null; icon?: string | null; name?: string | null; spaceId: string; visibility?: SpaceVisibility | null }
+
+export type SpaceUpdateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+
 export type WorkspaceDeleteInput = { confirm: string }
 
 export type WorkspaceDeleteOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
@@ -220,6 +298,10 @@ export type Operations = {
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
+  credential_create: { input: CredentialCreateInput; output: CredentialCreateOutput }
+  credential_list: { input: CredentialListInput; output: CredentialListOutput }
+  credential_revoke: { input: CredentialRevokeInput; output: CredentialRevokeOutput }
+  credential_rotate: { input: CredentialRotateInput; output: CredentialRotateOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
@@ -249,6 +331,18 @@ export type Operations = {
   run_result_report: { input: RunResultReportInput; output: RunResultReportOutput }
   run_update: { input: RunUpdateInput; output: RunUpdateOutput }
   run_usage_report: { input: RunUsageReportInput; output: RunUsageReportOutput }
+  space_archive: { input: SpaceArchiveInput; output: SpaceArchiveOutput }
+  space_create: { input: SpaceCreateInput; output: SpaceCreateOutput }
+  space_join: { input: SpaceJoinInput; output: SpaceJoinOutput }
+  space_leave: { input: SpaceLeaveInput; output: SpaceLeaveOutput }
+  space_list: { input: SpaceListInput; output: SpaceListOutput }
+  space_member_add: { input: SpaceMemberAddInput; output: SpaceMemberAddOutput }
+  space_member_remove: { input: SpaceMemberRemoveInput; output: SpaceMemberRemoveOutput }
+  space_member_update: { input: SpaceMemberUpdateInput; output: SpaceMemberUpdateOutput }
+  space_open: { input: SpaceOpenInput; output: SpaceOpenOutput }
+  space_personal_open: { input: SpacePersonalOpenInput; output: SpacePersonalOpenOutput }
+  space_restore: { input: SpaceRestoreInput; output: SpaceRestoreOutput }
+  space_update: { input: SpaceUpdateInput; output: SpaceUpdateOutput }
   workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
   workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
 }

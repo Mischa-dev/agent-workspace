@@ -21,10 +21,7 @@ use crate::{
     auth::{AuthenticatedActor, load_authenticated_actor, origin_is_allowed},
     error::AppError,
     outbox::{OUTBOX_SCHEMA_VERSION, OutboxEnvelope, OutboxPublisher},
-    policy::{
-        Action, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, MembershipRole, RoleGrant},
 };
 
 const SESSION_REVALIDATION_INTERVAL: Duration = Duration::from_secs(15);
@@ -638,46 +635,26 @@ async fn event_is_authorized(
     };
     realtime_policy_allows(
         principal.actor_id,
-        &principal.actor_kind,
         &membership.role,
         membership.enabled,
         event.project_id(),
-        event.conversation_id(),
     )
 }
 
 fn realtime_policy_allows(
     actor_id: Uuid,
-    actor_kind: &str,
     role: &str,
     membership_enabled: bool,
     project_id: Uuid,
-    conversation_id: Option<Uuid>,
 ) -> Result<bool, AppError> {
-    let subject = Subject::new(
+    // Subscribing needs only "Open projects", which every role holds,
+    // custom ones included, so the built-in role decides it.
+    Ok(crate::access::membership_allows(
         actor_id,
-        crate::accounts::actor_kind(actor_kind)?,
-        true,
-        // Subscribing needs only "Open projects", which every role holds,
-        // custom ones included, so the built-in role decides it.
-        Some(Membership::project(
-            project_id,
-            RoleGrant::built_in(parse_membership_role(role)?),
-            membership_enabled,
-        )),
-        None,
-    );
-    let scope = conversation_id.map_or_else(
-        || ProjectScope::project(project_id),
-        |conversation_id| ProjectScope::thread(project_id, conversation_id),
-    );
-    Ok(matches!(
-        authorize(
-            &subject,
-            Action::RealtimeSubscribe,
-            Resource::Project(scope),
-        ),
-        Decision::Allow
+        project_id,
+        RoleGrant::built_in(parse_membership_role(role)?),
+        membership_enabled,
+        Action::RealtimeSubscribe.permission(),
     ))
 }
 
@@ -751,48 +728,20 @@ mod tests {
         let actor_id = Uuid::now_v7();
 
         assert!(
-            realtime_policy_allows(
-                actor_id,
-                "human",
-                "viewer",
-                true,
-                event.project_id,
-                event.conversation_id,
-            )
-            .expect("viewer policy")
+            realtime_policy_allows(actor_id, "viewer", true, event.project_id,)
+                .expect("viewer policy")
         );
         assert!(
-            realtime_policy_allows(
-                actor_id,
-                "external_agent",
-                "member",
-                true,
-                event.project_id,
-                event.conversation_id,
-            )
-            .expect("external member policy")
+            realtime_policy_allows(actor_id, "member", true, event.project_id,)
+                .expect("external member policy")
         );
         assert!(
-            !realtime_policy_allows(
-                actor_id,
-                "human",
-                "owner",
-                false,
-                event.project_id,
-                event.conversation_id,
-            )
-            .expect("disabled membership policy")
+            !realtime_policy_allows(actor_id, "owner", false, event.project_id,)
+                .expect("disabled membership policy")
         );
         assert!(
-            !realtime_policy_allows(
-                actor_id,
-                "execution_worker",
-                "worker",
-                true,
-                event.project_id,
-                event.conversation_id,
-            )
-            .expect("undelegated Worker policy")
+            !realtime_policy_allows(actor_id, "worker", true, event.project_id,)
+                .expect("undelegated Worker policy")
         );
     }
 

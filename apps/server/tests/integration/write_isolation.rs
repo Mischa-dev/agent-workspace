@@ -468,6 +468,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "bug_report_link_write",
     "channel_create",
     "conversation_continue",
+    "credential_create",
+    "credential_revoke",
+    "credential_rotate",
     "conversation_members",
     "conversation_start",
     "conversation_update",
@@ -515,10 +518,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "person_create",
     "pin_set",
     "plan_import",
-    "project_archive",
     "project_layout_set",
-    "project_member_set",
-    "project_update",
     "pull_request_create",
     "pull_request_merge",
     "pull_request_refresh",
@@ -549,6 +549,15 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "scheduled_message_update",
     "session_bind",
     "settings_set",
+    "space_archive",
+    "space_create",
+    "space_join",
+    "space_leave",
+    "space_member_add",
+    "space_member_remove",
+    "space_member_update",
+    "space_restore",
+    "space_update",
     "task_claim",
     "task_comment",
     "task_comment_delete",
@@ -593,11 +602,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
 ];
 
 /// Write tools this suite deliberately doesn't call, and why.
-const MCP_WRITE_EXCLUSIONS: &[(&str, &str)] = &[(
-    "project_create",
-    "makes a project in the caller's own workspace and takes no workspace ID; a template it \
-     names is looked up only in that workspace",
-)];
+const MCP_WRITE_EXCLUSIONS: &[(&str, &str)] = &[];
 
 // ---------------------------------------------------------------------------
 // Coverage guard (no database needed)
@@ -6068,12 +6073,10 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "preset": bx.layout_preset, "remove": true}),
             json!({"projectId": a.project, "name": "Net based", "base": bx.layout_preset}),
         ]),
-        mcp_case(
-            "project_member_set",
-            json!({"projectId": a.project, "person": "@wren", "role": "viewer"}),
-            vec![json!({"projectId": b.project, "person": "@wren", "role": "viewer"})],
-        )
-        .rejecting(vec![json!({"projectId": a.project, "person": bx.wren, "role": "viewer"})]),
+        mcp_case("space_join", json!({}), vec![json!({"spaceId": b.project})])
+            .without_own("joining needs an open space A's app isn't in; space_ops.rs covers it"),
+        mcp_case("space_leave", json!({}), vec![json!({"spaceId": b.project})])
+            .without_own("leaving would cut A's app off from the later cases; space_ops.rs covers it"),
         mcp_case(
             "repository_write",
             json!({"projectId": a.project, "owner": "net-org", "name": "net-mcp", "githubRepositoryId": 990_001, "defaultBranch": "main", "trustAcknowledged": true}),
@@ -6132,6 +6135,31 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
         ),
+        // K1.23: an account's secrets. B's agent, B's spaces and B's
+        // secrets aren't A's agent's to touch.
+        mcp_case(
+            "credential_create",
+            json!({"name": "net secret"}),
+            vec![
+                json!({"name": "net secret b", "account": b.agent}),
+                json!({"name": "net secret c", "space": b.project}),
+            ],
+        )
+        .by_agent(),
+        mcp_case(
+            "credential_rotate",
+            json!({}),
+            vec![json!({"credential": bx.api_token})],
+        )
+        .by_agent()
+        .without_own("rotating needs a secret of A's agent; credentials.rs covers it"),
+        mcp_case(
+            "credential_revoke",
+            json!({}),
+            vec![json!({"credential": bx.api_token})],
+        )
+        .by_agent()
+        .without_own("revoking needs a secret of A's agent; credentials.rs covers it"),
         // H1.24: deleting a workspace, or keeping it, only ever acts on the
         // caller's own. A's own call would stop every later case here;
         // workspace_lifecycle.rs runs it.
@@ -6242,15 +6270,31 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "person": bx.wren, "agentLimit": null}),
             json!({"projectId": a.project, "person": "@wren", "role": bx.custom_role}),
         ]),
+        // K4.7: spaces. B's spaces, B's workspace and B's project
+        // templates aren't A's.
         mcp_case(
-            "project_update",
-            json!({"projectId": a.project, "name": "Work"}),
-            vec![json!({"projectId": b.project, "name": "Work"})],
+            "space_update",
+            json!({"spaceId": a.project, "name": "Work"}),
+            vec![json!({"spaceId": b.project, "name": "Work"})],
         ),
         mcp_case(
-            "project_archive",
-            json!({"project": sp.projects[1], "archived": true}),
-            vec![json!({"project": b.project, "archived": true})],
+            "space_create",
+            json!({"key": "NETS", "name": "Net space", "kind": "team"}),
+            vec![
+                json!({"key": "NETB", "name": "Net b", "workspace": b.organization}),
+                json!({"key": "NETC", "name": "Net c", "templateId": bx.project_template}),
+            ],
+        ),
+        mcp_case(
+            "space_restore",
+            json!({}),
+            vec![json!({"spaceId": b.project})],
+        )
+        .without_own("restoring needs an archived space of A's; spaces.rs covers it"),
+        mcp_case(
+            "space_archive",
+            json!({"spaceId": sp.projects[1]}),
+            vec![json!({"spaceId": b.project})],
         )
         .last(),
         mcp_case(
@@ -7382,5 +7426,25 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "clientRequestId": "net-approval-b",
             })],
         ),
+        // K4.8: space members, last: removing @wren from A's project would
+        // take them from the cases above. B's spaces and B's people aren't A's.
+        mcp_case(
+            "space_member_add",
+            json!({"spaceId": a.project, "account": "@wren", "role": "member"}),
+            vec![json!({"spaceId": b.project, "account": "@wren", "role": "member"})],
+        )
+        .rejecting(vec![json!({"spaceId": a.project, "account": bx.wren, "role": "member"})]),
+        mcp_case(
+            "space_member_update",
+            json!({"spaceId": a.project, "account": "@wren", "role": "viewer"}),
+            vec![json!({"spaceId": b.project, "account": "@wren", "role": "viewer"})],
+        )
+        .rejecting(vec![json!({"spaceId": a.project, "account": bx.wren, "role": "viewer"})]),
+        mcp_case(
+            "space_member_remove",
+            json!({"spaceId": a.project, "account": "@wren"}),
+            vec![json!({"spaceId": b.project, "account": "@wren"})],
+        )
+        .rejecting(vec![json!({"spaceId": a.project, "account": bx.wren})]),
     ]
 }

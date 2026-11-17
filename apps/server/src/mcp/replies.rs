@@ -1056,7 +1056,6 @@ async fn open_answer_thread(
     let channel = match lock_conversation_for(
         transaction,
         principal.actor_id,
-        principal.actor_kind,
         channel_id,
         Action::ThreadCreate,
         false,
@@ -1232,13 +1231,7 @@ pub(super) async fn reply_retry(
     };
     let result = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let outcome = retry_request_in(
-            &mut transaction,
-            principal.actor_id,
-            principal.actor_kind,
-            request_id,
-        )
-        .await?;
+        let outcome = retry_request_in(&mut transaction, principal.actor_id, request_id).await?;
         insert_audit(
             &mut transaction,
             principal,

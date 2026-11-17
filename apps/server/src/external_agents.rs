@@ -1139,6 +1139,17 @@ async fn mutate_connection(
             "stale version",
         ));
     }
+    // K4.9: a retired agent's personal space is archived with it, its notes
+    // and pages kept.
+    if remove {
+        crate::spaces::personal::archive_for(
+            &mut transaction,
+            access.organization_id,
+            current.actor_id,
+            principal.actor_id,
+        )
+        .await?;
+    }
 
     let one_time_credential = if should_issue {
         let (token, token_prefix, token_digest) = generate_token();

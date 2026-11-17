@@ -167,12 +167,11 @@ impl McpPrincipal {
         crate::access::Caller::of_principal(self, None)
     }
 
-    /// The connected app a person is acting through. Agents act as themselves,
-    /// so their writes carry no "via".
+    /// The connected app the account is acting through, whatever its kind
+    /// (K1.25): an app acting for an agent shows "via" as one acting for a
+    /// person does.
     pub fn via_grant_id(&self) -> Option<Uuid> {
-        (self.actor_kind == ActorKind::Human)
-            .then_some(self.oauth_grant_id)
-            .flatten()
+        self.oauth_grant_id
     }
 
     pub fn can_read(&self) -> bool {
@@ -198,6 +197,7 @@ struct CredentialAuthRow {
     client_name: String,
     token_digest: Vec<u8>,
     scopes: Vec<String>,
+    reach: String,
 }
 
 #[derive(Clone)]
@@ -419,25 +419,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Add someone from your organization to a project, change their role, or remove them (remove: true). Removing ends their access at once; what they wrote stays. Owners and admins only, as themselves.",
-        annotations(
-            title = "Set project member",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn project_member_set(
-        &self,
-        Parameters(arguments): Parameters<admin::MemberSetArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<admin::MemberLine>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(admin::project_member_set(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "People: a project's invitations (or, with workspace: true, its workspace's), newest first, with each one's role, status and version (not its link). Workspace owners and admins who may invite people, through an app connected as themselves.",
         annotations(
             title = "List invitations",
@@ -640,7 +621,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Give someone a workspace role, and optionally the same role in each of their projects. Owners and admins only, through an app connected as themselves (never an agent as itself); only owners change an admin's role or give one based on admin, nobody changes their own or an owner's, and agents hold roles based on member or viewer. For one project's role, use project_member_set. Audited.",
+        description = "Give someone a workspace role, and optionally the same role in each of their projects. Owners and admins only, through an app connected as themselves (never an agent as itself); only owners change an admin's role or give one based on admin, nobody changes their own or an owner's, and agents hold roles based on member or viewer. For one space's role, use space_member_update. Audited.",
         annotations(
             title = "Assign role",
             read_only_hint = false,
@@ -656,63 +637,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<role_tools::AssignmentLine>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(role_tools::role_assign(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Create a project in your workspace, with a key for its task numbers and a name. You become its owner; it starts with the default workflow. People only, through an app connected for their whole account. Calling again with the same key and name returns the project you already made.",
-        annotations(
-            title = "Create project",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn project_create(
-        &self,
-        Parameters(arguments): Parameters<admin::ProjectCreateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<admin::ProjectValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(admin::project_create(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Rename a project. Its key stays the same, so task keys and links keep working. Owners and admins only, as themselves.",
-        annotations(
-            title = "Rename project",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn project_update(
-        &self,
-        Parameters(arguments): Parameters<admin::ProjectUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<admin::ProjectValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(admin::project_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Archive a project, or restore one with archived: false. Archiving hides the project, its tasks and its channels from everyone, and is refused while a run is going there. Nothing is deleted. Owners and admins only, as themselves.",
-        annotations(
-            title = "Archive or restore project",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn project_archive(
-        &self,
-        Parameters(arguments): Parameters<admin::ProjectArchiveArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<admin::ProjectValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(admin::project_archive(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -3818,6 +3742,11 @@ pub(crate) async fn caller_reach(
         else {
             return Ok((PermissionSet::EMPTY, Some(AgentLimits::default())));
         };
+        // A token narrowed to nothing holds what the account holds through
+        // its connection or its home space, as its secret would.
+        if scope.permissions.is_none() && !scope.listed_spaces {
+            return Ok((reach, limits));
+        }
         let (reach, limits) = scope.narrow(principal.actor_id, reach, limits.as_ref());
         return Ok((reach, Some(limits)));
     }
@@ -4122,7 +4051,7 @@ async fn run_tool(
     // refused. A list spanning every workspace of an account-wide app isn't
     // a call into one; its writes are refused where they land (task writes
     // in `work_item_commands::lock_membership`, messages in the send
-    // pipeline, new projects in `projects::insert_new_project`, operations
+    // pipeline, new spaces in `spaces::manage::create`, operations
     // in the dispatcher).
     if principal.project_explicit || !principal.account_wide {
         let open = match crate::db::scoped_one(&server.state.pool, async |connection| {
@@ -4166,6 +4095,8 @@ async fn run_tool(
             return Ok(suspended_refusal(&request.name));
         }
     }
+    let request_name = request.name.clone();
+    let state = server.state.clone();
     let call = McpServer::tools().call(rmcp::handler::server::tool::ToolCallContext::new(
         server, request, context,
     ));
@@ -4175,10 +4106,41 @@ async fn run_tool(
         account: principal.actor_id,
         workspaces: None,
     };
+    // K1.25: every write the tool makes says which credential it came
+    // through, and for a run's token, the run and who asked for it.
+    let acting = match acting_of(&state, &principal).await {
+        Ok(acting) => acting,
+        Err(error) => {
+            tracing::error!(category = error.log_category(), "MCP acting lookup failed");
+            return Ok(refusal(
+                &request_name,
+                "Couldn't check your access just now. Try again.".to_owned(),
+            ));
+        }
+    };
+    let call = crate::access::acting::within(acting, call);
     match limits {
         Some(limits) => crate::tenancy::scoped(tenancy, with_agent_limits(limits, call)).await,
         None => crate::tenancy::scoped(tenancy, call).await,
     }
+}
+
+/// Who a call through `principal` acts for (K1.25).
+pub(crate) async fn acting_of(
+    state: &AppState,
+    principal: &McpPrincipal,
+) -> Result<crate::access::acting::Acting, AppError> {
+    let (run, requested_by) = if principal.authentication_class == ACCESS_TOKEN_CLASS {
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        crate::access::tokens::acting_of(&mut connection, principal.credential_id).await?
+    } else {
+        (None, None)
+    };
+    Ok(crate::access::acting::Acting {
+        credential: Some(principal.credential_id),
+        requested_by,
+        run,
+    })
 }
 
 /// Picks up a session the server no longer holds instead of answering 404.
@@ -5021,7 +4983,8 @@ pub(crate) async fn resolve_bearer_principal(
             c.external_agent_connection_id,
             c.client_name,
             c.token_digest,
-            c.scopes
+            c.scopes,
+            c.reach
         FROM account_credentials c
         JOIN actors a ON a.id = c.actor_id
         LEFT JOIN users u ON u.actor_id = c.actor_id
@@ -5042,8 +5005,9 @@ pub(crate) async fn resolve_bearer_principal(
           AND (
               (u.status = 'active'
                AND c.external_agent_connection_id IS NULL
-               AND p.archived_at IS NULL
-               AND pm.enabled)
+               -- K1.23: a secret reaching the whole account isn't tied to
+               -- the space it was made in.
+               AND (c.reach = 'account' OR (p.archived_at IS NULL AND pm.enabled)))
               OR
               -- K1.6: a connection belongs to the workspace, not to the
               -- project it was first added to; each call is checked against
@@ -5106,7 +5070,7 @@ pub(crate) async fn resolve_bearer_principal(
         client_name: row.client_name,
         scopes: row.scopes,
         authentication_class: "mcp_bearer",
-        account_wide: false,
+        account_wide: row.reach == "account",
         project_explicit: false,
     }))
 }
@@ -5528,7 +5492,11 @@ pub(crate) fn parse_mcp_actor_kind(value: &str) -> Result<ActorKind, AppError> {
 fn generate_token() -> (String, String, [u8; 32]) {
     let mut bytes = [0_u8; TOKEN_BYTES];
     OsRng.fill_bytes(&mut bytes);
-    let token = format!("aw_mcp_{}", URL_SAFE_NO_PAD.encode(bytes));
+    let token = format!(
+        "{}{}",
+        crate::access::credentials::SECRET_PREFIX,
+        URL_SAFE_NO_PAD.encode(bytes)
+    );
     let prefix = token[..TOKEN_PREFIX_LENGTH].to_owned();
     let digest = Sha256::digest(token.as_bytes()).into();
     (token, prefix, digest)
@@ -5638,6 +5606,15 @@ async fn keys_to_ids(
     {
         arguments["projectId"] = serde_json::Value::String(project_id.to_string());
         changed = true;
+    }
+    // K4.9: "me" names the caller's personal space, made on first use.
+    for field in ["projectId", "spaceId"] {
+        if unresolved(arguments, field).as_deref() == Some(PERSONAL_SPACE_NAME)
+            && let Some(project_id) = personal_space_of(state, principal).await?
+        {
+            arguments[field] = serde_json::Value::String(project_id.to_string());
+            changed = true;
+        }
     }
     for field in ["projectId", "toProjectId", "spaceId"] {
         if let Some(key) = unresolved(arguments, field)
@@ -5847,6 +5824,36 @@ async fn workspace_space_of(
             .await?;
     transaction.commit().await?;
     Ok(project_id)
+}
+
+/// What `projectId` or `spaceId` says to mean the caller's personal space
+/// (K4.9). Lowercase only: "ME" stays a space key.
+const PERSONAL_SPACE_NAME: &str = "me";
+
+/// The caller's personal space in the workspace their connection is
+/// anchored in, made on first use. A credential held to one space never
+/// reaches it.
+async fn personal_space_of(
+    state: &AppState,
+    principal: &McpPrincipal,
+) -> Result<Option<Uuid>, AppError> {
+    if common::confined_project(principal).is_some() {
+        return Ok(None);
+    }
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let Some(organization_id) =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(principal.project_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+    else {
+        return Ok(None);
+    };
+    let space =
+        crate::spaces::personal::personal(&mut transaction, organization_id, principal.actor_id)
+            .await?;
+    transaction.commit().await?;
+    Ok(space)
 }
 
 /// The one active project the caller can reach under this key. An older
@@ -6500,10 +6507,11 @@ mod tests {
     #[test]
     fn generated_token_has_256_bits_and_only_safe_prefix_metadata() {
         let (token, prefix, digest) = generate_token();
-        assert!(token.starts_with("aw_mcp_"));
+        assert!(token.starts_with("aw_sk_"));
         assert_eq!(prefix.len(), 16);
         assert_eq!(digest.len(), 32);
-        assert!(token.len() >= 50);
+        // 32 random bytes, 43 characters unpadded.
+        assert!(token.len() >= "aw_sk_".len() + 43);
         assert!(!prefix.contains(' '));
     }
 

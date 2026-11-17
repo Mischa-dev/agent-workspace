@@ -310,6 +310,10 @@ pub(super) struct RoleWriteArguments {
     /// every module the workspace has on; leave it out to keep it. Never for
     /// the owner role.
     pub modules_off: Option<Vec<String>>,
+    /// true holds the role's holders, when they act on someone's request
+    /// (such as a run someone asked for), to what that account could also
+    /// do. Leave it out to keep it.
+    pub act_within_requester: Option<bool>,
     /// True makes it the role new members and invitations start with.
     pub is_default: Option<bool>,
     /// True removes the role. Only custom roles nobody holds can go.
@@ -392,6 +396,7 @@ pub(super) async fn role_write(
                         agent_limit: arguments.agent_limit.clone(),
                         defaults: defaults.unwrap_or_default(),
                         modules_off: arguments.modules_off.clone().unwrap_or_default(),
+                        act_within_requester: arguments.act_within_requester.unwrap_or(false),
                         is_default: arguments.is_default.unwrap_or(false),
                     },
                 )
@@ -428,6 +433,7 @@ pub(super) async fn role_write(
                         agent_limit,
                         defaults,
                         modules_off: arguments.modules_off.clone(),
+                        act_within_requester: arguments.act_within_requester,
                         is_default: arguments.is_default,
                     },
                 )
@@ -461,7 +467,7 @@ pub(super) struct RoleAssignArguments {
     /// Who: an @handle or actor ID of someone in the workspace.
     pub person: String,
     /// The workspace role to give them, by name, key or ID. For a role in
-    /// one project only, use project_member_set. Leave it out to change only
+    /// one project only, use space_member_update. Leave it out to change only
     /// agentLimit.
     #[serde(default)]
     pub role: Option<String>,
