@@ -187,7 +187,7 @@ pub(super) async fn layout_preset_write(
         if project_role(state, principal, project_id).await?.is_none() {
             return Ok(ToolResult::not_found("That project"));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let organization_id =
             sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
                 .bind(project_id)

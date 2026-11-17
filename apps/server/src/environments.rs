@@ -193,7 +193,7 @@ pub(crate) async fn default_environment(
     project_id: Uuid,
     actor_id: Uuid,
 ) -> Result<(Option<Uuid>, settings::Source), AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let effective = settings::resolve(
         &mut connection,
         settings::SettingsContext {
@@ -346,7 +346,7 @@ async fn clean(
     let organization_id =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(project_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
     let manifest = state
         .supervisors
@@ -376,7 +376,7 @@ async fn clean(
         )
         .bind(project_id)
         .bind(repository_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         if !exists {
             return Err(AppError::NotFound("repository"));
@@ -461,7 +461,7 @@ async fn create_environment(
         Action::SettingsManage,
     )
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = create_in(
         &state,
         &mut transaction,
@@ -562,7 +562,7 @@ async fn update_environment(
         Action::SettingsManage,
     )
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = update_in(
         &state,
         &mut transaction,
@@ -680,7 +680,7 @@ async fn archive_environment(
         Action::SettingsManage,
     )
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     archive_in(
         &mut transaction,
         organization_id,
@@ -768,7 +768,7 @@ async fn make_default(
         Action::SettingsManage,
     )
     .await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     make_default_in(
         &mut transaction,
         organization_id,
@@ -962,7 +962,7 @@ pub(crate) async fn check_in(
     .bind(environment_id)
     .bind(ok)
     .bind(message.chars().take(300).collect::<String>())
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     Ok((ok, message, row))
 }

@@ -167,21 +167,31 @@ pub(super) struct VisibleLinks {
     pub ready: bool,
 }
 
-pub(super) fn reader(principal: &McpPrincipal) -> Reader {
+pub(super) fn reader(state: &AppState, principal: &McpPrincipal) -> Reader {
+    Reader {
+        addresses: crate::addresses::Addresses::of(state),
+        ..reader_of(principal)
+    }
+}
+
+fn reader_of(principal: &McpPrincipal) -> Reader {
     Reader {
         actor_id: principal.actor_id,
         connection_id: principal.external_agent_connection_id,
+        addresses: crate::addresses::Addresses::LEGACY,
     }
 }
 
 pub(super) async fn visible_links(
+    state: &AppState,
     connection: &mut PgConnection,
     principal: &McpPrincipal,
     project_id: Uuid,
     task_id: Uuid,
 ) -> Result<VisibleLinks, AppError> {
     let links =
-        work_item_planning::task_links(connection, reader(principal), project_id, task_id).await?;
+        work_item_planning::task_links(connection, reader(state, principal), project_id, task_id)
+            .await?;
     let reachable = accessible_project_ids_in(&mut *connection, principal).await?;
     // task_links keeps tasks the reader's role lets them see; in an app's
     // call, its agent limit decides as well.
@@ -336,7 +346,11 @@ async fn resolve_linked(
     for reference in references {
         match work_item_planning::resolve_reference(
             &mut *connection,
-            reader(principal),
+            // Only ids come back: no link is written.
+            Reader {
+                addresses: crate::addresses::Addresses::LEGACY,
+                ..reader_of(principal)
+            },
             project_id,
             reference,
         )
@@ -449,7 +463,7 @@ pub(super) async fn task_depend(
     };
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) =
             access_refusal(check_write_access(&mut transaction, principal).await?)
         {
@@ -508,7 +522,7 @@ pub(super) async fn task_depend(
             }
         };
         let (task, sees) = changed_task(&mut transaction, principal, project_id, task_id).await?;
-        let links = visible_links(&mut transaction, principal, project_id, task_id).await?;
+        let links = visible_links(state, &mut transaction, principal, project_id, task_id).await?;
         transaction.commit().await?;
         Ok::<_, AppError>(ToolResult::ok(DependencyValue {
             task,
@@ -582,7 +596,7 @@ pub(super) async fn task_relate(
     };
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) =
             access_refusal(check_write_access(&mut transaction, principal).await?)
         {
@@ -623,7 +637,7 @@ pub(super) async fn task_relate(
             Err(refusal) => return Ok(link_refusal("otherTaskId", &reference, &refusal)),
         };
         let (task, _) = changed_task(&mut transaction, principal, project_id, task_id).await?;
-        let links = visible_links(&mut transaction, principal, project_id, task_id).await?;
+        let links = visible_links(state, &mut transaction, principal, project_id, task_id).await?;
         transaction.commit().await?;
         Ok::<_, AppError>(ToolResult::ok(RelationsValue {
             task,
@@ -671,7 +685,7 @@ pub(super) async fn task_watch(
     };
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // Anyone who can see a task may watch it, as in the app.
         if let Some(refusal) = access_refusal(
             check_access_for(&mut transaction, principal, Action::WorkItemView).await?,
@@ -813,7 +827,7 @@ pub(super) async fn milestone_list(
             crate::policy::Action::WorkItemView,
         )
         .await?;
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let rows = work_item_planning::list_milestones(
             &mut connection,
             principal.project_id,
@@ -927,7 +941,7 @@ pub(super) async fn milestone_write(
             }
         }
         let (add_ids, remove_ids) = task_ids.split_at(add.len());
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) =
             access_refusal(check_write_access(&mut transaction, principal).await?)
         {

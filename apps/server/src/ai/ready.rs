@@ -16,6 +16,7 @@ use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 use crate::{
+    addresses::{Addresses, Target},
     error::AppError,
     settings::{self, SettingsContext},
     work_item_planning::Reader,
@@ -32,6 +33,7 @@ const MIN_DESCRIPTION: i32 = 40;
 struct Row {
     id: Uuid,
     project_id: Uuid,
+    workspace_id: Uuid,
     key: String,
     title: String,
     status_name: String,
@@ -52,7 +54,8 @@ struct Row {
 }
 
 const ROW_SELECT: &str = r#"
-    SELECT item.id, item.project_id, project.project_key || '-' || item.number AS key,
+    SELECT item.id, item.project_id, project.organization_id AS workspace_id,
+           project.project_key || '-' || item.number AS key,
            item.title, status.name AS status_name, status.semantic_category AS status_category,
            status.semantic_category IN ('completed', 'canceled') AS finished,
            item.priority, item.estimate, item.due_date,
@@ -481,8 +484,8 @@ fn score(row: &Row, unblocks: usize, today: NaiveDate) -> (i64, Vec<String>) {
     (score, reasons)
 }
 
-fn href(row: &Row) -> String {
-    format!("/projects/{}/work-items/{}", row.project_id, row.id)
+fn href(addresses: Addresses, row: &Row) -> String {
+    addresses.in_workspace(row.workspace_id, &Target::task(row.project_id, row.id))
 }
 
 /// The project's open tasks, ranked, with each one's readiness.
@@ -540,7 +543,7 @@ pub async fn rank(
                 unblocks: count,
                 reasons,
                 readiness,
-                href: href(row),
+                href: href(reader.addresses, row),
             }
         })
         .filter(|task| match filter.scope {
@@ -881,7 +884,7 @@ pub async fn graph(
                 && open_blockers.get(&row.id).copied().unwrap_or(0) == 0
                 && loaded.hidden_blockers.get(&row.id).copied().unwrap_or(0) == 0,
             critical: critical_set.contains(&row.id),
-            href: href(row),
+            href: href(reader.addresses, row),
         })
         .collect::<Vec<_>>();
     nodes.sort_by_key(|node| natural_key(&node.key));
@@ -1012,6 +1015,7 @@ mod tests {
         Row {
             id,
             project_id: Uuid::nil(),
+            workspace_id: Uuid::nil(),
             key: format!("T-{}", id.as_u128()),
             title: String::new(),
             status_name: String::new(),

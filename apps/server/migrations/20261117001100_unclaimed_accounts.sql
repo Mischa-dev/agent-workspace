@@ -28,3 +28,6 @@ CREATE TABLE account_claims (
 
 CREATE INDEX account_claims_account ON account_claims (account_id);
 CREATE INDEX account_claims_workspace ON account_claims (workspace_id, created_at DESC);
+
+-- Row security (the tenancy decision of 2026-11-16).
+SELECT tenancy_protect('account_claims', 'workspace_id');

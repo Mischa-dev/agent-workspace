@@ -141,7 +141,7 @@ pub(super) async fn github_integration_write(
         return ToolResult::invalid("expectedVersion", "A version is 1 or more.");
     }
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         github::require_project_access_as(
             &mut transaction,
             principal.actor_id,

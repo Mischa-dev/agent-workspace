@@ -74,7 +74,7 @@ async fn readable(
         "SELECT organization_id FROM projects WHERE id = $1 AND kind = 'standard'",
     )
     .bind(principal.project_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     {
         Some(organization_id) => Ok(Ok(organization_id)),
@@ -156,10 +156,10 @@ pub(super) async fn ai_suggestions_list(
                 ));
             }
         };
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let page = suggestions::list(
             &mut connection,
-            reader(principal),
+            reader(state, principal),
             principal.project_id,
             &Filter {
                 status: arguments.status,
@@ -205,7 +205,7 @@ pub(super) async fn ai_suggestion_decide(
         _ => return ToolResult::invalid("decision", "Pass accept or dismiss."),
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) =
             access_refusal(check_write_access(&mut transaction, principal).await?)
         {
@@ -216,13 +216,19 @@ pub(super) async fn ai_suggestion_decide(
             suggestions::accept(
                 &mut transaction,
                 &actor,
-                reader(principal),
+                reader(state, principal),
                 suggestion_id,
                 "accepted",
             )
             .await?
         } else {
-            suggestions::dismiss(&mut transaction, &actor, reader(principal), suggestion_id).await?
+            suggestions::dismiss(
+                &mut transaction,
+                &actor,
+                reader(state, principal),
+                suggestion_id,
+            )
+            .await?
         };
         if let Err(refusal) = outcome {
             transaction.rollback().await?;
@@ -233,10 +239,10 @@ pub(super) async fn ai_suggestion_decide(
             });
         }
         transaction.commit().await?;
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let view = suggestions::get(
             &mut connection,
-            reader(principal),
+            reader(state, principal),
             principal.project_id,
             suggestion_id,
         )
@@ -275,7 +281,7 @@ pub(super) async fn ai_analyze(
             Ok(organization_id) => organization_id,
             Err(refusal) => return Ok(refusal),
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) =
             access_refusal(check_write_access(&mut transaction, principal).await?)
         {
@@ -340,10 +346,10 @@ pub(super) async fn ai_analyze(
                 .await?
                 {
                     Ok(id) => {
-                        let mut connection = state.pool.acquire().await?;
+                        let mut connection = crate::db::scoped_tx(&state.pool).await?;
                         let view = suggestions::get(
                             &mut connection,
-                            reader(principal),
+                            reader(state, principal),
                             principal.project_id,
                             id,
                         )
@@ -414,7 +420,7 @@ pub(super) async fn task_ready_list(
             };
             let readiness = ready::readiness_of(
                 &state.pool,
-                reader(principal),
+                reader(state, principal),
                 principal.project_id,
                 task_id,
             )
@@ -439,7 +445,7 @@ pub(super) async fn task_ready_list(
         };
         let ranking = ready::rank(
             &state.pool,
-            reader(principal),
+            reader(state, principal),
             principal.project_id,
             &RankFilter {
                 scope,
@@ -486,7 +492,7 @@ pub(super) async fn dependency_graph(
         };
         let graph = ready::graph(
             &state.pool,
-            reader(principal),
+            reader(state, principal),
             principal.project_id,
             &GraphFilter {
                 milestone_id,
@@ -618,7 +624,7 @@ pub(super) async fn plan_import(
                         "Pass the version you read, so a changed plan isn't created by mistake.",
                     ));
                 };
-                let mut transaction = state.pool.begin().await?;
+                let mut transaction = crate::db::scoped_tx(&state.pool).await?;
                 // Creating a plan makes tasks and also changes them (milestones,
                 // dependencies): it needs both, within an app's limit too.
                 for action in [Action::WorkItemCreate, Action::WorkItemEdit] {
@@ -663,7 +669,7 @@ pub(super) async fn plan_import(
             },
             _ => return Ok(ToolResult::invalid("plan", "Pass plan or pageId, one of them.")),
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if let Some(refusal) = access_refusal(check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?)
         {
             return Ok(refusal);

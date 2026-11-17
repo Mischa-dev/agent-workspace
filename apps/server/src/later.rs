@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::{self, Addresses},
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::TimelineEntryView,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
@@ -112,6 +113,7 @@ struct SavedRow {
     done_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     project_id: Uuid,
+    workspace_id: Uuid,
     project_name: String,
     direct_space: bool,
     message_id: Option<Uuid>,
@@ -141,7 +143,7 @@ fn select_sql(extra: &str) -> String {
     format!(
         r#"
         SELECT item.id, item.kind, item.note, item.remind_at, item.done_at, item.created_at,
-               item.project_id,
+               item.project_id, project.organization_id AS workspace_id,
                CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
                    AS project_name,
                project.kind = 'direct' AS direct_space,
@@ -189,29 +191,40 @@ fn place(row: &SavedRow) -> String {
     }
 }
 
-/// Where a message opens: its conversation, scrolled to it.
-pub(crate) fn message_href(
+/// Where a message opens: its conversation, scrolled to it. A thread in a
+/// DM or group opens in its parent's page.
+pub(crate) fn message_target(
     project_id: Uuid,
     direct_space: bool,
     conversation_id: Uuid,
     conversation_kind: Option<&str>,
     parent_conversation_id: Option<Uuid>,
-    message_id: Uuid,
-) -> String {
-    if direct_space {
-        // A thread in a DM or group opens in its parent's page.
-        let id = parent_conversation_id.unwrap_or(conversation_id);
-        return format!("/messages/{id}#message-{message_id}");
-    }
-    let segment = if conversation_kind == Some("thread") {
-        "threads"
-    } else {
-        "channels"
-    };
-    format!("/projects/{project_id}/{segment}/{conversation_id}#message-{message_id}")
+) -> addresses::Target {
+    addresses::Target::conversation(
+        project_id,
+        conversation_kind.unwrap_or("channel"),
+        conversation_id,
+        parent_conversation_id,
+        direct_space,
+        false,
+    )
 }
 
-fn view(row: SavedRow) -> SavedItemView {
+/// The path of message `message_id` in `conversation` (a
+/// [`message_target`]) in workspace `workspace_id`.
+pub(crate) fn message_href(
+    addresses: Addresses,
+    workspace_id: Uuid,
+    conversation: &addresses::Target,
+    message_id: Uuid,
+) -> String {
+    format!(
+        "{}#message-{message_id}",
+        addresses.in_workspace(workspace_id, conversation)
+    )
+}
+
+fn view(addresses: Addresses, row: SavedRow) -> SavedItemView {
     let message = match (row.message_id, row.conversation_id) {
         (Some(id), Some(conversation_id)) => Some(SavedMessageView {
             id,
@@ -238,15 +251,22 @@ fn view(row: SavedRow) -> SavedItemView {
     };
     let href = match (&message, &work_item) {
         (Some(message), _) => message_href(
-            row.project_id,
-            row.direct_space,
-            message.conversation_id,
-            row.conversation_kind.as_deref(),
-            row.parent_conversation_id,
+            addresses,
+            row.workspace_id,
+            &message_target(
+                row.project_id,
+                row.direct_space,
+                message.conversation_id,
+                row.conversation_kind.as_deref(),
+                row.parent_conversation_id,
+            ),
             message.id,
         ),
-        (None, Some(item)) => format!("/projects/{}/work-items/{}", row.project_id, item.id),
-        (None, None) => "/later".to_owned(),
+        (None, Some(item)) => addresses.in_workspace(
+            row.workspace_id,
+            &addresses::Target::task(row.project_id, item.id),
+        ),
+        (None, None) => addresses.in_workspace(row.workspace_id, &addresses::Target::Later),
     };
     SavedItemView {
         id: row.id,
@@ -287,6 +307,7 @@ pub struct LaterPage {
 /// `viewer`'s saved items they can still see, within `within` when given.
 pub async fn list(
     pool: &PgPool,
+    addresses: Addresses,
     viewer: Uuid,
     view_: ListView,
     within: Option<&[Uuid]>,
@@ -305,14 +326,14 @@ pub async fn list(
         .bind(viewer)
         .bind(within)
         .bind(LIST_LIMIT)
-        .fetch_all(pool)
+        .fetch_all(crate::db::scoped(pool))
         .await?;
     let open_count = open_count(pool, viewer, within).await?;
     Ok(LaterPage {
         items: rows
             .into_iter()
             .filter(|row| !hidden_by_limit(viewer, row))
-            .map(view)
+            .map(|row| view(addresses, row))
             .collect(),
         open_count,
     })
@@ -354,19 +375,24 @@ pub async fn open_count(
         viewer,
         crate::policy::Permission::TasksView,
     ))
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?)
 }
 
 /// One of `viewer`'s items, if they can still see it.
-pub async fn get_item(pool: &PgPool, viewer: Uuid, id: Uuid) -> Result<SavedItemView, AppError> {
+pub async fn get_item(
+    pool: &PgPool,
+    addresses: Addresses,
+    viewer: Uuid,
+    id: Uuid,
+) -> Result<SavedItemView, AppError> {
     sqlx::query_as::<_, SavedRow>(&select_sql("AND item.id = $2"))
         .bind(viewer)
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         .filter(|row| !hidden_by_limit(viewer, row))
-        .map(view)
+        .map(|row| view(addresses, row))
         .ok_or(AppError::NotFound("saved_item"))
 }
 
@@ -486,7 +512,7 @@ pub async fn save(
         .as_deref()
         .map(parse_remind_at)
         .transpose()?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let open = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM saved_items WHERE actor_id = $1 AND done_at IS NULL",
     )
@@ -607,7 +633,7 @@ pub async fn save(
         (Some(_), Some(_)) => return Err(AppError::Validation("messageId")),
     };
     transaction.commit().await?;
-    get_item(&state.pool, saver.actor_id, id).await
+    get_item(&state.pool, Addresses::of(state), saver.actor_id, id).await
 }
 
 enum Target {
@@ -739,14 +765,14 @@ pub async fn change(
     request: ChangeRequest,
 ) -> Result<SavedItemView, AppError> {
     // Only one they can still see.
-    get_item(&state.pool, actor_id, id).await?;
+    get_item(&state.pool, Addresses::of(state), actor_id, id).await?;
     let note = clean_note(request.note.as_deref())?;
     let remind_at = match request.remind_at.as_ref() {
         None => None,
         Some(None) => Some(None),
         Some(Some(value)) => Some(Some(parse_remind_at(value)?)),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let item = sqlx::query_as::<_, LockedItem>(
         "SELECT id, organization_id, kind, remind_at, done_at FROM saved_items WHERE id = $1 AND actor_id = $2 FOR UPDATE",
     )
@@ -797,11 +823,11 @@ pub async fn change(
         schedule(&mut *transaction, item.organization_id, item.id, at).await?;
     }
     transaction.commit().await?;
-    get_item(&state.pool, actor_id, id).await
+    get_item(&state.pool, Addresses::of(state), actor_id, id).await
 }
 
 pub async fn remove(pool: &PgPool, actor_id: Uuid, id: Uuid) -> Result<(), AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let removed = sqlx::query_as::<_, (Uuid, Option<DateTime<Utc>>)>(
         "DELETE FROM saved_items WHERE id = $1 AND actor_id = $2 RETURNING id, remind_at",
     )
@@ -902,7 +928,7 @@ struct DueRow {
 }
 
 async fn remind(state: &AppState, job: &RemindJob) -> Result<(), JobError> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // Access is checked now, as the item's owner, with an active account.
     let Some(row) = sqlx::query_as::<_, DueRow>(
         r#"
@@ -988,7 +1014,7 @@ async fn notify(
             "note": row.note,
             "savedItemId": row.id,
             "savedKind": row.kind,
-            "href": "/later",
+            "href": addresses::Target::Later.legacy_path(),
         }),
         group_key: format!("reminder:{}", row.id),
         dedupe_key: format!("reminder:{}:{}", row.id, at.timestamp_micros()),
@@ -1032,7 +1058,7 @@ async fn tell_agent(
             &summary,
             "saved_item",
             row.id,
-            "/later",
+            &addresses::Target::Later.legacy_path(),
         )
         .await?;
     }
@@ -1062,6 +1088,7 @@ async fn list_http(
     Ok(Json(
         list(
             &state.pool,
+            Addresses::of(&state),
             principal.actor_id,
             query.view.unwrap_or_default(),
             None,
@@ -1148,13 +1175,28 @@ mod tests {
         let thread = Uuid::now_v7();
         let parent = Uuid::now_v7();
         let message = Uuid::now_v7();
+        let workspace = Uuid::now_v7();
+        let href = |direct, parent| {
+            message_href(
+                Addresses::LEGACY,
+                workspace,
+                &message_target(project, direct, thread, Some("thread"), parent),
+                message,
+            )
+        };
         assert_eq!(
-            message_href(project, true, thread, Some("thread"), Some(parent), message),
-            format!("/messages/{parent}#message-{message}")
+            href(true, Some(parent)),
+            addresses::Target::Direct {
+                id: parent,
+                thread: None
+            }
+            .legacy_path()
+                + &format!("#message-{message}")
         );
         assert_eq!(
-            message_href(project, false, thread, Some("thread"), None, message),
-            format!("/projects/{project}/threads/{thread}#message-{message}")
+            href(false, None),
+            addresses::Target::space(project, addresses::Place::Thread(thread)).legacy_path()
+                + &format!("#message-{message}")
         );
     }
 }

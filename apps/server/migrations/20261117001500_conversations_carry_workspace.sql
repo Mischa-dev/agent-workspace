@@ -1,8 +1,7 @@
 -- K4.4: conversations carry their workspace, and one full visibility rule.
 --
--- * conversations.workspace_id: added, backfilled from the space, filled by
---   a trigger for writers that don't set it yet, then NOT NULL, with an
---   index (workspace_id, kind). Writers set it explicitly.
+-- * conversations.workspace_id (added with row security): an index
+--   (workspace_id, kind). Writers set it explicitly.
 -- * conversations.kept: a DM or group that belongs to its workspace and
 --   ends with membership there (ruling R20; the `direct_messages` setting
 --   that starts them comes later). Every existing one is personal.
@@ -32,34 +31,10 @@
 -- the rule once per conversation instead is left to the search owner. A
 -- first version that called space_readable_by from the body cost 44 s.
 
-ALTER TABLE conversations ADD COLUMN workspace_id UUID;
-
-UPDATE conversations conversation
-SET workspace_id = space.organization_id
-FROM projects space
-WHERE space.id = conversation.project_id
-  AND conversation.workspace_id IS NULL;
-
-CREATE FUNCTION conversations_fill_workspace()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF NEW.workspace_id IS NULL THEN
-        SELECT organization_id INTO NEW.workspace_id FROM projects WHERE id = NEW.project_id;
-    END IF;
-    RETURN NEW;
-END
-$$;
-
-CREATE TRIGGER conversations_fill_workspace
-BEFORE INSERT OR UPDATE OF project_id, workspace_id ON conversations
-FOR EACH ROW EXECUTE FUNCTION conversations_fill_workspace();
+-- conversations.workspace_id itself came with row security (migrations
+-- 20261116183100 and 20261116183200): filled on insert, NOT NULL.
 
 ALTER TABLE conversations
-    ALTER COLUMN workspace_id SET NOT NULL,
-    ADD CONSTRAINT conversations_workspace_fk
-        FOREIGN KEY (workspace_id) REFERENCES organizations(id),
     ADD COLUMN kept BOOLEAN NOT NULL DEFAULT false,
     ADD CONSTRAINT conversations_kept_is_direct
         CHECK (NOT kept OR kind IN ('dm', 'group'));

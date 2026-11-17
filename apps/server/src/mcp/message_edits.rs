@@ -283,7 +283,7 @@ pub(super) async fn message_edit(
     };
     let result = async {
         let request_hash = edit_request_hash(&content, arguments.expected_revision)?;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let locked =
             match lock_message_for_change(&mut transaction, &actor, None, message_id, Change::Edit)
@@ -411,7 +411,7 @@ pub(super) async fn message_delete(
         Err(message) => return ToolResult::denied(message),
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let locked = match lock_message_for_change(
             &mut transaction,
@@ -512,7 +512,7 @@ pub(super) async fn message_preview_hide(
         Err(message) => return ToolResult::denied(message),
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let locked = match lock_message_for_change(
             &mut transaction,
@@ -578,7 +578,7 @@ pub(super) async fn message_history(
         .bind(message_id)
         .bind(principal.project_id)
         .bind(principal.actor_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         else {
             return Ok(ToolResult::not_found("That message"));

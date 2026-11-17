@@ -1010,7 +1010,7 @@ async fn list_tasks(
     // only projects where it's on for them, their role narrowing it, before
     // anything is counted or paged.
     let modules = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, &projects)
             .await?
     };
@@ -1020,7 +1020,7 @@ async fn list_tasks(
     let place = if let [only] = projects.as_slice() {
         sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
             .bind(only)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
             .unwrap_or_else(|| "this project".to_owned())
     } else {
@@ -1122,7 +1122,7 @@ async fn list_tasks(
             let [project] = projects.as_slice() else {
                 return Ok(Err(ToolResult::invalid("collection", ONE_PROJECT)));
             };
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             match crate::collections::task_like::find(&mut connection, *project, reference).await? {
                 Some(found) => Some(found.task_collection_id()),
                 None => {
@@ -1154,7 +1154,7 @@ async fn list_tasks(
             let [project] = projects.as_slice() else {
                 return Ok(Err(ToolResult::invalid("fieldFilters", ONE_PROJECT)));
             };
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             match field_tools::filter_clauses(
                 &mut connection,
                 principal,
@@ -1326,10 +1326,7 @@ async fn list_tasks(
     };
 
     // One snapshot for both queries, so the total and the page agree.
-    let mut transaction = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *transaction)
-        .await?;
+    let mut transaction = crate::db::scoped_snapshot(&state.pool).await?;
     let mut count = QueryBuilder::<Postgres>::new(format!("SELECT count(*) {TASK_FROM}"));
     filters.push_where(&mut count);
     let total = count
@@ -1435,7 +1432,7 @@ async fn filter_milestones(
     )
     .bind(projects)
     .bind(value)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     if !ids.is_empty() {
         return Ok(Ok(ids));
@@ -1449,7 +1446,7 @@ async fn filter_milestones(
         "#,
     )
     .bind(projects)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(Err(if names.is_empty() {
         format!(
@@ -1491,7 +1488,7 @@ async fn filter_statuses(
     )
     .bind(projects)
     .bind(values)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     // A group is known even where no status is in it yet.
     let unknown = rows.iter().find(|(value, id)| {
@@ -1507,7 +1504,7 @@ async fn filter_statuses(
             "#,
         )
         .bind(projects)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         return Ok(Err(format!(
             "No status called \"{}\" in {place}. Statuses: {}. Groups: {}.",
@@ -1543,7 +1540,7 @@ async fn filter_types(
     )
     .bind(projects)
     .bind(values)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     if let Some((value, _)) = rows.iter().find(|(_, id)| id.is_none()) {
         let names = sqlx::query_scalar::<_, String>(
@@ -1555,7 +1552,7 @@ async fn filter_types(
             "#,
         )
         .bind(projects)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         return Ok(Err(format!(
             "No task type called \"{}\" in {place}. Types: {}.",
@@ -1612,7 +1609,7 @@ async fn filter_labels(
     )
     .bind(projects)
     .bind(&values)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut names = Vec::new();
     let mut resolution = work_item_labels::Resolution::default();
@@ -1646,7 +1643,7 @@ async fn filter_labels(
         return Ok(Ok(names));
     }
     if let [project] = projects {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         return Ok(Err(work_item_labels::unknown_message(
             &mut connection,
             *project,
@@ -1682,7 +1679,7 @@ async fn resolve_actor(
     )
     .bind(projects)
     .bind(person.trim_start_matches('@'))
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -1736,7 +1733,7 @@ async fn resolve_among(
         )
         .bind(id)
         .bind(projects)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
     };
     if let Some(id) = parse_id(identifier) {
         return Ok(reachable(id).await?);
@@ -1770,7 +1767,7 @@ async fn resolve_among(
     .bind(project_key)
     .bind(number)
     .bind(projects)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(match matches.as_slice() {
         [only] => Some(*only),
@@ -2154,7 +2151,7 @@ pub(super) async fn task_open(
             "#
         ))
         .bind(task_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let conversations = sqlx::query_as::<_, LinkedItem>(
             r#"
@@ -2178,7 +2175,7 @@ pub(super) async fn task_open(
         .bind(task_id)
         .bind(principal.actor_id)
         .bind(project_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let links = sqlx::query_as::<_, LinkedItem>(
             r#"
@@ -2211,7 +2208,7 @@ pub(super) async fn task_open(
         )
         .bind(task_id)
         .bind(principal.actor_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let mut comments = sqlx::query_as::<_, CommentItem>(
             r#"
@@ -2232,7 +2229,7 @@ pub(super) async fn task_open(
             "#,
         )
         .bind(task_id)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         comments.reverse();
         // Files on the task and on its comments (file_read opens them).
@@ -2259,10 +2256,10 @@ pub(super) async fn task_open(
             "SELECT id FROM project_pages WHERE project_id = $1 AND is_guide AND archived_at IS NULL",
         )
         .bind(project_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .map(|id| id.to_string());
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let planning_row = sqlx::query_as::<_, PlanningRow>(&format!(
             r#"
             SELECT item.milestone_id, milestone.name AS milestone_name,
@@ -2288,7 +2285,7 @@ pub(super) async fn task_open(
             None => None,
         };
         let planning_links =
-            planning::visible_links(&mut connection, principal, project_id, task_id).await?;
+            planning::visible_links(state, &mut connection, principal, project_id, task_id).await?;
         let watchers = planning::visible_watchers(&mut connection, project_id, task_id).await?;
         let fields = field_tools::task_fields(&mut connection, project_id, task_id).await?;
         let collection = sqlx::query_scalar::<_, String>(
@@ -2436,7 +2433,7 @@ pub(super) async fn task_create(
         let in_messages_space =
             sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
                 .bind(principal.project_id)
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await
                 .ok()
                 .flatten()
@@ -2501,7 +2498,7 @@ async fn assignee_for(
         return Ok(None);
     };
     let resolved = async {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         resolve_assignee(&mut connection, principal, principal.project_id, person).await
     }
     .await;
@@ -2881,7 +2878,7 @@ async fn task_reorder_inner(
         }
     };
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(refused) = lock_for_task_write(&mut transaction, principal, project_id).await? {
         return Ok(refused);
     }
@@ -3146,7 +3143,7 @@ async fn task_key_by_id(state: &AppState, task_id: Uuid) -> Result<String, AppEr
         "#,
     )
     .bind(task_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .unwrap_or_else(|| task_id.to_string()))
 }
@@ -3255,7 +3252,7 @@ async fn handoff_notes(
     )
     .bind(task_id)
     .bind(limit)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -3281,7 +3278,7 @@ async fn current_claim(state: &AppState, task_id: Uuid) -> Result<Option<ClaimVa
         "#,
     )
     .bind(task_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .map(|row| ClaimValue {
         task_id: row.work_item_id.to_string(),
@@ -3322,7 +3319,7 @@ pub(super) async fn task_claim(
                 "You can't work on tasks in that project.",
             ));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         // The claim takes its turn on the project row before the task, as
         // every task write does (lock_membership) before it locks tasks and
@@ -3463,7 +3460,7 @@ pub(super) async fn task_release(
                 "You can't work on tasks in that project.",
             ));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let released =
             sqlx::query("DELETE FROM work_item_claims WHERE work_item_id = $1 AND actor_id = $2")
                 .bind(task_id)
@@ -3743,7 +3740,7 @@ async fn task_whiteboard_link(
         .await?;
         let version = sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
             .bind(task_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
         Ok::<_, AppError>(ToolResult::ok(LinkValue {
             task_id: task_id.to_string(),
@@ -3823,7 +3820,7 @@ async fn task_link_inner(
         }
     };
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(refused) = lock_for_task_write(&mut transaction, principal, project_id).await? {
         return Ok(refused);
     }
@@ -4217,7 +4214,7 @@ async fn find_repository(
         )
         .bind(project_id)
         .bind(id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .ok_or_else(|| ToolResult::not_found("That repository")));
     }
@@ -4237,7 +4234,7 @@ async fn find_repository(
     )
     .bind(project_id)
     .bind(name)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     match found.as_slice() {
         [only] => Ok(Ok(only.clone())),
@@ -4256,7 +4253,7 @@ async fn find_repository(
                 "#,
             )
             .bind(project_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
             let message = if here.is_empty() {
                 format!(
@@ -4304,7 +4301,7 @@ async fn find_pull_request(
         .bind(project_id)
         .bind(id)
         .bind(principal.actor_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
     } else if reference.starts_with("https://github.com/") && reference.len() <= 2048 {
         let url = reference
@@ -4318,7 +4315,7 @@ async fn find_pull_request(
         .bind(project_id)
         .bind(url)
         .bind(principal.actor_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
     } else {
         return Ok(Err(ToolResult::invalid(

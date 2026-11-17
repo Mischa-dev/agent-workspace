@@ -30,9 +30,14 @@ last `CREATE OR REPLACE`. It isn't checked in, so run it again after a merge.
 ## Write it like the others
 
 - Start with a comment saying which workstream it's for and what each part is.
-- Every new table belongs to a workspace: give it `project_id` (or
-  `organization_id`) with a foreign key, so it's scoped and isolation tests
-  can reach it. No single-process state.
+- Every new table belongs to a workspace: give it `workspace_id` (and
+  `space_id` where it lives in a space) with a foreign key, list it in
+  `TENANT_TABLES` in `src/tenancy/tables.rs`, and protect it with row
+  security in the same migration: `SELECT tenancy_protect('<table>',
+  'workspace_id');` (add the row's conversation as a third argument when the
+  table can hold a DM's rows). `tenancy_row_rules` fails on a tenant table
+  without its policy. A server-wide table goes on `GLOBAL_TABLES` with its
+  reason instead. No single-process state.
 - Put limits in the database as well as in code: `CHECK (char_length(...)
   BETWEEN 1 AND n)`, `!~ '[[:cntrl:]]'` for one-line text, enums as
   `CHECK (x IN (...))`.

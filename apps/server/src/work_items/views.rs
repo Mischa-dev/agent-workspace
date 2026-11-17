@@ -1084,7 +1084,7 @@ async fn my_work_section(
             .bind(reader)
             .bind(projects)
             .bind(MY_WORK_LIMIT)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?;
     let total = sqlx::query_scalar::<_, i64>(&format!(
         r#"SELECT count(*) FROM task_rows item
@@ -1097,7 +1097,7 @@ async fn my_work_section(
     ))
     .bind(reader)
     .bind(projects)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?;
     Ok(MyWorkSection { items, total })
 }
@@ -1232,7 +1232,7 @@ pub(super) async fn get_timeline(
     if to < from || (to - from).num_days() > MAX_TIMELINE_DAYS {
         return Err(AppError::Validation("to"));
     }
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     if let Some(milestone_id) = query.milestone_id
         && planning::milestone(&mut connection, project_id, milestone_id)
             .await?
@@ -1297,6 +1297,7 @@ pub(super) async fn get_timeline(
         crate::work_item_planning::Reader {
             actor_id: principal.actor_id,
             connection_id: None,
+            addresses: crate::addresses::Addresses::of(&state),
         },
         project_id,
         &ids,

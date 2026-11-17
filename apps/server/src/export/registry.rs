@@ -160,10 +160,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
-                "idempotency_keys",
-                "runtime state of this server (queues, leases, retries)",
-            ),
-            (
                 "link_previews",
                 "a cache or index derived from other rows, rebuilt on import",
             ),

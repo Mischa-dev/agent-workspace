@@ -3857,7 +3857,7 @@ pub(crate) async fn caller_reach(
     state: &AppState,
     principal: &McpPrincipal,
 ) -> Result<(PermissionSet, Option<AgentLimits>), AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     if principal.actor_kind == ActorKind::Human {
         let access = crate::roles::app_access(&mut connection, principal.actor_id).await?;
         Ok((access.union, Some(access.limits)))
@@ -3876,7 +3876,7 @@ async fn caller_modules_anywhere(
     state: &AppState,
     principal: &McpPrincipal,
 ) -> Result<crate::modules::ModuleSet, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     crate::modules::state::anywhere(&mut connection, principal.actor_id).await
 }
 
@@ -3908,7 +3908,7 @@ async fn module_off_here(
     tool: &str,
     module: &crate::modules::manifest::Manifest,
 ) -> Result<Option<String>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     // A list that names no project spans every project the caller reaches
     // and leaves out those where its module is off itself, so it's on
     // wherever it's on somewhere, even for a connection anchored in one.
@@ -4546,7 +4546,7 @@ async fn project_in_workspace(
     )
     .bind(project_id)
     .bind(workspace)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -4557,9 +4557,7 @@ async fn alias_workspace(
     principal: &McpPrincipal,
     named: &str,
 ) -> Result<crate::ops::mcp::AliasWorkspace, crate::ops::OpError> {
-    let mut connection = state
-        .pool
-        .acquire()
+    let mut connection = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(|error| crate::ops::OpError::logged("workspace", &error.into()))?;
     let workspace = crate::ops::target::workspace_named(&mut connection, named).await?;
@@ -4984,7 +4982,7 @@ pub(crate) async fn resolve_bearer_principal(
         "#,
     )
     .bind(prefix)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
 
     let matched = rows.into_iter().find(|row| {
@@ -5006,7 +5004,7 @@ pub(crate) async fn resolve_bearer_principal(
     )
     .bind(row.credential_id)
     .bind(LAST_USED_THROTTLE_MINUTES)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     if let Some(connection_id) = row.external_agent_connection_id {
         sqlx::query(
@@ -5019,7 +5017,7 @@ pub(crate) async fn resolve_bearer_principal(
         )
         .bind(connection_id)
         .bind(LAST_USED_THROTTLE_MINUTES)
-        .execute(&state.pool)
+        .execute(crate::db::scoped(&state.pool))
         .await?;
     }
 
@@ -5126,7 +5124,7 @@ pub async fn issue_credential_as(
     validate_issue_command(pool, &command).await?;
     let (token, token_prefix, token_digest) = generate_token();
     let credential_id = Uuid::now_v7();
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let expires_at = sqlx::query_scalar::<_, String>(
         r#"
         INSERT INTO mcp_client_credentials (
@@ -5198,7 +5196,7 @@ pub async fn list_credentials(
         "#,
     )
     .bind(project_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -5222,7 +5220,7 @@ pub async fn revoke_credential_as(
     expected_version: i64,
     issuer: CredentialIssuer,
 ) -> Result<CredentialMetadata, AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let row = credential_metadata_for_update(&mut transaction, credential_id).await?;
     if row.version != expected_version || row.status != "active" {
         return Err(AppError::Conflict(
@@ -5270,7 +5268,7 @@ pub async fn replace_credential(
     }
     let (token, token_prefix, token_digest) = generate_token();
     let replacement_id = Uuid::now_v7();
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let row = credential_metadata_for_update(&mut transaction, credential_id).await?;
     if row.version != expected_version || row.status != "active" {
         return Err(AppError::Conflict(
@@ -5384,7 +5382,7 @@ async fn validate_issue_command(
     )
     .bind(command.project_id)
     .bind(command.actor_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?;
     let wants_write = command.scopes.iter().any(|scope| scope == "write");
     // Write scope for anyone whose role may write anything here (any
@@ -5710,7 +5708,7 @@ async fn repository_by_name(
     .bind(full_name)
     .bind(within)
     .bind(common::confined_project(principal))
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(match matches.as_slice() {
         [repository_id] => Some(*repository_id),
@@ -5759,7 +5757,7 @@ async fn workspace_space_of(
     if common::confined_project(principal).is_some() {
         return Ok(None);
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let Some(organization_id) =
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(principal.project_id)
@@ -5803,7 +5801,7 @@ async fn project_by_key(
     .bind(principal.external_agent_connection_id)
     .bind(key)
     .bind(common::confined_project(principal))
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(match matches.as_slice() {
         [project_id] => Some(*project_id),
@@ -5878,7 +5876,7 @@ pub(super) async fn task_key_resolution(
     .bind(project_key)
     .bind(number)
     .bind(common::confined_project(principal))
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     // Keys are organization-scoped: the same key+number in two of the
     // caller's organizations names two different tasks, and silently picking
@@ -5933,7 +5931,7 @@ async fn original_task_by_key(
     .bind(project_key)
     .bind(number)
     .bind(common::confined_project(principal))
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -6065,7 +6063,11 @@ async fn first_scope(
             if query.contains("$2") {
                 lookup = lookup.bind(principal.actor_id);
             }
-            return Ok(Some(lookup.fetch_optional(&state.pool).await?));
+            return Ok(Some(
+                lookup
+                    .fetch_optional(crate::db::scoped(&state.pool))
+                    .await?,
+            ));
         }
     }
     Ok(None)
@@ -6115,7 +6117,7 @@ async fn scoped_project(
                 .bind(principal.actor_id)
                 .bind(principal.external_agent_connection_id)
                 .bind(target)
-                .fetch_one(&state.pool)
+                .fetch_one(crate::db::scoped(&state.pool))
                 .await?;
         if !allowed {
             return Err(AppError::Forbidden);
@@ -6142,7 +6144,7 @@ async fn identifier_project(
                 )
                 .bind(id)
                 .bind(principal.actor_id)
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await?);
             }
             Ok(sqlx::query_scalar::<_, Uuid>(
@@ -6159,7 +6161,7 @@ async fn identifier_project(
             .bind(principal.project_id)
             .bind(principal.actor_id)
             .bind(principal.external_agent_connection_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?)
         }
         // Task tools accept `identifier` as an alias for `taskId`.
@@ -6168,7 +6170,7 @@ async fn identifier_project(
                 "SELECT project_id FROM work_items WHERE id = $1",
             )
             .bind(id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?),
             Some(reads::WorkItemReference::Key) => Ok(sqlx::query_scalar::<_, Uuid>(
                 r#"
@@ -6185,7 +6187,7 @@ async fn identifier_project(
             .bind(principal.project_id)
             .bind(principal.actor_id)
             .bind(principal.external_agent_connection_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?),
             None => Ok(None),
         },

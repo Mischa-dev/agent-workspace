@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::Target,
     auth::{AuthenticatedActor, require_authenticated_write},
     domain::allocate_conversation_sequence,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
@@ -396,7 +397,40 @@ pub struct ConversationWorkItemReferenceView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_category: Option<String>,
     pub archived_at: Option<String>,
+    /// In today's shape: a chip's link stays inside the app, which reads
+    /// both shapes (a stopgap until timeline views are built with the
+    /// server's addresses, C1). Read rows leave it out and name the task's
+    /// project instead; [`ConversationWorkItemReferenceView::linked`] fills
+    /// it in.
+    #[serde(default)]
     pub href: String,
+    #[serde(default, skip_serializing)]
+    pub project_id: Option<Uuid>,
+}
+
+impl ConversationWorkItemReferenceView {
+    fn linked(mut self) -> Self {
+        if let Some(project_id) = self.project_id
+            && self.href.is_empty()
+        {
+            self.href = Target::task(project_id, self.id).legacy_path();
+        }
+        self
+    }
+}
+
+/// Task chips read from a JSON column, with their links filled in.
+fn work_item_references(
+    value: serde_json::Value,
+    invalid: &'static str,
+) -> Result<Vec<ConversationWorkItemReferenceView>, AppError> {
+    Ok(
+        serde_json::from_value::<Vec<ConversationWorkItemReferenceView>>(value)
+            .map_err(|_| AppError::Internal(invalid))?
+            .into_iter()
+            .map(ConversationWorkItemReferenceView::linked)
+            .collect(),
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -821,7 +855,7 @@ async fn list_channels(
     .bind(project_id)
     .bind(principal.actor_id)
     .bind(MAX_CHANNELS_PER_PROJECT)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let channels = rows
         .into_iter()
@@ -880,7 +914,7 @@ async fn create_channel(
     let request_hash = RequestHash::for_value(&command)?;
     let scope = idempotency::resource_bound_scope("project", project_id, "channel_create")?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = lock_project_access(
         &mut transaction,
         &principal,
@@ -1017,7 +1051,7 @@ async fn create_thread(
     let request_hash = RequestHash::for_value(&command)?;
     let scope = idempotency::resource_bound_scope("channel", channel_id, "thread_create")?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let channel = lock_conversation_access(
         &mut transaction,
         &principal,
@@ -1294,7 +1328,7 @@ pub(crate) async fn thread_summaries(
     .bind(status)
     .bind(include_archived)
     .bind(limit)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 
@@ -1499,7 +1533,7 @@ async fn patch_thread(
     ApiJson(patch): ApiJson<ThreadPatch>,
 ) -> Result<Json<ConversationView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let view = update_thread(
         &mut transaction,
         principal.actor_id,
@@ -1742,7 +1776,7 @@ pub(crate) async fn append_message_command_with(
         }
     };
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let conversation = lock_message_conversation(
         &mut transaction,
         &actor,
@@ -1939,7 +1973,8 @@ pub(crate) async fn append_message_command_with(
                 title: Some(title),
                 status_category: Some(status_category),
                 archived_at,
-                href: format!("/projects/{}/work-items/{id}", conversation.project_id),
+                href: Target::task(conversation.project_id, id).legacy_path(),
+                project_id: Some(conversation.project_id),
             },
         )
         .collect();
@@ -2396,11 +2431,16 @@ pub(crate) async fn enqueue_external_message_events(
     .bind(conversation.id)
     .fetch_all(&mut **transaction)
     .await?;
-    let kind = match conversation.kind.as_str() {
-        "thread" => "threads",
-        "channel" => "channels",
-        _ => "messages",
-    };
+    // Stored with the event: today's shape, which the web and resolve read.
+    let path = Target::conversation(
+        conversation.project_id,
+        &conversation.kind,
+        conversation.id,
+        None,
+        !matches!(conversation.kind.as_str(), "thread" | "channel"),
+        true,
+    )
+    .legacy_path();
     for (connection_id, _) in connections {
         enqueue_external_event(
             transaction,
@@ -2410,14 +2450,7 @@ pub(crate) async fn enqueue_external_message_events(
             "You were mentioned in a Message",
             "message",
             message_id,
-            &if kind == "messages" {
-                format!("/messages/{}", conversation.id)
-            } else {
-                format!(
-                    "/projects/{}/{kind}/{}",
-                    conversation.project_id, conversation.id
-                )
-            },
+            &path,
         )
         .await?;
     }
@@ -2492,7 +2525,7 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
                     'title', item.title,
                     'statusCategory', status.semantic_category,
                     'archivedAt', item.archived_at::text,
-                    'href', '/projects/' || item.project_id::text || '/work-items/' || item.id::text
+                    'projectId', item.project_id
                 ) ORDER BY min_reference.first_node_index, item.id
             ) AS items
             FROM (
@@ -2602,7 +2635,7 @@ async fn conversation_timeline(
     .bind(conversation.project_id)
     .bind(before_sequence)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let has_older = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
     if has_older {
@@ -2647,7 +2680,7 @@ async fn conversation_timeline(
                     'title', item.title,
                     'statusCategory', status.semantic_category,
                     'archivedAt', item.archived_at::text,
-                    'href', '/projects/' || item.project_id::text || '/work-items/' || item.id::text
+                    'projectId', item.project_id
                 ) ORDER BY item.number, item.id
             ), '[]'::jsonb)
             FROM work_item_conversation_links link
@@ -2661,10 +2694,9 @@ async fn conversation_timeline(
             )
             .bind(conversation.project_id)
             .bind(conversation.id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?;
-            serde_json::from_value(value)
-                .map_err(|_| AppError::Internal("invalid linked Work Item projection"))?
+            work_item_references(value, "invalid linked Work Item projection")?
         } else {
             Vec::new()
         };
@@ -2706,7 +2738,7 @@ async fn mark_conversation_seen(
     if request.highest_seen_sequence < 0 {
         return Err(AppError::Validation("highest seen sequence"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let conversation = lock_conversation_access(
         &mut transaction,
         &principal,
@@ -2779,7 +2811,7 @@ async fn mark_conversation_unread(
     ApiJson(request): ApiJson<MarkUnreadRequest>,
 ) -> Result<Json<ReadStateView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let change = mark_unread_from(
         &mut transaction,
         principal.actor_id,
@@ -2979,7 +3011,7 @@ async fn archive_conversation(
     request: ArchiveConversationRequest,
 ) -> Result<Json<ArchiveConversationResponse>, AppError> {
     require_authenticated_write(state, headers, principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (conversation, archived) = set_conversation_archived(
         &mut transaction,
         principal.actor_id,
@@ -3067,7 +3099,7 @@ async fn restore_conversation(
     request: ArchiveConversationRequest,
 ) -> Result<Json<RestoreConversationResponse>, AppError> {
     require_authenticated_write(state, headers, principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (conversation, restored) = set_conversation_archived(
         &mut transaction,
         principal.actor_id,
@@ -3328,7 +3360,7 @@ async fn search_mentionable_actors(
     .bind(cursor_handle)
     .bind(cursor_id)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let has_more = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
     if has_more {
@@ -3400,7 +3432,7 @@ async fn project_conversation_sidebar(
     .bind(principal.actor_id)
     .bind(include_archived)
     .bind(MAX_CHANNELS_PER_PROJECT)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let threads = sqlx::query_as::<_, SidebarThreadRow>(
         r#"
@@ -3481,7 +3513,7 @@ async fn project_conversation_sidebar(
     .bind(&principal.actor_kind)
     .bind(include_archived)
     .bind(MAX_THREADS_PER_SIDEBAR)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
 
     let expanded_channel_id = query.expanded_channel_id;
@@ -3680,7 +3712,7 @@ async fn authorized_project(
     )
     .bind(project_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("project"))?;
     require_policy(
@@ -3813,7 +3845,7 @@ pub(crate) async fn fetch_conversation_access(
     )
     .bind(conversation_id)
     .bind(actor_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?)
 }
 
@@ -4106,7 +4138,7 @@ async fn fetch_read_state(
     )
     .bind(conversation_id)
     .bind(actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     Ok(row.map_or(
         ReadStateView {
@@ -4274,10 +4306,10 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
             let mentioned_actors =
                 serde_json::from_value::<Vec<ActorView>>(row.mentioned_actors)
                     .map_err(|_| AppError::Internal("decode timeline Message mentions"))?;
-            let referenced_work_items = serde_json::from_value::<
-                Vec<ConversationWorkItemReferenceView>,
-            >(row.referenced_work_items)
-            .map_err(|_| AppError::Internal("decode timeline Work Item references"))?;
+            let referenced_work_items = work_item_references(
+                row.referenced_work_items,
+                "decode timeline Work Item references",
+            )?;
             let attachments =
                 serde_json::from_value::<Vec<crate::files::FileView>>(row.attachments)
                     .map_err(|_| AppError::Internal("decode timeline Message files"))?;
@@ -4457,7 +4489,7 @@ async fn fetch_run_projection(
         "#,
     )
     .bind(conversation.id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let latest_terminal_run = sqlx::query_as::<_, RunRow>(
         r#"
@@ -4503,7 +4535,7 @@ async fn fetch_run_projection(
         "#,
     )
     .bind(conversation.id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     // Whether the latest run published, for what may be done next, read
     // before its code is left out below.
@@ -4540,7 +4572,7 @@ async fn fetch_run_projection(
             )
             .bind(run.id)
             .bind(principal.actor_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?
         }
         _ => false,
@@ -4568,7 +4600,7 @@ async fn fetch_run_projection(
         "#,
     )
     .bind(conversation.id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let active_run = active_run.map(|run| {
         let scope = ProjectScope::run(

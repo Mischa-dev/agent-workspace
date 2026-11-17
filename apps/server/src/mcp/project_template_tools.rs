@@ -96,7 +96,7 @@ async fn workspace_of(
     Ok(
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(principal.project_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?,
     )
 }
@@ -132,7 +132,7 @@ pub(super) async fn project_template_list(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let templates = templates::templates_for(
             &mut connection,
             reader(principal),
@@ -191,7 +191,7 @@ pub(super) async fn project_template_write(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let (done, outcome, template_id) = match arguments.template.as_deref() {
             None => {
                 if arguments.archived.is_some() || arguments.expected_version.is_some() {

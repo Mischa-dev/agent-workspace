@@ -134,7 +134,7 @@ async fn mail_available_for(pool: &PgPool, actor_id: Uuid) -> Result<bool, AppEr
         "#,
     )
     .bind(actor_id)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?)
 }
 
@@ -143,7 +143,7 @@ async fn email_view(pool: &PgPool, principal: &AuthenticatedActor) -> Result<Ema
         "SELECT address, verified_at, verification_sent_at FROM user_email_addresses WHERE user_id = $1",
     )
     .bind(principal.user_id)
-    .fetch_optional(pool)
+    .fetch_optional(crate::db::scoped(pool))
     .await?;
     let mail_available = mail_available_for(pool, principal.actor_id).await?;
     Ok(match row {
@@ -206,7 +206,7 @@ async fn set_email_http(
     if !mail_available_for(&state.pool, principal.actor_id).await? {
         return Err(AppError::Conflict("email", "mail isn't set up"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let current = sqlx::query_as::<_, AddressRow>(
         "SELECT address, verified_at, verification_sent_at FROM user_email_addresses WHERE user_id = $1 FOR UPDATE",
     )
@@ -260,7 +260,7 @@ async fn remove_email_http(
     principal: AuthenticatedActor,
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("DELETE FROM user_email_addresses WHERE user_id = $1")
         .bind(principal.user_id)
         .execute(&mut *transaction)
@@ -289,7 +289,7 @@ async fn resend_http(
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<EmailView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = sqlx::query_as::<_, AddressRow>(
         "SELECT address, verified_at, verification_sent_at FROM user_email_addresses WHERE user_id = $1 FOR UPDATE",
     )
@@ -332,7 +332,7 @@ async fn send_confirmation(state: &AppState, user_id: Uuid) -> Result<(), JobErr
         "#,
     )
     .bind(user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some((address, actor_id, display_name)) = row else {
         return Ok(());
@@ -353,7 +353,7 @@ async fn send_confirmation(state: &AppState, user_id: Uuid) -> Result<(), JobErr
     .bind(&address)
     .bind(digest(&link_token).to_vec())
     .bind(VERIFY_HOURS)
-    .execute(&state.pool)
+    .execute(crate::db::scoped(&state.pool))
     .await?;
     if updated.rows_affected() == 0 {
         return Ok(());
@@ -404,7 +404,7 @@ async fn verify_http(
         return Err(AppError::NotFound("confirmation link"));
     }
     state.rate_limits.check_invitation(&request.token)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
         r#"
         SELECT address.user_id, user_account.actor_id, address.address
@@ -567,7 +567,7 @@ async fn send_reset(state: &AppState, login: &str) -> Result<(), JobError> {
         "#,
     )
     .bind(login)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some(target) = target else {
         return Ok(());
@@ -575,7 +575,9 @@ async fn send_reset(state: &AppState, login: &str) -> Result<(), JobError> {
     let Some(transport) = mail::transport_for_actor(state, target.actor_id).await? else {
         return Ok(());
     };
-    let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("password-reset:{}", target.user_id))
         .execute(&mut *transaction)
@@ -649,7 +651,7 @@ async fn send_reset(state: &AppState, login: &str) -> Result<(), JobError> {
         // throttled by it and mails a fresh one.
         sqlx::query("DELETE FROM password_reset_tokens WHERE id = $1")
             .bind(link_id)
-            .execute(&state.pool)
+            .execute(crate::db::scoped(&state.pool))
             .await
             .map_err(AppError::from)?;
         return Err(error.into());
@@ -727,7 +729,7 @@ async fn inspect_reset_http(
 ) -> Result<Json<ResetInspection>, AppError> {
     require_allowed_origin(&state.config, &headers)?;
     state.rate_limits.check_invitation(&request.token)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let reset = live_reset(&mut transaction, &request.token).await?;
     let two_factor_required =
         crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await?;
@@ -774,7 +776,7 @@ async fn complete_reset_http(
     }
     // Check the link before spending a password hash on it.
     {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         live_reset(&mut transaction, &request.token).await?;
         transaction.rollback().await?;
     }
@@ -782,7 +784,7 @@ async fn complete_reset_http(
         let _permit = state.rate_limits.try_acquire_password_kdf()?;
         password::hash_password(std::mem::take(&mut request.new_password)).await?
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let reset = live_reset(&mut transaction, &request.token).await?;
     if crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await? {
         let code = request.code.as_deref().map(str::trim).unwrap_or_default();

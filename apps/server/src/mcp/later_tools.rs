@@ -20,6 +20,7 @@ use super::{
 };
 use crate::{
     AppState,
+    addresses::Addresses,
     error::AppError,
     later::{self, ChangeRequest, ListView, SaveRequest, SavedItemView, Saver},
     message_content::MessageContent,
@@ -149,7 +150,7 @@ async fn inbox_within(
     actor_id: Uuid,
     within: Option<Vec<Uuid>>,
 ) -> Result<Vec<Uuid>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let projects = match within {
         Some(projects) => projects,
         None => {
@@ -190,6 +191,7 @@ pub(super) async fn later_list(
             "open" | "done" => {
                 let page = later::list(
                     &state.pool,
+                    Addresses::of(state),
                     principal.actor_id,
                     if view == "done" {
                         ListView::Done
@@ -203,8 +205,14 @@ pub(super) async fn later_list(
             }
             "scheduled" => (
                 Vec::new(),
-                scheduled_messages::list(&state.pool, principal.actor_id, None, within.as_deref())
-                    .await?,
+                scheduled_messages::list(
+                    &state.pool,
+                    Addresses::of(state),
+                    principal.actor_id,
+                    None,
+                    within.as_deref(),
+                )
+                .await?,
             ),
             _ => {
                 return Ok(ToolResult::invalid("view", "Use open, done or scheduled."));
@@ -311,7 +319,7 @@ pub(super) async fn later_save(
                     Err(error) => return Err(error),
                 };
                 if let Some(home) = home {
-                    let mut connection = state.pool.acquire().await?;
+                    let mut connection = crate::db::scoped_tx(&state.pool).await?;
                     if crate::modules::state::by_workspace(&mut connection, principal.actor_id)
                         .await?
                         .get(&home)
@@ -401,7 +409,9 @@ pub(super) async fn later_update(
     };
     let result = async {
         // Only items this connection can read.
-        let item = match later::get_item(&state.pool, principal.actor_id, id).await {
+        let item = match later::get_item(&state.pool, Addresses::of(state), principal.actor_id, id)
+            .await
+        {
             Ok(item) => item,
             Err(AppError::NotFound(_)) => return Ok(ToolResult::not_found("That item")),
             Err(error) => return Err(error),
@@ -540,7 +550,7 @@ pub(super) async fn message_schedule(
     // connection: a retry waits for this one and answers with its message,
     // and a crash leaves neither.
     let scheduled = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let reservation = match reserve_create(
             &mut transaction,
             principal,
@@ -572,11 +582,14 @@ pub(super) async fn message_schedule(
     .await;
     // Read back as the author: only while they still see the conversation.
     let read = match scheduled {
-        Ok((id, replayed)) => {
-            scheduled_messages::get_scheduled(&state.pool, principal.actor_id, id)
-                .await
-                .map(|message| (message, replayed))
-        }
+        Ok((id, replayed)) => scheduled_messages::get_scheduled(
+            &state.pool,
+            Addresses::of(state),
+            principal.actor_id,
+            id,
+        )
+        .await
+        .map(|message| (message, replayed)),
         Err(error) => Err(error),
     };
     match read {
@@ -627,14 +640,20 @@ pub(super) async fn scheduled_message_update(
         Err(message) => return ToolResult::denied(message),
     };
     let result = async {
-        let existing =
-            match scheduled_messages::get_scheduled(&state.pool, principal.actor_id, id).await {
-                Ok(existing) => existing,
-                Err(AppError::NotFound(_)) => {
-                    return Ok(ToolResult::not_found("That scheduled message"));
-                }
-                Err(error) => return Err(error),
-            };
+        let existing = match scheduled_messages::get_scheduled(
+            &state.pool,
+            Addresses::of(state),
+            principal.actor_id,
+            id,
+        )
+        .await
+        {
+            Ok(existing) => existing,
+            Err(AppError::NotFound(_)) => {
+                return Ok(ToolResult::not_found("That scheduled message"));
+            }
+            Err(error) => return Err(error),
+        };
         if let Some(projects) = within(state, principal).await?
             && !projects.contains(&existing.project_id)
         {

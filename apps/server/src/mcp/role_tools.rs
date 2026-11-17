@@ -38,7 +38,7 @@ async fn workspace_of(
     Ok(
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(principal.project_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?,
     )
 }
@@ -140,7 +140,7 @@ pub(super) async fn role_list(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let caller = roles::standing(&mut connection, organization_id, principal.actor_id).await?;
         let roles = roles::list(&mut connection, caller, organization_id).await?;
         let (_, permissions) = roles::catalogue();
@@ -186,7 +186,7 @@ pub(super) async fn role_get(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let caller = roles::standing(&mut connection, organization_id, principal.actor_id).await?;
         let Some(role_id) =
             roles::find_role(&mut connection, organization_id, &arguments.role).await?
@@ -256,7 +256,7 @@ pub(super) async fn my_permissions(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let PermissionsView {
             workspace, project, ..
         } = roles::permissions_of(
@@ -357,7 +357,7 @@ pub(super) async fn role_write(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
         let auditor = Auditor::App(principal);
         let existing = match arguments.role.as_deref() {
@@ -548,7 +548,7 @@ pub(super) async fn role_assign(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
         let person = arguments.person.trim();
         let Some(actor_id) = sqlx::query_scalar::<_, Uuid>(

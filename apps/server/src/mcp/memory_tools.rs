@@ -177,7 +177,7 @@ pub(super) async fn search_tool(
                 )
                 .bind(&projects)
                 .bind(person.trim_start_matches('@'))
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await?
                 {
                     Some(id) => Some(id),
@@ -193,6 +193,7 @@ pub(super) async fn search_tool(
         };
         let hits = search::search(
             &state.pool,
+            crate::addresses::Addresses::of(state),
             principal.actor_id,
             &projects,
             &query,
@@ -430,7 +431,7 @@ pub(super) async fn page_get(
             "#,
         )
         .bind(page_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         Ok::<_, AppError>(ToolResult::ok(PageValue {
             open_comments,
@@ -554,7 +555,7 @@ pub(super) async fn page_write(
     };
     let result = async {
         let project_id = principal.project_id;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // Making a page needs edit or edit-own (it will be theirs); changing
         // one is decided below, once its maker is known.
         let Some(own_mode) =
@@ -1328,7 +1329,7 @@ pub(super) async fn page_edit(
     }
     let result = async {
         let project_id = principal.project_id;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if page_write_mode(state, principal, &mut transaction, project_id, true)
             .await?
             .is_none()

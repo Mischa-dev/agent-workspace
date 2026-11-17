@@ -654,7 +654,7 @@ pub async fn used_any(pool: &sqlx::PgPool, organization_id: Uuid) -> Result<bool
         "SELECT EXISTS (SELECT 1 FROM workspace_template_uses WHERE organization_id = $1)",
     )
     .bind(organization_id)
-    .fetch_one(pool)
+    .fetch_one(crate::db::scoped(pool))
     .await?)
 }
 
@@ -1610,7 +1610,7 @@ async fn list_route(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<ListResponse>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let caller = roles::standing(&mut connection, organization_id, principal.actor_id).await?;
     Ok(Json(ListResponse {
         organization_id,
@@ -1650,7 +1650,7 @@ async fn apply_route(
 ) -> Result<axum::response::Response, AppError> {
     use axum::response::IntoResponse;
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
     if !may_use(caller) {
         return Err(AppError::Forbidden);
@@ -1702,7 +1702,7 @@ async fn save_route(
     let name = normalize_name(&request.name).ok_or(AppError::Validation("name"))?;
     let description =
         normalize_description(&request.description).ok_or(AppError::Validation("description"))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
     if !may_use(caller) {
         return Err(AppError::Forbidden);
@@ -1738,7 +1738,7 @@ async fn remove_route(
     ApiPath((organization_id, template_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
     if !may_use(caller) {
         return Err(AppError::Forbidden);

@@ -1,18 +1,9 @@
--- K1.12: suggesting instead of editing is a permission, not an account kind.
---
--- Until now the server made an agent's edits to a page someone else made a
--- suggestion, let agents decide suggestions only on their own pages, and
--- refused agents a few capabilities by hand. Those rules are gone; roles
--- say it instead (`pages.suggest`, `pages.edit_own`, `access::write_mode`).
--- So that no live agent can do more than it did the moment the rules go
--- (K1 section 4.5), each role R held by an agent account that holds
--- `pages.edit` gets a copy, "R, suggests": R's permissions without
--- `pages.edit` and the capabilities refused to agents by hand, with
--- `pages.suggest` and `pages.edit_own`. Those agents' memberships move to
--- it. An owner gives any agent plain Member (or more) to give it a person's
--- access. This is the only step that selects by account kind, and it runs
--- once. New agents get `access.default_agent_role_id`, unset by default:
--- the role new people get (ruling R5).
+-- Test fixture: every agent account holding a role with `pages.edit` moves
+-- to a copy of that role, "R, suggests": R's permissions without
+-- `pages.edit` (and a few capabilities), with `pages.suggest` and
+-- `pages.edit_own`. Tests whose agent should suggest on other people's
+-- pages run it after their setup. Selecting by account kind is fine here:
+-- it only builds the test's roles.
 
 CREATE TEMPORARY TABLE suggest_roles ON COMMIT DROP AS
 SELECT source.id AS source_id,
@@ -56,7 +47,7 @@ INSERT INTO workspace_roles (
     agent_limit, defaults
 )
 SELECT role_id, organization_id, key, false, base_role, name,
-       'Made for existing agents when suggesting became a permission: edits to pages others made are suggestions.',
+       'Edits to pages others made are suggestions.',
        permissions, agent_limit, defaults
 FROM suggest_roles
 ON CONFLICT DO NOTHING;

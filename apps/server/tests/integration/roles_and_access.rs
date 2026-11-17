@@ -18,8 +18,8 @@ use super::{
     mcp_tasks::{add_member, space},
     message_edits::{add_person, create_channel, direct_space, owner_id, say, text},
     support::{
+        agents_suggest,
         app::{Browser, connect_app, create_agent, initialize, send, tool},
-        existing_agents_suggest,
         world::{Setup, create_project, setup},
     },
     w20_files::{read, with_data_root},
@@ -5874,7 +5874,7 @@ async fn a_custom_role_keeps_its_meaning_when_the_catalogue_grows() {
     .expect("an old custom role");
     for _ in 0..2 {
         sqlx::raw_sql(include_str!(
-            "../../migrations/20261115011300_catalogue_levels.sql"
+            "../../migrations/20261117001000_catalogue_levels.sql"
         ))
         .execute(&setup.pool)
         .await
@@ -6172,10 +6172,10 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
 /// K1.12: suggesting instead of editing is a permission, not an account
 /// kind. A new agent gets the workspace's role for new agents (the role new
 /// people get, unless an owner picks another) and edits pages directly.
-/// Agents that existed when the rule went keep suggesting through the
-/// "suggests" copy of their role, until an owner gives them plain Member. A
-/// person given that copy suggests too, through their app. Whoever edits a
-/// page decides its suggestions, agent or not; a suggester doesn't.
+/// An agent given a "suggests" copy of Member suggests, until an owner gives
+/// it plain Member back. A person given that copy suggests too, through
+/// their app. Whoever edits a page decides its suggestions, agent or not; a
+/// suggester doesn't.
 #[tokio::test]
 async fn suggesting_is_a_role_not_an_account_kind() {
     let Some(setup) = setup("k1_suggest").await else {
@@ -6248,9 +6248,9 @@ async fn suggesting_is_a_role_not_an_account_kind() {
     assert_eq!(direct["outcome"], "ok", "{direct}");
     assert!(direct["value"]["suggestion"].is_null(), "{direct}");
 
-    // The one-time step for agents that already existed: Rook now holds
+    // Rook is given the "suggests" copy of Member: it now holds
     // "Member, suggests" and its edits wait for someone who edits the page.
-    existing_agents_suggest(&setup.pool).await;
+    agents_suggest(&setup.pool).await;
     assert_eq!(workspace_role(rook).await, "member-suggests");
     let suggested = append(rook_token.clone(), rook_session.clone(), "Then we ship.").await;
     assert_eq!(

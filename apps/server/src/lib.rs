@@ -4,6 +4,7 @@ pub mod access;
 pub mod account;
 pub mod account_security;
 pub mod accounts;
+pub mod addresses;
 pub mod agent_docs;
 pub mod agent_parity;
 pub mod agent_profiles;
@@ -197,6 +198,7 @@ pub fn router(state: AppState) -> Router {
         .merge(mail::http::router())
         .merge(workspace::router())
         .merge(workspace::slug::router())
+        .merge(addresses::resolve::router())
         .merge(roles::router())
         .merge(workspace_templates::router())
         .merge(server_status::router())

@@ -156,6 +156,15 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
         .run(&pool)
         .await
         .expect("apply migrations");
+    // Both isolation nets run as a role row rules bind (H1.21), so the
+    // policies are exercised under them rather than bypassed.
+    let pool = match super::db::row_rules_role(&pool, &schema).await {
+        Some(role) => {
+            pool.close().await;
+            super::db::schema_pool_as(&database_url, &schema, role).await
+        }
+        None => pool,
+    };
 
     let temporary = tempfile::tempdir().expect("temporary root");
     let data_root = temporary.path().join("data");

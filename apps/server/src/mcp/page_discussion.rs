@@ -36,9 +36,9 @@ async fn may_comment(
     }
     let (_, limits) = super::caller_reach(state, principal).await?;
     let caller = crate::access::Caller::of_principal(principal, limits);
-    let mut connection = state.pool.acquire().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     Ok(crate::access::check(
-        &mut connection,
+        &mut transaction,
         &caller,
         crate::access::Need::permission(crate::policy::Permission::PagesComment)
             .writes()
@@ -58,7 +58,7 @@ async fn readable(
     let project =
         sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
             .bind(page_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?;
     let Some(project_id) = project.filter(|project| *project == principal.project_id) else {
         return Ok(None);
@@ -250,7 +250,7 @@ pub(super) async fn page_comment(
                 "You can't comment on pages in that project.",
             ));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
@@ -366,7 +366,7 @@ pub(super) async fn page_comment_update(
                 "You can't comment on pages in that project.",
             ));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let Some(page) = store::lock_page(&mut transaction, page_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
@@ -572,7 +572,7 @@ pub(super) async fn page_suggestion_decide(
     };
     let result = async {
         let project_id = principal.project_id;
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // Anyone who may at least suggest here reaches the tool (an author
         // withdraws); accepting and rejecting need edit access to the page
         // (K1.12).

@@ -164,7 +164,7 @@ pub(super) async fn workflow_get(
             Action::WorkItemView,
         )
         .await?;
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         Ok::<_, AppError>(ToolResult::ok(
             workflow_value(&mut connection, principal.project_id).await?,
         ))
@@ -325,7 +325,7 @@ pub(super) async fn workflow_update(
         if project_role(state, principal, project_id).await?.is_none() {
             return Ok(ToolResult::not_found("That project"));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         super::common::mark_via(&mut transaction, principal).await?;
         let Some(membership) =
             lock_membership(&mut transaction, principal.actor_id, project_id).await?
@@ -539,7 +539,7 @@ pub(super) async fn project_members(
         .bind(arguments.include_removed.unwrap_or(false))
         .bind(i64::from(MEMBERS_PAGE) + 1)
         .bind(i64::from(offset))
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let mut members = members;
         let next_offset = (members.len() > MEMBERS_PAGE as usize).then(|| {
@@ -657,7 +657,7 @@ async fn project_value(state: &AppState, project_id: Uuid) -> Result<ProjectValu
         "#,
     )
     .bind(project_id)
-    .fetch_one(&state.pool)
+    .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     value.url = public_url(state, &format!("/projects/{project_id}"));
     Ok(value)
@@ -716,7 +716,7 @@ pub(super) async fn project_create(
         None => None,
     };
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // The workspace is the one the connected app's home project is in.
         // Lock the caller's workspace membership as the web app does, so a
         // removal can't race the new owner membership.
@@ -895,7 +895,7 @@ async fn existing_project_with_key(
     .bind(key)
     .bind(principal.actor_id)
     .bind(name)
-    .fetch_optional(&state.pool)
+    .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     Ok(match mine {
         Some(project_id) => ToolResult::ok(project_value(state, project_id).await?),
@@ -936,7 +936,7 @@ pub(super) async fn project_update(
     };
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let Some(row) = admin_row(&mut transaction, principal, project_id).await? else {
             return Ok(ToolResult::not_found("That project"));
         };
@@ -1020,7 +1020,7 @@ pub(super) async fn project_archive(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let Some(row) = admin_row(&mut transaction, principal, project_id).await? else {
             return Ok(ToolResult::not_found("That project"));
         };
@@ -1128,7 +1128,7 @@ async fn project_reference(
     )
     .bind(principal.actor_id)
     .bind(reference.trim())
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     // Keys are organization-scoped: when two of the caller's organizations
     // use the same key, refuse to guess — archiving the wrong project is
@@ -1219,7 +1219,7 @@ pub(super) async fn project_layout_set(
     }
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         if arguments.rules.is_some() {
             // Lock the project first, as the web's rule changes do.
             sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
@@ -1530,7 +1530,7 @@ pub(super) async fn project_member_set(
     }
     let project_id = principal.project_id;
     let result = async {
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let Some(row) = admin_row(&mut transaction, principal, project_id).await? else {
             return Ok(ToolResult::not_found("That project"));
         };
@@ -1655,7 +1655,7 @@ pub(super) async fn project_member_set(
         )
         .bind(project_id)
         .bind(actor_id)
-        .fetch_one(&state.pool)
+        .fetch_one(crate::db::scoped(&state.pool))
         .await?;
         Ok::<_, AppError>(ToolResult::ok(member))
     }

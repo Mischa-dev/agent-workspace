@@ -367,7 +367,7 @@ async fn read_workspace(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<WorkspaceView>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let role = caller_role(&mut connection, &principal, organization_id, false).await?;
     Ok(Json(
         load_workspace(&mut connection, organization_id, role).await?,
@@ -401,7 +401,7 @@ async fn rename_workspace(
     ApiJson(request): ApiJson<RenameRequest>,
 ) -> Result<Json<WorkspaceView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (role, renamed) = rename_workspace_in(
         &mut transaction,
         principal.actor_id,
@@ -615,7 +615,7 @@ async fn list_members(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<MembersResponse>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let caller = member_manager_role(&mut connection, &principal, organization_id, false).await?;
     // "See the workspace member directory", by the caller's workspace role:
     // every built-in role holds it; a custom role only when an owner or an
@@ -711,7 +711,7 @@ async fn update_member(
         (None, Some(false)) | (Some(_), None) => {}
         _ => return Err(AppError::Validation("workspace member update")),
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_workspace_memberships(&mut transaction, organization_id).await?;
     let caller = member_manager_role(&mut transaction, &principal, organization_id, true).await?;
     if !caller.manages() {
@@ -966,7 +966,7 @@ async fn transfer_ownership(
     if request.actor_id == principal.actor_id {
         return Err(AppError::Validation("new owner"));
     }
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_workspace_memberships(&mut transaction, organization_id).await?;
     let caller = caller_role(&mut transaction, &principal, organization_id, true).await?;
     if caller != WorkspaceRole::Owner {
@@ -1023,7 +1023,7 @@ async fn leave_workspace(
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_workspace_memberships(&mut transaction, organization_id).await?;
     let role = caller_role(&mut transaction, &principal, organization_id, true).await?;
     if role == WorkspaceRole::Owner {
@@ -1119,7 +1119,7 @@ async fn list_invitations(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<InvitationsResponse>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let invitations =
         workspace_invitations_for(&mut connection, principal.actor_id, organization_id).await?;
     Ok(Json(InvitationsResponse { invitations }))
@@ -1205,7 +1205,7 @@ async fn issue_invitation(
     ApiJson(request): ApiJson<IssueRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let issued = issue_workspace_invitation_in(
         &mut transaction,
         principal.actor_id,
@@ -1373,7 +1373,7 @@ async fn revoke_invitation(
     ApiJson(request): ApiJson<RevokeRequest>,
 ) -> Result<Json<InvitationView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (organization_id, role) = revoke_workspace_invitation_in(
         &mut transaction,
         principal.actor_id,
@@ -1545,7 +1545,7 @@ async fn resolve_invitation(
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
     require_allowed_origin(&state.config, &headers)?;
     let (prefix, digest) = consume_token(&mut token, &state)?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let row = find_invitation(&mut connection, &prefix, &digest, false).await?;
     Ok(Json(ResolvedInvitation {
         organization_name: row.organization_name,
@@ -1688,7 +1688,7 @@ async fn accept_new_user(
     let _password_kdf_permit = state.rate_limits.try_acquire_password_kdf()?;
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let invitation = find_invitation(&mut transaction, &prefix, &digest, true).await?;
     let crate::accounts::Person {
         account_id: actor_id,
@@ -1760,7 +1760,7 @@ async fn accept_existing_user(
     require_authenticated_write(&state, &headers, &principal)?;
     let (prefix, digest) = consume_token(&mut token, &state)?;
     let handle = normalize_handle(&request.handle)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let invitation = find_invitation(&mut transaction, &prefix, &digest, true).await?;
     let epoch = sqlx::query_scalar::<_, i64>(
         r#"
@@ -1883,7 +1883,7 @@ async fn set_default_workspace(
     ApiJson(request): ApiJson<DefaultWorkspaceRequest>,
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     caller_role(&mut transaction, &principal, request.organization_id, true).await?;
     sqlx::query("UPDATE users SET default_organization_id = $2, updated_at = now() WHERE id = $1")
         .bind(principal.user_id)

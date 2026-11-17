@@ -223,7 +223,7 @@ pub async fn list(
     )
     .bind(page_id)
     .bind(include_resolved)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     let mut threads: Vec<ThreadView> = Vec::new();
     for row in rows {
@@ -453,7 +453,10 @@ pub async fn create(
         notification.detail = serde_json::json!({
             "pageCommentId": id,
             "threadId": thread_id,
-            "href": format!("/projects/{}/pages/{page_id}#comment-{thread_id}", page.project_id),
+            "href": format!(
+                "{}#comment-{thread_id}",
+                crate::addresses::Target::page(page.project_id, page_id).legacy_path()
+            ),
         });
         notify(transaction, &notification).await?;
     }

@@ -410,6 +410,7 @@ async fn open_thing(
         task_projects: &task_projects,
         modules,
         workspaces: &workspaces,
+        addresses: crate::addresses::Addresses::of(&state),
     };
     let thing = things::get(&mut connection, &viewer, &kind, id)
         .await?

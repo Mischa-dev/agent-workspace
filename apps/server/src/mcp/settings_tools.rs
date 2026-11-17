@@ -88,10 +88,10 @@ pub(super) async fn settings_get(
         .bind(principal.project_id)
         .bind(principal.actor_id)
         .bind(principal.external_agent_connection_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .ok_or(AppError::NotFound("project"))?;
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let effective = settings::resolve(
             &mut connection,
             settings::SettingsContext {
@@ -219,7 +219,7 @@ pub(super) async fn settings_set(
         if project_role(state, principal, project_id).await?.is_none() {
             return Ok(ToolResult::not_found("That project"));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let organization_id = sqlx::query_scalar::<_, uuid::Uuid>(
             "SELECT organization_id FROM projects WHERE id = $1",

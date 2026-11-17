@@ -230,7 +230,7 @@ pub async fn list(
     .bind(filter.limit.clamp(1, 200))
     .bind(filter.on_in.is_some())
     .bind(filter.on_in.as_ref().map(|on| on.projects.clone()).unwrap_or_default())
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await
     .map(presented)?)
 }
@@ -310,7 +310,7 @@ pub async fn visible_to(
         sqlx::query_scalar::<_, bool>("SELECT whiteboard_visible_to($1, $2)")
             .bind(whiteboard_id)
             .bind(actor_id)
-            .fetch_one(pool)
+            .fetch_one(crate::db::scoped(pool))
             .await?,
     )
 }
@@ -318,7 +318,7 @@ pub async fn visible_to(
 pub async fn summary(pool: &PgPool, whiteboard_id: Uuid) -> Result<BoardSummary, AppError> {
     sqlx::query_as::<_, BoardSummary>(&format!("{SUMMARY_SELECT} WHERE board.id = $1"))
         .bind(whiteboard_id)
-        .fetch_optional(pool)
+        .fetch_optional(crate::db::scoped(pool))
         .await?
         .map(BoardSummary::presented)
         .ok_or(AppError::NotFound("whiteboard"))
@@ -918,7 +918,7 @@ pub async fn links(
     .bind(caller.actor_id)
     .bind(caller.connection_id)
     .bind(caller.confined_project)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     // A linked task's title is its current one: shown only with "see tasks"
     // in its project (role, and an app's agent limit), as task_open would;
@@ -967,7 +967,7 @@ pub async fn linked_to(
             .bind(caller.actor_id)
             .bind(caller.connection_id)
             .bind(project_id)
-            .fetch_one(pool)
+            .fetch_one(crate::db::scoped(pool))
             .await?;
     if !reachable {
         return Err(AppError::NotFound("link target"));
@@ -988,7 +988,7 @@ pub async fn linked_to(
     .bind(caller.connection_id)
     .bind(kind.as_str())
     .bind(target_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?)
 }
 

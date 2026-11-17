@@ -132,19 +132,22 @@ async fn organization_of(state: &AppState, project_id: Uuid) -> Result<Uuid, App
     Ok(
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(project_id)
-            .fetch_one(&state.pool)
+            .fetch_one(crate::db::scoped(&state.pool))
             .await?,
     )
 }
 
 async fn send_one(state: &AppState, job: &SendJob) -> Result<(), JobError> {
     // Read as the recipient: anything they can no longer see sends nothing.
-    let Some(notification) =
-        notifications::get_many(&state.pool, job.recipient, &[job.notification_id])
-            .await?
-            .into_iter()
-            .next()
-    else {
+    let Some(notification) = notifications::get_many(
+        &state.pool,
+        crate::addresses::Addresses::of(state),
+        job.recipient,
+        &[job.notification_id],
+    )
+    .await?
+    .into_iter()
+    .next() else {
         return Ok(());
     };
     if notification.read {
@@ -152,7 +155,9 @@ async fn send_one(state: &AppState, job: &SendJob) -> Result<(), JobError> {
     }
     let organization_id = organization_of(state, notification.project_id).await?;
     {
-        let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
+        let mut connection = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(AppError::from)?;
         let decision = notification_settings::decide(
             &mut connection,
             job.recipient,
@@ -234,7 +239,7 @@ async fn send_digests(state: &AppState) -> Result<(), JobError> {
         LIMIT 5000
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     for candidate in candidates {
         // One person's failure (a bounced address) mustn't stop the rest.
@@ -249,7 +254,7 @@ async fn send_digests(state: &AppState) -> Result<(), JobError> {
 }
 
 async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<(), AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let (quiet, digest) = notification_settings::quiet_hours(
         &mut connection,
         candidate.organization_id,
@@ -287,7 +292,14 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
     .fetch_all(&mut *connection)
     .await?;
     let mut items = Vec::new();
-    for notification in notifications::get_many(&state.pool, candidate.actor_id, &ids).await? {
+    for notification in notifications::get_many(
+        &state.pool,
+        crate::addresses::Addresses::of(state),
+        candidate.actor_id,
+        &ids,
+    )
+    .await?
+    {
         let decision = notification_settings::decide(
             &mut connection,
             candidate.actor_id,
@@ -301,6 +313,7 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
     }
     if items.is_empty() {
         record_digest(&mut connection, candidate).await?;
+        connection.commit().await?;
         return Ok(());
     }
     let Some(address) =
@@ -339,7 +352,7 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
     );
     // Record first: a digest that half-sent is better skipped than doubled.
     record_digest(&mut connection, candidate).await?;
-    drop(connection);
+    connection.commit().await?;
     if let Err(error) = mail::send(
         state,
         &transport,

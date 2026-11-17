@@ -234,7 +234,7 @@ async fn repository_projects(
     projects: &[Uuid],
 ) -> Result<Vec<Uuid>, AppError> {
     let projects = {
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         crate::modules::state::ProjectModules::load(&mut connection, principal.actor_id, projects)
             .await?
             .keep(projects, |set, _| set.contains("code"))
@@ -251,7 +251,7 @@ async fn repository_projects(
     )
     .bind(principal.actor_id)
     .bind(&projects)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(roles
         .into_iter()
@@ -309,7 +309,7 @@ pub(super) async fn check_summaries(
     .bind(pull_requests)
     .bind(&FAILING_CONCLUSIONS[..])
     .bind(MAX_FAILING_CHECKS as i32)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     Ok(rows
         .into_iter()
@@ -461,7 +461,7 @@ pub(super) async fn repository_list(
         .bind(arguments.include_archived.unwrap_or(false))
         .bind(&ACTIVE_RUN_STATES[..])
         .bind(MAX_REPOSITORIES)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         let repositories = rows
             .into_iter()
@@ -720,7 +720,7 @@ async fn task_pull_requests(
     )
     .bind(task_id)
     .bind(reach)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?)
 }
 
@@ -822,7 +822,7 @@ pub(super) async fn pull_request_list(
                     )
                     .bind(id)
                     .bind(&allowed)
-                    .fetch_optional(&state.pool)
+                    .fetch_optional(crate::db::scoped(&state.pool))
                     .await?;
                     match found {
                         Some(id) => Some(id),
@@ -843,7 +843,7 @@ pub(super) async fn pull_request_list(
                     )
                     .bind(&allowed)
                     .bind(value)
-                    .fetch_all(&state.pool)
+                    .fetch_all(crate::db::scoped(&state.pool))
                     .await?;
                     match matches.as_slice() {
                         [] => return Ok(repository_not_found()),
@@ -876,7 +876,7 @@ pub(super) async fn pull_request_list(
                 )
                 .bind(task_id)
                 .bind(&allowed)
-                .fetch_optional(&state.pool)
+                .fetch_optional(crate::db::scoped(&state.pool))
                 .await?;
                 if found.is_none() {
                     return Ok(ToolResult::not_found("That task"));
@@ -897,7 +897,7 @@ pub(super) async fn pull_request_list(
                 "SELECT github_login FROM users WHERE actor_id = $1",
             )
             .bind(principal.actor_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?
             .flatten()
         } else {
@@ -915,7 +915,7 @@ pub(super) async fn pull_request_list(
             .bind(needs_me)
             .bind(limit)
             .bind(offset)
-            .fetch_all(&state.pool)
+            .fetch_all(crate::db::scoped(&state.pool))
             .await?;
         let total = rows.first().map_or(0, |row| row.total);
         let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
@@ -1055,7 +1055,7 @@ async fn page_details(
         "#,
     )
     .bind(ids)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     // Linked tasks only from projects where the caller (and an app's limit)
     // still sees tasks: seeing code isn't seeing tasks.
@@ -1099,7 +1099,7 @@ async fn page_details(
     )
     .bind(ids)
     .bind(principal.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let threads = thread_rows
         .into_iter()
@@ -1132,7 +1132,7 @@ async fn page_details(
     )
     .bind(ids)
     .bind(principal.actor_id)
-    .fetch_all(&state.pool)
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let runs = run_rows
         .into_iter()

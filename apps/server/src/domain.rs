@@ -349,7 +349,11 @@ async fn enqueue_external_terminal_run_event(
             &format!("Sponsored Worker run reached {state}"),
             "agent_run",
             run_id,
-            &format!("/projects/{project_id}/threads/{conversation_id}"),
+            &crate::addresses::Target::space(
+                project_id,
+                crate::addresses::Place::Thread(conversation_id),
+            )
+            .legacy_path(),
         )
         .await?;
     }

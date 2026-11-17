@@ -31,3 +31,6 @@ CREATE TABLE invite_tokens (
 );
 
 CREATE INDEX invite_tokens_workspace ON invite_tokens (workspace_id, created_at DESC);
+
+-- Row security (the tenancy decision of 2026-11-16).
+SELECT tenancy_protect('invite_tokens', 'workspace_id');

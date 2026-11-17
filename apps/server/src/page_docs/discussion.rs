@@ -155,7 +155,7 @@ pub async fn create_comment(
     ApiJson(request): ApiJson<CommentRequest>,
 ) -> Result<Json<CommentCreated>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (writer, page) = locked_for_comment(&state, &mut transaction, &principal, page_id).await?;
     let (id, thread_id) = comments::create(
         &mut transaction,
@@ -210,7 +210,7 @@ pub async fn update_comment(
         (None, Some(resolved)) => CommentChange::Resolve(resolved),
         _ => return Err(AppError::Validation("body")),
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (writer, page) = locked_for_comment(&state, &mut transaction, &principal, page_id).await?;
     let thread_id = comments::change(
         &mut transaction,
@@ -242,7 +242,7 @@ pub async fn delete_comment(
     ApiPath((page_id, comment_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<CommentChanged>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (writer, page) = locked_for_comment(&state, &mut transaction, &principal, page_id).await?;
     let thread_id = comments::change(
         &mut transaction,
@@ -288,7 +288,7 @@ pub async fn decide_suggestion(
     ApiJson(request): ApiJson<DecisionRequest>,
 ) -> Result<Json<DecisionView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let writer = memory::browser_writer(&principal)?;
     let project_id = memory::page_project(&state.pool, page_id).await?;
     // Anyone who may at least suggest here may withdraw their own;

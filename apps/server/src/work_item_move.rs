@@ -1179,7 +1179,7 @@ pub async fn preview(
     task_id: Uuid,
     target_project_id: Uuid,
 ) -> Refusable<MovePlan> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = refuse!(
         check_access(
             &mut transaction,
@@ -1259,7 +1259,7 @@ pub async fn destinations(
     source_project_id: Uuid,
     task_id: Uuid,
 ) -> Refusable<Vec<Destination>> {
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     // The task, and the right to move it out of its project.
     let Some(source) = read_membership(&mut transaction, mover.actor_id, source_project_id).await?
     else {
@@ -1570,7 +1570,7 @@ pub async fn execute(
         )));
     }
 
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     crate::domain::set_via_grant(&mut transaction, mover.via_grant).await?;
     let access = refuse!(
         check_access(
@@ -2335,7 +2335,7 @@ async fn replayed(
         )
         .bind(receipt.target_project_id)
         .bind(&ids)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await?
         .into_iter()
         .collect::<HashMap<_, _>>()

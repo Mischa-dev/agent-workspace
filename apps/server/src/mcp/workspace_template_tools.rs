@@ -44,7 +44,7 @@ async fn workspace_of(
     Ok(
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
             .bind(principal.project_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(crate::db::scoped(&state.pool))
             .await?,
     )
 }
@@ -86,7 +86,7 @@ pub(super) async fn workspace_template_list(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut connection = state.pool.acquire().await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
         let caller = roles::standing(&mut connection, organization_id, principal.actor_id).await?;
         Ok::<_, AppError>(ToolResult::ok(WorkspaceTemplateListValue {
             templates: templates::list(&mut connection, organization_id).await?,
@@ -125,7 +125,7 @@ pub(super) async fn workspace_template_apply(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
         if !templates::may_use(caller) {
             return Ok(ToolResult::denied(MANAGERS_USE_TEMPLATES));
@@ -205,7 +205,7 @@ pub(super) async fn workspace_template_save(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
         if !templates::may_use(caller) {
             return Ok(ToolResult::denied(MANAGERS_USE_TEMPLATES));

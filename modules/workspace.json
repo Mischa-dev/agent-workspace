@@ -58,6 +58,7 @@
     "/api/v1/account/*",
     "/api/v1/account-claims/*",
     "/api/v1/invite-links/*",
+    "/api/v1/links/resolve",
     "/api/v1/auth/*",
     "/api/v1/client-errors",
     "/api/v1/dev/bootstrap",

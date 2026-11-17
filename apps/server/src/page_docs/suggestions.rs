@@ -325,7 +325,7 @@ pub async fn list(
          ORDER BY suggestion.created_at, suggestion.id LIMIT 200"
     ))
     .bind(page_id)
-    .fetch_all(pool)
+    .fetch_all(crate::db::scoped(pool))
     .await?;
     if include_decided {
         rows.extend(
@@ -335,7 +335,7 @@ pub async fn list(
             ))
             .bind(page_id)
             .bind(DECIDED_SHOWN)
-            .fetch_all(pool)
+            .fetch_all(crate::db::scoped(pool))
             .await?,
         );
     }
@@ -424,7 +424,10 @@ pub async fn create(
         notification.actor_id = Some(author.actor_id);
         notification.detail = serde_json::json!({
             "pageSuggestionId": id,
-            "href": format!("/projects/{}/pages/{page_id}#suggestion-{id}", page.project_id),
+            "href": format!(
+                "{}#suggestion-{id}",
+                crate::addresses::Target::page(page.project_id, page_id).legacy_path()
+            ),
         });
         notify(transaction, &notification).await?;
     }

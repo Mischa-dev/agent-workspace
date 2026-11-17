@@ -27,6 +27,7 @@ use super::{
 };
 use crate::{
     AppState,
+    addresses::{Place, Target},
     error::AppError,
     jobs::{self, JobContext, JobError, JobRegistry, NewJob},
     mcp::{ImportTask, create_for_import},
@@ -1040,7 +1041,10 @@ async fn announce(pool: &PgPool, import_id: Uuid) -> Result<(), AppError> {
         "ai_plan_import",
         import_id,
         message,
-        format!("/projects/{project_id}/plan-import?plan={import_id}"),
+        format!(
+            "{}?plan={import_id}",
+            Target::space(project_id, Place::PlanImport).legacy_path()
+        ),
     )
     .await
 }
