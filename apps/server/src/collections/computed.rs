@@ -212,14 +212,14 @@ pub async fn enqueue(
     Ok(())
 }
 
-/// One batch of records after `after`, in ID order: the last ID when there
-/// may be more. None when the collection is gone or has no formulas left.
+/// One batch of records after `after`, in ID order: the records it
+/// recalculated. None when the collection is gone or has no formulas left.
 async fn recompute_batch(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
     after: Option<Uuid>,
-) -> Result<Option<Uuid>, AppError> {
+) -> Result<Option<Vec<Uuid>>, AppError> {
     let found = sqlx::query_scalar::<_, bool>(
         "SELECT acts_like_task FROM collections \
          WHERE project_id = $1 AND id = $2 AND builtin IS NULL FOR SHARE",
@@ -247,9 +247,7 @@ async fn recompute_batch(
     .fetch_all(&mut *connection)
     .await?;
     compute_rows(connection, project_id, &definitions, &rows).await?;
-    Ok((rows.len() as i64 == RECOMPUTE_BATCH)
-        .then(|| rows.last().map(|row| row.id))
-        .flatten())
+    Ok(Some(rows.iter().map(|row| row.id).collect()))
 }
 
 /// Recalculates every record of one collection, batch by batch.
@@ -261,12 +259,27 @@ pub async fn recompute_collection(
     let mut after = None;
     loop {
         let mut transaction = db::scoped_tx(pool).await?;
-        let last = recompute_batch(&mut transaction, project_id, collection_id, after).await?;
-        transaction.commit().await?;
-        match last {
-            Some(last) => after = Some(last),
-            None => return Ok(()),
+        let Some(ids) = recompute_batch(&mut transaction, project_id, collection_id, after).await?
+        else {
+            transaction.commit().await?;
+            return Ok(());
+        };
+        // Open tables and dashboards fetch the new values (a field's own
+        // event can reach them before the batch is done).
+        if !ids.is_empty() {
+            crate::outbox::enqueue_collection_updated(
+                &mut transaction,
+                project_id,
+                collection_id,
+                &ids,
+            )
+            .await?;
         }
+        transaction.commit().await?;
+        if (ids.len() as i64) < RECOMPUTE_BATCH {
+            return Ok(());
+        }
+        after = ids.last().copied();
     }
 }
 

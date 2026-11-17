@@ -36,6 +36,8 @@ pub struct OpMeta {
     pub title: &'static str,
     pub description: &'static str,
     pub emits: &'static [&'static str],
+    /// Output fields shown once and never kept (`Operation::SHOWN_ONCE`).
+    pub shown_once: &'static [&'static str],
     pub max_body_bytes: usize,
     pub input_schema: fn() -> Value,
     pub output_schema: fn() -> Value,
@@ -91,6 +93,7 @@ pub fn entry<O: Operation>() -> OpEntry {
             title: O::TITLE,
             description: O::DESCRIPTION,
             emits: O::EMITS,
+            shown_once: O::SHOWN_ONCE,
             max_body_bytes: O::MAX_BODY_BYTES,
             input_schema: schema_of::<O::Input>,
             output_schema: schema_of::<O::Output>,

@@ -385,12 +385,12 @@ pub fn from_params(params: &BTreeMap<String, String>) -> Result<TaskQuery, Probl
             }),
             "dueBefore" => all.push(clause(
                 tasks::DUE_DATE,
-                FieldOp::Lt,
+                FieldOp::Lte,
                 vec![date("dueBefore", value)?],
             )),
             "dueAfter" => all.push(clause(
                 tasks::DUE_DATE,
-                FieldOp::Gt,
+                FieldOp::Gte,
                 vec![date("dueAfter", value)?],
             )),
             "overdue" => {
@@ -687,8 +687,9 @@ pub fn to_params(config: &ViewConfig) -> Option<BTreeMap<String, String>> {
                         let on = clause.op == FieldOp::NotEmpty;
                         params.insert("claimed".to_owned(), on.to_string());
                     }
-                    (tasks::DUE_DATE, FieldOp::Lt | FieldOp::Gt) if values.len() == 1 => {
-                        let key = if clause.op == FieldOp::Lt {
+                    // "Due by" and "due on or after" take the day itself.
+                    (tasks::DUE_DATE, FieldOp::Lte | FieldOp::Gte) if values.len() == 1 => {
+                        let key = if clause.op == FieldOp::Lte {
                             "dueBefore"
                         } else {
                             "dueAfter"

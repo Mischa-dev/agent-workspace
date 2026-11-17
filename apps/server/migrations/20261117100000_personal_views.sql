@@ -183,9 +183,9 @@ BEGIN
             filters := filters || jsonb_build_array(jsonb_build_object(
                 'field', field, 'op', CASE WHEN raw IN ('true', '1') THEN 'notEmpty' ELSE 'empty' END));
         ELSIF key = 'dueBefore' THEN
-            filters := filters || jsonb_build_array(jsonb_build_object('field', field, 'op', 'lt', 'values', jsonb_build_array(raw)));
+            filters := filters || jsonb_build_array(jsonb_build_object('field', field, 'op', 'lte', 'values', jsonb_build_array(raw)));
         ELSIF key = 'dueAfter' THEN
-            filters := filters || jsonb_build_array(jsonb_build_object('field', field, 'op', 'gt', 'values', jsonb_build_array(raw)));
+            filters := filters || jsonb_build_array(jsonb_build_object('field', field, 'op', 'gte', 'values', jsonb_build_array(raw)));
         ELSIF key = 'overdue' AND raw IN ('true', '1') THEN
             filters := filters || jsonb_build_array(jsonb_build_object('field', field, 'op', 'within', 'values', jsonb_build_array('overdue')));
         ELSIF key = 'fieldFilters' AND jsonb_typeof(raw::jsonb) = 'array' THEN

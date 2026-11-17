@@ -514,9 +514,19 @@ impl Operation for ButtonPress {
                     .into(),
                 });
             }
+            // A secret a step shows once (a connection's webhook secret)
+            // isn't passed on: the press's answer is kept for replays.
+            let mut value = answer.body["value"].clone();
+            if let (Some(entry), Some(fields)) =
+                (registry.get(&step.operation), value.as_object_mut())
+            {
+                for field in entry.meta.shown_once {
+                    fields.remove(*field);
+                }
+            }
             steps.push(PressedStep {
                 operation: step.operation.clone(),
-                value: answer.body["value"].clone(),
+                value,
             });
         }
         call.audit_target(
