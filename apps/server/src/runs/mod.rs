@@ -29,15 +29,22 @@ use crate::{
 };
 
 pub mod activities;
+pub mod brief;
+pub mod credentials;
+pub mod finished;
 #[cfg(test)]
 mod guards;
 pub mod launch_paths;
 pub mod liveness;
 pub mod operations;
 pub mod ops;
+pub mod pages;
+pub mod reads;
+pub mod sql;
 pub mod state;
 pub mod store;
 pub mod usage;
+pub mod views;
 
 pub use state::{Liveness, RunState};
 
@@ -47,6 +54,7 @@ const BACKFILL_BATCH: i32 = 5000;
 
 pub fn register_jobs(registry: &mut JobRegistry) {
     liveness::register_jobs(registry);
+    usage::register_jobs(registry);
     registry.register_with_timeout(
         BACKFILL_ACTIVITIES_KIND,
         Duration::from_secs(300),

@@ -286,6 +286,46 @@ pub(crate) async fn tool(
     content
 }
 
+/// `tool`, for a call after which the credential stops working (a run's
+/// credential ends with the run): its output schema is read first.
+pub(crate) async fn last_tool(
+    app: &axum::Router,
+    token: &str,
+    session: &str,
+    name: &str,
+    arguments: Value,
+) -> Value {
+    let schema = output_schema(app, token, session, name).await;
+    let response = mcp(
+        app,
+        token,
+        Some(session),
+        json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": name, "arguments": arguments }
+        }),
+    )
+    .await;
+    let bytes = to_bytes(response.into_body(), 4_000_000)
+        .await
+        .expect("body");
+    let text = String::from_utf8(bytes.to_vec()).expect("utf-8");
+    let json = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(&text);
+    let value: Value = serde_json::from_str(json).unwrap_or_else(|_| panic!("MCP JSON: {text}"));
+    let content = value
+        .pointer("/result/structuredContent")
+        .cloned()
+        .unwrap_or_else(|| panic!("no structured content for {name}: {value}"));
+    if let Err(path) = conforms(&schema, &schema, &content, "") {
+        panic!("{name} result doesn't match its outputSchema at {path}: {content}");
+    }
+    content
+}
+
 /// A create that takes a `clientRequestId` makes one thing however often
 /// it's retried: the same call twice answers the first call's thing again,
 /// marked `idempotentReplay`, and another call with the same id is refused.

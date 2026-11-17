@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::{error::AppError, external_events::enqueue_external_event};
+use crate::error::AppError;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -170,7 +170,7 @@ pub async fn resume_answered_run(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
 ) -> Result<RunState, AppError> {
-    transition_run(transaction, run_id, RunState::Working, None)
+    crate::hosts::builtin::transition(transaction, run_id, RunState::Working, None)
         .await
         .map_err(refuse_unadmitted_run)
 }
@@ -226,138 +226,6 @@ fn admission_refusal_reason(message: &str) -> Option<&'static str> {
         .iter()
         .find(|(raised, _)| message == *raised)
         .map(|(_, reason)| *reason)
-}
-
-pub async fn transition_run(
-    transaction: &mut Transaction<'_, Postgres>,
-    run_id: Uuid,
-    next: RunState,
-    reason: Option<&str>,
-) -> Result<RunState, AppError> {
-    let current =
-        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
-            .bind(run_id)
-            .fetch_optional(&mut **transaction)
-            .await?
-            .ok_or(AppError::NotFound("agent_run"))?
-            .parse::<RunState>()?;
-
-    if current == next {
-        return Ok(current);
-    }
-    if !current.can_transition_to(next) {
-        return Err(AppError::Conflict("agent_run", "invalid state transition"));
-    }
-
-    let terminal = next.is_terminal();
-    sqlx::query(
-        r#"
-        UPDATE agent_runs
-           SET state = $2,
-               failure_reason = COALESCE($3, failure_reason),
-               started_at = CASE
-                   WHEN $2 IN ('starting', 'working') THEN COALESCE(started_at, now())
-                   ELSE started_at
-               END,
-               finished_at = CASE WHEN $4 THEN now() ELSE finished_at END,
-               updated_at = now()
-         WHERE id = $1
-        "#,
-    )
-    .bind(run_id)
-    .bind(next.to_string())
-    .bind(reason)
-    .bind(terminal)
-    .execute(&mut **transaction)
-    .await?;
-    if terminal {
-        // The run's session can be resumed by the next run, and its account
-        // slot may let a queued launch start.
-        crate::agent_sessions::idle_run_session(&mut **transaction, run_id).await?;
-        crate::launch::kick(&mut **transaction).await?;
-    }
-
-    let event_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (
-            id, agent_run_id, event_key, kind, summary, payload
-        )
-        VALUES ($1, $2, $3, 'run_state_changed', $4, $5)
-        "#,
-    )
-    .bind(event_id)
-    .bind(run_id)
-    .bind(format!("state:{next}:{event_id}"))
-    .bind(format!("Run moved from {current} to {next}."))
-    .bind(serde_json::json!({
-        "from": current,
-        "to": next,
-        "reason": reason,
-    }))
-    .execute(&mut **transaction)
-    .await?;
-
-    if terminal {
-        enqueue_external_terminal_run_event(transaction, run_id, next).await?;
-    }
-
-    Ok(next)
-}
-
-async fn enqueue_external_terminal_run_event(
-    transaction: &mut Transaction<'_, Postgres>,
-    run_id: Uuid,
-    state: RunState,
-) -> Result<(), AppError> {
-    let available =
-        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
-            .fetch_one(&mut **transaction)
-            .await?;
-    if !available {
-        return Ok(());
-    }
-    let recipients = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
-        r#"
-        SELECT connection.id, conversation.project_id, run.conversation_id
-        FROM agent_runs run
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        JOIN actors actor ON actor.id = run.requesting_actor_id
-         AND actor.kind = 'external_agent'
-        JOIN external_agent_connections connection
-          ON connection.project_id = conversation.project_id
-         AND connection.actor_id = run.requesting_actor_id
-         AND connection.status = 'active'
-        JOIN project_memberships membership
-          ON membership.project_id = connection.project_id
-         AND membership.actor_id = connection.actor_id
-         AND membership.enabled
-        WHERE run.id = $1 AND actor.status = 'active'
-        ORDER BY connection.id
-        FOR SHARE OF connection, actor, membership
-        "#,
-    )
-    .bind(run_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for (connection_id, project_id, conversation_id) in recipients {
-        enqueue_external_event(
-            transaction,
-            connection_id,
-            project_id,
-            "agent_run.terminal",
-            &format!("Sponsored Worker run reached {state}"),
-            "agent_run",
-            run_id,
-            &crate::addresses::Target::space(
-                project_id,
-                crate::addresses::Place::Thread(conversation_id),
-            )
-            .legacy_path(),
-        )
-        .await?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

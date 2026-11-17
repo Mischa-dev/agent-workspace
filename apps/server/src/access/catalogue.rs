@@ -67,6 +67,7 @@ pub enum Permission {
     RunsAccounts,
     RunsReport,
     RequestsRaise,
+    RequestsAnswer,
     CodeView,
     CodePublish,
     CodeManage,
@@ -196,7 +197,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 64] = [
+pub const PERMISSIONS: [PermissionInfo; 65] = [
     on(
         "space",
         Level::See,
@@ -743,6 +744,15 @@ pub const PERMISSIONS: [PermissionInfo; 64] = [
         ALL_ROLES,
     ),
     permission(
+        Permission::RequestsAnswer,
+        "requests.answer",
+        "runs",
+        "Answer requests",
+        "Answer the questions and proposals people and agents raise.",
+        PermissionScope::Project,
+        ALL_ROLES,
+    ),
+    permission(
         Permission::RequestsAnswerSensitive,
         "requests.answer_sensitive",
         "runs",
@@ -1069,7 +1079,7 @@ mod tests {
 
     /// The keys and built-in defaults that existed before K1.9, which stored
     /// custom roles and every built-in role still mean the same by.
-    const BEFORE_K1_9: [(&str, [bool; 4]); 34] = [
+    const BEFORE_K1_9: [(&str, [bool; 4]); 35] = [
         ("projects.view", [true, true, true, true]),
         ("projects.create", [true, true, false, false]),
         ("projects.manage", [true, true, false, false]),
@@ -1092,6 +1102,7 @@ mod tests {
         ("runs.accounts", [true, true, true, false]),
         ("runs.report", [true, true, true, true]),
         ("requests.raise", [true, true, true, true]),
+        ("requests.answer", [true, true, true, true]),
         ("code.view", [true, true, true, true]),
         ("code.publish", [true, true, true, false]),
         ("code.manage", [true, true, false, false]),

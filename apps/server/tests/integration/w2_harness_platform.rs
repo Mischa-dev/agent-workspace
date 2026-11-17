@@ -61,7 +61,7 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root
                 .join("codex/profiles")
                 .to_string_lossy()
@@ -76,7 +76,7 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
             "true".to_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
             "8".to_owned(),
         ),
     ]))

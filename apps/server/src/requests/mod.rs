@@ -6,6 +6,7 @@
 //! `legacy`).
 
 use chrono::{DateTime, Duration, Utc};
+use rmcp::schemars;
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -13,6 +14,7 @@ use uuid::Uuid;
 use crate::{error::AppError, runs::store::RunRow};
 
 pub mod legacy;
+pub mod ops;
 
 /// The most requests a run may have open at once.
 pub const MAX_OPEN_PER_RUN: i64 = 200;
@@ -126,6 +128,21 @@ fn prose(value: Option<&Value>) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+/// Who raises a request, where, and about what.
+#[derive(Clone, Copy, Debug)]
+pub struct Origin<'a> {
+    pub account_id: Uuid,
+    pub workspace_id: Uuid,
+    pub space_id: Option<Uuid>,
+    pub run_id: Option<Uuid>,
+    /// The id of the run activity that raised it.
+    pub host_request_ref: Option<&'a str>,
+    pub conversation_id: Option<Uuid>,
+    pub work_item_id: Option<Uuid>,
+    /// The field errors name.
+    pub field: &'static str,
+}
+
 /// Open the request an `interrupt` activity's `payload.request` describes,
 /// raised by the run's account in the run's space. `activity_ref` is the
 /// activity's id: a repeat of the same activity, or of the same
@@ -136,14 +153,44 @@ pub async fn open_for_run(
     activity_ref: &str,
     request: &Value,
 ) -> Result<Raised, OpenError> {
-    const FIELD: &str = "activities.payload.request";
+    let raised = open(
+        transaction,
+        Origin {
+            account_id: run.account_id,
+            workspace_id: run.workspace_id,
+            space_id: run.space_id,
+            run_id: Some(run.id),
+            host_request_ref: Some(activity_ref),
+            conversation_id: run.conversation_id,
+            work_item_id: run.work_item_id,
+            field: "activities.payload.request",
+        },
+        request,
+    )
+    .await?;
+    if raised.created {
+        announce_raised(transaction, raised.request_id).await?;
+    }
+    Ok(raised)
+}
+
+/// Open a request: `request` holds its kind, title, detail, options,
+/// allowText, audience ({accounts, roles}), expiresInSeconds, onExpiry and
+/// clientRequestId. A repeat of the same `clientRequestId` (or run
+/// activity) returns the request already open.
+pub async fn open(
+    transaction: &mut Transaction<'_, Postgres>,
+    origin: Origin<'_>,
+    request: &Value,
+) -> Result<Raised, OpenError> {
+    let field = origin.field;
     let client_request_id = prose(request.get("clientRequestId"));
     if client_request_id
         .as_deref()
         .is_some_and(|value| value.chars().count() > 200 || value.chars().any(char::is_control))
     {
         return Err(refused(
-            FIELD,
+            field,
             "Keep clientRequestId to 200 characters on one line.",
         ));
     }
@@ -155,9 +202,9 @@ pub async fn open_for_run(
         LIMIT 1
         "#,
     )
-    .bind(run.id)
-    .bind(activity_ref)
-    .bind(run.account_id)
+    .bind(origin.run_id)
+    .bind(origin.host_request_ref)
+    .bind(origin.account_id)
     .bind(&client_request_id)
     .fetch_optional(&mut **transaction)
     .await?
@@ -171,24 +218,25 @@ pub async fn open_for_run(
     let kind = match text(request.get("kind")).as_deref() {
         None | Some("question") => "question",
         Some("approval") => "approval",
+        Some("proposal") => "proposal",
         Some(_) => {
             return Err(refused(
-                FIELD,
-                "A run raises a question or an approval (request.kind).",
+                field,
+                "Ask a question, an approval or a proposal (kind).",
             ));
         }
     };
-    let title = prose(request.get("title"))
-        .ok_or_else(|| refused(FIELD, "Say what you need in request.title."))?;
+    let title =
+        prose(request.get("title")).ok_or_else(|| refused(field, "Say what you need in title."))?;
     if title.chars().count() > MAX_TITLE_CHARS {
-        return Err(refused(FIELD, "Keep request.title to 2,000 characters."));
+        return Err(refused(field, "Keep title to 2,000 characters."));
     }
     let detail = prose(request.get("detail"));
     if detail
         .as_deref()
         .is_some_and(|detail| detail.chars().count() > MAX_DETAIL_CHARS)
     {
-        return Err(refused(FIELD, "Keep request.detail to 8,000 characters."));
+        return Err(refused(field, "Keep detail to 8,000 characters."));
     }
     let options = match request.get("options") {
         None | Some(Value::Null) => Vec::new(),
@@ -199,7 +247,7 @@ pub async fn open_for_run(
                 let label = prose(option.get("label"));
                 let style = text(option.get("style"));
                 let (Some(id), Some(label)) = (id, label) else {
-                    return Err(refused(FIELD, "Each option has an id and a label."));
+                    return Err(refused(field, "Each option has an id and a label."));
                 };
                 if id.chars().count() > 40
                     || label.chars().count() > 200
@@ -208,7 +256,7 @@ pub async fn open_for_run(
                         .is_some_and(|style| !matches!(style, "approve" | "deny"))
                 {
                     return Err(refused(
-                        FIELD,
+                        field,
                         "Keep option ids to 40 characters and labels to 200; style is approve or deny.",
                     ));
                 }
@@ -222,7 +270,7 @@ pub async fn open_for_run(
             }
             clean
         }
-        Some(_) => return Err(refused(FIELD, "Give at most 8 options.")),
+        Some(_) => return Err(refused(field, "Give at most 8 options.")),
     };
     let allow_text = request
         .get("allowText")
@@ -230,7 +278,7 @@ pub async fn open_for_run(
         .unwrap_or(kind == "question" || options.is_empty());
     if options.is_empty() && !allow_text {
         return Err(refused(
-            FIELD,
+            field,
             "Give options to pick from, or allow a typed answer (allowText).",
         ));
     }
@@ -245,10 +293,10 @@ pub async fn open_for_run(
                     .and_then(|id| id.trim().parse::<Uuid>().ok())
             })
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| refused(FIELD, "Name people and agents in audience.accounts by ID."))?,
+            .ok_or_else(|| refused(field, "Name people and agents in audience.accounts by ID."))?,
         Some(_) => {
             return Err(refused(
-                FIELD,
+                field,
                 "Name at most 20 accounts in audience.accounts.",
             ));
         }
@@ -270,15 +318,21 @@ pub async fn open_for_run(
                     .map(str::to_owned)
             })
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| refused(FIELD, "Name roles in audience.roles by key, like owner."))?,
-        Some(_) => return Err(refused(FIELD, "Name at most 10 roles in audience.roles.")),
+            .ok_or_else(|| refused(field, "Name roles in audience.roles by key, like owner."))?,
+        Some(_) => return Err(refused(field, "Name at most 10 roles in audience.roles.")),
     };
-    let Some(space_id) = run.space_id else {
+    let Some(space_id) = origin.space_id else {
         return Err(refused(
-            FIELD,
-            "This run isn't in a project, so it can't ask anyone yet.",
+            field,
+            "This isn't in a project, so there's nobody to ask yet.",
         ));
     };
+    if origin.run_id.is_none() && accounts.is_empty() && roles.is_empty() {
+        return Err(refused(
+            field,
+            "Say who to ask: people or agents (audience.accounts) or roles (audience.roles).",
+        ));
+    }
     if !accounts.is_empty() {
         let members = sqlx::query_scalar::<_, i64>(
             r#"
@@ -289,7 +343,7 @@ pub async fn open_for_run(
         )
         .bind(space_id)
         .bind(&accounts)
-        .bind(run.account_id)
+        .bind(origin.account_id)
         .fetch_one(&mut **transaction)
         .await?;
         let distinct = {
@@ -300,7 +354,7 @@ pub async fn open_for_run(
         };
         if usize::try_from(members).unwrap_or(0) != distinct {
             return Err(refused(
-                FIELD,
+                field,
                 "Address people and agents in this project, other than yourself.",
             ));
         }
@@ -312,21 +366,34 @@ pub async fn open_for_run(
         }
         Some(_) => {
             return Err(refused(
-                FIELD,
+                field,
                 "expiresInSeconds is 60 (a minute) to 604,800 (a week).",
             ));
         }
     };
 
-    // Limits, counted under a lock on the run so two batches count each other.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('requests_run:' || $1::text, 0))")
-        .bind(run.id)
+    let on_expiry = match text(request.get("onExpiry")).as_deref() {
+        None | Some("expire") => "expire",
+        Some("deny") if expires_at.is_some() && deny_option(&options).is_some() => "deny",
+        Some(_) => {
+            return Err(refused(
+                field,
+                "onExpiry is expire, or deny with expiresInSeconds and an option styled deny.",
+            ));
+        }
+    };
+
+    // Limits, counted under a lock on the run (or the raiser) so two
+    // calls count each other.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('requests:' || $1::text, 0))")
+        .bind(origin.run_id.unwrap_or(origin.account_id))
         .execute(&mut **transaction)
         .await?;
-    let open_on_run = open_count(transaction, run.id).await?;
-    if open_on_run >= MAX_OPEN_PER_RUN {
+    if let Some(run_id) = origin.run_id
+        && open_count(transaction, run_id).await? >= MAX_OPEN_PER_RUN
+    {
         return Err(refused(
-            FIELD,
+            field,
             "This run already has 200 requests waiting. Wait for answers first.",
         ));
     }
@@ -340,14 +407,14 @@ pub async fn open_for_run(
                          AND addressed_account_ids @> ARRAY[addressee.id]) >= $3)
             "#,
         )
-        .bind(run.account_id)
+        .bind(origin.account_id)
         .bind(&accounts)
         .bind(MAX_OPEN_PER_ADDRESSEE)
         .fetch_one(&mut **transaction)
         .await?;
         if crowded {
             return Err(refused(
-                FIELD,
+                field,
                 "Someone you're asking already has 20 of your requests waiting. Wait for answers first.",
             ));
         }
@@ -359,26 +426,27 @@ pub async fn open_for_run(
             id, workspace_id, space_id, kind, raised_by_account_id, run_id, host_request_ref,
             client_request_id, conversation_id, work_item_id, title, detail, options,
             allow_text, answer_permission, addressed_account_ids, addressed_role_keys,
-            expires_at
+            expires_at, on_expiry
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+                $19)
         "#,
     )
     .bind(request_id)
-    .bind(run.workspace_id)
+    .bind(origin.workspace_id)
     .bind(space_id)
     .bind(kind)
-    .bind(run.account_id)
-    .bind(run.id)
-    .bind(activity_ref)
+    .bind(origin.account_id)
+    .bind(origin.run_id)
+    .bind(origin.host_request_ref)
     .bind(&client_request_id)
-    .bind(run.conversation_id)
-    .bind(run.work_item_id)
+    .bind(origin.conversation_id)
+    .bind(origin.work_item_id)
     .bind(&title)
     .bind(&detail)
     .bind(Value::Array(options))
     .bind(allow_text)
-    .bind(if kind == "approval" {
+    .bind(if kind == "approval" && origin.run_id.is_some() {
         "runs.approve"
     } else {
         "requests.answer"
@@ -386,7 +454,18 @@ pub async fn open_for_run(
     .bind(&accounts)
     .bind(&roles)
     .bind(expires_at)
+    .bind(on_expiry)
     .execute(&mut **transaction)
+    .await?;
+    stage_event(
+        transaction,
+        &crate::events::catalog::REQUEST_RAISED,
+        request_id,
+        origin.workspace_id,
+        Some(space_id),
+        1,
+        origin.account_id,
+    )
     .await?;
     Ok(Raised {
         request_id,
@@ -546,4 +625,743 @@ pub async fn cancel_raised_via_host(
     .execute(&mut **transaction)
     .await?
     .rows_affected())
+}
+
+// ------------------------------------------------------------- A1.8 flow
+
+/// The most characters of a typed answer.
+pub const MAX_ANSWER_CHARS: usize = 4_000;
+/// The event each of the raiser's connections gets when a request settles.
+pub const ANSWERED_EVENT: &str = "request.answered";
+
+/// The option a `deny` expiry picks: the first styled deny.
+fn deny_option(options: &[Value]) -> Option<&Value> {
+    options
+        .iter()
+        .find(|option| option.get("style").and_then(Value::as_str) == Some("deny"))
+}
+
+/// One option to pick.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestOption {
+    pub id: String,
+    pub label: String,
+    /// approve or deny, when the option says yes or no.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+}
+
+/// What was answered.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestAnswerView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_id: Option<String>,
+    /// The picked option's label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// A request as people and agents see it.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestView {
+    #[schemars(with = "String")]
+    pub id: Uuid,
+    /// question, approval or proposal.
+    pub kind: String,
+    /// open, answered, expired, cancelled or superseded.
+    pub status: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub options: Vec<RequestOption>,
+    /// Whether a typed answer is taken.
+    pub allow_text: bool,
+    #[schemars(with = "String")]
+    pub raised_by: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub space_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub run_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub conversation_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub task_id: Option<Uuid>,
+    /// The accounts it is addressed to, by id.
+    #[schemars(with = "Vec<String>")]
+    pub addressed_accounts: Vec<Uuid>,
+    /// The roles it is addressed to, by key.
+    pub addressed_roles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<RequestAnswerView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub answered_by: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    /// Pass it as expectedVersion to answer only what you read.
+    pub version: i64,
+}
+
+/// The options stored on a request.
+pub fn options_of(options: &Value) -> Vec<RequestOption> {
+    serde_json::from_value(options.clone()).unwrap_or_default()
+}
+
+/// A stored answer as shown, with the picked option's label.
+pub fn answer_of(answer: Option<&Value>, options: &[RequestOption]) -> Option<RequestAnswerView> {
+    let answer = answer?;
+    let option_id = text(answer.get("optionId"));
+    Some(RequestAnswerView {
+        label: option_id.as_ref().and_then(|picked| {
+            options
+                .iter()
+                .find(|option| &option.id == picked)
+                .map(|option| option.label.clone())
+        }),
+        option_id,
+        text: text(answer.get("text")),
+    })
+}
+
+impl From<&RequestRow> for RequestView {
+    fn from(row: &RequestRow) -> Self {
+        let options = options_of(&row.options);
+        Self {
+            id: row.id,
+            kind: row.kind.clone(),
+            status: row.status.clone(),
+            title: row.title.clone(),
+            detail: row.detail.clone(),
+            answer: answer_of(row.answer.as_ref(), &options),
+            options,
+            allow_text: row.allow_text,
+            raised_by: row.raised_by_account_id,
+            space_id: row.space_id,
+            run_id: row.run_id,
+            conversation_id: row.conversation_id,
+            task_id: row.work_item_id,
+            addressed_accounts: row.addressed_account_ids.clone(),
+            addressed_roles: row.addressed_role_keys.clone(),
+            answered_by: row.answered_by_account_id,
+            answered_at: row.answered_at,
+            expires_at: row.expires_at,
+            created_at: row.created_at,
+            version: row.version,
+        }
+    }
+}
+
+/// A request `viewer` may see, locked for a change when `lock`.
+pub async fn visible(
+    transaction: &mut Transaction<'_, Postgres>,
+    request_id: Uuid,
+    viewer: Uuid,
+    lock: bool,
+) -> Result<Option<RequestRow>, AppError> {
+    Ok(sqlx::query_as::<_, RequestRow>(&format!(
+        "SELECT {REQUEST_COLUMNS} FROM requests request \
+         WHERE request.id = $1 AND request_visible_to(request.id, $2) {}",
+        if lock { "FOR UPDATE" } else { "" }
+    ))
+    .bind(request_id)
+    .bind(viewer)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
+/// The access scope a request is answered in: its space, or its workspace.
+fn scope_of(row: &RequestRow) -> crate::access::Target {
+    row.space_id.map_or(
+        crate::access::Target::Workspace(row.workspace_id),
+        crate::access::Target::Space,
+    )
+}
+
+/// Whether `account` holds `permission` where the request lives.
+async fn holds(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &crate::access::Caller,
+    row: &RequestRow,
+    writes: bool,
+) -> Result<bool, AppError> {
+    let Some(permission) = crate::policy::Permission::from_key(&row.answer_permission) else {
+        return Ok(false);
+    };
+    Ok(crate::access::check_locked(
+        transaction,
+        caller,
+        crate::access::Need {
+            permission: Some(permission),
+            module: None,
+            writes,
+        },
+        scope_of(row),
+    )
+    .await?
+    .is_ok())
+}
+
+/// Whether the account holds one of the roles a request is addressed to,
+/// where it lives (by the role's key, built in or the workspace's own).
+async fn holds_addressed_role(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    row: &RequestRow,
+) -> Result<bool, AppError> {
+    if row.addressed_role_keys.is_empty() {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM project_memberships membership
+            LEFT JOIN workspace_roles custom ON custom.id = membership.role_id
+            WHERE $2::uuid IS NOT NULL AND membership.project_id = $2
+              AND membership.actor_id = $1 AND membership.enabled
+              AND (membership.role = ANY($4) OR custom.key = ANY($4))
+            UNION ALL
+            SELECT 1 FROM organization_memberships membership
+            LEFT JOIN workspace_roles custom ON custom.id = membership.role_id
+            WHERE $2::uuid IS NULL AND membership.organization_id = $3
+              AND membership.actor_id = $1 AND membership.enabled
+              AND (membership.role = ANY($4) OR custom.key = ANY($4))
+        )
+        "#,
+    )
+    .bind(account_id)
+    .bind(row.space_id)
+    .bind(row.workspace_id)
+    .bind(&row.addressed_role_keys)
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
+/// Who may answer an open request they can see: an account it names; else
+/// a holder of one of the roles it names who has its permission; else,
+/// when it names nobody, anyone with its permission there. Never the
+/// account that raised it.
+pub async fn may_answer(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &crate::access::Caller,
+    row: &RequestRow,
+) -> Result<bool, AppError> {
+    if row.status != "open" || row.raised_by_account_id == caller.account_id {
+        return Ok(false);
+    }
+    if row.addressed_account_ids.contains(&caller.account_id) {
+        return Ok(true);
+    }
+    if !row.addressed_role_keys.is_empty() {
+        return Ok(
+            holds_addressed_role(transaction, caller.account_id, row).await?
+                && holds(transaction, caller, row, true).await?,
+        );
+    }
+    if !row.addressed_account_ids.is_empty() {
+        return Ok(false);
+    }
+    holds(transaction, caller, row, true).await
+}
+
+/// Why an answer was refused.
+#[derive(Debug)]
+pub enum AnswerError {
+    Invalid {
+        field: &'static str,
+        message: &'static str,
+    },
+    /// Not open any more: answered, expired or withdrawn.
+    Settled(String),
+    NotYours,
+    App(AppError),
+}
+
+impl From<AppError> for AnswerError {
+    fn from(error: AppError) -> Self {
+        Self::App(error)
+    }
+}
+
+impl From<sqlx::Error> for AnswerError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::App(error.into())
+    }
+}
+
+/// The answer to store: an option of the request, words, or both.
+fn clean_answer(
+    row: &RequestRow,
+    option_id: Option<&str>,
+    typed: Option<&str>,
+) -> Result<Value, AnswerError> {
+    let options = options_of(&row.options);
+    let option_id = match option_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(picked) => Some(
+            options
+                .iter()
+                .find(|option| option.id == picked)
+                .map(|option| option.id.clone())
+                .ok_or(AnswerError::Invalid {
+                    field: "optionId",
+                    message: "Pick one of the request's options by its id.",
+                })?,
+        ),
+        None => None,
+    };
+    let typed = typed.map(str::trim).filter(|typed| !typed.is_empty());
+    if typed.is_some() && !row.allow_text {
+        return Err(AnswerError::Invalid {
+            field: "text",
+            message: "This request takes one of its options, not a typed answer.",
+        });
+    }
+    if typed.is_some_and(|typed| {
+        typed.chars().count() > MAX_ANSWER_CHARS
+            || typed
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t')
+    }) {
+        return Err(AnswerError::Invalid {
+            field: "text",
+            message: "Keep the answer to 4,000 characters; line breaks are fine.",
+        });
+    }
+    if option_id.is_none() && typed.is_none() {
+        return Err(AnswerError::Invalid {
+            field: "optionId",
+            message: "Pick an option (optionId), type an answer (text), or both.",
+        });
+    }
+    let mut answer = serde_json::Map::new();
+    if let Some(option_id) = option_id {
+        answer.insert("optionId".into(), Value::String(option_id));
+    }
+    if let Some(typed) = typed {
+        answer.insert("text".into(), Value::String(typed.to_owned()));
+    }
+    Ok(Value::Object(answer))
+}
+
+/// Answer an open request as `caller`, once. Its notices are marked read,
+/// its raiser is told, and a run waiting on it is told through its host.
+pub async fn answer(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &crate::access::Caller,
+    row: &RequestRow,
+    option_id: Option<&str>,
+    typed: Option<&str>,
+) -> Result<RequestRow, AnswerError> {
+    if row.status != "open" {
+        return Err(AnswerError::Settled(format!(
+            "This request is {} already.",
+            match row.status.as_str() {
+                "answered" => "answered",
+                "expired" => "past its time",
+                _ => "withdrawn",
+            }
+        )));
+    }
+    if row.legacy_source.is_some() {
+        return Err(AnswerError::Invalid {
+            field: "requestId",
+            message: "Answer this approval on its run (approval_respond).",
+        });
+    }
+    if !may_answer(transaction, caller, row).await? {
+        return Err(AnswerError::NotYours);
+    }
+    let answer = clean_answer(row, option_id, typed)?;
+    let settled = settle(
+        transaction,
+        row.id,
+        "answered",
+        Some(&answer),
+        Some(caller.account_id),
+    )
+    .await?
+    .ok_or_else(|| AnswerError::Settled("This request was settled meanwhile.".to_owned()))?;
+    Ok(settled)
+}
+
+/// Withdraw an open request its raiser no longer needs.
+pub async fn cancel(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    row: &RequestRow,
+) -> Result<RequestRow, AnswerError> {
+    if row.raised_by_account_id != account_id {
+        return Err(AnswerError::NotYours);
+    }
+    if row.status != "open" {
+        return Ok(row.clone());
+    }
+    if row.legacy_source.is_some() {
+        return Err(AnswerError::Invalid {
+            field: "requestId",
+            message: "Withdraw this approval by stopping its run.",
+        });
+    }
+    settle(transaction, row.id, "cancelled", None, None)
+        .await?
+        .ok_or_else(|| AnswerError::Settled("This request was settled meanwhile.".to_owned()))
+}
+
+/// Move an open request to `status` and do what follows: its notices are
+/// read, the raiser hears, and a run waiting on it goes on. `None` when it
+/// was no longer open.
+async fn settle(
+    transaction: &mut Transaction<'_, Postgres>,
+    request_id: Uuid,
+    status: &str,
+    answer: Option<&Value>,
+    by: Option<Uuid>,
+) -> Result<Option<RequestRow>, AppError> {
+    let Some(row) = sqlx::query_as::<_, RequestRow>(&format!(
+        r#"
+        UPDATE requests request
+           SET status = $2, answer = $3, answered_by_account_id = $4,
+               answered_at = CASE WHEN $2 = 'answered' THEN now() END,
+               version = request.version + 1, updated_at = now()
+         WHERE request.id = $1 AND request.status = 'open'
+        RETURNING {REQUEST_COLUMNS}
+        "#
+    ))
+    .bind(request_id)
+    .bind(status)
+    .bind(answer)
+    .bind(by)
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let ty = match status {
+        "answered" => &crate::events::catalog::REQUEST_ANSWERED,
+        "expired" => &crate::events::catalog::REQUEST_EXPIRED,
+        _ => &crate::events::catalog::REQUEST_CANCELLED,
+    };
+    stage_event(
+        transaction,
+        ty,
+        row.id,
+        row.workspace_id,
+        row.space_id,
+        row.version,
+        by.unwrap_or(row.raised_by_account_id),
+    )
+    .await?;
+    // Its cards have been dealt with.
+    let read = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        UPDATE notifications SET read_at = now(), updated_at = now()
+         WHERE subject_kind = 'request' AND subject_id = $1 AND read_at IS NULL
+        RETURNING project_id, recipient_actor_id
+        "#,
+    )
+    .bind(row.id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for (project_id, recipient) in read {
+        crate::notifications::announce(transaction, project_id, recipient).await?;
+    }
+    if status != "cancelled" {
+        tell_raiser(transaction, &row, by).await?;
+    }
+    if let Some(run_id) = row.run_id {
+        let summary = match status {
+            "answered" => "Answered.",
+            "expired" => "No answer came in time.",
+            _ => "Withdrawn.",
+        };
+        let run = crate::runs::ops::request_settled(
+            transaction,
+            run_id,
+            row.id,
+            by.unwrap_or(row.raised_by_account_id),
+            summary,
+        )
+        .await
+        .map_err(|error| match error {
+            crate::runs::ops::RunOpError::App(error) => error,
+            _ => AppError::Internal("request settled on its run"),
+        })?;
+        // A run on a host hears the answer through it.
+        if status != "cancelled"
+            && let Some(run) = run
+            && let Some(host_id) = run.host_id
+        {
+            use crate::hosts::dispatch::Host;
+            crate::hosts::dispatch::RemoteHost { id: host_id }
+                .answer(transaction, &run, row.id)
+                .await?;
+        }
+    }
+    Ok(Some(row))
+}
+
+/// Stage a request's event in the log. It names the request and its status,
+/// never its words; whoever may see the request may hear it.
+async fn stage_event(
+    transaction: &mut Transaction<'_, Postgres>,
+    ty: &'static crate::events::EventType,
+    request_id: Uuid,
+    workspace_id: Uuid,
+    space_id: Option<Uuid>,
+    version: i64,
+    actor: Uuid,
+) -> Result<(), AppError> {
+    use crate::events::{Audience, NewEvent};
+    let event = NewEvent {
+        id: Uuid::now_v7(),
+        ty,
+        workspace_id: Some(workspace_id),
+        space_id,
+        thing: Some((request_id, "request")),
+        access_thing: None,
+        version: Some(version),
+        changes: &["status"],
+        audience: Audience::Thing,
+        payload: serde_json::json!({}),
+        actor: Some(actor),
+        legacy_type: None,
+    };
+    crate::events::emit(transaction, event).await?;
+    Ok(())
+}
+
+/// The raiser hears that a request settled: a card in their inbox (in a
+/// space) and a `request.answered` event on each of their connections. Both
+/// name the request, never the answer: they read it with request_get.
+async fn tell_raiser(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: &RequestRow,
+    by: Option<Uuid>,
+) -> Result<(), AppError> {
+    let Some(space_id) = row.space_id else {
+        return Ok(());
+    };
+    let notification = crate::notifications::NewNotification {
+        project_id: space_id,
+        recipient_actor_id: row.raised_by_account_id,
+        kind: crate::notifications::kind::REQUEST_ANSWERED,
+        subject_kind: "request",
+        subject_id: row.id,
+        actor_id: by,
+        conversation_id: row.conversation_id,
+        message_id: None,
+        work_item_id: row.work_item_id,
+        comment_id: None,
+        agent_run_id: row.run_id,
+        approval_id: None,
+        pull_request_id: None,
+        detail: serde_json::json!({}),
+        group_key: format!("request:{}", row.id),
+        dedupe_key: format!("request_answered:{}", row.id),
+    };
+    if crate::notifications::deliver(transaction, &notification).await? {
+        crate::notifications::announce(transaction, space_id, row.raised_by_account_id).await?;
+    }
+    let connections = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM external_agent_connections
+        WHERE actor_id = $1 AND status = 'active' AND agent_connection_can_access(id, $2)
+        ORDER BY id
+        "#,
+    )
+    .bind(row.raised_by_account_id)
+    .bind(space_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for connection_id in connections {
+        crate::external_events::enqueue_external_event(
+            transaction,
+            connection_id,
+            space_id,
+            ANSWERED_EVENT,
+            "Your request was answered; read it with request_get",
+            "request",
+            row.id,
+            &crate::addresses::Target::Inbox.legacy_path(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Put a new request in front of who it asks, in its space: the accounts it
+/// names; else the holders of the roles it names who may answer it; else
+/// whoever asked for the run that raised it.
+pub async fn announce_raised(
+    transaction: &mut Transaction<'_, Postgres>,
+    request_id: Uuid,
+) -> Result<usize, AppError> {
+    let Some(row) = get(transaction, request_id).await? else {
+        return Ok(0);
+    };
+    let Some(space_id) = row.space_id else {
+        return Ok(0);
+    };
+    let candidates = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT membership.actor_id, actor.kind
+        FROM project_memberships membership
+        JOIN actors actor ON actor.id = membership.actor_id AND actor.status = 'active'
+        LEFT JOIN workspace_roles custom ON custom.id = membership.role_id
+        WHERE membership.project_id = $1 AND membership.enabled AND membership.actor_id <> $2
+          AND (membership.actor_id = ANY($3)
+               OR (cardinality($3) = 0
+                   AND (membership.role = ANY($4) OR custom.key = ANY($4)))
+               OR (cardinality($3) = 0 AND cardinality($4) = 0 AND membership.actor_id = $6))
+          AND request_visible_to($5, membership.actor_id)
+        ORDER BY membership.created_at, membership.actor_id
+        LIMIT 50
+        "#,
+    )
+    .bind(space_id)
+    .bind(row.raised_by_account_id)
+    .bind(&row.addressed_account_ids)
+    .bind(&row.addressed_role_keys)
+    .bind(row.id)
+    .bind(run_requester(transaction, &row).await?)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut told = 0;
+    for (account_id, kind) in candidates {
+        let named = row.addressed_account_ids.contains(&account_id);
+        if !named {
+            // By role: only those who may answer it.
+            let Some(kind) = crate::ops::context::actor_kind_of(&kind) else {
+                continue;
+            };
+            let caller = crate::access::Caller::person(account_id, kind);
+            if !holds(transaction, &caller, &row, false).await? {
+                continue;
+            }
+        }
+        let href = match (row.conversation_id, row.work_item_id) {
+            (None, Some(task_id)) => {
+                crate::addresses::Target::task(space_id, task_id).legacy_path()
+            }
+            _ => crate::addresses::Target::Inbox.legacy_path(),
+        };
+        let notification = crate::notifications::NewNotification {
+            project_id: space_id,
+            recipient_actor_id: account_id,
+            kind: crate::notifications::kind::REQUEST_RAISED,
+            subject_kind: "request",
+            subject_id: row.id,
+            actor_id: Some(row.raised_by_account_id),
+            conversation_id: row.conversation_id,
+            message_id: None,
+            work_item_id: row.work_item_id,
+            comment_id: None,
+            agent_run_id: row.run_id,
+            approval_id: None,
+            pull_request_id: None,
+            detail: serde_json::json!({ "href": href }),
+            group_key: format!("request:{}", row.id),
+            dedupe_key: format!("request:{}", row.id),
+        };
+        if crate::notifications::deliver(transaction, &notification).await? {
+            crate::notifications::announce(transaction, space_id, account_id).await?;
+            told += 1;
+        }
+    }
+    Ok(told)
+}
+
+/// Who asked for the run that raised a request, if anyone.
+async fn run_requester(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: &RequestRow,
+) -> Result<Option<Uuid>, AppError> {
+    let Some(run_id) = row.run_id else {
+        return Ok(None);
+    };
+    Ok(crate::runs::ops::locked(transaction, run_id)
+        .await?
+        .and_then(|run| run.requested_by_account_id))
+}
+
+/// Requests past their time: `deny` ones are answered with their deny
+/// option, the rest expire. Run by the job queue every minute.
+pub async fn expire_due(pool: &sqlx::PgPool) -> Result<usize, AppError> {
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    let due = sqlx::query_as::<_, RequestRow>(&format!(
+        r#"
+        SELECT {REQUEST_COLUMNS} FROM requests request
+        WHERE request.status = 'open' AND request.expires_at < now()
+          AND request.legacy_source IS NULL
+        ORDER BY request.expires_at
+        LIMIT 200
+        FOR UPDATE SKIP LOCKED
+        "#
+    ))
+    .fetch_all(&mut *transaction)
+    .await?;
+    let mut settled = 0;
+    for row in &due {
+        let deny = (row.on_expiry == "deny")
+            .then(|| {
+                deny_option(row.options.as_array().map_or(&[][..], Vec::as_slice))
+                    .and_then(|option| option.get("id").cloned())
+            })
+            .flatten();
+        let done = match deny {
+            Some(option_id) => {
+                settle(
+                    &mut transaction,
+                    row.id,
+                    "answered",
+                    Some(&serde_json::json!({"optionId": option_id, "expired": true})),
+                    None,
+                )
+                .await?
+            }
+            None => settle(&mut transaction, row.id, "expired", None, None).await?,
+        };
+        settled += usize::from(done.is_some());
+    }
+    transaction.commit().await?;
+    Ok(settled)
+}
+
+const EXPIRE_KIND: &str = "requests.expire_due";
+
+pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
+    registry.register(EXPIRE_KIND, |context| async move {
+        expire_due(&context.state.pool).await?;
+        Ok(())
+    });
+    registry.every(EXPIRE_KIND, std::time::Duration::from_secs(60));
+}
+
+/// A request on an inbox card.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestCard {
+    pub id: Uuid,
+    /// question, approval or proposal.
+    pub kind: String,
+    /// open, answered, expired, cancelled or superseded.
+    pub status: String,
+    pub title: String,
+    pub options: Vec<RequestOption>,
+    pub allow_text: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<RequestAnswerView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<String>,
 }

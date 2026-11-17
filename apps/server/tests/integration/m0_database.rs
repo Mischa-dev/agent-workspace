@@ -58,7 +58,7 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
             data_root.path().display().to_string(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root
                 .path()
                 .join("codex/profiles")

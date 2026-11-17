@@ -152,16 +152,18 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     }
     assert_eq!(role(&listed, "member")["isDefault"], true);
     assert_eq!(role(&listed, "owner")["workspaceHolders"], 1);
-    // Viewers only read, apart from reporting their own work, which every
-    // role does (A1.3).
+    // Viewers only read, apart from reporting their own work and raising
+    // and answering requests, which every role does (A1.3, A1.8).
     assert!(
         keys(&role(&listed, "viewer")["permissions"])
             .iter()
             .all(|key| key.ends_with(".view")
                 || key.ends_with(".see")
                 || key == "spaces.browse"
-                || key == "runs.report"
-                || key == "requests.raise"),
+                || matches!(
+                    key.as_str(),
+                    "runs.report" | "requests.raise" | "requests.answer"
+                )),
         "viewers only read"
     );
 

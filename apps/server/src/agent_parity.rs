@@ -801,11 +801,6 @@ mod tests {
         (Delete, "/api/v1/later/{id}", Tool("later_update")),
         (
             Post,
-            "/api/v1/questions/{id}/answer",
-            Tool("question_answer"),
-        ),
-        (
-            Post,
             "/api/v1/conversations/{id}/scheduled-messages",
             Tool("message_schedule"),
         ),
@@ -1048,6 +1043,11 @@ mod tests {
             Post,
             "/api/v1/host/notices",
             Plumbing("a host's notice about its agents, with its own credential"),
+        ),
+        (
+            Post,
+            "/api/v1/host/commands/{command_id}/ack",
+            Plumbing("a host acknowledging a command, with its own credential"),
         ),
         (Post, "/oauth/register", Plumbing("OAuth")),
         (Post, "/oauth/authorize", Plumbing("OAuth")),
