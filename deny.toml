@@ -3,10 +3,14 @@
 # comes with yrs, the server's Yjs library for live pages (AWD-53), and no yrs
 # release has moved off it yet (0.28.1 is the latest, November 2026). Take this
 # out once one has.
+# chrono and chrono-tz were marked unmaintained (RUSTSEC-2026-0543 and
+# RUSTSEC-2026-0555, November 2026) with no vulnerability; the server and
+# sqlx use chrono throughout, so moving to another date library is its own
+# piece of work.
 ignore = [
   { id = "RUSTSEC-2026-0215", reason = "unmaintained, not vulnerable; a dependency of yrs (live pages)" },
-  { id = "RUSTSEC-2026-0543", reason = "unmaintained, not vulnerable (chrono)" },
-  { id = "RUSTSEC-2026-0555", reason = "unmaintained, not vulnerable (chrono-tz)" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, not vulnerable; used throughout the server and sqlx" },
+  { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained, not vulnerable; time zones for schedules" },
 ]
 
 [bans]

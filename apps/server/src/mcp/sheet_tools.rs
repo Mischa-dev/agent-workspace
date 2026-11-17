@@ -40,7 +40,7 @@ use crate::{
         address::{self, column_name},
         engine::Value as CellValue,
     },
-    work_item_commands::lock_membership,
+    work_item_commands::{lock_membership, share_membership},
     work_item_labels::echo,
 };
 
@@ -97,10 +97,13 @@ async fn read_access<T>(
     }
 }
 
-/// A write holding the project lock, with the role checked again under it.
+/// A write holding the project lock (or, for changes to one sheet's cells
+/// and tabs, only the membership; C1.12), with the role checked again under
+/// it.
 async fn begin_write<T>(
     state: &AppState,
     principal: &McpPrincipal,
+    project_lock: bool,
 ) -> Result<Result<Transaction<'static, Postgres>, ToolResult<T>>, AppError> {
     let project_id = principal.project_id;
     if !can_write_in(state, principal, project_id, Action::SheetEdit).await? {
@@ -108,9 +111,12 @@ async fn begin_write<T>(
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     mark_via(&mut transaction, principal).await?;
-    let Some(membership) =
+    let membership = if project_lock {
         lock_membership(&mut transaction, principal.actor_id, project_id).await?
-    else {
+    } else {
+        share_membership(&mut transaction, principal.actor_id, project_id).await?
+    };
+    let Some(membership) = membership else {
         return Ok(Err(ToolResult::not_found("That project")));
     };
     if !membership.enabled {
@@ -1040,7 +1046,12 @@ pub(super) async fn sheet_write(
         if module_off(state, principal).await? {
             return Ok(ToolResult::module_off("sheet_write", "Sheets"));
         }
-        let mut transaction = match begin_write(state, principal).await? {
+        // Making, renaming, archiving or restoring a sheet checks per-project
+        // counts and names under the project lock; cell and tab changes
+        // lock only the sheet.
+        let project_lock =
+            arguments.sheet.is_none() || name.is_some() || arguments.archived.is_some();
+        let mut transaction = match begin_write(state, principal, project_lock).await? {
             Ok(transaction) => transaction,
             Err(refusal) => return Ok(refusal),
         };

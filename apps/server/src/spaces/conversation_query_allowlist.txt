@@ -9,7 +9,6 @@ api.rs::retry_run_in | reads whether a run's prompt message was removed, by id, 
 api.rs::select_run_setup_for | locks the thread a run starts in, by id, after the run access check
 automations.rs::message_contains | a rule's trigger test on one message by id, run as the rule's maker, who was checked when the event fired
 conversations.rs::append_message_command_with | the send pipeline: reads back the message it just wrote
-conversations.rs::create_thread | reads the origin message by id in the channel the caller was just checked for
 conversations.rs::enqueue_external_message_events | builds events for one written message; each recipient is checked when it reads
 conversations.rs::lock_conversation_for | locks the parent of a conversation the caller was just checked for
 conversations.rs::refresh_auto_thread_names | renames threads under a message the caller just wrote or edited
@@ -20,20 +19,15 @@ direct.rs::open_dm_in | finds the DM for a pair key the caller is one half of
 hosts/builtin/mod.rs::notify_sponsoring_agents | a worker telling a run's requesting agent its run finished; no text
 launch.rs::launch_from_tag | reads the message that tagged an agent, by id, inside the send pipeline
 launch.rs::queue_tag_launches | reads a just-written message's author by id, inside the send pipeline
-launch.rs::thread_under | locks and finds the thread under a just-written message, inside the send pipeline
-launch.rs::unique_thread_name | thread names under a channel the caller just posted in, to pick a free one
 link_previews.rs::refresh_messages | a worker refreshing previews on messages by id; no text leaves it
 mcp/channels.rs::channel_create | the caller's own new channel's name clash in a space they create channels in
 mcp/channels.rs::conversation_update | locks a conversation by id after the moderation check
 mcp/channels.rs::conversation_value | the kind of a thread's parent the caller already read
 mcp/replies.rs::conflict_reason | the agent's own reply request, by id, scoped to the agent
 mcp/replies.rs::from_failure | the agent's own reply requests, scoped to the agent; K4.4 reviews the conversation name
-mcp/replies.rs::open_answer_thread | the thread under a message the agent was asked to answer, by id
 mcp/replies.rs::reply_claim | the agent's own reply request, by id, scoped to the agent
 mcp/replies.rs::unusable | the agent's own reply request, by id, scoped to the agent
 mcp/talk.rs::message_items | messages of a conversation the caller opened after a readable check; quotes from elsewhere are checked one by one
-mcp/talk.rs::thread_start | the origin message and existing thread in a channel the caller was just checked for
-mcp/talk.rs::unique_thread_name | thread names under a channel the caller was just checked for
 mcp/tasks.rs::task_link_inner | whether an id is a thread in the task's own project, before linking
 memory.rs::decision_conversation | the conversation of a message a decision cites, by id; the citation is checked when read
 memory.rs::insert_revision | a decision's source conversation name; K4.4 checks it against the reader

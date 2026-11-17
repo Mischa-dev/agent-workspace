@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use super::{
     BoardChange, BoardSummary, Caller, LinkView, ListFilter, Placement, TargetKind, access,
+    edit::EditError,
     elements::{self, MAX_BATCH},
     render, scene, store,
 };
@@ -166,6 +167,8 @@ struct CreateRequest {
     project_id: Option<Uuid>,
     /// Link the new board to this task, project or page straight away.
     link: Option<LinkTarget>,
+    /// Start from a template: a template board's ID or a built-in's name.
+    from_template_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -211,7 +214,21 @@ async fn create_http(
         (None, None) => return Err(AppError::Validation("organizationId")),
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let id = super::create(&mut transaction, &caller, placement, &request.title).await?;
+    let id = match request.from_template_id.as_deref() {
+        Some(template) => super::templates::create_from(
+            &mut transaction,
+            &caller,
+            template,
+            placement,
+            Some(&request.title),
+        )
+        .await
+        .map_err(|error| match error {
+            EditError::App(error) => error,
+            EditError::Invalid(_) | EditError::Conflict(_) => AppError::NotFound("template"),
+        })?,
+        None => super::create(&mut transaction, &caller, placement, &request.title).await?,
+    };
     if let Some(link) = request.link {
         super::set_link(
             &mut transaction,

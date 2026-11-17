@@ -42,6 +42,9 @@ pub enum NotificationAction {
     Approve,
     Deny,
     Reply,
+    /// A mention or message: read the conversation (C2.2), as opening it
+    /// would.
+    Read,
     /// A reminder: mark its saved item done (W21).
     Done,
     /// A reminder: remind again in an hour (W21).
@@ -54,6 +57,7 @@ impl NotificationAction {
             Self::Approve => "approve",
             Self::Deny => "deny",
             Self::Reply => "reply",
+            Self::Read => "read",
             Self::Done => "done",
             Self::Snooze => "snooze",
         }
@@ -64,6 +68,7 @@ impl NotificationAction {
             "approve" => Some(Self::Approve),
             "deny" => Some(Self::Deny),
             "reply" => Some(Self::Reply),
+            "read" => Some(Self::Read),
             "done" => Some(Self::Done),
             "snooze" => Some(Self::Snooze),
             _ => None,
@@ -91,7 +96,7 @@ pub fn offered(notification: &NotificationView) -> Vec<NotificationAction> {
         notifications::kind::MENTION | notifications::kind::CONVERSATION_MESSAGE
             if notification.reply_conversation_id.is_some() =>
         {
-            vec![NotificationAction::Reply]
+            vec![NotificationAction::Reply, NotificationAction::Read]
         }
         notifications::kind::REMINDER if notification.saved_item_id.is_some() => {
             vec![NotificationAction::Done, NotificationAction::Snooze]
@@ -204,6 +209,7 @@ pub fn payload_actions(notification: &NotificationView, minted: &MintedActions) 
                 "title": format!("In {} min", crate::later::SNOOZE_MINUTES),
             }),
             NotificationAction::Deny => json!({"action": "deny", "title": "Deny"}),
+            NotificationAction::Read => json!({"action": "read", "title": "Mark read"}),
             NotificationAction::Reply => json!({
                 "action": "reply",
                 "title": if question { "Answer" } else { "Reply" },
@@ -390,6 +396,38 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
                 crate::later::snooze(state, actor.actor_id, saved_item_id).await?;
                 "snoozed"
             }
+        }
+        NotificationAction::Read => {
+            let conversation_id = notification
+                .reply_conversation_id
+                .ok_or(AppError::NotFound("notification_action"))?;
+            // The same read as opening it (C2.2), rechecked now: a
+            // conversation they can no longer read reads nothing.
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+            let conversation = sqlx::query_as::<_, (Uuid, i64)>(
+                r#"
+                SELECT conversation.project_id, conversation.next_entry_sequence - 1
+                FROM conversations conversation
+                WHERE conversation.id = $1
+                  AND actor_can_access_project($2, NULL, conversation.project_id)
+                  AND conversation_readable_by(conversation.id, $2)
+                "#,
+            )
+            .bind(conversation_id)
+            .bind(actor.actor_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .ok_or(AppError::NotFound("notification_action"))?;
+            crate::read_state::mark_seen(
+                &mut transaction,
+                conversation.0,
+                conversation_id,
+                actor.actor_id,
+                conversation.1,
+            )
+            .await?;
+            transaction.commit().await?;
+            "read"
         }
         NotificationAction::Reply => {
             let text = request

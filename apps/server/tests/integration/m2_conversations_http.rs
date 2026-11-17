@@ -323,7 +323,12 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
     assert_eq!(seen.status(), StatusCode::OK);
     let seen = response_json(seen).await;
     assert_eq!(seen["highestSeenSequence"], 3);
-    assert_eq!(seen["version"], 2);
+    // C2.3 (R2): sending already read the author's own messages, so the
+    // mark is where it stands, not one version past the first.
+    assert!(
+        seen["version"].as_i64().is_some_and(|version| version > 1),
+        "{seen}"
+    );
     let stale_seen = app
         .clone()
         .oneshot(request(

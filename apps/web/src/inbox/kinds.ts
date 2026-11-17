@@ -5,6 +5,13 @@ export const KIND_ICON: Record<string, IconName> = {
   mention: 'at-sign',
   comment_mention: 'at-sign',
   conversation_message: 'message',
+  direct_message: 'message',
+  thread_reply: 'message',
+  keyword: 'search',
+  connection_problem: 'circle-alert',
+  agent_unresponsive: 'bot',
+  budget_warning: 'activity',
+  thing_update: 'activity',
   reminder: 'clock',
   scheduled_send_failed: 'circle-alert',
   assigned: 'work',
@@ -23,4 +30,10 @@ export const KIND_ICON: Record<string, IconName> = {
 }
 
 /** Kinds that report something going wrong, drawn in the danger colour. */
-export const FAILURE_KINDS = new Set(['scheduled_send_failed', 'run_failed', 'checks_failed', 'capacity_limit_reached'])
+export const FAILURE_KINDS = new Set([
+  'scheduled_send_failed',
+  'run_failed',
+  'checks_failed',
+  'capacity_limit_reached',
+  'connection_problem',
+])

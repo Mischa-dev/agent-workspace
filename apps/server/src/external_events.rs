@@ -139,6 +139,78 @@ pub async fn enqueue_external_work_item_event(
     Ok(())
 }
 
+/// A comment on a task or page, for `comment.mentioned` (C1.1).
+pub struct MentioningComment {
+    pub project_id: Uuid,
+    /// A `subject_visible_to` kind: `task` or `page`.
+    pub thing_kind: &'static str,
+    pub thing_id: Uuid,
+    /// The event's resource: `work_item_comment` or `page_comment`.
+    pub comment_kind: &'static str,
+    pub comment_id: Uuid,
+    /// What the link's `#comment-` points at: the comment, or a page
+    /// comment's thread.
+    pub anchor: Uuid,
+    pub author_actor_id: Uuid,
+}
+
+/// Each agent a task or page comment mentions gets one `comment.mentioned`
+/// event per active connection (C1.1), the way `message.mentioned` works
+/// for messages: only while it's an enabled member who may see the thing,
+/// never for the author. The event carries ids and a link to the comment,
+/// never its words.
+pub async fn enqueue_comment_mentioned(
+    transaction: &mut Transaction<'_, Postgres>,
+    comment: MentioningComment,
+    mentioned_actor_ids: &[Uuid],
+) -> Result<(), AppError> {
+    if mentioned_actor_ids.is_empty() {
+        return Ok(());
+    }
+    let recipients = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT connection.id,
+               subject_href($4, $5) || '#comment-' || $6::text AS href
+        FROM external_agent_connections connection
+        JOIN actors actor ON actor.id = connection.actor_id
+        JOIN project_memberships membership
+          ON membership.project_id = $1
+         AND membership.actor_id = connection.actor_id
+        WHERE agent_connection_can_access(connection.id, $1)
+          AND connection.actor_id = ANY($2)
+          AND connection.actor_id <> $3
+          AND connection.status = 'active'
+          AND actor.status = 'active'
+          AND membership.enabled
+          AND subject_visible_to($4, $5, connection.actor_id)
+        ORDER BY connection.id
+        FOR SHARE OF connection, actor, membership
+        "#,
+    )
+    .bind(comment.project_id)
+    .bind(mentioned_actor_ids)
+    .bind(comment.author_actor_id)
+    .bind(comment.thing_kind)
+    .bind(comment.thing_id)
+    .bind(comment.anchor)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for (connection_id, href) in recipients {
+        enqueue_external_event(
+            transaction,
+            connection_id,
+            comment.project_id,
+            "comment.mentioned",
+            "You were mentioned in a comment",
+            comment.comment_kind,
+            comment.comment_id,
+            &href,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 pub fn encode_cursor(
     signing_key: &[u8],
     connection_id: Uuid,

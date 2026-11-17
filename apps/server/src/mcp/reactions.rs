@@ -16,8 +16,8 @@ use crate::{
     AppState,
     error::AppError,
     reactions::{
-        REACTION_LIST, ReactionError, ReactionRefused, ReactionView, reaction_rows, resolve,
-        set_reaction,
+        REACTION_LIST, ReactionError, ReactionRefused, ReactionView, could_be_reaction,
+        reaction_rows, set_reaction,
     },
 };
 
@@ -29,9 +29,9 @@ const LISTED_PEOPLE: usize = 10;
 pub(super) struct MessageReactArguments {
     /// The message: its ID, or a link to it.
     pub message_id: String,
-    /// One emoji, or its name: 👍 thumbsup, 👎 thumbsdown, ❤️ heart, 😄 smile,
-    /// 🎉 tada, 😕 confused, 🚀 rocket, 👀 eyes, ✅ check, ❌ x, 🙏 pray,
-    /// 🤔 thinking.
+    /// One emoji, or its name (👍 thumbsup, 👀 eyes, ✅ check, 🎉 tada, and
+    /// any other standard emoji), or the :name: of one of this workspace's
+    /// own.
     pub emoji: String,
     /// False to take your reaction away. Defaults to true.
     pub reacted: Option<bool>,
@@ -113,12 +113,17 @@ pub(super) async fn message_react(
     let Some(message_id) = parse_message_id(&arguments.message_id) else {
         return ToolResult::invalid("messageId", "Pass a message ID, or a link to the message.");
     };
-    let Some(choice) = resolve(&arguments.emoji) else {
-        return ToolResult::invalid(
+    let refused_emoji = || {
+        ToolResult::invalid(
             "emoji",
-            format!("Use one emoji from {REACTION_LIST}, or its name, such as eyes or check."),
-        );
+            format!(
+                "Use one emoji, such as {REACTION_LIST}, or its name (eyes, check), or a :name: of this workspace's own."
+            ),
+        )
     };
+    if !could_be_reaction(&arguments.emoji) {
+        return refused_emoji();
+    }
     let reacted = arguments.reacted.unwrap_or(true);
     let result = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
@@ -129,12 +134,13 @@ pub(super) async fn message_react(
             None,
             Some(principal.project_id),
             message_id,
-            choice,
+            &arguments.emoji,
             reacted,
         )
         .await
         {
             Ok(outcome) => outcome,
+            Err(ReactionError::App(AppError::Validation("reaction"))) => return Ok(refused_emoji()),
             Err(ReactionError::App(AppError::NotFound(_))) => {
                 return Ok(ToolResult::not_found("That message"));
             }
@@ -173,7 +179,7 @@ pub(super) async fn message_react(
                 message_id,
                 serde_json::json!({
                     "conversation_id": conversation_id,
-                    "reaction": choice.name,
+                    "reaction": outcome.picked.name,
                 }),
             )
             .await?;
@@ -184,8 +190,8 @@ pub(super) async fn message_react(
         Ok::<_, AppError>(ToolResult::ok(MessageReactionValue {
             conversation_id: conversation_id.to_string(),
             message_id: message_id.to_string(),
-            emoji: choice.emoji.to_owned(),
-            name: choice.name.to_owned(),
+            emoji: outcome.picked.emoji.clone(),
+            name: outcome.picked.name.clone(),
             reacted,
             changed: outcome.changed,
             reactions: reaction_summaries(by_message.remove(&message_id).unwrap_or_default()),
@@ -224,6 +230,8 @@ mod tests {
             count: 12,
             by_viewer: true,
             actors,
+            custom_emoji_id: None,
+            image_url: None,
         }]);
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].count, 12);

@@ -573,10 +573,47 @@ fn options() -> &'static usvg::Options<'static> {
 /// Draws SVG as a PNG, scaled by `scale` but never wider or taller than
 /// `MAX_PNG_SIDE`. Returns the PNG and its pixel size.
 pub fn png(svg: &str, scale: f64) -> Result<(Vec<u8>, u32, u32), &'static str> {
+    let pixmap = draw(svg, scale)?;
+    let (width, height) = (pixmap.width(), pixmap.height());
+    let png = pixmap
+        .encode_png()
+        .map_err(|_| "the board couldn't be encoded")?;
+    Ok((png, width, height))
+}
+
+/// Draws SVG as straight (not premultiplied) RGBA pixels, row by row, for
+/// a document that embeds the picture itself (a page's PDF, C1.23).
+pub fn pixels(svg: &str, scale: f64) -> Result<(Vec<u8>, u32, u32), &'static str> {
+    pixels_within(svg, scale, MAX_PNG_SIDE)
+}
+
+/// Same as [`pixels`], with no side longer than `max_side`.
+pub fn pixels_within(
+    svg: &str,
+    scale: f64,
+    max_side: u32,
+) -> Result<(Vec<u8>, u32, u32), &'static str> {
+    let pixmap = draw_within(svg, scale, max_side.min(MAX_PNG_SIDE))?;
+    let rgba = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let color = pixel.demultiply();
+            [color.red(), color.green(), color.blue(), color.alpha()]
+        })
+        .collect();
+    Ok((rgba, pixmap.width(), pixmap.height()))
+}
+
+fn draw(svg: &str, scale: f64) -> Result<tiny_skia::Pixmap, &'static str> {
+    draw_within(svg, scale, MAX_PNG_SIDE)
+}
+
+fn draw_within(svg: &str, scale: f64, max_side: u32) -> Result<tiny_skia::Pixmap, &'static str> {
     let tree = usvg::Tree::from_str(svg, options()).map_err(|_| "the board couldn't be drawn")?;
     let size = tree.size();
     let largest = f64::from(size.width().max(size.height())).max(1.0);
-    let scale = scale.clamp(0.1, 4.0).min(f64::from(MAX_PNG_SIDE) / largest);
+    let scale = scale.clamp(0.1, 4.0).min(f64::from(max_side) / largest);
     let width = ((f64::from(size.width()) * scale).ceil() as u32).max(1);
     let height = ((f64::from(size.height()) * scale).ceil() as u32).max(1);
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or("the board is too big to draw")?;
@@ -585,10 +622,7 @@ pub fn png(svg: &str, scale: f64) -> Result<(Vec<u8>, u32, u32), &'static str> {
         tiny_skia::Transform::from_scale(scale as f32, scale as f32),
         &mut pixmap.as_mut(),
     );
-    let png = pixmap
-        .encode_png()
-        .map_err(|_| "the board couldn't be encoded")?;
-    Ok((png, width, height))
+    Ok(pixmap)
 }
 
 #[cfg(test)]

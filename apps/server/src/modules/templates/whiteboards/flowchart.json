@@ -1,0 +1,15 @@
+{
+  "title": "Flowchart",
+  "operations": [
+    {"op": "add", "type": "ellipse", "id": "start", "x": 0, "y": 0, "width": 180, "height": 80, "text": "Start"},
+    {"op": "add", "type": "rectangle", "id": "step", "x": 0, "y": 160, "width": 180, "height": 80, "text": "Do something"},
+    {"op": "add", "type": "diamond", "id": "check", "x": -10, "y": 320, "width": 200, "height": 120, "text": "OK?"},
+    {"op": "add", "type": "rectangle", "id": "fix", "x": 300, "y": 340, "width": 180, "height": 80, "text": "Fix it"},
+    {"op": "add", "type": "ellipse", "id": "end", "x": 0, "y": 520, "width": 180, "height": 80, "text": "End"},
+    {"op": "connect", "from": "start", "to": "step"},
+    {"op": "connect", "from": "step", "to": "check"},
+    {"op": "connect", "from": "check", "to": "end", "text": "Yes"},
+    {"op": "connect", "from": "check", "to": "fix", "text": "No"},
+    {"op": "connect", "from": "fix", "to": "step"}
+  ]
+}

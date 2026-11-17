@@ -1,25 +1,19 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 
-import { getProjectConversationSidebar, markConversationSeen } from '../conversations/sidebarApi'
-import type { SidebarChannel } from '../conversations/types'
-import { getDirectOverview } from '../direct/api'
+import { callOp } from '../api/ops'
 import { markAllRead } from './markAllRead'
 
-vi.mock('../conversations/sidebarApi', () => ({
-  getProjectConversationSidebar: vi.fn(),
-  markConversationSeen: vi.fn(),
-}))
-vi.mock('../direct/api', () => ({ getDirectOverview: vi.fn() }))
+vi.mock('../api/ops', () => ({ callOp: vi.fn(), newRequestId: () => 'request' }))
 
 beforeEach(() => vi.resetAllMocks())
 
-it('reports an expanded channel failure while marking the unread conversations it did fetch', async () => {
-  vi.mocked(getDirectOverview).mockResolvedValue({ conversations: [] } as unknown as Awaited<ReturnType<typeof getDirectOverview>>)
-  vi.mocked(getProjectConversationSidebar).mockResolvedValueOnce({
-    channels: [{ id: 'channel', highestSequence: 4, highestSeenSequence: 0, hasMoreThreads: true, threads: [] } as unknown as SidebarChannel],
-  } as Awaited<ReturnType<typeof getProjectConversationSidebar>>).mockRejectedValueOnce(new Error('Offline'))
-  vi.mocked(markConversationSeen).mockResolvedValue(undefined as unknown as Awaited<ReturnType<typeof markConversationSeen>>)
+it('asks each workspace until it has nothing more, and counts a workspace that fails', async () => {
+  vi.mocked(callOp)
+    .mockResolvedValueOnce({ marked: 500, more: true } as never)
+    .mockResolvedValueOnce({ marked: 3, more: false } as never)
+    .mockRejectedValueOnce(new Error('Offline'))
 
-  expect(await markAllRead(['project'])).toEqual({ marked: 1, failed: 1 })
-  expect(markConversationSeen).toHaveBeenCalledWith({ conversationId: 'channel', highestSeenSequence: 4 })
+  expect(await markAllRead(['one', 'one', 'two'])).toEqual({ marked: 503, failed: 1 })
+  expect(callOp).toHaveBeenCalledTimes(3)
+  expect(callOp).toHaveBeenCalledWith('conversations_mark_read', {}, { workspaceId: 'one', requestId: 'request' })
 })

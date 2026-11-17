@@ -548,3 +548,49 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
     assert_eq!(retry["value"]["idempotentReplay"], true, "{retry}");
     assert_eq!(retry["value"]["name"], "Journal");
 }
+
+/// C1.12: a change to a sheet's cells takes no lock on the project row, so a
+/// task update (which holds that row) and a long sheet write never wait on
+/// each other. Making a sheet still takes it, for its per-project checks.
+#[tokio::test]
+async fn sheet_cell_writes_do_not_wait_for_the_project_lock() {
+    let Some(setup) = setup("c1_12_sheet_lock").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let created = tool(
+        app,
+        &codex,
+        &session,
+        "sheet_write",
+        json!({"projectId": "WORK", "name": "Plan", "cells": [{"cell": "A1", "input": "1"}], "clientRequestId": "plan-1"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+
+    // Another writer holds the project row, as a task update does
+    // (`lock_membership`'s lock on it).
+    let mut holder = setup.pool.begin().await.expect("holder");
+    sqlx::query("SELECT id FROM projects WHERE id = $1::uuid FOR NO KEY UPDATE")
+        .bind(&work)
+        .execute(&mut *holder)
+        .await
+        .expect("hold the project row");
+    let cells = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        tool(
+            app,
+            &codex,
+            &session,
+            "sheet_write",
+            json!({"projectId": "WORK", "sheet": "Plan", "cells": [{"cell": "A2", "input": "=A1*2"}], "clientRequestId": "plan-2"}),
+        ),
+    )
+    .await
+    .expect("a cell write never waits for the project lock");
+    assert_eq!(cells["outcome"], "ok", "{cells}");
+    holder.rollback().await.expect("release");
+}

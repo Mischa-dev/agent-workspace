@@ -39,7 +39,9 @@ impl SpaceKind {
     /// switches: a space's own switches only narrow it further.
     pub const fn starting_modules(self) -> Option<&'static [&'static str]> {
         match self {
-            Self::Workspace => Some(&["pages", "whiteboards", "channels"]),
+            // Messages too: channels need it, and comments on the
+            // workspace's own boards and sheets belong to it.
+            Self::Workspace => Some(&["pages", "whiteboards", "channels", "messages"]),
             Self::Project | Self::Team | Self::Personal => None,
         }
     }

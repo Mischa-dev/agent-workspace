@@ -1,0 +1,17 @@
+{
+  "title": "User journey",
+  "operations": [
+    {"op": "add", "type": "rectangle", "id": "discover", "x": 0, "y": 0, "width": 200, "height": 90, "rounded": true, "text": "Discover"},
+    {"op": "add", "type": "rectangle", "id": "sign-up", "x": 280, "y": 0, "width": 200, "height": 90, "rounded": true, "text": "Sign up"},
+    {"op": "add", "type": "rectangle", "id": "first-use", "x": 560, "y": 0, "width": 200, "height": 90, "rounded": true, "text": "First use"},
+    {"op": "add", "type": "rectangle", "id": "habit", "x": 840, "y": 0, "width": 200, "height": 90, "rounded": true, "text": "Habit"},
+    {"op": "add", "type": "rectangle", "id": "advocate", "x": 1120, "y": 0, "width": 200, "height": 90, "rounded": true, "text": "Recommend"},
+    {"op": "connect", "from": "discover", "to": "sign-up"},
+    {"op": "connect", "from": "sign-up", "to": "first-use"},
+    {"op": "connect", "from": "first-use", "to": "habit"},
+    {"op": "connect", "from": "habit", "to": "advocate"},
+    {"op": "add", "type": "text", "id": "doing", "x": -160, "y": 150, "text": "Doing"},
+    {"op": "add", "type": "text", "id": "feeling", "x": -160, "y": 250, "text": "Feeling"},
+    {"op": "add", "type": "text", "id": "chances", "x": -160, "y": 350, "text": "Chances"}
+  ]
+}

@@ -535,7 +535,7 @@ struct HandleRow {
 
 /// Turn plain text into message content, making each `@handle` of someone in
 /// the Project a real mention so they're notified.
-pub(super) async fn content_from_text(
+pub(crate) async fn content_from_text(
     state: &AppState,
     project_id: Uuid,
     text: &str,

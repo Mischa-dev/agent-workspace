@@ -99,6 +99,8 @@ pub(crate) struct World {
     pub(crate) task_file: Uuid,
     /// The link preview `file_message` shows, made ready by the test.
     pub(crate) link_preview: Uuid,
+    /// The workspace's own emoji (C2.19), added by `rook`.
+    pub(crate) custom_emoji: Uuid,
     /// A built module (M1.6) in the project, holding nothing.
     pub(crate) module: Uuid,
     /// A package install (M1.9) in the project, that made nothing.
@@ -1603,6 +1605,20 @@ async fn build_workspace(
         .fetch_one(pool)
         .await
         .expect("workspace slug");
+    let custom_emoji = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id)
+        VALUES ($1, $2, 'world_emoji', 'image/png', $3, $4)
+        "#,
+    )
+    .bind(custom_emoji)
+    .bind(organization)
+    .bind(tiny_png())
+    .bind(rook)
+    .execute(pool)
+    .await
+    .expect("custom emoji");
     let module = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -1690,6 +1706,7 @@ async fn build_workspace(
         file_message,
         task_file,
         link_preview,
+        custom_emoji,
         module,
         package_install,
     }
