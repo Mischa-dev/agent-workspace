@@ -267,8 +267,32 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
                 .expect("run state")
         }
     };
+    // The stop is a job queued with the suspension, not part of it.
+    let queued = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM background_jobs WHERE kind = $1 AND state = 'queued' \
+         AND payload->>'workspace' = $2",
+    )
+    .bind(lifecycle::STOP_RUNS_JOB_KIND)
+    .bind(a.organization.to_string())
+    .fetch_one(&t.pool)
+    .await
+    .expect("stop job");
+    assert_eq!(queued, 1);
+    assert_eq!(
+        lifecycle::stop_runs(&t.state, a.organization)
+            .await
+            .expect("stop runs"),
+        1
+    );
     assert_eq!(run_state(a.run).await, "interrupted");
     assert_eq!(run_state(b.run).await, "blocked");
+    // B is open, so its stop (were one queued) leaves its run alone.
+    assert_eq!(
+        lifecycle::stop_runs(&t.state, b.organization)
+            .await
+            .expect("stop runs"),
+        0
+    );
     // Answering the approval anyway is refused for the workspace's state.
     let (status, body) = send(
         &t.app,

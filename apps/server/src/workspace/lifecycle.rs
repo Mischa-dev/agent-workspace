@@ -40,6 +40,9 @@ pub const DELETION_GRACE_DAYS: i64 = 14;
 /// The job that deletes a workspace once its grace period is over.
 pub const DELETE_JOB_KIND: &str = "workspace.delete";
 
+/// The job that stops a closed workspace's runs, after the change commits.
+pub const STOP_RUNS_JOB_KIND: &str = "workspace.stop_runs";
+
 /// The calls a workspace that is deleting still answers.
 // Asking again answers with the schedule it has, so a retried request
 // (its response lost) still succeeds.
@@ -543,9 +546,9 @@ pub async fn suspend(
     .bind(reason.key())
     .execute(&mut *connection)
     .await?;
-    // Nothing keeps running in a suspended workspace: its runs stop now,
-    // and their drivers stop the harnesses' turns.
-    crate::api::interrupt_workspace_runs(connection, workspace, "workspace_suspended").await?;
+    // Nothing keeps running in a suspended workspace: its runs stop once
+    // this commits, and their drivers stop the harnesses' turns.
+    stop_runs_after_commit(connection, workspace).await?;
     announce(connection, workspace, Lifecycle::Suspended).await
 }
 
@@ -631,9 +634,59 @@ pub async fn request_deletion(
     )
     .await?;
     // A workspace being deleted takes no work, so its runs stop too.
-    crate::api::interrupt_workspace_runs(connection, workspace, "workspace_deleting").await?;
+    stop_runs_after_commit(connection, workspace).await?;
     announce(connection, workspace, Lifecycle::Deleting).await?;
     Ok(delete_after)
+}
+
+/// Queue the stop of `workspace`'s runs. Not inside the closing
+/// transaction: it holds the workspace's row, and stopping a run writes to
+/// its thread, which a run start locks before it asks whether the
+/// workspace is open. Once this commits no run starts there, and the job
+/// stops the ones already going. A server job, as the deletion is.
+async fn stop_runs_after_commit(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+) -> Result<(), AppError> {
+    crate::jobs::enqueue(
+        &mut *connection,
+        NewJob::new(STOP_RUNS_JOB_KIND)
+            .payload(StopRunsPayload { workspace })
+            .unique(format!("{STOP_RUNS_JOB_KIND}:{workspace}"))
+            .max_attempts(20),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Stop every unfinished run in `workspace` while it is suspended or being
+/// deleted; a workspace that opened again keeps its runs. How many stopped.
+pub async fn stop_runs(state: &AppState, workspace: Uuid) -> Result<usize, AppError> {
+    tenancy::scoped(
+        Tenancy::Workspace {
+            account: None,
+            workspace,
+        },
+        async {
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+            let lifecycle = sqlx::query_scalar::<_, String>(
+                "SELECT lifecycle FROM organizations WHERE id = $1",
+            )
+            .bind(workspace)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            let why = match lifecycle.as_deref().map(Lifecycle::parse).transpose()? {
+                Some(Lifecycle::Suspended) => "workspace_suspended",
+                Some(Lifecycle::Deleting) => "workspace_deleting",
+                _ => return Ok(0),
+            };
+            let stopped =
+                crate::api::interrupt_workspace_runs(&mut transaction, workspace, why).await?;
+            transaction.commit().await?;
+            Ok::<_, AppError>(stopped)
+        },
+    )
+    .await
 }
 
 /// Keep a workspace that was going to be deleted.
@@ -685,7 +738,20 @@ struct DeletePayload {
     workspace: Uuid,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StopRunsPayload {
+    workspace: Uuid,
+}
+
 pub fn register_jobs(registry: &mut JobRegistry) {
+    registry.register(STOP_RUNS_JOB_KIND, |context| async move {
+        let payload = context.job.payload_as::<StopRunsPayload>()?;
+        stop_runs(&context.state, payload.workspace)
+            .await
+            .map_err(JobError::from)?;
+        Ok(())
+    });
     registry.register_with_timeout(
         DELETE_JOB_KIND,
         std::time::Duration::from_secs(60 * 60),

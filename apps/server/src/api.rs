@@ -1483,7 +1483,8 @@ async fn interrupt_run_unchecked(
 
 /// Interrupt every run in `workspace` that hasn't finished (H1.24): a
 /// suspended workspace, or one being deleted, runs nothing. Inside the
-/// caller's transaction, which holds the workspace's row.
+/// caller's transaction, which must not hold the workspace's row: stopping
+/// a run writes to its thread, which run starts lock before the workspace.
 pub(crate) async fn interrupt_workspace_runs(
     connection: &mut sqlx::PgConnection,
     workspace: Uuid,
