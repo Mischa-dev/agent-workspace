@@ -459,7 +459,7 @@ done
     assert_eq!(
         recovery::reconcile_non_terminal_runs(&state)
             .await
-            .expect("release queued scheduler lease without recovering the run"),
+            .expect("leave a queued run alone"),
         0
     );
     let (queued_state, queued_claim) = sqlx::query_as::<_, (String, Option<Uuid>)>(
@@ -470,7 +470,9 @@ done
     .await
     .expect("read queued restart result");
     assert_eq!(queued_state, "queued");
-    assert!(queued_claim.is_none());
+    // K5.3: a live claim belongs to whoever holds it; a lapsed one is
+    // cleared by the next claim, not by recovery.
+    assert_eq!(queued_claim, Some(scheduler_claim_id));
 
     drop(state);
     pool.close().await;

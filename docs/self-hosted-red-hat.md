@@ -259,6 +259,20 @@ from requests and has no per-address limits, only per-name, per-token and
 shared ones; set it only when every request reaches the server through that
 proxy, or callers could name any address they like.
 
+Request limits (sign-in, resets, writes, MCP requests and the rest) are
+counted in PostgreSQL, in the unlogged table `rate_limit_counters`, so every
+server process spends from the same budgets and a restart or deploy doesn't
+reset them; a database crash or failover does. If the counters can't be
+reached, security limits (sign-in, resets, tokens) refuse and throughput
+limits allow, and both log a warning.
+
+The server works through a transaction-mode connection pooler (such as
+PgBouncer in transaction mode) in front of PostgreSQL: it sets nothing on a
+session and holds no session locks. Behind one, set
+`AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE=0`, and point
+`AGENT_WORKSPACE_DATABASE_LISTEN_URL` straight at PostgreSQL (or set it to
+`off` to run on polls alone), since a pooler can't hold a `LISTEN`.
+
 GitHub App settings are optional and must be installed as separate owner-only
 files before adding their paths to this environment. Never print those files.
 

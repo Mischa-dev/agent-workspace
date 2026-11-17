@@ -29,6 +29,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/organizations/{organization_id}/modules",
             get(read_modules).put(change_modules),
         )
+        .route("/api/v1/things/{id}", get(open_thing_by_id))
         .route("/api/v1/things/{kind}/{id}", get(open_thing))
 }
 
@@ -195,7 +196,7 @@ async fn change_modules(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ChangeRequest>,
 ) -> Result<Json<ModulesResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let metadata = change_modules_in(
         &mut transaction,
@@ -394,7 +395,31 @@ async fn open_thing(
     principal: AuthenticatedActor,
     ApiPath((kind, id)): ApiPath<(String, Uuid)>,
 ) -> Result<Json<ThingResponse>, AppError> {
-    if !things::KINDS.contains(&kind.as_str()) {
+    open(&state, &principal, &kind, id).await
+}
+
+/// `GET /api/v1/things/{id}`: the same, finding the kind in the registry.
+async fn open_thing_by_id(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(id): ApiPath<Uuid>,
+) -> Result<Json<ThingResponse>, AppError> {
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
+    let located = crate::things::locate(&mut connection, id)
+        .await?
+        .filter(|located| !located.deleted)
+        .ok_or(AppError::NotFound("thing"))?;
+    drop(connection);
+    open(&state, &principal, located.kind.as_str(), id).await
+}
+
+async fn open(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    kind: &str,
+    id: Uuid,
+) -> Result<Json<ThingResponse>, AppError> {
+    if !things::KINDS.contains(&kind) {
         return Err(AppError::NotFound("thing"));
     }
     let projects = crate::search::browser_projects(&state.pool, principal.actor_id).await?;
@@ -411,7 +436,7 @@ async fn open_thing(
         workspaces: &workspaces,
         workspace_boards: true,
     };
-    let thing = things::get(&mut connection, &viewer, &kind, id)
+    let thing = things::get(&mut connection, &viewer, kind, id)
         .await?
         .ok_or(AppError::NotFound("thing"))?;
     // The thing and its links follow its own project's modules (the person's
@@ -425,7 +450,7 @@ async fn open_thing(
         },
         None => viewer,
     };
-    let thing = things::get(&mut connection, &viewer, &kind, id)
+    let thing = things::get(&mut connection, &viewer, kind, id)
         .await?
         .ok_or(AppError::NotFound("thing"))?;
     let links = things::links(&mut connection, &viewer, &thing).await?;

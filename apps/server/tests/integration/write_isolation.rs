@@ -467,6 +467,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_delete",
     "file_upload",
     "github_integration_write",
+    "history_restore",
     "host_agent_bind",
     "host_agent_unbind",
     "host_enrolment_create",
@@ -2703,7 +2704,13 @@ pub(super) async fn digest_ignoring(
     pattern: &str,
     ignored: &[&str],
 ) -> BTreeMap<String, BTreeSet<String>> {
-    let tables = sqlx::query_scalar::<_, String>(
+    let tables = base_tables(pool).await;
+    digest_tables(pool, pattern, ignored, &tables).await
+}
+
+/// Every table in the schema (partitions and their parents included).
+async fn base_tables(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(
         r#"
         SELECT table_name::text FROM information_schema.tables
         WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
@@ -2712,7 +2719,16 @@ pub(super) async fn digest_ignoring(
     )
     .fetch_all(pool)
     .await
-    .expect("tables");
+    .expect("tables")
+}
+
+/// [`digest_ignoring`] over the named tables only.
+pub(super) async fn digest_tables(
+    pool: &PgPool,
+    pattern: &str,
+    ignored: &[&str],
+    tables: &[String],
+) -> BTreeMap<String, BTreeSet<String>> {
     let mut rows = BTreeMap::new();
     for table in tables {
         let found = sqlx::query_scalar::<_, String>(&format!(
@@ -2724,10 +2740,65 @@ pub(super) async fn digest_ignoring(
         .await
         .unwrap_or_else(|error| panic!("digest {table}: {error}"));
         if !found.is_empty() {
-            rows.insert(table, found.into_iter().collect::<BTreeSet<_>>());
+            rows.insert(table.clone(), found.into_iter().collect::<BTreeSet<_>>());
         }
     }
     rows
+}
+
+/// A cheap fingerprint of every table: its row count and the sum of its
+/// rows' inserting transaction ids. Any insert, update or delete moves it,
+/// so after a call only the tables whose fingerprint moved need
+/// [`digest_tables`] again: the full digest matches every row of every table
+/// against hundreds of IDs and is far too slow to repeat after each of
+/// hundreds of calls.
+pub(super) async fn table_fingerprints(pool: &PgPool) -> BTreeMap<String, String> {
+    let tables = base_tables(pool).await;
+    let query = tables
+        .iter()
+        .map(|table| {
+            format!(
+                r#"SELECT '{table}'::text, count(*)::text || ':' || coalesce(sum(xmin::text::numeric), 0)::text FROM "{table}""#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+    sqlx::query_as::<_, (String, String)>(&query)
+        .fetch_all(pool)
+        .await
+        .expect("table fingerprints")
+        .into_iter()
+        .collect()
+}
+
+/// Bring `rows` (a digest taken when the tables matched `fingerprints`) up
+/// to date: digest again only the tables whose fingerprint moved, and
+/// return the new fingerprints.
+pub(super) async fn refresh_digest(
+    pool: &PgPool,
+    pattern: &str,
+    ignored: &[&str],
+    fingerprints: &BTreeMap<String, String>,
+    rows: &mut BTreeMap<String, BTreeSet<String>>,
+) -> BTreeMap<String, String> {
+    let now = table_fingerprints(pool).await;
+    let moved = now
+        .iter()
+        .filter(|(table, print)| fingerprints.get(*table) != Some(*print))
+        .map(|(table, _)| table.clone())
+        .chain(
+            fingerprints
+                .keys()
+                .filter(|table| !now.contains_key(*table))
+                .cloned(),
+        )
+        .collect::<Vec<_>>();
+    let refreshed = digest_tables(pool, pattern, ignored, &moved).await;
+    for table in &moved {
+        rows.remove(table);
+    }
+    rows.extend(refreshed);
+    now
 }
 
 /// What changed between two digests, one line per row.
@@ -6813,6 +6884,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": b.task}),
             json!({"whiteboardId": a.whiteboard, "targetKind": "page", "targetId": b.page}),
         ]),
+        // K3.19: restoring any thing's version, by id alone.
+        mcp_case(
+            "history_restore",
+            json!({"thing": a.page, "version": 1, "expectedVersion": version("project_pages", &a.page)}),
+            vec![json!({"thing": b.page, "version": 1, "expectedVersion": 1})],
+        ),
         // Decisions and planning
         mcp_case(
             "decision_record",

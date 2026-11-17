@@ -208,7 +208,7 @@ async fn set_email_http(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<SetEmailRequest>,
 ) -> Result<Json<EmailView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let address =
         mail::normalize_address(&request.address).ok_or(AppError::Validation("address"))?;
     if !mail_available_for(&state, principal.actor_id).await? {
@@ -267,7 +267,7 @@ async fn remove_email_http(
     headers: HeaderMap,
     principal: AuthenticatedActor,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("DELETE FROM user_email_addresses WHERE user_id = $1")
         .bind(principal.user_id)
@@ -296,7 +296,7 @@ async fn resend_http(
     principal: AuthenticatedActor,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<EmailView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = sqlx::query_as::<_, AddressRow>(
         "SELECT address, verified_at, verification_sent_at FROM user_email_addresses WHERE user_id = $1 FOR UPDATE",
@@ -409,10 +409,10 @@ async fn verify_http(
 ) -> Result<Json<VerifiedResponse>, AppError> {
     require_allowed_origin(&state.config, &headers)?;
     if !well_formed(&request.token, VERIFY_PREFIX) {
-        state.rate_limits.note_invitation_failure();
+        state.rate_limits.note_invitation_failure().await;
         return Err(AppError::NotFound("confirmation link"));
     }
-    state.rate_limits.check_invitation(&request.token)?;
+    state.rate_limits.check_invitation(&request.token).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
         r#"
@@ -429,7 +429,8 @@ async fn verify_http(
     .await?;
     let row = state
         .rate_limits
-        .charge_link_miss(row.ok_or(AppError::NotFound("confirmation link")))?;
+        .charge_link_miss(row.ok_or(AppError::NotFound("confirmation link")))
+        .await?;
     let (user_id, actor_id, address) = row;
     let taken = sqlx::query_scalar::<_, bool>(
         r#"
@@ -530,10 +531,13 @@ async fn request_reset_http(
     // The same answer for every well-formed request; who exists is looked
     // up later, in the job.
     if let Some(login) = normalize_reset_key(&request.login) {
-        state.rate_limits.check_password_reset(
-            crate::rate_limit::client_address(&state.config, &headers),
-            &login,
-        )?;
+        state
+            .rate_limits
+            .check_password_reset(
+                crate::rate_limit::client_address(&state.config, &headers),
+                &login,
+            )
+            .await?;
         jobs::enqueue(
             &state.pool,
             NewJob::new(RESET_KIND)
@@ -611,7 +615,7 @@ async fn send_reset(state: &AppState, login: &str) -> Result<(), JobError> {
     }
     // The whole server's reset emails have a ceiling too; only real sends
     // spend it, so requests for made-up accounts can't hold anyone's back.
-    if let Err(seconds) = state.rate_limits.check_reset_email() {
+    if let Err(seconds) = state.rate_limits.check_reset_email(&mut transaction).await {
         return Err(JobError::retry(format!(
             "too many reset emails right now; trying again in {seconds} s"
         )));
@@ -739,11 +743,12 @@ async fn inspect_reset_http(
     ApiJson(request): ApiJson<TokenRequest>,
 ) -> Result<Json<ResetInspection>, AppError> {
     require_allowed_origin(&state.config, &headers)?;
-    state.rate_limits.check_invitation(&request.token)?;
+    state.rate_limits.check_invitation(&request.token).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let reset = state
         .rate_limits
-        .charge_link_miss(live_reset(&mut transaction, &request.token).await)?;
+        .charge_link_miss(live_reset(&mut transaction, &request.token).await)
+        .await?;
     let two_factor_required =
         crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await?;
     transaction.commit().await?;
@@ -783,7 +788,7 @@ async fn complete_reset_http(
     ApiJson(mut request): ApiJson<CompleteRequest>,
 ) -> Result<StatusCode, AppError> {
     require_allowed_origin(&state.config, &headers)?;
-    state.rate_limits.check_invitation(&request.token)?;
+    state.rate_limits.check_invitation(&request.token).await?;
     if !(12..=1024).contains(&request.new_password.len()) {
         return Err(AppError::Validation("new password"));
     }
@@ -792,7 +797,8 @@ async fn complete_reset_http(
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         state
             .rate_limits
-            .charge_link_miss(live_reset(&mut transaction, &request.token).await)?;
+            .charge_link_miss(live_reset(&mut transaction, &request.token).await)
+            .await?;
         transaction.rollback().await?;
     }
     let new_phc = {
@@ -802,7 +808,8 @@ async fn complete_reset_http(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let reset = state
         .rate_limits
-        .charge_link_miss(live_reset(&mut transaction, &request.token).await)?;
+        .charge_link_miss(live_reset(&mut transaction, &request.token).await)
+        .await?;
     if crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await? {
         let code = request.code.as_deref().map(str::trim).unwrap_or_default();
         let factor = crate::account_security::load_factor(&mut transaction, reset.user_id)
@@ -892,7 +899,7 @@ async fn complete_reset_http(
     .await?;
     transaction.commit().await?;
     for session_id in revoked {
-        state.realtime.revoke_session(session_id);
+        crate::realtime::ephemeral::revoke_session(&state, session_id).await;
         crate::auth::workos::revoke_provider_session(&state, session_id).await;
     }
     Ok(StatusCode::NO_CONTENT)

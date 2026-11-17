@@ -57,7 +57,7 @@ async fn limits_belong_to_an_address_or_a_workspace_not_the_server() {
     config.client_address_header = Some(ADDRESS_HEADER.to_owned());
     let state = AppState {
         config: Arc::new(config),
-        rate_limits: RateLimiters::default().with_workspace_calls_per_window(3),
+        rate_limits: RateLimiters::with_workspace_calls_per_window(3),
         ..t.state.clone()
     };
     let app = router(state);
@@ -93,6 +93,13 @@ async fn limits_belong_to_an_address_or_a_workspace_not_the_server() {
 
     // A's agents get three calls this minute; then A is refused, B isn't.
     let a_session = initialize(&app, &t.a.agent_token).await.expect("A's agent");
+    let b_session = initialize(&app, &t.b.agent_token).await.expect("B's agent");
+    // The counters are shared (K5.6), so the setup's own calls count too:
+    // start both workspaces' minutes afresh.
+    sqlx::query("DELETE FROM rate_limit_counters WHERE bucket = 'workspace.calls'")
+        .execute(&t.state.pool)
+        .await
+        .expect("fresh workspace budgets");
     for call in 0..3 {
         let (status, body) =
             call_tool(&app, &t.a.agent_token, &a_session, "task_list", json!({})).await;
@@ -107,7 +114,6 @@ async fn limits_belong_to_an_address_or_a_workspace_not_the_server() {
         result["code"] == "rate_limited" || result["outcome"] == "rate_limited",
         "A's fourth call: {body}"
     );
-    let b_session = initialize(&app, &t.b.agent_token).await.expect("B's agent");
     let (status, body) =
         call_tool(&app, &t.b.agent_token, &b_session, "task_list", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{body}");

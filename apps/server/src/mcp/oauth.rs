@@ -150,6 +150,7 @@ async fn register_client(
     state
         .rate_limits
         .check_oauth_registration_sender(crate::rate_limit::client_address(&state.config, &headers))
+        .await
         .map_err(OAuthError::from)?;
     state
         .rate_limits
@@ -157,6 +158,7 @@ async fn register_client(
             crate::rate_limit::client_address(&state.config, &headers),
             &request.client_name,
         )
+        .await
         .map_err(OAuthError::from)?;
     request.client_name = clean_client_name(&request.client_name);
     validate_client_name(&request.client_name)?;
@@ -329,6 +331,7 @@ async fn authorize(
             crate::rate_limit::client_address(&state.config, &headers),
             &request.client_id,
         )
+        .await
         .map_err(OAuthError::from)?;
     let (client, scopes) = validate_authorize_request(&state, &request).await?;
     let principal = match principal {
@@ -466,6 +469,7 @@ async fn consent(
             crate::rate_limit::client_address(&state.config, &headers),
             &form.client_id,
         )
+        .await
         .map_err(OAuthError::from)?;
     let header = HeaderValue::from_str(&form.csrf_token)
         .map_err(|_| OAuthError::access_denied("invalid CSRF state"))?;
@@ -633,10 +637,12 @@ async fn token(
         state
             .rate_limits
             .check_oauth_refresh_sender(address, &request.client_id)
+            .await
     } else {
         state
             .rate_limits
             .check_oauth_ceremony(address, &request.client_id)
+            .await
     };
     if let Err(error) = budget {
         tracing::warn!(
@@ -654,7 +660,8 @@ async fn token(
         Ok(response) => {
             state
                 .rate_limits
-                .note_oauth_client_success(&request.client_id);
+                .note_oauth_client_success(&request.client_id)
+                .await;
             response
         }
         Err(error) => {
@@ -664,7 +671,8 @@ async fn token(
             {
                 state
                     .rate_limits
-                    .note_oauth_refresh_failure(address, &request.client_id);
+                    .note_oauth_refresh_failure(address, &request.client_id)
+                    .await;
             }
             // A refused refresh is what drops a connected app's tools, so say
             // why. Only the static reason is logged, never the request.
@@ -946,7 +954,8 @@ async fn refresh(state: &AppState, request: &TokenRequest) -> Result<TokenRespon
     // its app's budget. Refused here, nothing is rotated.
     state
         .rate_limits
-        .check_oauth_refresh(&row.client_id.to_string())?;
+        .check_oauth_refresh_on(&mut transaction, &row.client_id.to_string())
+        .await?;
     let retired_seconds = row
         .used_at
         .map(|used_at| (chrono::Utc::now() - used_at).num_seconds());
@@ -1078,6 +1087,7 @@ async fn revoke(
             crate::rate_limit::client_address(&state.config, &headers),
             &request.client_id,
         )
+        .await
         .map_err(OAuthError::from)?;
     let client_id = parse_client_id(&request.client_id)?;
     if request.token.len() > MAX_TOKEN {

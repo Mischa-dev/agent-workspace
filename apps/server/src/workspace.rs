@@ -425,7 +425,7 @@ async fn rename_workspace(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<RenameRequest>,
 ) -> Result<Json<WorkspaceView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (role, renamed) = rename_workspace_in(
         &mut transaction,
@@ -725,7 +725,7 @@ async fn update_member(
     ApiPath((organization_id, actor_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<UpdateMemberRequest>,
 ) -> Result<Json<MemberView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let next_role = match request.role.as_deref() {
         None => None,
         Some("admin") => Some("admin"),
@@ -987,7 +987,7 @@ async fn transfer_ownership(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<TransferRequest>,
 ) -> Result<Json<WorkspaceView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.actor_id == principal.actor_id {
         return Err(AppError::Validation("new owner"));
     }
@@ -1047,7 +1047,7 @@ async fn leave_workspace(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_workspace_memberships(&mut transaction, organization_id).await?;
     let role = caller_role(&mut transaction, &principal, organization_id, true).await?;
@@ -1233,7 +1233,7 @@ async fn issue_invitation(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<IssueRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let issued = issue_workspace_invitation_in(
         &mut transaction,
@@ -1401,7 +1401,7 @@ async fn revoke_invitation(
     ApiPath(invitation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<RevokeRequest>,
 ) -> Result<Json<InvitationView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (organization_id, role) = revoke_workspace_invitation_in(
         &mut transaction,
@@ -1531,7 +1531,10 @@ fn valid_invitation_sql(lock: bool) -> String {
 
 /// Check a token's shape and rate limit, then forget it. Returns its lookup
 /// prefix and digest.
-fn consume_token(token: &mut String, state: &AppState) -> Result<(String, [u8; 32]), AppError> {
+async fn consume_token(
+    token: &mut String,
+    state: &AppState,
+) -> Result<(String, [u8; 32]), AppError> {
     let valid = token.len() == 50
         && token.starts_with(TOKEN_PREFIX)
         && token
@@ -1545,11 +1548,11 @@ fn consume_token(token: &mut String, state: &AppState) -> Result<(String, [u8; 3
     });
     token.zeroize();
     let Some((prefix, digest)) = result else {
-        state.rate_limits.check_invitation("invalid")?;
-        state.rate_limits.note_invitation_failure();
+        state.rate_limits.check_invitation("invalid").await?;
+        state.rate_limits.note_invitation_failure().await;
         return Err(AppError::NotFound("workspace_invitation"));
     };
-    state.rate_limits.check_invitation(&prefix)?;
+    state.rate_limits.check_invitation(&prefix).await?;
     Ok((prefix, digest))
 }
 
@@ -1591,11 +1594,12 @@ async fn resolve_invitation(
 ) -> Result<Json<ResolvedInvitation>, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
     require_allowed_origin(&state.config, &headers)?;
-    let (prefix, digest) = consume_token(&mut token, &state)?;
+    let (prefix, digest) = consume_token(&mut token, &state).await?;
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let row = state
         .rate_limits
-        .charge_link_miss(find_invitation(&mut connection, &prefix, &digest, false).await)?;
+        .charge_link_miss(find_invitation(&mut connection, &prefix, &digest, false).await)
+        .await?;
     Ok(Json(ResolvedInvitation {
         organization_name: row.organization_name,
         role: row.role,
@@ -1772,7 +1776,7 @@ async fn accept_new_user(
             "signed-in users must accept with their existing identity",
         ));
     }
-    let (prefix, digest) = consume_token(&mut token, &state)?;
+    let (prefix, digest) = consume_token(&mut token, &state).await?;
     let login_name = normalize_login_name(&request.login_name)
         .map_err(|_| AppError::Validation("login name"))?;
     let display_name = normalize_display_name(&request.display_name)?;
@@ -1786,7 +1790,8 @@ async fn accept_new_user(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let invitation = state
         .rate_limits
-        .charge_link_miss(find_invitation(&mut transaction, &prefix, &digest, true).await)?;
+        .charge_link_miss(find_invitation(&mut transaction, &prefix, &digest, true).await)
+        .await?;
     let actor_id = Uuid::now_v7();
     let user_id = Uuid::now_v7();
     sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
@@ -1859,13 +1864,14 @@ async fn accept_existing_user(
     ApiJson(mut request): ApiJson<AcceptExistingRequest>,
 ) -> Result<Response, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
-    require_authenticated_write(&state, &headers, &principal)?;
-    let (prefix, digest) = consume_token(&mut token, &state)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
+    let (prefix, digest) = consume_token(&mut token, &state).await?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let invitation = state
         .rate_limits
-        .charge_link_miss(find_invitation(&mut transaction, &prefix, &digest, true).await)?;
+        .charge_link_miss(find_invitation(&mut transaction, &prefix, &digest, true).await)
+        .await?;
     let epoch = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT user_account.authentication_epoch
@@ -1986,7 +1992,7 @@ async fn set_default_workspace(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<DefaultWorkspaceRequest>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     caller_role(&mut transaction, &principal, request.organization_id, true).await?;
     sqlx::query("UPDATE users SET default_organization_id = $2, updated_at = now() WHERE id = $1")

@@ -774,7 +774,7 @@ pub(super) async fn project_create(
         // H1.1: an account-wide app skipped the workspace budget at the
         // gate; the call is charged here, once its workspace is known.
         if principal.account_wide && !principal.project_explicit {
-            state.rate_limits.check_workspace_call(organization_id)?;
+            state.rate_limits.check_workspace_call(organization_id).await?;
         }
         let reservation = match reserve_create(
             &mut transaction,

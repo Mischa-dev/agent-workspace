@@ -21,7 +21,7 @@ const LEGACY_RUN_SQL: &[(&str, &str)] = &[
     ("automations.rs", "A1.6"),
     ("conversations.rs", "A1.6"),
     ("domain.rs", "A1.14"),
-    ("events.rs", "A1.6"),
+    ("events/route.rs", "A1.6"),
     ("external_events.rs", "A1.6"),
     ("external_execution.rs", "A1.10"),
     ("github.rs", "A1.19"),

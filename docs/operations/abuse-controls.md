@@ -56,8 +56,8 @@ A refused call answers 429 (or, from an MCP tool, `rate_limited` with
 | `AGENT_WORKSPACE_WORKSPACE_CALLS_PER_MINUTE` | 3000 | MCP and public API calls per workspace per minute. |
 | `AGENT_WORKSPACE_OAUTH_MAX_UNCLAIMED_CLIENTS` | 1024 | Apps that registered but never finished connecting, before new registrations are refused. |
 
-The limits are counted in each server process today. K5's shared store
-takes the same keys and scopes, so several processes then share one count.
+The limits are counted in PostgreSQL (K5.6, `rate_limit_counters`), so every
+server process spends from the same budget and a restart forgets nothing.
 
 ## Suspending a workspace (H1.24)
 

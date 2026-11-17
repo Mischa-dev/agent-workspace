@@ -117,7 +117,7 @@ pub(super) async fn move_to_project(
     ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(body): ApiJson<MoveBody>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let key = IdempotencyKey::from_headers(&headers)?;
     let mover = mover(&headers, &principal, project_id, body.target_project_id)?;
     let request = MoveRequest {

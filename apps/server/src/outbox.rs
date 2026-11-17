@@ -298,6 +298,31 @@ pub struct SheetUpdatedPayload {
     pub revision: i64,
 }
 
+/// Every outbox event type; each has a catalogue entry naming it as a
+/// legacy name (`events::catalog`).
+pub const LEGACY_EVENT_TYPES: &[&str] = &[
+    "conversation.created",
+    "conversation.updated",
+    "conversation.reply_requests.updated",
+    "conversation.archived",
+    "conversation.message.created",
+    "conversation.message.updated",
+    "conversation.message.reactions.updated",
+    "conversation.read_state.updated",
+    "conversation.member.removed",
+    "conversation.agent_run.updated",
+    "work_item.updated",
+    "project.membership.updated",
+    "project.modules.updated",
+    "notifications.updated",
+    "account.managers.changed",
+    "whiteboard.updated",
+    "page.updated",
+    "page.discussion.updated",
+    "collection.updated",
+    "sheet.updated",
+];
+
 /// The most modules one `project.modules.updated` names.
 pub const MAX_MODULE_EVENT_SWITCHES: usize = 200;
 
@@ -606,7 +631,10 @@ impl OutboxEventPayload {
         Ok(value)
     }
 
-    fn from_json(event_type: &str, value: serde_json::Value) -> Result<Self, OutboxEventError> {
+    pub(crate) fn from_json(
+        event_type: &str,
+        value: serde_json::Value,
+    ) -> Result<Self, OutboxEventError> {
         validate_payload_size(&value)?;
         let payload = match event_type {
             "conversation.created" => Self::ConversationCreated(
@@ -743,6 +771,32 @@ pub struct OutboxEnvelope {
     pub payload: serde_json::Value,
 }
 
+impl OutboxEnvelope {
+    /// Protocol 1's frame for a logged event (K5.5): the outbox event the log
+    /// mirrored, with the same id, rebuilt from the log on every instance's
+    /// tail. The cursor is the event's position. None for an event that
+    /// never was an outbox event (it has no `legacy_type`) or doesn't decode.
+    pub fn from_logged(event: &crate::events::LoggedEvent) -> Option<Self> {
+        let event_type = event.legacy_type.as_deref()?;
+        let project_id = event.space_id?;
+        let decoded = OutboxEventPayload::from_json(event_type, event.payload.clone()).ok()?;
+        Some(Self {
+            event_id: event.id,
+            event_cursor: event.position,
+            version: OUTBOX_SCHEMA_VERSION,
+            project_id,
+            conversation_id: decoded.conversation_id(),
+            recipient_actor_id: decoded.recipient_actor_id(),
+            event_type: event_type.to_owned(),
+            occurred_at: event
+                .created_at
+                .format("%Y-%m-%dT%H:%M:%S%.6fZ")
+                .to_string(),
+            payload: decoded.to_json().ok()?,
+        })
+    }
+}
+
 #[derive(Clone, FromRow)]
 pub struct ClaimedOutboxEvent {
     event_id: Uuid,
@@ -770,6 +824,11 @@ impl ClaimedOutboxEvent {
 
     pub fn project_id(&self) -> Uuid {
         self.project_id
+    }
+
+    /// The stored payload, as written.
+    pub fn payload_json(&self) -> &serde_json::Value {
+        &self.payload
     }
 
     pub fn attempt_count(&self) -> i32 {
@@ -898,6 +957,15 @@ pub async fn enqueue_on(
     .bind(&event.payload_json)
     .bind(event.max_attempts)
     .execute(&mut *connection)
+    .await?;
+    // K3.2: the same event, with the same id, in the event log.
+    crate::events::legacy::mirror(
+        connection,
+        event.event_id,
+        event.project_id,
+        &event.payload,
+        &event.payload_json,
+    )
     .await?;
     Ok(event.event_id)
 }

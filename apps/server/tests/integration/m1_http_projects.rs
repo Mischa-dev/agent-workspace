@@ -1091,15 +1091,12 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
 /// the same header means nothing and there's no per-address limit.
 #[tokio::test]
 async fn the_client_address_header_is_a_setting() {
-    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
-        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
+    // The limits are counted in the database (K5.6).
+    let Some(db) = crate::support::db::db("client_address_header").await else {
         return;
     };
-    // A short password is refused before any database read.
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect_lazy(&database_url)
-        .expect("lazy pool");
+    let database_url = db.url.clone();
+    let pool = db.pool.clone();
     for (header, limited) in [(Some("x-client-address"), true), (None, false)] {
         let mut values = BTreeMap::from([(
             "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
@@ -1149,4 +1146,5 @@ async fn the_client_address_header_is_a_setting() {
             assert_eq!(refused, 0, "{statuses:?}");
         }
     }
+    db.finish().await;
 }

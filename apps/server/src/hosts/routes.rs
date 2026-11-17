@@ -102,7 +102,7 @@ fn protocol_header(headers: &HeaderMap) -> Result<(), HostError> {
 /// The host making this call, after the rate limit and protocol checks.
 async fn host_caller(state: &AppState, headers: &HeaderMap) -> Result<HostRow, HostError> {
     let token = bearer(headers).ok_or(HostError::Unauthorized)?;
-    state.rate_limits.check_mcp_auth(token)?;
+    state.rate_limits.check_mcp_auth(token).await?;
     protocol_header(headers)?;
     protocol::authenticate(&state.pool, token).await
 }
@@ -112,7 +112,7 @@ async fn enrol_route(
     headers: HeaderMap,
     ApiJson(request): ApiJson<protocol::EnrolRequest>,
 ) -> Result<(StatusCode, Json<protocol::Enrolled>), HostError> {
-    state.rate_limits.check_mcp_auth(&request.code)?;
+    state.rate_limits.check_mcp_auth(&request.code).await?;
     protocol_header(&headers)?;
     Ok((
         StatusCode::CREATED,

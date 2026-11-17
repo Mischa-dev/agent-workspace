@@ -273,7 +273,7 @@ async fn issue_invitation(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<IssueInvitationRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let issued = issue_invitation_in(
         &mut transaction,
@@ -382,7 +382,7 @@ async fn revoke_invitation(
     ApiPath(invitation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<RevokeInvitationRequest>,
 ) -> Result<Json<InvitationView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let revoked = revoke_invitation_in(
         &mut transaction,
@@ -482,7 +482,7 @@ async fn replace_invitation(
     ApiPath(invitation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ReplaceInvitationRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let issued = replace_invitation_in(
         &mut transaction,
@@ -649,13 +649,16 @@ async fn resolve_invitation(
 ) -> Result<Json<ResolvedInvitation>, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
     require_allowed_origin(&state.config, &headers)?;
-    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
-    let row = state.rate_limits.charge_link_miss(
-        fetch_valid_invitation(&state, &prefix)
-            .await?
-            .filter(|row| digest_matches(&row.token_digest, &digest))
-            .ok_or(AppError::NotFound("project_invitation")),
-    )?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state).await?;
+    let row = state
+        .rate_limits
+        .charge_link_miss(
+            fetch_valid_invitation(&state, &prefix)
+                .await?
+                .filter(|row| digest_matches(&row.token_digest, &digest))
+                .ok_or(AppError::NotFound("project_invitation")),
+        )
+        .await?;
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     require_issuer_still_grants(&mut connection, &row).await?;
     Ok(Json(ResolvedInvitation {
@@ -680,7 +683,7 @@ async fn accept_new_user(
             "signed-in users must accept with their existing identity",
         ));
     }
-    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state).await?;
     let login_name = normalize_login_name(&request.login_name)
         .map_err(|_| AppError::Validation("login name"))?;
     let display_name = normalize_display_name(&request.display_name)?;
@@ -692,12 +695,15 @@ async fn accept_new_user(
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = state.rate_limits.charge_link_miss(
-        lock_valid_invitation(&mut transaction, &prefix)
-            .await?
-            .filter(|row| digest_matches(&row.token_digest, &digest))
-            .ok_or(AppError::NotFound("project_invitation")),
-    )?;
+    let invitation = state
+        .rate_limits
+        .charge_link_miss(
+            lock_valid_invitation(&mut transaction, &prefix)
+                .await?
+                .filter(|row| digest_matches(&row.token_digest, &digest))
+                .ok_or(AppError::NotFound("project_invitation")),
+        )
+        .await?;
     require_issuer_still_grants(&mut transaction, &invitation).await?;
     if sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM users WHERE lower(login_name) = $1)",
@@ -828,16 +834,19 @@ async fn accept_existing_user(
     ApiJson(mut request): ApiJson<AcceptExistingInvitationRequest>,
 ) -> Result<Response, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
-    require_authenticated_write(&state, &headers, &principal)?;
-    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state).await?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = state.rate_limits.charge_link_miss(
-        lock_valid_invitation(&mut transaction, &prefix)
-            .await?
-            .filter(|row| digest_matches(&row.token_digest, &digest))
-            .ok_or(AppError::NotFound("project_invitation")),
-    )?;
+    let invitation = state
+        .rate_limits
+        .charge_link_miss(
+            lock_valid_invitation(&mut transaction, &prefix)
+                .await?
+                .filter(|row| digest_matches(&row.token_digest, &digest))
+                .ok_or(AppError::NotFound("project_invitation")),
+        )
+        .await?;
     require_issuer_still_grants(&mut transaction, &invitation).await?;
     #[derive(FromRow)]
     struct ExistingIdentity {
@@ -1048,7 +1057,7 @@ fn valid_invitation_sql(lock: bool) -> &'static str {
     }
 }
 
-fn consume_invitation_token(
+async fn consume_invitation_token(
     token: &mut String,
     state: &AppState,
 ) -> Result<(String, [u8; 32]), AppError> {
@@ -1065,11 +1074,11 @@ fn consume_invitation_token(
     });
     token.zeroize();
     let Some((prefix, digest)) = result else {
-        state.rate_limits.check_invitation("invalid")?;
-        state.rate_limits.note_invitation_failure();
+        state.rate_limits.check_invitation("invalid").await?;
+        state.rate_limits.note_invitation_failure().await;
         return Err(AppError::NotFound("project_invitation"));
     };
-    state.rate_limits.check_invitation(&prefix)?;
+    state.rate_limits.check_invitation(&prefix).await?;
     Ok((prefix, digest))
 }
 

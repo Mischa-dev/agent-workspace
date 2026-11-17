@@ -186,7 +186,7 @@ pub async fn update_document(
     ApiPath(page_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateRequest>,
 ) -> Result<Json<SyncResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let writer = memory::browser_writer(&principal)?;
     let update = decode(&request.update, store::MAX_UPDATE_BYTES, "update")?;
     let since = decode(&request.state_vector, MAX_STATE_VECTOR_BYTES, "stateVector")?;

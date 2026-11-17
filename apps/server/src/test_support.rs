@@ -13,7 +13,14 @@ pub mod source;
 /// defaults), so a few tests tearing down at once failed with "out of shared
 /// memory". Dropping the tables one at a time first keeps each transaction to
 /// a few hundred locks.
+///
+/// A test's app can still be at work when the test ends: a run its scheduler
+/// admitted, driven by a task the test never joins, writing through the
+/// schema's own pool. Its locks and the drop's can deadlock (AWD-183), so any
+/// other session holding a lock in the schema is stopped first, and again
+/// before each retry.
 pub async fn drop_schema(pool: &PgPool, schema: &str) -> Result<(), sqlx::Error> {
+    stop_schema_users(pool, schema).await?;
     let tables = sqlx::query_scalar::<_, String>(
         r#"
         SELECT format('DROP TABLE IF EXISTS %I.%I CASCADE', n.nspname, c.relname)
@@ -28,10 +35,52 @@ pub async fn drop_schema(pool: &PgPool, schema: &str) -> Result<(), sqlx::Error>
     .fetch_all(pool)
     .await?;
     for statement in tables {
-        sqlx::query(&statement).execute(pool).await?;
+        retry_deadlock(pool, schema, &statement).await?;
     }
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
-        .execute(pool)
-        .await?;
+    retry_deadlock(pool, schema, &format!("DROP SCHEMA {schema} CASCADE")).await
+}
+
+/// Ends every other session holding a lock on something in `schema`, saying
+/// which statement it was in so a test that leaves work behind can be found.
+async fn stop_schema_users(pool: &PgPool, schema: &str) -> Result<(), sqlx::Error> {
+    let users = sqlx::query_as::<_, (i32, String)>(
+        r#"
+        SELECT DISTINCT activity.pid, coalesce(left(activity.query, 160), '')
+        FROM pg_locks held
+        JOIN pg_class class ON class.oid = held.relation
+        JOIN pg_stat_activity activity ON activity.pid = held.pid
+        WHERE class.relnamespace = to_regnamespace($1)
+          AND held.pid <> pg_backend_pid()
+        "#,
+    )
+    .bind(schema)
+    .fetch_all(pool)
+    .await?;
+    for (pid, statement) in users {
+        eprintln!("dropping {schema}: stopping session {pid}, still in: {statement}");
+        // Not ours to end (another role's) is left to the retry.
+        let _ = sqlx::query("SELECT pg_terminate_backend($1)")
+            .bind(pid)
+            .execute(pool)
+            .await;
+    }
     Ok(())
+}
+
+/// A drop can still deadlock with a session that took its first lock after
+/// the sweep; stop it and try again.
+async fn retry_deadlock(pool: &PgPool, schema: &str, statement: &str) -> Result<(), sqlx::Error> {
+    let mut tries = 0;
+    loop {
+        match sqlx::query(statement).execute(pool).await {
+            Err(sqlx::Error::Database(error))
+                if error.code().as_deref() == Some("40P01") && tries < 5 =>
+            {
+                tries += 1;
+                stop_schema_users(pool, schema).await?;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            result => return result.map(|_| ()),
+        }
+    }
 }
