@@ -2290,7 +2290,7 @@ async fn update_http(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<UpdateRequest>,
 ) -> Result<Json<UpdateResult>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let selection = match (request.ids, request.all) {
         (Some(ids), None | Some(false)) => {
             if request.project_id.is_some() {

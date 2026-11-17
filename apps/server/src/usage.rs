@@ -896,7 +896,7 @@ async fn refresh_http(
     ApiPath(account_id): ApiPath<Uuid>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<AccountUsageView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let account = owned_account(&state.pool, principal.actor_id, account_id).await?;
     if account.readable() {
         match read_and_store(&state, &account).await {
@@ -1009,7 +1009,7 @@ async fn create_schedule_http(
     ApiPath(account_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<NewSchedule>,
 ) -> Result<Json<AccountUsageView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     Ok(Json(
         create_schedule(&state, principal.actor_id, account_id, &request).await?,
     ))
@@ -1021,7 +1021,7 @@ async fn delete_schedule_http(
     principal: AuthenticatedActor,
     ApiPath((account_id, schedule_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<AccountUsageView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let account = owned_account(&state.pool, principal.actor_id, account_id).await?;
     let deleted = sqlx::query("DELETE FROM usage_schedules WHERE id = $1 AND account_id = $2")
         .bind(schedule_id)
@@ -1042,7 +1042,7 @@ async fn set_rule_http(
     ApiPath((account_id, rule)): ApiPath<(Uuid, String)>,
     ApiJson(request): ApiJson<alerts::RuleChange>,
 ) -> Result<Json<AccountUsageView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let account = owned_account(&state.pool, principal.actor_id, account_id).await?;
     let rule = alerts::Rule::parse(&rule).ok_or(AppError::NotFound("alert rule"))?;
     alerts::set_rule(&state.pool, &account, rule, &request).await?;
@@ -1073,7 +1073,7 @@ async fn spend_credit_http(
     ApiPath(account_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<SpendRequest>,
 ) -> Result<Json<SpendResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if !request.confirm {
         return Err(AppError::Validation("confirm"));
     }

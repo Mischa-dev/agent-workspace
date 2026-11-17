@@ -1664,3 +1664,52 @@ async fn retention_runs_as_scheduled_jobs() {
     .expect("next runs");
     assert_eq!(later, 3);
 }
+
+/// K5.3: a host job stops when this instance loses the built-in host's
+/// lease, and goes back to the queue for the successor, rather than running
+/// on and recording a result after another instance took over.
+#[tokio::test]
+async fn a_host_job_stops_when_the_host_lease_is_lost() {
+    let Some(setup) = backbone("backbone_host_lease").await else {
+        return;
+    };
+    let finished = Arc::new(AtomicUsize::new(0));
+    let mut registry = JobRegistry::new();
+    let done = finished.clone();
+    registry.register_host("test.host_slow", move |_| {
+        let done = done.clone();
+        async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            done.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    });
+    let id = created(
+        jobs::enqueue(&setup.pool, NewJob::new("test.host_slow"))
+            .await
+            .expect("enqueue"),
+    );
+    let lease = agent_workspace_server::cluster::Lease {
+        name: agent_workspace_server::cluster::LeaseName::BuiltinHost,
+        token: 1,
+        lost: tokio_util::sync::CancellationToken::new(),
+    };
+    let lost = lease.lost.clone();
+    let losing = async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        lost.cancel();
+    };
+    let (ran, ()) = tokio::time::timeout(
+        Duration::from_secs(10),
+        futures_util::future::join(jobs::run_due_host(&setup.state, &registry, &lease), losing),
+    )
+    .await
+    .expect("the host job stops with the lease");
+    assert_eq!(ran.expect("host jobs"), 1);
+    assert_eq!(finished.load(Ordering::SeqCst), 0, "it never finished");
+    assert_eq!(
+        job_state(&setup.pool, id).await.0,
+        "queued",
+        "back for the successor"
+    );
+}

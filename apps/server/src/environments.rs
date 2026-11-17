@@ -452,7 +452,7 @@ async fn create_environment(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<EnvironmentRequest>,
 ) -> Result<Json<EnvironmentView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
@@ -553,7 +553,7 @@ async fn update_environment(
     ApiPath((project_id, environment_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<EnvironmentRequest>,
 ) -> Result<Json<EnvironmentView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
@@ -671,7 +671,7 @@ async fn archive_environment(
     ApiPath((project_id, environment_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<EnvironmentList>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
@@ -759,7 +759,7 @@ async fn make_default(
     ApiPath((project_id, environment_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<EnvironmentList>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,
@@ -860,7 +860,7 @@ async fn check_environment(
     ApiPath((project_id, environment_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<CheckResult>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let organization_id = authorize_project(
         &state.pool,
         principal.actor_id,

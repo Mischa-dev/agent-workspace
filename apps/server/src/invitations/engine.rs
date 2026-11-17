@@ -85,7 +85,7 @@ pub fn issue(family: Family) -> Issued {
 /// the row) and digest (to compare). A malformed token is `not_found` as
 /// `resource`, the same answer as an unknown one; both count against the
 /// invitation rate limit.
-pub fn consume(
+pub async fn consume(
     token: &mut String,
     family: Family,
     state: &AppState,
@@ -104,10 +104,10 @@ pub fn consume(
     });
     token.zeroize();
     let Some((prefix, digest)) = result else {
-        state.rate_limits.check_invitation("invalid")?;
+        state.rate_limits.check_invitation("invalid").await?;
         return Err(AppError::NotFound(resource));
     };
-    state.rate_limits.check_invitation(&prefix)?;
+    state.rate_limits.check_invitation(&prefix).await?;
     Ok((prefix, digest))
 }
 

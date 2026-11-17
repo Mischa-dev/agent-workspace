@@ -918,7 +918,7 @@ async fn receive(
     body: &[u8],
 ) -> Result<Response, AppError> {
     let token_digest = digest(token);
-    state.rate_limits.check_bug_report(&token_digest)?;
+    state.rate_limits.check_bug_report(&token_digest).await?;
     if body.len() > MAX_REPORT_BYTES {
         return Err(AppError::PayloadTooLarge);
     }
@@ -1181,7 +1181,7 @@ async fn receive_answer(
 /// but the form: never a record, a person or a task.
 async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> {
     let token_digest = digest(token);
-    state.rate_limits.check_bug_report(&token_digest)?;
+    state.rate_limits.check_bug_report(&token_digest).await?;
     let row = sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>, Option<Value>)>(
         "SELECT project_id, name, state, collection_id, form FROM bug_report_links WHERE token_digest = $1",
     )
@@ -1316,7 +1316,7 @@ async fn create_route(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreateLink>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     project_rights(&state.pool, &caller, project_id).await?;
     if let Some(message) = form_problem(
@@ -1357,7 +1357,7 @@ async fn update_route(
     ApiPath(link_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateLink>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     if request.form.is_some() {
         let row = manageable(&state.pool, &caller, link_id).await?;
@@ -1381,7 +1381,7 @@ async fn replace_route(
     principal: AuthenticatedActor,
     ApiPath(link_id): ApiPath<Uuid>,
 ) -> Result<Json<LinkWithUrl>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok(Json(replace(&state, &caller, link_id).await?))
 }
@@ -1392,7 +1392,7 @@ async fn delete_route(
     principal: AuthenticatedActor,
     ApiPath(link_id): ApiPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     delete(&state, &caller, link_id).await?;
     Ok(StatusCode::NO_CONTENT)

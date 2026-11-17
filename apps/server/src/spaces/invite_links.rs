@@ -590,7 +590,7 @@ async fn resolve(
 ) -> Result<Json<ResolvedLink>, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
     require_allowed_origin(&state.config, &headers)?;
-    let (prefix, digest) = engine::consume(&mut token, Family::Link, &state, RESOURCE)?;
+    let (prefix, digest) = engine::consume(&mut token, Family::Link, &state, RESOURCE).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (link, role, _) = find(&mut transaction, &prefix, &digest, false).await?;
     transaction.commit().await?;
@@ -704,7 +704,7 @@ async fn accept_new(
             "signed-in users must accept with their existing identity",
         ));
     }
-    let (prefix, digest) = engine::consume(&mut token, Family::Link, &state, RESOURCE)?;
+    let (prefix, digest) = engine::consume(&mut token, Family::Link, &state, RESOURCE).await?;
     let login_name = normalize_login_name(&request.login_name)
         .map_err(|_| AppError::Validation("login name"))?;
     let display_name = crate::workspace::normalize_display_name(&request.display_name)?;
@@ -786,8 +786,8 @@ async fn accept_existing(
     ApiJson(mut request): ApiJson<AcceptExistingRequest>,
 ) -> Result<Response, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
-    require_authenticated_write(&state, &headers, &principal)?;
-    let (prefix, digest) = engine::consume(&mut token, Family::Link, &state, RESOURCE)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
+    let (prefix, digest) = engine::consume(&mut token, Family::Link, &state, RESOURCE).await?;
     let handle = crate::workspace::normalize_handle(&request.handle)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (link, role, custom) = find(&mut transaction, &prefix, &digest, true).await?;

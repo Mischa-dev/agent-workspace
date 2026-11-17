@@ -242,6 +242,14 @@ pub(crate) fn naming_offences(name: &str, sql: &str) -> Vec<String> {
             .next()
             .unwrap_or_default()
             .to_owned();
+        // A partition takes its parent's columns.
+        if after[table.len()..]
+            .trim_start()
+            .starts_with("PARTITION OF ")
+        {
+            rest = &after[table.len()..];
+            continue;
+        }
         let body_start = after.find('(').map_or(after.len(), |index| index + 1);
         let mut depth = 1;
         let mut end = body_start;

@@ -330,7 +330,7 @@ async fn forward_http(
     ApiPath(message_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ForwardRequest>,
 ) -> Result<(StatusCode, Json<MessageAppendResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let outcome = forward(
         &state,

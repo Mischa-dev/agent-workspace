@@ -120,7 +120,7 @@ async fn limit_webhook_attempts(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if let Err(error) = state.rate_limits.check_webhook_attempt() {
+    if let Err(error) = state.rate_limits.check_webhook_attempt().await {
         return error.into_response();
     }
     next.run(request).await
@@ -1316,7 +1316,7 @@ async fn update_github_automation_settings(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateGitHubAutomationSettingsRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.expected_version < 1 {
         return Err(AppError::Validation("expectedVersion"));
     }
@@ -1644,7 +1644,7 @@ async fn sync_installation(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<SyncInstallationRequest>,
 ) -> Result<Json<GitHubStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let SyncedInstallation {
         mut transaction,
         installation_id,
@@ -1718,6 +1718,14 @@ pub(crate) async fn queue_publish_in(
     project_id: Uuid,
     run_id: Uuid,
 ) -> Result<Queued<PublishJobView>, AppError> {
+    // The worktree is inspected here, and it is on the built-in host's
+    // disk: another instance can't see it (K5.3).
+    if state.supervisors.host_lease_lost().is_cancelled() {
+        return Err(AppError::Conflict(
+            "repository_workspace",
+            "this server doesn't hold the run's worktree; try again",
+        ));
+    }
     let candidate = sqlx::query_as::<_, PublishCandidate>(
         r#"
         SELECT run.id AS agent_run_id, run.conversation_id,
@@ -1909,7 +1917,7 @@ async fn publish_agent_run(
     principal: AuthenticatedActor,
     ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if state.config.github.is_none() {
         return Err(AppError::Conflict("github_integration", "not_configured"));
     }
@@ -2180,7 +2188,7 @@ async fn create_pull_request(
     ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(mut request): ApiJson<CreatePullRequestRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if state.config.github.is_none() {
         return Err(AppError::Conflict("github_integration", "not_configured"));
     }
@@ -2358,7 +2366,7 @@ async fn refresh_pull_request(
     principal: AuthenticatedActor,
     ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if state.config.github.is_none() {
         return Err(AppError::Conflict("github_integration", "not_configured"));
     }
@@ -2407,7 +2415,14 @@ async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
         // Each job keeps renewing its lease while it works: a publish alone
         // can take minutes (a token, two ref reads and a push), far past one
         // lease, and an expired lease lets another worker run it again.
-        if let Some(job) = claim_publish_job(state).await? {
+        // A publication reads the run's worktree, which is on the built-in
+        // host's disk: only the instance holding it takes one (K5.3).
+        let host_here = !state.supervisors.host_lease_lost().is_cancelled();
+        if let Some(job) = if host_here {
+            claim_publish_job(state).await?
+        } else {
+            None
+        } {
             let job_id = job.job_id;
             match while_leased(
                 state,
@@ -6169,7 +6184,7 @@ async fn merge_pull_request(
     ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<MergePullRequestRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let actor = CommandActor {
         actor_id: principal.actor_id,
         actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,

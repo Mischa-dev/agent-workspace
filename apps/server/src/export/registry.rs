@@ -156,12 +156,30 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "runtime state of this server (queues, leases, retries)",
             ),
             (
+                "event_staging",
+                "the server's event log on its way in; what happened is carried by the rows it describes",
+            ),
+            (
+                "events",
+                "the server's event log (K3.2): history of this server, not state to move; the rows it describes are exported",
+            ),
+            ("events_default", "a partition of the server's event log"),
+            ("events_p0", "a partition of the server's event log"),
+            (
                 "bug_report_links",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
                 "link_previews",
                 "a cache or index derived from other rows, rebuilt on import",
+            ),
+            (
+                "links",
+                "a cache or index derived from other rows, rebuilt on import (K3.12 mirrors the stores that hold links until K3.13)",
+            ),
+            (
+                "things",
+                "a cache or index derived from other rows, rebuilt on import (the registry's backfill, K3.10)",
             ),
             (
                 "workspace_slugs",

@@ -395,7 +395,8 @@ pub async fn write_switch(
     .fetch_optional(&mut *connection)
     .await?;
     if changed.is_some() {
-        super::gate::forget(organization_id);
+        // Every instance forgets once this commits (K5.5).
+        super::gate::forget_everywhere(connection, organization_id).await?;
     }
     Ok(changed.is_some())
 }

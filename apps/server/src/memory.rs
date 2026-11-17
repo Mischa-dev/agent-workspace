@@ -1347,7 +1347,7 @@ async fn create_page_http(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<PageInput>,
 ) -> Result<Json<PageView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let direct = project_access(
@@ -1414,7 +1414,7 @@ async fn update_page_http(
     ApiPath(page_id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<PageInput>,
 ) -> Result<Json<PageView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
     let project_id = page_project(&state.pool, page_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
@@ -1524,7 +1524,7 @@ async fn record_decision_http(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<DecisionInput>,
 ) -> axum::response::Response {
-    if let Err(error) = require_authenticated_write(&state, &headers, &principal) {
+    if let Err(error) = require_authenticated_write(&state, &headers, &principal).await {
         return error.into_response();
     }
     let input = serde_json::json!({
@@ -1584,7 +1584,7 @@ async fn pin_http(
     ApiPath(conversation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<PinRequest>,
 ) -> Result<Json<PinsResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project_id = set_pin(
@@ -1617,7 +1617,7 @@ async fn unpin_http(
     principal: AuthenticatedActor,
     ApiPath((conversation_id, kind, target_id)): ApiPath<(Uuid, String, Uuid)>,
 ) -> Result<Json<PinsResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project_id = set_pin(

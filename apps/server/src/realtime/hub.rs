@@ -52,8 +52,12 @@ pub struct RealtimeEvent {
 
 #[derive(Clone, Debug)]
 enum RealtimeDelivery {
-    Durable { envelope: OutboxEnvelope },
+    Durable {
+        envelope: OutboxEnvelope,
+    },
     Ephemeral(RealtimeEvent),
+    /// The tail skipped ahead: every socket closes to refetch (K5.5).
+    Resync,
 }
 
 impl RealtimeDelivery {
@@ -61,6 +65,7 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope, .. } => envelope.event_id,
             Self::Ephemeral(event) => event.event_id,
+            Self::Resync => Uuid::nil(),
         }
     }
 
@@ -68,6 +73,7 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope, .. } => envelope.project_id,
             Self::Ephemeral(event) => event.project_id,
+            Self::Resync => Uuid::nil(),
         }
     }
 
@@ -75,13 +81,14 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope } => envelope.conversation_id,
             Self::Ephemeral(event) => event.conversation_id,
+            Self::Resync => None,
         }
     }
 
     fn recipient_actor_id(&self) -> Option<Uuid> {
         match self {
             Self::Durable { envelope } => envelope.recipient_actor_id,
-            Self::Ephemeral(_) => None,
+            Self::Ephemeral(_) | Self::Resync => None,
         }
     }
 
@@ -108,6 +115,7 @@ impl RealtimeDelivery {
         let json = match self {
             Self::Durable { envelope, .. } => serde_json::to_string(envelope),
             Self::Ephemeral(event) => serde_json::to_string(event),
+            Self::Resync => return Err(RealtimePublishError::Serialization),
         }
         .map_err(|_| RealtimePublishError::Serialization)?;
         if json.len() > MAX_REALTIME_FRAME_BYTES {
@@ -127,10 +135,15 @@ pub enum RealtimePublishError {
     Serialization,
 }
 
+/// This instance's sockets. Durable events reach it from the instance's
+/// tail (`deliver_logged`, K5.5), ephemeral ones from this instance or, over
+/// the bus, from the others (`realtime::ephemeral`).
 #[derive(Clone)]
 pub struct RealtimeHub {
     sender: broadcast::Sender<RealtimeDelivery>,
     session_revocations: broadcast::Sender<Uuid>,
+    /// Who this hub is on the ephemeral bus, so it skips its own frames.
+    origin: Uuid,
 }
 
 impl RealtimeHub {
@@ -140,9 +153,43 @@ impl RealtimeHub {
         Self {
             sender,
             session_revocations,
+            origin: Uuid::now_v7(),
         }
     }
 
+    pub fn origin(&self) -> Uuid {
+        self.origin
+    }
+
+    /// A logged event, from this instance's tail, to its sockets as protocol
+    /// 1's frame. Events that were never outbox events have no frame yet.
+    pub fn deliver_logged(&self, event: &crate::events::LoggedEvent) {
+        let Some(envelope) = OutboxEnvelope::from_logged(event) else {
+            return;
+        };
+        if let Err(error) = OutboxPublisher::publish(self, &envelope) {
+            tracing::warn!(
+                event_id = %envelope.event_id,
+                event_position = envelope.event_cursor,
+                error_category = %error,
+                "logged event has no valid realtime frame"
+            );
+        }
+    }
+
+    /// The tail skipped ahead: every socket here closes to refetch.
+    pub fn resync(&self) {
+        let _ = self.sender.send(RealtimeDelivery::Resync);
+    }
+
+    /// Checks an outbox event's frame without sending it: the outbox
+    /// publisher keeps side effects only, and sockets hear the log (K5.5).
+    pub fn validate(&self, envelope: &OutboxEnvelope) -> Result<(), RealtimePublishError> {
+        checked_delivery(envelope)?.to_wire_json().map(drop)
+    }
+
+    /// A `message.delta` to this instance's sockets only; use
+    /// `realtime::ephemeral::publish` to reach every instance's.
     pub fn publish(&self, event: RealtimeEvent) {
         if !ephemeral_event_is_valid(&event) {
             tracing::warn!(
@@ -155,6 +202,8 @@ impl RealtimeHub {
         let _ = self.sender.send(RealtimeDelivery::Ephemeral(event));
     }
 
+    /// Closes this instance's sockets for the session; use
+    /// `realtime::ephemeral::revoke_session` to close every instance's.
     pub fn revoke_session(&self, session_id: Uuid) {
         let _ = self.session_revocations.send(session_id);
     }
@@ -163,7 +212,7 @@ impl RealtimeHub {
         self.sender.subscribe()
     }
 
-    fn subscribe_session_revocations(&self) -> broadcast::Receiver<Uuid> {
+    pub(crate) fn subscribe_session_revocations(&self) -> broadcast::Receiver<Uuid> {
         self.session_revocations.subscribe()
     }
 }
@@ -172,6 +221,18 @@ impl OutboxPublisher for RealtimeHub {
     type Error = RealtimePublishError;
 
     fn publish(&self, envelope: &OutboxEnvelope) -> Result<(), Self::Error> {
+        let delivery = checked_delivery(envelope)?;
+        // Validate and bound the exact frame before making it observable.
+        delivery.to_wire_json()?;
+        // No connected browser is still a successful broadcast operation:
+        // reconnect correctness comes from HTTP refetch, not socket replay.
+        let _ = self.sender.send(delivery);
+        Ok(())
+    }
+}
+
+fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, RealtimePublishError> {
+    {
         let payload_conversation_id = envelope
             .payload
             .get("conversationId")
@@ -299,15 +360,9 @@ impl OutboxPublisher for RealtimeHub {
         {
             return Err(RealtimePublishError::InvalidMetadata);
         }
-        let delivery = RealtimeDelivery::Durable {
+        Ok(RealtimeDelivery::Durable {
             envelope: envelope.clone(),
-        };
-        // Validate and bound the exact frame before making it observable.
-        delivery.to_wire_json()?;
-        // No connected browser is still a successful broadcast operation:
-        // reconnect correctness comes from HTTP refetch, not socket replay.
-        let _ = self.sender.send(delivery);
-        Ok(())
+        })
     }
 }
 
@@ -399,6 +454,10 @@ async fn serve_socket(
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
+                if matches!(event, RealtimeDelivery::Resync) {
+                    close_socket_for_resync(&mut socket).await;
+                    break;
+                }
                 let current_principal =
                     match current_principal(&state, &headers, &original_principal).await {
                         Ok(Some(principal)) => principal,
@@ -616,10 +675,11 @@ pub fn outbox_worker_id() -> String {
 
 /// Publishes committed outbox rows until shutdown is requested.
 ///
-/// Claim transactions only hold a short lease. Broadcasting happens after
-/// the claim commits, and `published_at` is recorded in a later transaction.
-/// A crash between those operations can therefore redeliver the stable event
-/// ID, which is the intended at-least-once contract.
+/// Since K5.5 publishing means side effects only (notifications, routing):
+/// sockets hear the same event, with the same id, from every instance's
+/// tail of the log. Claim transactions only hold a short lease, and
+/// `published_at` is recorded in a later transaction, so a crash between
+/// them repeats the side effects, which dedupe on the event id.
 pub async fn run_outbox_publisher(
     pool: PgPool,
     realtime: RealtimeHub,
@@ -664,8 +724,9 @@ fn valid_worker_id(worker_id: &str) -> bool {
         })
 }
 
-/// Publishes one batch of ready outbox events and writes the notifications
-/// they cause. Public so tests can drain the outbox without the poll loop.
+/// Checks one batch of ready outbox events and writes the notifications
+/// and routing they cause (sockets hear them from the tail, K5.5). Public
+/// so tests can drain the outbox without the poll loop.
 pub async fn publish_ready_outbox_batch(
     pool: &PgPool,
     realtime: &RealtimeHub,
@@ -692,7 +753,7 @@ pub async fn publish_ready_outbox_batch(
             }
         };
 
-        if let Err(error) = OutboxPublisher::publish(realtime, &envelope) {
+        if let Err(error) = realtime.validate(&envelope) {
             tracing::warn!(
                 event_id = %claim.event_id(),
                 event_cursor = claim.event_cursor(),

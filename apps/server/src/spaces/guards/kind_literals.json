@@ -8,7 +8,7 @@
   "collections/tasks.rs": 1,
   "conversations.rs": 10,
   "direct.rs": 4,
-  "events.rs": 1,
+  "events/route.rs": 1,
   "forwarding.rs": 1,
   "home.rs": 2,
   "later.rs": 2,

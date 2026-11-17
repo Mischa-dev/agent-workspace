@@ -204,7 +204,7 @@ async fn create_http(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<CreateRequest>,
 ) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     let placement = match (request.project_id, request.organization_id) {
         (Some(project_id), _) => Placement::Project(project_id),
@@ -244,7 +244,7 @@ async fn change_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(change): ApiJson<BoardChange>,
 ) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     super::change(&mut transaction, &caller, id, &change).await?;
@@ -259,7 +259,7 @@ async fn purge_http(
     principal: AuthenticatedActor,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     super::purge(&mut transaction, &caller, id).await?;
@@ -286,7 +286,7 @@ async fn empty_trash_http(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<EmptyTrashRequest>,
 ) -> Result<Json<EmptyTrashResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let deleted = super::empty_trash(
@@ -314,7 +314,7 @@ async fn duplicate_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<DuplicateRequest>,
 ) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let copy = super::duplicate(&mut transaction, &caller, id, request.title.as_deref()).await?;
@@ -364,7 +364,7 @@ async fn write_scene_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(write): ApiJson<SceneWrite>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     if write.elements.len() > MAX_BATCH {
         return Err(AppError::PayloadTooLarge);
@@ -428,7 +428,7 @@ async fn operations_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<OperationsRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut transaction, &caller, id, true).await?;
@@ -492,7 +492,7 @@ async fn put_file_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(upload): ApiJson<FileUpload>,
 ) -> Result<Json<FileStored>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let _ = (upload.created, upload.last_retrieved);
     let caller = Caller::browser(&principal)?;
     if !store::allowed_mime(&upload.mime_type) {
@@ -589,7 +589,7 @@ async fn restore_http(
     principal: AuthenticatedActor,
     ApiPath((id, revision)): ApiPath<(Uuid, i32)>,
 ) -> Result<Json<store::WriteOutcome>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut transaction, &caller, id, true).await?;
@@ -614,7 +614,7 @@ async fn link_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(target): ApiJson<LinkTarget>,
 ) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     super::set_link(
@@ -636,7 +636,7 @@ async fn unlink_http(
     principal: AuthenticatedActor,
     ApiPath((id, kind, target_id)): ApiPath<(Uuid, String, Uuid)>,
 ) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     super::set_link(

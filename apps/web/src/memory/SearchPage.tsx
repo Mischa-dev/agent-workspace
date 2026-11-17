@@ -26,12 +26,15 @@ import { useListKeys } from '../ui/listKeys'
 import '../styles/pages.css'
 
 type SearchHit = {
-  kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'record' | 'file'
+  kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'record' | 'file' | 'whiteboard' | 'sheet'
   id: string
   title: string
   /** A thread's or task's status, or "superseded" for a replaced decision. */
   status?: string | null
   snippet: string
+  /** Null for a workspace's own board, which is in no project. */
+  projectId: string | null
+  workspaceId: string
   projectName: string
   conversationName: string | null
   author: string | null
@@ -47,6 +50,8 @@ const KIND_LABEL: Record<SearchHit['kind'], string> = {
   record: 'Record',
   message: 'Message',
   file: 'File',
+  whiteboard: 'Board',
+  sheet: 'Sheet',
 }
 
 /** The title and its status apart. Servers before `status` was its own field put it in the title's last brackets. */

@@ -269,7 +269,7 @@ async fn issue_invitation(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<IssueInvitationRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let issued = issue_invitation_in(
         &mut transaction,
@@ -378,7 +378,7 @@ async fn revoke_invitation(
     ApiPath(invitation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<RevokeInvitationRequest>,
 ) -> Result<Json<InvitationView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let revoked = revoke_invitation_in(
         &mut transaction,
@@ -478,7 +478,7 @@ async fn replace_invitation(
     ApiPath(invitation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ReplaceInvitationRequest>,
 ) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let issued = replace_invitation_in(
         &mut transaction,
@@ -645,7 +645,7 @@ async fn resolve_invitation(
 ) -> Result<Json<ResolvedInvitation>, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
     require_allowed_origin(&state.config, &headers)?;
-    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state).await?;
     let row = fetch_valid_invitation(&state, &prefix)
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
@@ -674,7 +674,7 @@ async fn accept_new_user(
             "signed-in users must accept with their existing identity",
         ));
     }
-    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state).await?;
     let login_name = normalize_login_name(&request.login_name)
         .map_err(|_| AppError::Validation("login name"))?;
     let display_name = normalize_display_name(&request.display_name)?;
@@ -818,8 +818,8 @@ async fn accept_existing_user(
     ApiJson(mut request): ApiJson<AcceptExistingInvitationRequest>,
 ) -> Result<Response, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
-    require_authenticated_write(&state, &headers, &principal)?;
-    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state).await?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let invitation = lock_valid_invitation(&mut transaction, &prefix)
@@ -1039,11 +1039,11 @@ fn valid_invitation_sql(lock: bool) -> &'static str {
     }
 }
 
-fn consume_invitation_token(
+async fn consume_invitation_token(
     token: &mut String,
     state: &AppState,
 ) -> Result<(String, [u8; 32]), AppError> {
-    engine::consume(token, engine::Family::Project, state, "project_invitation")
+    engine::consume(token, engine::Family::Project, state, "project_invitation").await
 }
 
 fn digest_matches(stored: &[u8], candidate: &[u8; 32]) -> bool {

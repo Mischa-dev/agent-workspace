@@ -256,7 +256,8 @@ async fn list_projects(
     if search.is_some() {
         state
             .rate_limits
-            .check_expensive_read(principal.session_id)?;
+            .check_expensive_read(principal.session_id)
+            .await?;
     }
     let search_pattern = search.map(|value| format!("%{value}%"));
     let rows = sqlx::query_as::<_, ProjectRow>(
@@ -379,7 +380,7 @@ async fn create_project(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<CreateProjectRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = idempotency_key(&headers)?;
     let key = normalize_project_key(&request.key)?;
     let name = normalize_project_name(&request.name)?;
@@ -683,7 +684,7 @@ async fn update_project(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateProjectRequest>,
 ) -> Result<Json<ProjectView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let name = normalize_project_name(&request.name)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
@@ -741,7 +742,7 @@ async fn archive_project(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ArchiveProjectRequest>,
 ) -> Result<Json<ProjectView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -798,7 +799,7 @@ async fn restore_project(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ArchiveProjectRequest>,
 ) -> Result<Json<ProjectView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -863,7 +864,7 @@ async fn update_navigation(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateNavigationRequest>,
 ) -> Result<Json<NavigationView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -994,7 +995,7 @@ async fn switch_project(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<SwitchProjectRequest>,
 ) -> Result<Json<SwitchProjectResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -1069,7 +1070,7 @@ async fn set_rail_order(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<RailOrderRequest>,
 ) -> Result<Json<RailOrderResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut seen = std::collections::HashSet::new();
     if request.project_ids.len() > MAX_RAIL_PROJECTS
         || !request.project_ids.iter().all(|id| seen.insert(*id))

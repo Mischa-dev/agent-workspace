@@ -230,7 +230,7 @@ async fn create_connection(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreateConnectionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let webhook_url = validate_webhook_url(
         request.webhook_url.clone(),
         &state.config.webhook_trusted_origins,
@@ -645,7 +645,7 @@ async fn update_connection(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<UpdateConnectionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.expected_version < 1
         || request.role.is_none() && request.enabled.is_none() && request.scopes.is_none()
     {
@@ -705,7 +705,7 @@ async fn set_webhook(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<WebhookRequest>,
 ) -> Result<Json<WebhookResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let to_typed = match request.wakeup_format.as_deref() {
         None => false,
         Some("typed") => true,
@@ -796,7 +796,7 @@ async fn test_webhook(
     principal: AuthenticatedActor,
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<crate::replies::TestWakeup>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -867,7 +867,7 @@ async fn rotate_credential(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<ExpectedVersionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     mutate_connection(
         &state,
         &headers,
@@ -895,7 +895,7 @@ async fn create_setup_link(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<SetupLinkRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     mutate_connection(
         &state,
         &headers,
@@ -921,7 +921,7 @@ async fn remove_connection(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<ExpectedVersionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     mutate_connection(
         &state,
         &headers,

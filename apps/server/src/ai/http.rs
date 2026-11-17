@@ -200,7 +200,7 @@ async fn writer(
     project_id: Uuid,
     action: Action,
 ) -> Result<Member, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     member(state, principal, project_id, action).await
 }
 
@@ -401,7 +401,7 @@ async fn test_workspace(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     settings::authorize_workspace_manage(&state.pool, &principal, organization_id).await?;
     Ok(ping(
         &state,
@@ -1072,7 +1072,7 @@ async fn task_summary(
     principal: AuthenticatedActor,
     ApiPath((project_id, task_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let member = member(&state, &principal, project_id, Action::WorkItemView).await?;
     Ok(summary_response(
         summaries::task(
@@ -1100,7 +1100,7 @@ async fn thread_summary(
     ApiPath(conversation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ThreadSummaryRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let Some(project_id) = sqlx::query_scalar::<_, Uuid>(
         "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
     )

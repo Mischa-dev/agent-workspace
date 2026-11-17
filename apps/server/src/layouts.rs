@@ -1420,7 +1420,7 @@ async fn change_project_layout(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<LayoutRequest>,
 ) -> Result<Json<ProjectLayoutView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let organization_id =
         settings::authorize_project_manage(&mut *transaction, &principal, project_id).await?;
@@ -1484,7 +1484,7 @@ async fn change_project_rules(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<RulesRequest>,
 ) -> Result<Json<ProjectLayoutView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.rules.len() > MAX_RULES {
         return Err(AppError::Validation("rules"));
     }
@@ -1668,7 +1668,7 @@ async fn change_workspace_layout(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<LayoutRequest>,
 ) -> Result<Json<WorkspaceLayoutView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
     let preset = request.layout.as_ref().map(|layout| layout.preset.clone());
@@ -1714,7 +1714,7 @@ async fn change_my_view(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<MyViewRequest>,
 ) -> Result<Json<WorkspaceLayoutView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let wanted = request
         .hidden
         .iter()
@@ -1786,7 +1786,7 @@ async fn create_preset(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<PresetRequest>,
 ) -> Result<(StatusCode, Json<SavedPreset>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
     let preset = create_preset_in(
@@ -1911,7 +1911,7 @@ async fn change_preset(
     ApiPath((organization_id, preset_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<PresetChange>,
 ) -> Result<Json<SavedPreset>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
     let preset = change_preset_in(
@@ -2009,7 +2009,7 @@ async fn remove_preset(
     principal: AuthenticatedActor,
     ApiPath((organization_id, preset_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_preset(&mut transaction, &principal, organization_id, preset_id).await?;
     let name = remove_preset_in(

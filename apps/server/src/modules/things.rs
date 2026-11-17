@@ -61,6 +61,8 @@ pub const KINDS: &[&str] = &[
     "conversation",
     "project",
     "record",
+    "sheet",
+    "collection",
 ];
 
 #[derive(Debug, FromRow)]
@@ -145,6 +147,11 @@ impl ThingRow {
                 name: self.owner_name.unwrap_or_else(|| "Someone".to_owned()),
             }),
             project_id: self.project_id,
+            space_id: None,
+            parent_id: None,
+            version: None,
+            updated_at: None,
+            fields: serde_json::Map::new(),
         }
     }
 }
@@ -246,6 +253,30 @@ const RECORDS_SQL: &str = r#"
       AND collection.builtin IS NULL
 "#;
 
+/// A project's sheets (AWD-54) that aren't archived.
+const SHEETS_SQL: &str = r#"
+    SELECT sheet.id, 'sheet' AS kind, sheet.name AS title, NULL::text AS status,
+           sheet.updated_by_actor_id AS owner_id, editor.display_name AS owner_name,
+           sheet.project_id, NULL::uuid AS organization_id, false AS direct
+    FROM sheets sheet
+    LEFT JOIN project_memberships editor
+      ON editor.project_id = sheet.project_id AND editor.actor_id = sheet.updated_by_actor_id
+    WHERE sheet.id = ANY($1) AND sheet.project_id = ANY($2) AND sheet.archived_at IS NULL
+"#;
+
+/// A project's collections that aren't archived. The built-in Tasks
+/// collection is the task list, so it opens like any other.
+const COLLECTIONS_SQL: &str = r#"
+    SELECT collection.id, 'collection' AS kind, collection.name AS title, NULL::text AS status,
+           collection.created_by_actor_id AS owner_id, maker.display_name AS owner_name,
+           collection.project_id, NULL::uuid AS organization_id, false AS direct
+    FROM collections collection
+    LEFT JOIN project_memberships maker
+      ON maker.project_id = collection.project_id AND maker.actor_id = collection.created_by_actor_id
+    WHERE collection.id = ANY($1) AND collection.project_id = ANY($2)
+      AND collection.archived_at IS NULL
+"#;
+
 fn resolver(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "task" => TASKS_SQL,
@@ -255,6 +286,8 @@ fn resolver(kind: &str) -> Option<&'static str> {
         "thread" | "channel" | "conversation" => CONVERSATIONS_SQL,
         "project" => PROJECTS_SQL,
         "record" => RECORDS_SQL,
+        "sheet" => SHEETS_SQL,
+        "collection" => COLLECTIONS_SQL,
         _ => return None,
     })
 }
@@ -382,7 +415,59 @@ async fn resolve(
         let href = row.href(connection, &mut linker).await?;
         things.push(row.into_thing(href));
     }
+    with_envelope(connection, &mut things).await?;
     Ok(things)
+}
+
+#[derive(FromRow)]
+struct Envelope {
+    id: Uuid,
+    space_id: Option<Uuid>,
+    parent_id: Option<Uuid>,
+    version: i64,
+    updated_at: String,
+}
+
+/// The registry's envelope (K3.10) on things already read with the
+/// viewer's access: where each lives, what holds it, its version.
+async fn with_envelope(
+    connection: &mut PgConnection,
+    things: &mut [Thing],
+) -> Result<(), AppError> {
+    if things.is_empty() {
+        return Ok(());
+    }
+    let ids = things.iter().map(|thing| thing.id).collect::<Vec<_>>();
+    let envelopes = sqlx::query_as::<_, Envelope>(
+        "SELECT id, space_id, parent_id, version, updated_at::text AS updated_at \
+         FROM things WHERE id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .map(|envelope| (envelope.id, envelope))
+    .collect::<BTreeMap<_, _>>();
+    for thing in things {
+        if let Some(envelope) = envelopes.get(&thing.id) {
+            thing.space_id = envelope.space_id;
+            thing.parent_id = envelope.parent_id;
+            thing.version = Some(envelope.version);
+            thing.updated_at = Some(envelope.updated_at.clone());
+        }
+    }
+    Ok(())
+}
+
+/// Things of one kind, by id, that the viewer can see (for
+/// `things::get_many`, which finds the kinds).
+pub async fn get_many(
+    connection: &mut PgConnection,
+    viewer: &Viewer<'_>,
+    kind: &str,
+    ids: &[Uuid],
+) -> Result<Vec<Thing>, AppError> {
+    resolve(connection, viewer, kind, ids).await
 }
 
 /// One thing, if the viewer can see it.
@@ -510,6 +595,16 @@ fn links_sql(kind: &str) -> Option<&'static str> {
             SELECT 'about' AS link, 'incoming' AS direction, 'whiteboard' AS other_kind,
                    whiteboard_id AS other_id
             FROM whiteboard_links WHERE target_kind = 'project' AND target_id = $1
+            "#
+        }
+        // Sheets and collections (K3.10) are linked to only from text, until
+        // K3.12's link store.
+        "sheet" | "collection" => {
+            r#"
+            SELECT 'about' AS link, 'incoming' AS direction, thing_kind AS other_kind,
+                   thing_id AS other_id
+            FROM thing_references
+            WHERE target_id = $1 AND target_kind IN ('sheet', 'collection')
             "#
         }
         // What a record's link fields point at (AWD-110), and where it's

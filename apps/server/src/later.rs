@@ -1109,7 +1109,7 @@ async fn save_http(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<SaveRequest>,
 ) -> Result<(StatusCode, Json<ItemResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if principal.actor_kind != "human" {
         return Err(AppError::Forbidden);
     }
@@ -1136,7 +1136,7 @@ async fn change_http(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<ChangeRequest>,
 ) -> Result<Json<ItemResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let item = change(&state, principal.actor_id, id, request).await?;
     Ok(Json(ItemResponse { item }))
 }
@@ -1147,7 +1147,7 @@ async fn remove_http(
     principal: AuthenticatedActor,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     remove(&state.pool, principal.actor_id, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

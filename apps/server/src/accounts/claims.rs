@@ -242,7 +242,8 @@ async fn accept_claim(
             "sign out before claiming another account",
         ));
     }
-    let (prefix, digest) = engine::consume(&mut token, Family::Claim, &state, "account_claim")?;
+    let (prefix, digest) =
+        engine::consume(&mut token, Family::Claim, &state, "account_claim").await?;
     let login_name = normalize_login_name(&request.login_name)
         .map_err(|_| AppError::Validation("login name"))?;
     if !(12..=1024).contains(&submitted_password.len()) {

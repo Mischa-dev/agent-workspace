@@ -154,14 +154,15 @@ async fn start(
         let principal = load_authenticated_actor(&state, &headers)
             .await?
             .ok_or(AppError::AuthenticationRequired)?;
-        require_authenticated_write(&state, &headers, &principal)?;
+        require_authenticated_write(&state, &headers, &principal).await?;
         Some(principal.session_id)
     } else {
         None
     };
-    state.rate_limits.check_workos_start(
-        workos_start_key(&state.config, &headers, link_session_id).as_deref(),
-    )?;
+    state
+        .rate_limits
+        .check_workos_start(workos_start_key(&state.config, &headers, link_session_id).as_deref())
+        .await?;
     let username = request
         .username
         .as_deref()
@@ -584,7 +585,7 @@ async fn update_profile(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<UpdateProfile>,
 ) -> Result<Json<Profile>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.display_name.is_none() && request.github_login.is_none() {
         return Err(AppError::Validation("profile"));
     }
@@ -679,7 +680,7 @@ pub(super) async fn session_valid(state: &AppState, session_id: Uuid) -> Result<
             .bind(session_id)
             .execute(&state.pool)
             .await?;
-        state.realtime.revoke_session(session_id);
+        crate::realtime::ephemeral::revoke_session(state, session_id).await;
     }
     Ok(valid)
 }

@@ -1142,7 +1142,8 @@ pub(super) async fn get_my_work(
 ) -> Result<Json<MyWork>, AppError> {
     state
         .rate_limits
-        .check_expensive_read(principal.session_id)?;
+        .check_expensive_read(principal.session_id)
+        .await?;
     let projects = my_projects(&state.pool, principal.actor_id).await?;
     Ok(Json(
         my_work(&state.pool, principal.actor_id, &projects).await?,
@@ -1221,7 +1222,8 @@ pub(super) async fn get_timeline(
 ) -> Result<Json<TimelineResponse>, AppError> {
     state
         .rate_limits
-        .check_expensive_read(principal.session_id)?;
+        .check_expensive_read(principal.session_id)
+        .await?;
     let membership = project_membership(&state.pool, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
