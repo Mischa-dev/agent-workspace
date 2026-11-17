@@ -332,7 +332,7 @@ const INBOX_ITEM_SELECT: &str = r#"
 "#;
 
 fn agent_identity(principal: &McpPrincipal) -> Option<Uuid> {
-    (principal.actor_kind == ActorKind::ExternalAgent)
+    (principal.actor_kind == ActorKind::ExternalAgent) // kind-check: mechanical (reply requests are addressed to an agent's connection)
         .then_some(principal.external_agent_connection_id)
         .flatten()
 }

@@ -101,8 +101,10 @@ pub(crate) async fn ask_for_replies(
         // Project discussions ask agents a person mentions, and in a thread
         // also the agents already working there (follow-ups). DMs and groups
         // retain their existing delivery and turn rules below.
+        // Loop guard: an agent's channel message wakes no agent until A2.8's
+        // chain depth.
         if message.author_kind != "human" {
-            // kind-check: mechanical (loop guard: an agent's channel message wakes no agent until A2.8's chain depth)
+            // kind-check: mechanical (loop guard on wake-ups)
             return Ok(());
         }
         if !message.mentioned_actor_ids.is_empty() {
@@ -126,7 +128,7 @@ pub(crate) async fn ask_for_replies(
     if !matches!(message.conversation_kind, "dm" | "group") {
         return Ok(());
     }
-    let from_agent = message.author_kind == "external_agent";
+    let from_agent = message.author_kind == "external_agent"; // kind-check: mechanical (agents' turns in a DM or group are budgeted so they can't wake each other forever)
     if from_agent {
         if message.conversation_kind == "dm" {
             return Ok(());
@@ -205,7 +207,7 @@ async fn agents_to_ask(
             JOIN actors actor ON actor.id = membership.actor_id
             WHERE membership.project_id = $1
               AND membership.enabled
-              AND actor.kind = 'external_agent'
+              AND actor.kind = 'external_agent' -- // kind-check: mechanical (a mentioned agent is asked to reply; a person is notified)
               AND actor.status = 'active'
               AND actor.id = ANY($2)
               AND conversation_visible_to($3, actor.id)
@@ -225,7 +227,7 @@ async fn agents_to_ask(
         JOIN actors actor ON actor.id = member.actor_id
         WHERE member.conversation_id = $1
           AND member.actor_id <> $2
-          AND actor.kind = 'external_agent'
+          AND actor.kind = 'external_agent' -- // kind-check: mechanical (agents in a DM or group are asked to reply; people are notified)
           AND actor.status = 'active'
           AND conversation_visible_to($1, member.actor_id)
         ORDER BY member.actor_id
@@ -257,7 +259,7 @@ async fn thread_followers(
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE membership.project_id = $1
           AND membership.enabled
-          AND actor.kind = 'external_agent'
+          AND actor.kind = 'external_agent' -- // kind-check: mechanical (a follow-up asks the agents working in a thread to reply)
           AND actor.status = 'active'
           AND actor.id <> $3
           AND NOT (actor.id = ANY($4))
@@ -890,6 +892,7 @@ pub(crate) async fn continue_conversation_in(
     .await?;
     if let Some((message_id, author_actor_id, author_kind)) = &latest
         && author_kind == "external_agent"
+    // kind-check: mechanical (an agent's last word passes the turn to the next agent)
     {
         ask(
             transaction,

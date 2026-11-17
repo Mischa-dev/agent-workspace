@@ -324,7 +324,7 @@ async fn direct_overview(
                   AND role_allows(mine.role, mine.role_id, 'direct.start'))
           AND actor.id <> $1
           AND actor.status = 'active'
-        ORDER BY (actor.kind = 'external_agent') DESC, lower(profile.display_name), actor.id
+        ORDER BY (actor.kind = 'external_agent') DESC, lower(profile.display_name), actor.id -- // kind-check: mechanical (list order)
         LIMIT $3
         "#,
     )
@@ -933,32 +933,24 @@ pub(crate) async fn open_dm_in(
         (other_actor_id, actor_id)
     };
     let dm_key = format!("{first}:{second}");
-    if let Some(workspace) = kept_in(transaction, inside, actor_id, &[other_actor_id]).await? {
-        return open_kept_dm(transaction, workspace, actor_id, other_actor_id, &dm_key).await;
-    }
-    // One DM per pair (R20): the pair's personal DM, else the newest from
-    // before R20, when DMs lived in a workspace.
-    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id FROM conversations
-        WHERE kind = 'dm' AND dm_key = $1 AND NOT kept AND project_id IS NULL
-          AND conversation_visible_to(id, $2)
-        ORDER BY (workspace_id = direct_scope_id()) DESC, created_at DESC, id
-        LIMIT 1
-        "#,
-    )
-    .bind(&dm_key)
-    .bind(actor_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    {
+    let kept = kept_in(transaction, inside, actor_id, &[other_actor_id]).await?;
+    if let Some(id) = pair_dm(transaction, kept, actor_id, &dm_key).await? {
         return Ok((id, false));
     }
-    lock_startable(transaction, actor_id, DIRECT, &[other_actor_id]).await?;
+    if let Some(workspace) = kept {
+        require_start_in(transaction, workspace, actor_id).await?;
+    }
+    lock_startable(
+        transaction,
+        actor_id,
+        kept.unwrap_or(DIRECT),
+        &[other_actor_id],
+    )
+    .await?;
     let inserted = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, dm_key)
-        VALUES ($1, NULL, direct_scope_id(), 'dm', $2, 'members', $3)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, dm_key, kept)
+        VALUES ($1, NULL, COALESCE($4, direct_scope_id()), 'dm', $2, 'members', $3, $4 IS NOT NULL)
         ON CONFLICT DO NOTHING
         RETURNING id
         "#,
@@ -966,22 +958,14 @@ pub(crate) async fn open_dm_in(
     .bind(Uuid::now_v7())
     .bind(DM_NAME)
     .bind(&dm_key)
+    .bind(kept)
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(conversation_id) = inserted else {
         // Someone else made it just now.
-        let id = sqlx::query_scalar::<_, Uuid>(
-            r#"
-            SELECT id FROM conversations
-            WHERE kind = 'dm' AND dm_key = $1 AND workspace_id = direct_scope_id()
-              AND conversation_visible_to(id, $2)
-            "#,
-        )
-        .bind(&dm_key)
-        .bind(actor_id)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or(AppError::Conflict("conversation", "try again"))?;
+        let id = pair_dm(transaction, kept, actor_id, &dm_key)
+            .await?
+            .ok_or(AppError::Conflict("conversation", "try again"))?;
         return Ok((id, false));
     };
     insert_members(
@@ -1101,68 +1085,29 @@ async fn require_start_in(
     }
 }
 
-/// The pair's kept DM in `workspace`, made if there is none. The pair's
-/// personal DM stays as it is, listed beside it.
-async fn open_kept_dm(
+/// The pair's DM that `actor_id` sees: their kept one in `kept`'s
+/// workspace, or else their personal one (R20: one per pair; the newest from
+/// before R20, when DMs lived in a workspace, if there is no other).
+async fn pair_dm(
     transaction: &mut Transaction<'_, Postgres>,
-    workspace: Uuid,
-    actor_id: Uuid,
-    other_actor_id: Uuid,
-    dm_key: &str,
-) -> Result<(Uuid, bool), AppError> {
-    if let Some(id) = kept_dm(transaction, workspace, actor_id, dm_key).await? {
-        return Ok((id, false));
-    }
-    require_start_in(transaction, workspace, actor_id).await?;
-    lock_startable(transaction, actor_id, workspace, &[other_actor_id]).await?;
-    let inserted = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, dm_key, kept)
-        VALUES ($1, NULL, $2, 'dm', $3, 'members', $4, true)
-        ON CONFLICT DO NOTHING
-        RETURNING id
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(workspace)
-    .bind(DM_NAME)
-    .bind(dm_key)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    let Some(conversation_id) = inserted else {
-        // Someone else made it just now.
-        let id = kept_dm(transaction, workspace, actor_id, dm_key)
-            .await?
-            .ok_or(AppError::Conflict("conversation", "try again"))?;
-        return Ok((id, false));
-    };
-    insert_members(
-        transaction,
-        conversation_id,
-        actor_id,
-        &[actor_id, other_actor_id],
-    )
-    .await?;
-    Ok((conversation_id, true))
-}
-
-/// The pair's kept DM in `workspace`, if `actor_id` sees it.
-async fn kept_dm(
-    transaction: &mut Transaction<'_, Postgres>,
-    workspace: Uuid,
+    kept: Option<Uuid>,
     actor_id: Uuid,
     dm_key: &str,
 ) -> Result<Option<Uuid>, AppError> {
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT id FROM conversations
-        WHERE kind = 'dm' AND dm_key = $1 AND kept AND workspace_id = $3
-          AND project_id IS NULL AND conversation_visible_to(id, $2)
+        WHERE kind = 'dm' AND dm_key = $1 AND project_id IS NULL
+          AND CASE WHEN $3::uuid IS NULL THEN NOT kept
+                   ELSE kept AND workspace_id = $3 END
+          AND conversation_visible_to(id, $2)
+        ORDER BY (workspace_id = direct_scope_id()) DESC, created_at DESC, id
+        LIMIT 1
         "#,
     )
     .bind(dm_key)
     .bind(actor_id)
-    .bind(workspace)
+    .bind(kept)
     .fetch_optional(&mut **transaction)
     .await?)
 }

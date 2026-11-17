@@ -2402,9 +2402,9 @@ pub(crate) async fn lock_message_conversation(
                     -- Browser authentication, including the loopback-only
                     -- development principal, was validated before entering
                     -- this command path.
-                    ($4::boolean IS NULL AND actor.kind = 'human')
+                    ($4::boolean IS NULL AND actor.kind = 'human') -- // kind-check: mechanical (signed in through the browser)
                     OR
-                    ($4::boolean AND actor.kind = 'external_agent')
+                    ($4::boolean AND actor.kind = 'external_agent') -- // kind-check: mechanical (signed in through an agent connection)
                 ))
         FOR UPDATE OF conversation
         "#,
@@ -4089,7 +4089,6 @@ fn conversation_capabilities(
     conversation: &ConversationAccessRow,
 ) -> Result<ConversationCapabilities, AppError> {
     let active = !conversation.project_archived && !conversation.is_archived();
-    let actor_kind = parse_actor_kind(&principal.actor_kind)?;
     let allows = |action| conversation.allows(principal.actor_id, action);
     Ok(ConversationCapabilities {
         view: allows(Action::ProjectView)?,
@@ -4103,9 +4102,7 @@ fn conversation_capabilities(
         worker_invoke: active && conversation.kind == "thread" && allows(Action::WorkerInvoke)?,
         edit_messages: active && allows(Action::MessageSend)?,
         remove_own_messages: !conversation.project_archived && allows(Action::MessageSend)?,
-        remove_any_message: !conversation.project_archived
-            && actor_kind == ActorKind::Human
-            && allows(Action::MessageModerate)?,
+        remove_any_message: !conversation.project_archived && allows(Action::MessageModerate)?,
     })
 }
 

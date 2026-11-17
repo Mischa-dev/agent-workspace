@@ -1160,6 +1160,7 @@ fn reply_quote(id: Uuid, quote: Option<&crate::forwarding::ForwardedView>) -> Re
 /// "Name (@handle)", with ", agent" for agents.
 pub(super) fn person_label(name: &str, handle: &str, kind: Option<&str>) -> String {
     if kind == Some("external_agent") {
+        // kind-check: mechanical (a display label)
         format!("{name} (@{handle}, agent)")
     } else {
         format!("{name} (@{handle})")
@@ -2039,15 +2040,15 @@ pub(super) async fn people_search(
             SELECT actor.id,
                    min(known.display_name) AS name,
                    min(known.handle) AS handle,
-                   CASE WHEN actor.kind = 'external_agent' THEN 'agent' ELSE 'person' END AS kind,
+                   CASE WHEN actor.kind = 'external_agent' THEN 'agent' ELSE 'person' END AS kind, -- // kind-check: mechanical (a display label)
                    array_agg(DISTINCT known.place) AS projects
             FROM known
             JOIN actors actor ON actor.id = known.actor_id
-            WHERE actor.status = 'active' AND actor.kind IN ('human', 'external_agent')
+            WHERE actor.status = 'active' AND actor.kind IN ('human', 'external_agent') -- // kind-check: mechanical (accounts that can be messaged, not runs' worker accounts)
               AND ($2 = '' OR known.display_name ILIKE '%' || $2 || '%'
                            OR known.handle ILIKE '%' || $2 || '%')
             GROUP BY actor.id, actor.kind
-            ORDER BY (actor.kind = 'external_agent') DESC, lower(min(known.display_name))
+            ORDER BY (actor.kind = 'external_agent') DESC, lower(min(known.display_name)) -- // kind-check: mechanical (list order)
             LIMIT $3
             "#,
         )
