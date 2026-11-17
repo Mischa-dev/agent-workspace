@@ -996,12 +996,12 @@ async fn app_limit_hides(
 
 /// Whether `owner` can see what the event is about right now.
 pub(crate) async fn visible_to(
-    executor: impl PgExecutor<'_>,
+    pool: &PgPool,
     owner: Uuid,
     project_id: Uuid,
     subject: &Subject,
 ) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
+    let seen = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT actor_can_access_project($1, NULL, $2)
            AND ($3::uuid IS NULL OR conversation_visible_to($3, $1))
@@ -1039,8 +1039,42 @@ pub(crate) async fn visible_to(
     .bind(subject.pull_request_id)
     .bind(subject.work_item_id)
     .bind(subject.record_id)
-    .fetch_one(executor)
-    .await?)
+    .fetch_one(crate::db::scoped(pool))
+    .await?;
+    if !seen {
+        return Ok(false);
+    }
+    // A page, sheet or board (K3.5): as the thing registry shows it to the
+    // owner in that project now, its module on for them there.
+    let document = [
+        ("page", subject.page_id),
+        ("sheet", subject.sheet_id),
+        ("whiteboard", subject.whiteboard_id),
+    ]
+    .into_iter()
+    .find_map(|(kind, id)| id.map(|id| (kind, id)));
+    let Some((kind, id)) = document else {
+        return Ok(true);
+    };
+    let mut connection = crate::db::scoped_tx(pool).await?;
+    let Some(modules) =
+        crate::modules::state::for_project(&mut connection, project_id, owner).await?
+    else {
+        return Ok(false);
+    };
+    let projects = [project_id];
+    let workspaces = std::collections::BTreeMap::new();
+    let viewer = crate::things::Viewer {
+        actor_id: owner,
+        projects: &projects,
+        task_projects: &[],
+        modules,
+        workspaces: &workspaces,
+        addresses: crate::addresses::Addresses::LEGACY,
+    };
+    Ok(crate::things::get(&mut connection, &viewer, id)
+        .await?
+        .is_some_and(|thing| thing.kind == kind && thing.project_id == Some(project_id)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1203,7 +1237,7 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
         .await?;
         return Ok(());
     }
-    let Some(body) = build_body(state, &due, &subject).await? else {
+    let Some(body) = build_body(state, &due, subscription.owner_actor_id, &subject).await? else {
         finish_delivery(pool, due.id, "skipped", Some("What it was about is gone.")).await?;
         return Ok(());
     };
@@ -1481,9 +1515,61 @@ pub(crate) async fn record_data(
     })))
 }
 
+/// A page, sheet or board as a webhook sends it (K3.5): its title, version
+/// and address as the owner sees it through the thing registry, never its
+/// content. `None` once it's gone or out of the owner's sight.
+pub(crate) async fn document_data(
+    state: &AppState,
+    owner: Uuid,
+    project_id: Uuid,
+    subject: &Subject,
+) -> Result<Option<(&'static str, Value)>, AppError> {
+    let Some((key, id)) = [
+        ("page", subject.page_id),
+        ("sheet", subject.sheet_id),
+        ("whiteboard", subject.whiteboard_id),
+    ]
+    .into_iter()
+    .find_map(|(key, id)| id.map(|id| (key, id))) else {
+        return Ok(None);
+    };
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
+    let modules = crate::modules::state::for_project(&mut connection, project_id, owner)
+        .await?
+        .unwrap_or_default();
+    let projects = [project_id];
+    let workspaces = std::collections::BTreeMap::new();
+    let viewer = crate::things::Viewer {
+        actor_id: owner,
+        projects: &projects,
+        task_projects: &[],
+        modules,
+        workspaces: &workspaces,
+        addresses: crate::addresses::Addresses::LEGACY,
+    };
+    let Some(thing) = crate::things::get(&mut connection, &viewer, id).await? else {
+        return Ok(None);
+    };
+    if thing.kind != key {
+        return Ok(None);
+    }
+    let origin = events::public_origin(state);
+    Ok(Some((
+        key,
+        json!({
+            "id": thing.id,
+            "title": thing.title,
+            "version": thing.version,
+            "updatedAt": thing.updated_at,
+            "url": format!("{origin}{}", thing.href),
+        }),
+    )))
+}
+
 async fn build_body(
     state: &AppState,
     due: &DueDelivery,
+    owner: Uuid,
     subject: &Subject,
 ) -> Result<Option<Value>, AppError> {
     let pool = &state.pool;
@@ -1527,6 +1613,15 @@ async fn build_body(
                 record["changedFields"] = json!(subject.changed_fields);
             }
             json!({ "record": record })
+        }
+        "page.updated" | "sheet.updated" | "whiteboard.updated" => {
+            let Some(project_id) = due.project_id else {
+                return Ok(None);
+            };
+            let Some((key, data)) = document_data(state, owner, project_id, subject).await? else {
+                return Ok(None);
+            };
+            json!({ key: data })
         }
         "run.updated" | "run.finished" => {
             let Some(run_id) = subject.agent_run_id else {
