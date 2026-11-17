@@ -1,7 +1,9 @@
 [workspace]
 members = [
   "apps/server",
+  "crates/host-conformance",
   "crates/host-protocol",
+  "examples/minimal-host",
   "tools/codex-bridge-spike",
   "tools/host-maintenance",
 ]
