@@ -1,8 +1,13 @@
 //! S8: the workspace's audit log, read.
 //!
-//! `audit_events` is written all over the server; this reads it for one
-//! workspace, newest first, with filters for who, which app, what kind and
-//! when. Owners and admins read it. An event about a conversation or a
+//! Two sources, read together (K3.20): the facts in the event log (a task
+//! changed, a page saved, with who, through which app and for whom) and
+//! `audit_events`, which still records what isn't a change to a thing
+//! (sign-ins, settings, keys) and every refused attempt. A succeeded audit
+//! row gives way to the facts logged about the same thing by the same
+//! request or transaction (same `now()`), which say more and carry no text.
+//! One workspace, newest first, with filters for who, which app, what kind
+//! and when. Owners and admins read it. An event about a conversation or a
 //! message shows only when the reader can see that conversation
 //! (`conversation_visible_to`), so the log never reveals a private
 //! conversation to someone outside it. Metadata holds ids and counts, never
@@ -208,11 +213,48 @@ async fn require_reader(
     }
 }
 
+/// Both sources as one `event` relation, for `$1` the workspace. A fact's
+/// action is its type (`task.updated`); its metadata holds the keys of what
+/// changed, the version and who asked for it, never content.
+fn combined() -> String {
+    format!(
+        r#"
+    WITH event AS (
+        SELECT audit.id, audit.organization_id, audit.occurred_at, audit.action,
+               audit.outcome, audit.actor_id, audit.project_id, audit.channel,
+               audit.client_name, audit.target_kind, audit.target_id, audit.metadata
+        FROM audit_events audit
+        WHERE audit.organization_id = $1
+          AND NOT (audit.outcome = 'succeeded' AND audit.target_id IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM events fact
+                               WHERE fact.thing_id = audit.target_id
+                                 AND fact.workspace_id = audit.organization_id
+                                 AND fact.class = 'fact'
+                                 AND (fact.request_id = audit.request_id
+                                      OR fact.created_at = audit.occurred_at)))
+        UNION ALL
+        SELECT fact.id, fact.workspace_id, fact.created_at, fact.type, 'succeeded',
+               fact.actor_account_id, fact.space_id,
+               CASE WHEN fact.via_credential_id IS NOT NULL THEN 'mcp' END,
+               {app}, COALESCE(fact.thing_kind, 'workspace'), fact.thing_id,
+               jsonb_strip_nulls(jsonb_build_object(
+                   'changes', to_jsonb(fact.changes),
+                   'version', fact.thing_version,
+                   'conversation_id', fact.conversation_id,
+                   'requestedBy', fact.requested_by_account_id))
+        FROM events fact
+        WHERE fact.workspace_id = $1 AND fact.class = 'fact'
+    )
+    "#,
+        app = crate::events::activity::app_of("fact.via_credential_id"),
+    )
+}
+
 /// Events in the workspace the reader may see: everything but events about
 /// conversations or messages they can't see. `$1` is the workspace, `$2`
 /// the reader.
 const VISIBLE_EVENTS: &str = r#"
-    FROM audit_events event
+    FROM event
     LEFT JOIN projects project ON project.id = event.project_id
     LEFT JOIN actors actor ON actor.id = event.actor_id
     LEFT JOIN organization_actor_profiles profile
@@ -254,6 +296,7 @@ async fn list_events(
     };
     let rows = sqlx::query_as::<_, EventRow>(&format!(
         r#"
+        {combined}
         SELECT event.id, event.occurred_at, event.action, event.outcome,
                event.actor_id,
                COALESCE(profile.display_name, user_account.display_name,
@@ -274,7 +317,8 @@ async fn list_events(
           AND ($10::timestamptz IS NULL OR (event.occurred_at, event.id) < ($10, $11))
         ORDER BY event.occurred_at DESC, event.id DESC
         LIMIT $12
-        "#
+        "#,
+        combined = combined(),
     ))
     .bind(organization_id)
     .bind(principal.actor_id)
@@ -431,33 +475,38 @@ async fn facets(
             .to_lowercase()
             .cmp(&right.display_name.to_lowercase())
     });
-    let channels = sqlx::query_scalar::<_, String>(
+    let channels = sqlx::query_scalar::<_, String>(&format!(
         r#"
-        SELECT DISTINCT channel FROM audit_events
-        WHERE organization_id = $1 AND channel IS NOT NULL
+        {combined}
+        SELECT DISTINCT channel FROM event
+        WHERE channel IS NOT NULL
         ORDER BY 1
         "#,
-    )
+        combined = combined(),
+    ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let clients = sqlx::query_scalar::<_, String>(
+    let clients = sqlx::query_scalar::<_, String>(&format!(
         r#"
-        SELECT client_name FROM audit_events
-        WHERE organization_id = $1 AND client_name IS NOT NULL
+        {combined}
+        SELECT client_name FROM event
+        WHERE client_name IS NOT NULL
         GROUP BY client_name ORDER BY max(occurred_at) DESC LIMIT 50
         "#,
-    )
+        combined = combined(),
+    ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let kinds = sqlx::query_scalar::<_, String>(
+    let kinds = sqlx::query_scalar::<_, String>(&format!(
         r#"
-        SELECT DISTINCT split_part(action, '.', 1) FROM audit_events
-        WHERE organization_id = $1
+        {combined}
+        SELECT DISTINCT split_part(action, '.', 1) FROM event
         ORDER BY 1
         "#,
-    )
+        combined = combined(),
+    ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;

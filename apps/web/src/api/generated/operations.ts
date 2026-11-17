@@ -18,6 +18,8 @@ export type Envelope<T> =
   | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }
   | OpError
 
+export type ActivityEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; position: number; requestedBy?: string | null; requestedById?: string | null; summary: string; type: string; version?: number | null; via?: string | null }
+
 export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
 
 export type AgentUsageLine = { accountId: string; cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; handle?: string | null; inputTokens: number; name?: string | null; outputTokens: number; runs: number }
@@ -75,6 +77,10 @@ export type RunRecord = { activityCount: number; cancelRequestedAt?: string | nu
 export type RunResultInput = { branch?: string | null; id?: string | null; kind: string; number?: number | null; thingKind?: string | null; title?: string | null; url?: string | null }
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
+
+export type ActivityListInput = { before?: number | null; limit?: number | null; thing: string }
+
+export type ActivityListOutput = { entries: ActivityEntry[]; kind: string }
 
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
@@ -185,6 +191,7 @@ export type RunUsageReportInput = { cachedInputTokens?: number | null; cost?: nu
 export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId?: string | null }
 
 export type Operations = {
+  activity_list: { input: ActivityListInput; output: ActivityListOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }

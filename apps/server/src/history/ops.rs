@@ -27,7 +27,7 @@ pub fn register_ops(registry: &mut Registry) {
 /// own resolver where it has one (a conversation's visibility, the modules
 /// on in its space, tasks only where the caller may see tasks), so a thing
 /// the caller can't see is `not_found` like one that doesn't exist.
-async fn visible_kind(call: &OpCall<'_>, id: Uuid) -> Result<String, OpError> {
+pub(crate) async fn visible_kind(call: &OpCall<'_>, id: Uuid) -> Result<String, OpError> {
     let not_found = || OpError::not_found("That thing");
     let state = call.state;
     let account = call.account_id();

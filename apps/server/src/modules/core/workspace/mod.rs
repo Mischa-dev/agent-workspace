@@ -15,5 +15,6 @@ impl CoreModule for Module {
     fn register(&self, module: &mut Registrar<'_>) {
         module.operations(crate::packages::ops::register_ops);
         module.operations(crate::history::ops::register_ops);
+        module.operations(crate::events::activity::register_ops);
     }
 }

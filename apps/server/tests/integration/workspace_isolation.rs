@@ -1976,6 +1976,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "file_read",
     "history_list",
     "history_show",
+    "activity_list",
     "collection_list",
     "collection_describe",
     "record_query",
@@ -2679,6 +2680,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "history_show",
             vec![json!({"thing": a.page, "version": 1})],
             vec![json!({"thing": b.page, "version": 1})],
+            vec![],
+        ),
+        // K3.20: any thing's activity from the log.
+        case(
+            "activity_list",
+            vec![json!({"thing": a.page}), json!({"thing": a.task})],
+            vec![json!({"thing": b.page}), json!({"thing": b.task})],
             vec![],
         ),
     ]

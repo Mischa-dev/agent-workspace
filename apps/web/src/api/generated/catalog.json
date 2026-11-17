@@ -1,5 +1,19 @@
 [
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "activity_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List activity"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

@@ -12,6 +12,7 @@
 //! Writers that predate the catalogue stage typed change notices with
 //! `outbox::enqueue` (`notice`); they are events like any other.
 
+pub mod activity;
 pub mod catalog;
 pub mod consumer;
 pub mod notice;

@@ -10,6 +10,7 @@ mod a1_run_reporting;
 mod a1_runs_record;
 mod access_compare;
 mod accounts;
+mod activity_log;
 mod agent_interface;
 mod awd102_task_move;
 mod awd110_collection_forms;
