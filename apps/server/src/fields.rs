@@ -405,6 +405,7 @@ pub enum RecordKind {
 }
 
 impl RecordKind {
+    /// How audit details name the kind.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Task => "task",
@@ -412,7 +413,8 @@ impl RecordKind {
         }
     }
 
-    /// The collection the fields belong to; None for tasks.
+    /// The collection the fields belong to; None for the project's
+    /// built-in Tasks collection.
     pub fn collection_id(self) -> Option<Uuid> {
         match self {
             Self::Task => None,
@@ -2705,6 +2707,11 @@ pub fn group_clause(field: Uuid, key: &str) -> FieldClause {
 // ---------------------------------------------------------------------------
 // Definitions
 
+/// The collection a kind's fields belong to, from `$2` (a collection ID, or
+/// NULL for the project's built-in Tasks collection) and `$1` (the project).
+const FIELD_COLLECTION: &str =
+    "COALESCE($2::uuid, (SELECT id FROM collections WHERE project_id = $1 AND builtin = 'tasks'))";
+
 const DEFINITION_COLUMNS: &str = "id, name, description, field_type, config, position, \
      archived_at IS NOT NULL AS archived, version";
 
@@ -2718,14 +2725,13 @@ pub async fn list(
 ) -> Result<Vec<FieldDefinition>, AppError> {
     sqlx::query_as::<_, DefinitionRow>(&format!(
         "SELECT {DEFINITION_COLUMNS} FROM field_definitions \
-         WHERE project_id = $1 AND record_kind = $2 AND collection_id IS NOT DISTINCT FROM $4 \
+         WHERE project_id = $1 AND collection_id = {FIELD_COLLECTION} \
            AND ($3 OR archived_at IS NULL) \
          ORDER BY archived_at IS NOT NULL, position, id LIMIT {MAX_FIELD_ROWS}"
     ))
     .bind(project_id)
-    .bind(kind.as_str())
-    .bind(include_archived)
     .bind(kind.collection_id())
+    .bind(include_archived)
     .fetch_all(executor)
     .await?
     .into_iter()
@@ -2741,13 +2747,11 @@ async fn definition(
 ) -> Result<Option<FieldDefinition>, AppError> {
     sqlx::query_as::<_, DefinitionRow>(&format!(
         "SELECT {DEFINITION_COLUMNS} FROM field_definitions \
-         WHERE project_id = $1 AND record_kind = $2 AND id = $3 \
-           AND collection_id IS NOT DISTINCT FROM $4"
+         WHERE project_id = $1 AND collection_id = {FIELD_COLLECTION} AND id = $3"
     ))
     .bind(project_id)
-    .bind(kind.as_str())
-    .bind(id)
     .bind(kind.collection_id())
+    .bind(id)
     .fetch_optional(&mut *connection)
     .await?
     .map(FieldDefinition::try_from)
@@ -2979,12 +2983,11 @@ pub async fn create(
     {
         return Ok(CreateFieldOutcome::NameTaken(taken.clone()));
     }
-    let total = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM field_definitions WHERE project_id = $1 AND record_kind = $2 \
-         AND collection_id IS NOT DISTINCT FROM $3",
-    )
+    let total = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM field_definitions \
+         WHERE project_id = $1 AND collection_id = {FIELD_COLLECTION}"
+    ))
     .bind(project_id)
-    .bind(kind.as_str())
     .bind(kind.collection_id())
     .fetch_one(&mut *connection)
     .await?;
@@ -3027,25 +3030,27 @@ pub async fn create(
         serde_json::to_value(&config).map_err(|_| AppError::Internal("encode field config"))?;
     sqlx::query(
         r#"
+        WITH target AS (
+            SELECT COALESCE($3, ensure_tasks_collection($2, $8)) AS collection_id
+        )
         INSERT INTO field_definitions (
-            id, project_id, record_kind, name, description, field_type, config,
+            id, project_id, name, description, field_type, config,
             position, created_by_actor_id, collection_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7,
-                (SELECT COALESCE(max(position) + 1, 0) FROM field_definitions
-                 WHERE project_id = $2 AND record_kind = $3
-                   AND collection_id IS NOT DISTINCT FROM $9), $8, $9)
+        SELECT $1, $2, $4, $5, $6, $7,
+               (SELECT COALESCE(max(position) + 1, 0) FROM field_definitions
+                WHERE collection_id = target.collection_id), $8, target.collection_id
+        FROM target
         "#,
     )
     .bind(id)
     .bind(project_id)
-    .bind(kind.as_str())
+    .bind(kind.collection_id())
     .bind(&new.name)
     .bind(&new.description)
     .bind(new.field_type.as_str())
     .bind(config)
     .bind(actor_id)
-    .bind(kind.collection_id())
     .execute(&mut *connection)
     .await?;
     if let Some(position) = new.position {
@@ -3069,24 +3074,22 @@ async fn move_to(
     id: Uuid,
     position: i32,
 ) -> Result<(), AppError> {
-    let mut order = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM field_definitions WHERE project_id = $1 AND record_kind = $2 \
-         AND collection_id IS NOT DISTINCT FROM $3 \
-         ORDER BY archived_at IS NOT NULL, position, id",
-    )
+    let mut order = sqlx::query_scalar::<_, Uuid>(&format!(
+        "SELECT id FROM field_definitions \
+         WHERE project_id = $1 AND collection_id = {FIELD_COLLECTION} \
+         ORDER BY archived_at IS NOT NULL, position, id"
+    ))
     .bind(project_id)
-    .bind(kind.as_str())
     .bind(kind.collection_id())
     .fetch_all(&mut *connection)
     .await?;
-    let active = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM field_definitions WHERE project_id = $1 AND record_kind = $2 \
-         AND archived_at IS NULL AND id <> $3 AND collection_id IS NOT DISTINCT FROM $4",
-    )
+    let active = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM field_definitions WHERE project_id = $1 \
+         AND collection_id = {FIELD_COLLECTION} AND archived_at IS NULL AND id <> $3"
+    ))
     .bind(project_id)
-    .bind(kind.as_str())
-    .bind(id)
     .bind(kind.collection_id())
+    .bind(id)
     .fetch_one(&mut *connection)
     .await?;
     order.retain(|other| *other != id);
@@ -3099,17 +3102,14 @@ async fn move_to(
         r#"
         UPDATE field_definitions field
         SET position = placed.position
-        FROM unnest($3::uuid[], $4::int[]) AS placed(id, position)
-        WHERE field.project_id = $1 AND field.record_kind = $2 AND field.id = placed.id
-          AND field.collection_id IS NOT DISTINCT FROM $5
+        FROM unnest($2::uuid[], $3::int[]) AS placed(id, position)
+        WHERE field.project_id = $1 AND field.id = placed.id
           AND field.position <> placed.position
         "#,
     )
     .bind(project_id)
-    .bind(kind.as_str())
     .bind(&order)
     .bind(&positions)
-    .bind(kind.collection_id())
     .execute(&mut *connection)
     .await?;
     Ok(())
@@ -3169,14 +3169,13 @@ pub async fn change(
     actor_id: Uuid,
     change: FieldChange,
 ) -> Result<ChangeFieldOutcome, AppError> {
-    let locked = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM field_definitions WHERE project_id = $1 AND record_kind = $2 AND id = $3 \
-         AND collection_id IS NOT DISTINCT FROM $4 FOR UPDATE",
-    )
+    let locked = sqlx::query_scalar::<_, Uuid>(&format!(
+        "SELECT id FROM field_definitions \
+         WHERE project_id = $1 AND collection_id = {FIELD_COLLECTION} AND id = $3 FOR UPDATE"
+    ))
     .bind(project_id)
-    .bind(kind.as_str())
-    .bind(field_id)
     .bind(kind.collection_id())
+    .bind(field_id)
     .fetch_optional(&mut *connection)
     .await?;
     if locked.is_none() {
@@ -3303,26 +3302,22 @@ pub async fn change(
     }
     let config_value =
         serde_json::to_value(&config).map_err(|_| AppError::Internal("encode field config"))?;
-    sqlx::query(
-        r#"
-        UPDATE field_definitions
-        SET name = $4, description = $5, config = $6,
-            archived_at = CASE WHEN $7 THEN COALESCE(archived_at, now()) END,
-            archived_by_actor_id = CASE WHEN $7 THEN COALESCE(archived_by_actor_id, $8) END,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND record_kind = $2 AND id = $3
-          AND collection_id IS NOT DISTINCT FROM $9
-        "#,
-    )
+    sqlx::query(&format!(
+        "UPDATE field_definitions \
+         SET name = $4, description = $5, config = $6, \
+             archived_at = CASE WHEN $7 THEN COALESCE(archived_at, now()) END, \
+             archived_by_actor_id = CASE WHEN $7 THEN COALESCE(archived_by_actor_id, $8) END, \
+             version = version + 1, updated_at = now() \
+         WHERE project_id = $1 AND collection_id = {FIELD_COLLECTION} AND id = $3"
+    ))
     .bind(project_id)
-    .bind(kind.as_str())
+    .bind(kind.collection_id())
     .bind(field_id)
     .bind(&name)
     .bind(&description)
     .bind(config_value)
     .bind(archived)
     .bind(actor_id)
-    .bind(kind.collection_id())
     .execute(&mut *connection)
     .await?;
     if moves && let Some(position) = change.position {

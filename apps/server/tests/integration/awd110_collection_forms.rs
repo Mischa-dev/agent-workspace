@@ -708,3 +708,147 @@ async fn public_forms_hold_back_scripts_floods_and_a_busy_day() {
     let (status, sent) = from("198.51.100.4", "Someone else".to_owned()).await;
     assert_eq!(status, StatusCode::CREATED, "{sent}");
 }
+
+/// T1.11: the Tasks collection is edited like any other. A field added on
+/// its collection screen is a task field, an agent writes its records (by
+/// field and option names) as task changes, and a form on it makes tasks.
+#[tokio::test]
+async fn tasks_take_fields_records_and_forms_like_any_collection() {
+    let Some(setup) = setup("t1_11_tasks_like_any").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let base = format!("/api/v1/projects/{work}/collections");
+    let (status, listed) = get(&setup, &setup.browser, &base).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let tasks_id = listed["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .find(|collection| collection["builtin"] == "tasks")
+        .expect("Tasks")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let (status, effort) = write(
+        &setup,
+        &setup.browser,
+        "POST",
+        &format!("{base}/{tasks_id}/fields"),
+        json!({"name": "Effort", "type": "number"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{effort}");
+
+    // An agent writes a record of Tasks by names: it's a task, with the
+    // built-in fields and the new one set.
+    let written = call(
+        "record_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Tasks",
+            "records": [{"title": "Oil the hinges", "fields": {"Priority": "High", "Effort": 3}}],
+            "clientRequestId": "hinges",
+        }),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    assert_eq!(written["value"]["created"], 1, "{written}");
+    let task = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM task_rows WHERE project_id = $1::uuid AND title = 'Oil the hinges' \
+         AND priority = 'high'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the task, high priority");
+    let opened = call("task_open", json!({"taskId": task.to_string()})).await;
+    let fields = opened["value"]["task"]["fields"]
+        .as_array()
+        .or_else(|| opened["value"]["fields"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        fields
+            .iter()
+            .any(|field| field["name"] == "Effort" && field["value"] == 3),
+        "{opened}"
+    );
+    // A second write of the same values changes nothing.
+    let again = call(
+        "record_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Tasks",
+            "records": [{"record": task.to_string(), "fields": {"Effort": 3}}],
+            "clientRequestId": "hinges-again",
+        }),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    // A wrong option is refused with its record's place.
+    let wrong = call(
+        "record_write",
+        json!({
+            "projectId": "WORK",
+            "collection": "Tasks",
+            "records": [{"title": "Fine"}, {"title": "Odd", "fields": {"Priority": "Whenever"}}],
+            "clientRequestId": "wrong-priority",
+        }),
+    )
+    .await;
+    assert_eq!(wrong["outcome"], "invalid_request", "{wrong}");
+    let fine = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM task_rows WHERE project_id = $1::uuid AND title = 'Fine'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("count");
+    assert_eq!(fine, 0, "all or nothing");
+
+    // A form on Tasks makes a task of its answers.
+    let made = call(
+        "bug_report_link_write",
+        json!({"projectId": "WORK", "name": "Chores form", "collection": "Tasks",
+               "form": {"fields": [{"field": "Priority"}, {"field": "Effort", "required": true}]}}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let token = token_of(&made["value"]["formUrl"]);
+    let rendered = render(&setup, &token).await;
+    let (status, sent) = public(
+        &setup,
+        "POST",
+        &format!("/api/v1/bug-reports/{token}"),
+        "application/json",
+        &signed(
+            &json!({"title": "Sweep the deck", "Priority": "Low", "Effort": 2}).to_string(),
+            &rendered,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let (priority, values) = sqlx::query_as::<_, (String, Value)>(
+        "SELECT priority, field_values FROM task_rows \
+         WHERE project_id = $1::uuid AND title = 'Sweep the deck'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the answer's task");
+    assert_eq!(priority, "low");
+    let effort_id = effort["field"]["id"]
+        .as_str()
+        .or_else(|| effort["id"].as_str())
+        .expect("Effort's id");
+    assert_eq!(values[effort_id], 2, "{values}");
+}

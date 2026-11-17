@@ -69,7 +69,12 @@ export type CollectionBody = {
   archivedRecords: number
   canEditRecords: boolean
   canBuild: boolean
+  /** Adds, changes and archives its fields; for Tasks, the task field settings' permission too. */
+  canChangeFields: boolean
 }
+
+/** The built-in fields of a collection whose records are tasks (status, assignee, priority, dates, labels): changed in the task settings, not here. */
+export const BUILT_IN_TASK_FIELDS: ReadonlySet<string> = new Set(['1', '2', '3', '4', '5', '6'].map((n) => `0192f5c0-0000-7000-8000-00000000000${n}`))
 
 export type PersonRef = { id: string; name: string }
 
@@ -214,6 +219,7 @@ function normalizeBody(value: unknown): CollectionBody {
     archivedRecords: asNumber(raw.archivedRecords),
     canEditRecords: raw.canEditRecords === true,
     canBuild: raw.canBuild === true,
+    canChangeFields: raw.canChangeFields === true,
   }
 }
 

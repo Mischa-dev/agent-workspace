@@ -266,13 +266,20 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
         "{project}"
     );
 
-    // Its records change only through their tasks.
+    // A record written there is a task, made through the task rules (T1.11).
     let direct = call(
         "record_write",
-        json!({"projectId": "WORK", "collection": "Bugs", "records": [{"title": "Sneaky"}], "clientRequestId": "sneaky"}),
+        json!({"projectId": "WORK", "collection": "Bugs", "records": [{"title": "Written as a record"}], "clientRequestId": "as-record"}),
     )
     .await;
-    assert_eq!(direct["outcome"], "conflict", "{direct}");
+    assert_eq!(direct["outcome"], "ok", "{direct}");
+    let as_task = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM task_rows WHERE title = 'Written as a record' AND collection_id IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("count");
+    assert_eq!(as_task, 1);
     // In the database the record owns its title (T1.3), but it can't leave
     // its task: no move to another collection, no delete.
     let sneaky = sqlx::query("DELETE FROM collection_records WHERE id = $1")

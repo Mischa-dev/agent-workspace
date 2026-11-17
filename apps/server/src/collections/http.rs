@@ -144,6 +144,8 @@ async fn project_key(
 struct Reader {
     can_edit: bool,
     can_build: bool,
+    /// Tasks' fields follow the task field settings' rule (T1.11).
+    can_manage_task_fields: bool,
     project_archived: bool,
 }
 
@@ -166,6 +168,7 @@ async fn reader(
     Ok(Reader {
         can_edit: allows(&actor, &membership, Action::CollectionRecordEdit)?,
         can_build: allows(&actor, &membership, Action::CollectionBuild)?,
+        can_manage_task_fields: allows(&actor, &membership, Action::WorkflowManage)?,
         project_archived: membership.project_archived_at.is_some(),
     })
 }
@@ -360,6 +363,9 @@ struct CollectionBody {
     archived_records: i64,
     can_edit_records: bool,
     can_build: bool,
+    /// Adds, changes and archives its fields: building, and for Tasks the
+    /// task field settings' rule too (T1.11).
+    can_change_fields: bool,
 }
 
 async fn collection_body(
@@ -368,6 +374,7 @@ async fn collection_body(
     collection: &Collection,
     can_edit: bool,
     can_build: bool,
+    can_manage_task_fields: bool,
 ) -> Result<CollectionBody, AppError> {
     let definitions =
         super::field_definitions(&mut *connection, project_id, collection.id, true).await?;
@@ -389,9 +396,10 @@ async fn collection_body(
             .map(|view| ViewSummary::of(view, &definitions))
             .collect(),
         archived_records,
-        // The Tasks collection's records are tasks, changed on task screens.
+        // Records of a collection that acts like a task change as tasks.
         can_edit_records: can_edit && !collection.archived,
         can_build,
+        can_change_fields: can_build && (!collection.is_tasks() || can_manage_task_fields),
     })
 }
 
@@ -414,6 +422,7 @@ async fn get_collection(
             &collection,
             reader.can_edit && writable,
             reader.can_build && writable,
+            reader.can_manage_task_fields,
         )
         .await?,
     ))
@@ -578,7 +587,15 @@ async fn create_collection(
     outbox::enqueue_collection_updated(&mut write.transaction, project_id, collection.id, &[])
         .await?;
     let collection = write.collection(collection.id).await?;
-    let body = collection_body(&mut write.transaction, project_id, &collection, true, true).await?;
+    let body = collection_body(
+        &mut write.transaction,
+        project_id,
+        &collection,
+        true,
+        true,
+        true,
+    )
+    .await?;
     write.finish(StatusCode::CREATED, &body).await
 }
 
@@ -749,7 +766,15 @@ async fn update_collection(
             ));
         }
     };
-    let body = collection_body(&mut write.transaction, project_id, &collection, true, true).await?;
+    let body = collection_body(
+        &mut write.transaction,
+        project_id,
+        &collection,
+        true,
+        true,
+        true,
+    )
+    .await?;
     write.finish(StatusCode::OK, &body).await
 }
 

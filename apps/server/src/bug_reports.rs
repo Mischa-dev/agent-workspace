@@ -265,12 +265,6 @@ pub(crate) async fn checked_form(
             "The collection is archived. Restore it to take answers.".to_owned(),
         ));
     }
-    if collection.acts_like_task {
-        return Ok(Err(format!(
-            "{}'s records are tasks, so a form can't add to it yet. A bug report link without a collection makes tasks.",
-            collection.name
-        )));
-    }
     let definitions = crate::collections::field_definitions(
         &mut *crate::db::scoped_tx(pool).await?,
         project_id,
@@ -445,6 +439,13 @@ pub(crate) async fn create(
         }
         (Some(collection_id), form) => {
             if !can_add_records(&state.pool, caller, project_id).await {
+                return Err(AppError::Forbidden);
+            }
+            // A form whose answers are tasks needs the right to make tasks.
+            let makes_tasks = crate::collections::get(&state.pool, project_id, collection_id)
+                .await?
+                .is_some_and(|collection| collection.acts_like_task);
+            if makes_tasks && !can_create {
                 return Err(AppError::Forbidden);
             }
             let form = form.clone().unwrap_or_default();
@@ -879,10 +880,26 @@ struct ReportLink {
 /// Why the maker can't add tasks (or a form's records) through it any
 /// more, if they can't.
 async fn maker_refusal(pool: &PgPool, link: &ReportLink) -> Result<Option<String>, AppError> {
-    let action = if link.collection_id.is_some() {
-        PolicyAction::CollectionRecordEdit
-    } else {
-        PolicyAction::WorkItemCreate
+    // A form whose collection's records are tasks makes tasks (T1.11).
+    let makes_tasks = match link.collection_id {
+        None => true,
+        Some(collection_id) => sqlx::query_scalar::<_, bool>(
+            "SELECT acts_like_task FROM collections WHERE project_id = $1 AND id = $2",
+        )
+        .bind(link.project_id)
+        .bind(collection_id)
+        .fetch_optional(crate::db::scoped(pool))
+        .await?
+        .unwrap_or(false),
+    };
+    // A form writes records; one whose records are tasks makes tasks too.
+    let actions = match (link.collection_id.is_some(), makes_tasks) {
+        (false, _) => &[PolicyAction::WorkItemCreate][..],
+        (true, false) => &[PolicyAction::CollectionRecordEdit][..],
+        (true, true) => &[
+            PolicyAction::CollectionRecordEdit,
+            PolicyAction::WorkItemCreate,
+        ][..],
     };
     let reachable = sqlx::query_scalar::<_, bool>(
         "SELECT coalesce(actor_can_access_project($1, NULL, $2), false)",
@@ -891,20 +908,23 @@ async fn maker_refusal(pool: &PgPool, link: &ReportLink) -> Result<Option<String
     .bind(link.project_id)
     .fetch_one(crate::db::scoped(pool))
     .await?;
-    let allowed = reachable
-        && matches!(
-            crate::memory::project_access(
-                pool,
-                link.owner_actor_id,
-                ActorKind::Human,
-                link.project_id,
-                action,
-            )
-            .await,
-            Ok(false)
-        );
+    let mut allowed = reachable;
+    for action in actions {
+        allowed = allowed
+            && matches!(
+                crate::memory::project_access(
+                    pool,
+                    link.owner_actor_id,
+                    ActorKind::Human,
+                    link.project_id,
+                    *action,
+                )
+                .await,
+                Ok(false)
+            );
+    }
     Ok((!allowed).then(|| {
-        if link.collection_id.is_some() {
+        if link.collection_id.is_some() && !makes_tasks {
             "Turned off because the person who made it can no longer add records in this \
              project. Turn it on again to take answers as you."
                 .to_owned()

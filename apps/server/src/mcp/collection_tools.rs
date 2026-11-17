@@ -450,7 +450,8 @@ pub(super) struct CollectionWriteArguments {
     pub archived: Option<bool>,
     /// true makes its records tasks: each gets a status, assignee,
     /// priority, dates, labels and a key like AWD-12, and is then changed
-    /// with the task tools (task_create with collection, task_update).
+    /// as a task (record_write, or task_create with collection and
+    /// task_update).
     /// false turns it off again while it has no records.
     pub acts_like_task: Option<bool>,
     /// The version from collection_describe: if the collection changed
@@ -1258,6 +1259,124 @@ pub(super) struct RecordWriteValue {
     pub idempotent_replay: bool,
 }
 
+/// Writes records of a collection whose records are tasks, each as a task
+/// change (`collections::task_writes`, as the web app's record routes do),
+/// all or nothing in the caller's transaction.
+async fn task_records_write(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    project_key: &str,
+    collection: &Collection,
+    inputs: &[RecordInput],
+) -> Result<Result<Vec<Written>, records::WriteProblem>, AppError> {
+    let project_id = principal.project_id;
+    let actor = super::tasks::command_actor(principal, project_id);
+    // Agents name built-in fields, options, people and labels as they read
+    // them; the task change takes them by ID.
+    let builtins = collections::tasks::fields(
+        &mut *transaction,
+        project_id,
+        collection.field_kind(),
+        false,
+    )
+    .await?
+    .into_iter()
+    .filter(|field| collections::tasks::is_builtin_field(field.id))
+    .collect::<Vec<_>>();
+    let mut written = Vec::with_capacity(inputs.len());
+    for (index, input) in inputs.iter().enumerate() {
+        let (named, rest): (Vec<_>, Vec<_>) = input
+            .values
+            .iter()
+            .cloned()
+            .partition(|(reference, _)| fields::find(&builtins, reference).is_some());
+        let resolved = match work_item_fields::resolve_for(
+            &mut *transaction,
+            project_id,
+            Writer {
+                actor_id: principal.actor_id,
+                project_key,
+            },
+            &builtins,
+            "fields",
+            &named,
+            None,
+        )
+        .await?
+        {
+            Ok(resolved) => resolved,
+            Err(problem) => {
+                return Ok(Err(records::WriteProblem {
+                    index,
+                    kind: ProblemKind::Invalid,
+                    field: problem.field,
+                    message: problem.message,
+                    current_version: None,
+                }));
+            }
+        };
+        let input = &RecordInput {
+            values: resolved
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    (
+                        entry.field.id.to_string(),
+                        entry.value.unwrap_or(Value::Null),
+                    )
+                })
+                .chain(rest)
+                .collect(),
+            ..input.clone()
+        };
+        let before = match input.record {
+            Some(reference) => records::find(
+                &mut **transaction,
+                project_id,
+                collection.id,
+                reference,
+                true,
+            )
+            .await?
+            .map(|record| record.version),
+            None => None,
+        };
+        let task_id = match collections::task_writes::write(
+            transaction,
+            &actor,
+            project_key,
+            collection,
+            input,
+        )
+        .await?
+        {
+            Ok(task_id) => task_id,
+            Err(mut problem) => {
+                problem.index = index;
+                return Ok(Err(problem));
+            }
+        };
+        let record = records::find(
+            &mut **transaction,
+            project_id,
+            collection.id,
+            RecordRef::Id(task_id),
+            true,
+        )
+        .await?
+        .ok_or(AppError::Internal("written task is missing"))?;
+        written.push(match before {
+            None => Written::Created(record),
+            Some(version) if version == record.version => Written::Unchanged(record),
+            Some(_) => Written::Changed {
+                record,
+                changed: Vec::new(),
+            },
+        });
+    }
+    Ok(Ok(written))
+}
+
 pub(super) async fn record_write(
     state: &AppState,
     principal: &McpPrincipal,
@@ -1363,14 +1482,6 @@ pub(super) async fn record_write(
         else {
             return Ok(ToolResult::not_found("That collection"));
         };
-        if collection.is_tasks() {
-            return Ok(ToolResult::conflict(collections::tasks::READ_ONLY_MESSAGE));
-        }
-        if collection.acts_like_task {
-            return Ok(ToolResult::conflict(collections::tasks::task_like_message(
-                &collection.name,
-            )));
-        }
         if collection.archived {
             return Ok(ToolResult::conflict(format!(
                 "\"{}\" is archived. Restore it with collection_write (archived: false) first.",
@@ -1384,17 +1495,29 @@ pub(super) async fn record_write(
             actor_id: principal.actor_id,
             project_key: &project_key,
         };
-        let written = match records::write(
-            &mut transaction,
-            project_id,
-            &collection,
-            writer,
-            &definitions,
-            "fields",
-            &inputs,
-        )
-        .await?
-        {
+        let written = if collection.acts_like_task {
+            // Its records are tasks: each is a task change, as on the web.
+            task_records_write(
+                &mut transaction,
+                principal,
+                &project_key,
+                &collection,
+                &inputs,
+            )
+            .await?
+        } else {
+            records::write(
+                &mut transaction,
+                project_id,
+                &collection,
+                writer,
+                &definitions,
+                "fields",
+                &inputs,
+            )
+            .await?
+        };
+        let written = match written {
             Ok(written) => written,
             Err(problem) => {
                 let at = format!("records[{}].{}", problem.index, problem.field);

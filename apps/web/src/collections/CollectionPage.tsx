@@ -167,12 +167,12 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   // The built-in Tasks collection (AWD-110) reads the project's tasks, and
   // the records of a collection that acts like a task are tasks too: a
   // record opens its task, and an edit here is a task change. Tasks' name
-  // and fields are the project's, changed in the task settings.
+  // and settings stay; its fields change here like any collection's (T1.11).
   const tasks = collection.data.collection.builtin === 'tasks'
   const taskLike = tasks || collection.data.collection.actsLikeTask === true
   // A link to such a record (an embed, an old link) opens its task.
   if (taskLike && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
-  const body = tasks ? { ...collection.data, canBuild: false } : collection.data
+  const body = { ...collection.data, canBuild: collection.data.canChangeFields }
   const canSaveViews = collection.data.canBuild && !(Boolean(project.archivedAt) || body.collection.archived)
   const views = [...body.views].sort((left, right) => left.position - right.position)
   const view = views.find((entry) => entry.id === params.get('view')) ?? views[0] ?? null
@@ -293,8 +293,9 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   }
 
   const collectionMenu: MenuEntry[] = [
-    ...(body.canEditRecords && !taskLike ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
-    ...(canBuild
+    ...(body.canEditRecords ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
+    ...(canBuild && tasks ? [{ label: 'Add a field…', icon: 'plus' as const, onSelect: () => setDialog({ kind: 'field', field: null }) }] : []),
+    ...(canBuild && !tasks
       ? ([
           { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },
           { label: 'Add a field…', icon: 'plus', onSelect: () => setDialog({ kind: 'field', field: null }) },
@@ -347,7 +348,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
         {body.collection.archived ? (
           <Banner className="aw-page__banner" icon="archive" tone="warning">
             This collection is archived, so its records can’t change.{' '}
-            {body.canBuild && !project.archivedAt ? (
+            {collection.data.canBuild && !project.archivedAt ? (
               <Button onClick={() => void setCollectionArchived(false)} size="sm">
                 Restore
               </Button>

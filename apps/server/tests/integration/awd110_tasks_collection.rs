@@ -184,12 +184,21 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
         json!({
             "projectId": "WORK",
             "collection": "Tasks",
-            "records": [{"title": "Sneaky"}],
-            "clientRequestId": "sneaky",
+            "records": [{"title": "Written as a record", "fields": {"Priority": "high"}}],
+            "clientRequestId": "as-record",
         }),
     )
     .await;
-    assert_eq!(written["outcome"], "conflict", "{written}");
+    // Its records are tasks: a record written there is a task (T1.11).
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let made = sqlx::query_scalar::<_, String>(
+        "SELECT priority FROM task_rows WHERE project_id = $1::uuid AND title = 'Written as a record'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the task");
+    assert_eq!(made, "high");
     // A field added to Tasks is a task field; a built-in name is refused.
     let (status, mood) = send(
         app,
@@ -202,14 +211,16 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{mood}");
-    let kind = sqlx::query_scalar::<_, String>(
-        "SELECT record_kind FROM field_definitions WHERE project_id = $1::uuid AND name = 'Mood'",
+    let home = sqlx::query_scalar::<_, String>(
+        "SELECT collection.builtin FROM field_definitions field \
+         JOIN collections collection ON collection.id = field.collection_id \
+         WHERE field.project_id = $1::uuid AND field.name = 'Mood'",
     )
     .bind(&work)
     .fetch_one(&setup.pool)
     .await
     .expect("Mood");
-    assert_eq!(kind, "task");
+    assert_eq!(home, "tasks");
     let (status, _) = send(
         app,
         setup.browser.request(
@@ -233,20 +244,21 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     )
     .await;
     assert_eq!(agent_status["outcome"], "invalid_request", "{agent_status}");
-    // Nor does a form add to it.
+    // A form adds tasks to it (T1.11).
     let form = call(
         "bug_report_link_write",
-        json!({"projectId": "WORK", "name": "Task form", "collection": "Tasks"}),
+        json!({"projectId": "WORK", "name": "Task form", "collection": "Tasks",
+               "form": {"fields": [{"field": "Priority"}, {"field": "Effort"}]}}),
     )
     .await;
-    assert_eq!(form["outcome"], "invalid_request", "{form}");
+    assert_eq!(form["outcome"], "ok", "{form}");
     let tasks_now =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_items WHERE project_id = $1::uuid")
             .bind(&work)
             .fetch_one(&setup.pool)
             .await
             .expect("count");
-    assert_eq!(tasks_now, 3);
+    assert_eq!(tasks_now, 4);
 
     // Another project's Tasks collection is its own, and this one's ID
     // finds nothing there.

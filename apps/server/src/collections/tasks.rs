@@ -660,17 +660,7 @@ pub async fn ensure(
     Ok(())
 }
 
-/// What to say when a write asks to change the Tasks collection's records,
-/// fields, or the collection itself.
+/// What to say when a write asks to change the Tasks collection itself.
 pub const READ_ONLY_MESSAGE: &str = "Tasks is the built-in collection of this project's tasks: \
-     its name and settings don't change. Change its records with the task tools (task_create, \
-     task_update), and its fields with collection_write.";
-
-/// What to say when `record_write` names a collection whose records are
-/// tasks.
-pub fn task_like_message(name: &str) -> String {
-    format!(
-        "{name}'s records act like tasks: add them with task_create (collection: \"{name}\") and \
-         change them with task_update, by key or ID."
-    )
-}
+     its name and settings don't change. Its records are the tasks (record_write or the task \
+     tools), and its fields change with collection_write.";
