@@ -2,7 +2,7 @@ import { useState, type RefObject } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { Button, Dialog, DocumentSkeleton, ErrorState, SegmentedControl } from '../ui'
-import { summarizeConversation } from './api'
+import { aiKeys, summarizeConversation } from './api'
 import { aiErrorMessage } from './links'
 import { SummaryView } from './SummaryView'
 
@@ -24,7 +24,7 @@ export default function CatchUpDialog({
   // Fixed when the dialog opens, so switching back and forth reuses the answer.
   const [since] = useState(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
   const summary = useQuery({
-    queryKey: ['conversation', conversationId, 'ai-summary', range],
+    queryKey: aiKeys.catchUp(conversationId, range),
     queryFn: () => summarizeConversation(conversationId, range === 'day' ? since : null),
     staleTime: 5 * 60_000,
     retry: false,

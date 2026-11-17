@@ -5,6 +5,7 @@ import { queryKeys } from '../api/queryKeys'
 import { useInstantMutation } from '../app/mutations'
 import { archiveConversation, conversationVersionFrom, restoreConversation } from './api'
 import type { ProjectConversationSidebar } from './types'
+import { threadsRootKey } from './threadModel'
 
 /**
  * Archive a channel or thread, leave it, and offer Undo, which restores it
@@ -31,8 +32,8 @@ export function useArchiveConversation({
   const here = `${location.pathname}${location.search}`
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
-    void queryClient.invalidateQueries({ queryKey: ['project', projectId, 'conversation', conversationId] })
-    void queryClient.invalidateQueries({ queryKey: ['project', projectId, 'threads'] })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.conversation(projectId, conversationId) })
+    void queryClient.invalidateQueries({ queryKey: threadsRootKey(projectId) })
   }
   return useInstantMutation({
     mutationFn: (expectedVersion: number) => archiveConversation({ conversationId, kind, expectedVersion }),

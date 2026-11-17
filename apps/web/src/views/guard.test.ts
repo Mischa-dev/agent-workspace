@@ -29,7 +29,6 @@ const FROZEN_LINES: Record<string, number> = {
 
 /** Files shaped like a second view engine that exist today. */
 const ALLOWED_FILES = new Set([
-  'collections/RecordBoard.tsx',
   'conversations/threadBoard.tsx',
   'work-items/FilterBar.tsx',
   'work-items/WorkItemBoard.tsx',
@@ -38,7 +37,7 @@ const ALLOWED_FILES = new Set([
 ])
 
 /** Files that call the board drag hook today, besides its own. */
-const ALLOWED_DRAG = new Set(['collections/RecordBoard.tsx', 'collections/RecordCalendar.tsx', 'work-items/WorkItemBoard.tsx'])
+const ALLOWED_DRAG = new Set(['work-items/WorkItemBoard.tsx'])
 
 const ENGINE = ['views/', 'pieces/']
 const SHAPED = /(Board\.tsx|FilterBar[^/]*|filterModel[^/]*|viewDraft[^/]*)$/

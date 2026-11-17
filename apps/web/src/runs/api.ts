@@ -132,12 +132,7 @@ export type UsageFilter = { organizationId?: string; projectId?: string; groupBy
 export const RUN_PAGE_SIZE = 50
 
 /** Runs cross projects, so their keys sit outside any one project's. */
-export const runKeys = {
-  list: (filter: RunListFilter) => ['runs', 'list', filter] as const,
-  usage: (filter: UsageFilter) => ['runs', 'usage', filter] as const,
-  detail: (runId: string) => ['runs', 'detail', runId] as const,
-  diff: (runId: string) => ['runs', 'detail', runId, 'diff'] as const,
-}
+export { runKeys } from './keys'
 
 function query(values: Record<string, string | number | boolean | undefined>) {
   const params = new URLSearchParams()

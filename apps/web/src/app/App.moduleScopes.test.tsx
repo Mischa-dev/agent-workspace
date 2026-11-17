@@ -222,7 +222,7 @@ describe('entry points follow the modules where they lead', () => {
     })
     press('g', 'w')
     await settle()
-    expect(window.location.pathname).not.toBe('/my-work')
+    expect(window.location.pathname).not.toBe('/w/mischa/my-work')
     press('?')
     const sheet = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
     expect(sheet.querySelector('dd[aria-label="G then T"]')).toBeTruthy()
@@ -236,7 +236,7 @@ describe('entry points follow the modules where they lead', () => {
     await settle()
     await waitFor(() => {
       press('g', 'w')
-      expect(window.location.pathname).toBe('/my-work')
+      expect(window.location.pathname).toBe('/w/mischa/my-work')
     })
     window.history.pushState({}, '', `/projects/${projectAId}`)
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))

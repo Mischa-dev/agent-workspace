@@ -11,8 +11,11 @@ export function isSettled(status: string) {
   return SETTLED.has(status.toLowerCase())
 }
 
+/** Every cached thread board in one project. */
+export const threadsRootKey = (projectId: string) => ['project', projectId, 'threads'] as const
+
 export const threadsQueryKey = (projectId: string, conversationId: string) =>
-  ['project', projectId, 'threads', conversationId] as const
+  [...threadsRootKey(projectId), conversationId] as const
 
 /** Every cached thread board of one conversation, whichever project holds it. */
 export const isThreadsKey = (key: readonly unknown[], conversationId: string) =>

@@ -131,7 +131,7 @@ function RenameSection({ project }: { project: Project }) {
       setDraft(null)
       setError(null)
       queryClient.setQueryData(queryKeys.project(renamed.id), renamed)
-      void queryClient.invalidateQueries({ queryKey: ['projects'] })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
       showToast({ tone: 'success', title: `Renamed to ${renamed.name}` })
     },
     onError: async (reason) => {

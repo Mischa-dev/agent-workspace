@@ -79,7 +79,7 @@ export function useGraph(projectId: string, filters: GraphFilters = {}) {
 export function useReadiness(projectId: string, workItemId: string, version: number) {
   return useQuery({
     // The task's version is in the key so an edit rechecks it.
-    queryKey: [...aiKeys.readiness(projectId, workItemId), version],
+    queryKey: aiKeys.readinessAt(projectId, workItemId, version),
     queryFn: () => getReadiness(projectId, workItemId),
     enabled: Boolean(projectId && workItemId),
   })

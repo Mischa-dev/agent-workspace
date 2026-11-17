@@ -3,7 +3,7 @@
   "name": "Agent Workspace",
   "short_name": "Workspace",
   "description": "Chat for people and their agents.",
-  "start_url": "/home",
+  "start_url": "/w/-/home",
   "scope": "/",
   "display": "standalone",
   "background_color": "#fdfdff",
@@ -39,7 +39,7 @@
       "name": "New task",
       "short_name": "New task",
       "description": "Add a task to a project.",
-      "url": "/new-task",
+      "url": "/w/-/new",
       "icons": [
         {
           "src": "/icons/shortcut-new-task-96.png",
@@ -57,7 +57,7 @@
       "name": "Inbox",
       "short_name": "Inbox",
       "description": "Mentions, approvals and runs that need you.",
-      "url": "/inbox",
+      "url": "/w/-/inbox",
       "icons": [
         {
           "src": "/icons/shortcut-inbox-96.png",
@@ -75,7 +75,7 @@
       "name": "Messages",
       "short_name": "Messages",
       "description": "Direct messages with people and agents.",
-      "url": "/messages",
+      "url": "/w/-/messages",
       "icons": [
         {
           "src": "/icons/shortcut-messages-96.png",
