@@ -3,6 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { collectionChange, sheetChange, documentChanged, lastHeardVersion, onPageChange, onWhiteboardChange, pageChange, whiteboardChange } from './liveDocuments'
 import type { RealtimeEnvelope } from './realtimeModel'
+import { queryKeys } from '../api/queryKeys'
+import { collectionKeys } from '../collections/keys'
+import { memoryKeys } from '../memory/keys'
+import { sheetKeys } from '../sheets/keys'
+import { whiteboardKeys } from '../whiteboards/keys'
 
 const PROJECT = '0190f5a4-0000-7000-8000-000000000001'
 const PAGE = '0190f5a4-0000-7000-8000-000000000002'
@@ -10,6 +15,10 @@ const BOARD = '0190f5a4-0000-7000-8000-000000000003'
 const COLLECTION = '0190f5a4-0000-7000-8000-000000000004'
 
 function envelope(type: string, payload: Record<string, unknown>): RealtimeEnvelope {
+  return base(type, payload)
+}
+
+function base(type: string, payload: Record<string, unknown>): RealtimeEnvelope {
   return {
     eventId: '0190f5a4-0000-7000-8000-0000000000ff',
     eventCursor: 1,
@@ -94,6 +103,47 @@ describe('live documents from the realtime socket', () => {
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
       ['project', PROJECT, 'sheets', COLLECTION],
       ['project', PROJECT, 'sheets', 'list'],
+      undefined,
     ])
+    // The third refetches this sheet's discussion summaries, and no other's.
+    const summaries = invalidate.mock.calls[2]?.[0]?.predicate
+    const query = (queryKey: unknown[]) => ({ queryKey }) as unknown as Parameters<NonNullable<typeof summaries>>[0]
+    expect(summaries?.(query(['op', null, 'comment_list', { thing: { kind: 'sheet', id: COLLECTION } }]))).toBe(true)
+    expect(summaries?.(query(['op', null, 'comment_list', { thing: { kind: 'sheet', id: 'other' } }]))).toBe(false)
+    expect(summaries?.(query(['op', null, 'page_list', {}]))).toBe(false)
+  })
+
+  // The pages cache under their features' key factories; the live connection
+  // names the same factories (W1.2), so a key that changes shape in one place
+  // still reaches what is on screen. Seeded with real queries, not literals.
+  it('refreshes what the pages cached, by their own key factories', () => {
+    vi.useFakeTimers()
+    // Fresh ids: an earlier test's pending refresh for the same thing would swallow these.
+    const [PROJECT, PAGE, BOARD, COLLECTION] = ['11', '12', '13', '14'].map((n) => `0190f5a4-0000-7000-8000-0000000000${n}`)
+    const envelope = (type: string, payload: Record<string, unknown>) => ({ ...base(type, payload), projectId: PROJECT })
+    const queryClient = new QueryClient()
+    const seeded = {
+      records: collectionKeys.records(PROJECT, COLLECTION, 'view'),
+      collections: collectionKeys.list(PROJECT, false),
+      sheetTab: sheetKeys.tab(PROJECT, COLLECTION, 'tab-1'),
+      sheets: sheetKeys.list(PROJECT),
+      discussion: memoryKeys.discussion(PROJECT, PAGE),
+      page: memoryKeys.page(PROJECT, PAGE),
+      pageThing: queryKeys.thing('page', PAGE),
+      boards: whiteboardKeys.list({}),
+      boardThing: queryKeys.thing('whiteboard', BOARD),
+      unrelated: memoryKeys.page(PROJECT, BOARD).slice(0, 3).concat(['decisions']),
+    }
+    for (const key of Object.values(seeded)) queryClient.setQueryData(key, { seeded: true })
+    documentChanged(queryClient, envelope('collection.updated', { collectionId: COLLECTION, recordIds: [] }))
+    documentChanged(queryClient, envelope('sheet.updated', { sheetId: COLLECTION, revision: 3 }))
+    documentChanged(queryClient, envelope('page.discussion.updated', { pageId: PAGE }))
+    documentChanged(queryClient, envelope('page.updated', { pageId: PAGE, version: 9 }))
+    documentChanged(queryClient, envelope('whiteboard.updated', { whiteboardId: BOARD, sceneSeq: 2, version: 2 }))
+    vi.advanceTimersByTime(5_000)
+    const invalidated = (key: readonly unknown[]) => queryClient.getQueryState(key)?.isInvalidated
+    const { unrelated, ...touched } = seeded
+    for (const [name, key] of Object.entries(touched)) expect(invalidated(key), name).toBe(true)
+    expect(invalidated(unrelated)).toBe(false)
   })
 })

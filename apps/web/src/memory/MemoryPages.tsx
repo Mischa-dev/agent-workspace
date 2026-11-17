@@ -6,13 +6,13 @@ import { isApiError } from '../api/errors'
 import { opQuery } from '../api/ops'
 import { readLocal, writeLocal } from '../app/localDrafts'
 import { toastError } from '../app/mutations'
-import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
 import type { Project, ProjectLocation } from '../projects/types'
-import { useHomeWorkspaceId, useProjectExperience } from '../experience/layout'
-import { AppShell } from '../shell/AppShell'
+import { useWorkspaceId } from '../app/workspace'
+import { useProjectExperience } from '../experience/layout'
+import { useShellPage } from '../shell/shellStore'
 import { MemoryTabs } from '../shell/ProjectTabs'
 import { usePageTitle } from '../shell/documentTitleModel'
 import {
@@ -104,30 +104,25 @@ function excerptText(excerpt: string) {
 
 /** Loads the project and renders its frame, or the loading and error states, remembering `place` as where the person is. */
 function ProjectFrame({ children, place }: { children: (project: Project) => ReactNode; place?: ProjectLocation }) {
-  const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
+  // Until the page can draw, the shell keeps the space the address names.
+  useShellPage(project.data ? { mainClassName: 'aw-main--page', project: project.data } : {})
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading />
-      </AppShell>
+      <ProjectPageLoading />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
   return (
-    <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
-      <div className="aw-page aw-page--reading">
-        {place ? <RememberPlace location={place} project={project.data} /> : null}
-        {children(project.data)}
-      </div>
-    </AppShell>
+    <div className="aw-page aw-page--reading">
+      {place ? <RememberPlace location={place} project={project.data} /> : null}
+      {children(project.data)}
+    </div>
   )
 }
 
@@ -135,23 +130,22 @@ const pagesHref = (projectId: string) => `/projects/${encodeURIComponent(project
 
 /** The workspace's own pages, outside any project: they live in its hidden space. */
 function WorkspacePagesPage() {
-  const session = useAuthenticatedSession()
-  const organizationId = useHomeWorkspaceId()
+  const organizationId = useWorkspaceId()
   const space = useQuery({
-    queryKey: ['organization', organizationId, 'pages-space'],
+    queryKey: memoryKeys.workspacePagesSpace(organizationId),
     queryFn: () => workspacePagesSpace(organizationId ?? ''),
     enabled: Boolean(organizationId),
     staleTime: Infinity,
   })
   if (space.data) return <Navigate replace to={pagesHref(space.data.projectId)} />
   return (
-    <AppShell user={session.user}>
+    <>
       {space.isError ? (
         <ErrorState error={space.error} onRetry={() => void space.refetch()} title="Pages didn’t load" />
       ) : (
         <ListSkeleton label="Loading pages" rows={3} />
       )}
-    </AppShell>
+    </>
   )
 }
 
@@ -793,7 +787,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
   const [showSuperseded, setShowSuperseded] = useState(false)
   const [recording, setRecording] = useState(false)
   const decisions = useQuery({
-    queryKey: [...memoryKeys.decisions(projectId), showSuperseded],
+    queryKey: memoryKeys.decisionList(projectId, showSuperseded),
     queryFn: () => listDecisions(projectId, showSuperseded),
   })
   const target = location.hash ? decodeURIComponent(location.hash.slice(1)) : ''

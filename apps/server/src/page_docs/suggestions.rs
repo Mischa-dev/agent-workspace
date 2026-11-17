@@ -623,6 +623,7 @@ pub async fn decide(
                 actor_id: author_id,
                 actor_kind: crate::conversations::parse_actor_kind(&author_kind)?,
                 via_grant_id: None,
+                confined_project: None,
             };
             let (saved, _) = store::save(
                 transaction,
@@ -771,6 +772,7 @@ mod tests {
             actor_id,
             actor_kind,
             via_grant_id: None,
+            confined_project: None,
         };
         assert!(must_suggest(
             &writer(agent, ActorKind::ExternalAgent),

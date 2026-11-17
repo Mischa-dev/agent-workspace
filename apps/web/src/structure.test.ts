@@ -27,6 +27,8 @@ type Rule = {
   what: string;
   ceiling: number;
   count: (source: string) => number;
+  /** Files the rule doesn't look at (`src/`-relative). */
+  skip?: (file: string) => boolean;
 };
 
 /** Whitespace squeezed out, so `role  ===  'admin'` and `role==='admin'` match alike. */
@@ -47,6 +49,9 @@ const kindNeedles = ["external_agent", "human"].flatMap((kind) => [
 ]);
 const vendorNeedles = ["Codex", "Claude"];
 
+/** `<AppShell` uses left after W1.12a and W1.12b; W1.12c takes it to zero. */
+const CEILING_APP_SHELL = 27;
+
 const rules: Rule[] = [
   {
     id: "web_role_name_gates",
@@ -59,6 +64,23 @@ const rules: Rule[] = [
     what: "a check on the account kind; ask for a permission instead",
     ceiling: 10,
     count: (source) => countAll(squeeze(source), kindNeedles),
+  },
+  {
+    // W1.2 (guard 6.5): keys come from a feature's key factory (or the op
+    // client once a module moves to it), never an array written where it's used.
+    id: "web_inline_query_keys",
+    what: "a query key written inline; add it to the feature's key factory",
+    ceiling: 0,
+    count: (source) => squeeze(source).split("queryKey:[").length - 1,
+  },
+  {
+    // W1.12 (guard 6.3): pages tell the persistent shell what they need with
+    // useShellPage; they don't wrap themselves in AppShell. W1.12c ends it.
+    id: "web_app_shell_in_pages",
+    what: "a page wrapped in <AppShell>; call useShellPage and render only the page",
+    ceiling: CEILING_APP_SHELL,
+    count: (source) => (source.match(/<AppShell[\s>]/g) ?? []).length,
+    skip: (file) => file.startsWith("shell/"),
   },
   {
     id: "web_vendor_names",
@@ -74,6 +96,7 @@ function scan(rule: Rule, files: Record<string, string>) {
   const lower: string[] = [];
   for (const [path, source] of Object.entries(files)) {
     const file = path.replace(/^\.\//, "");
+    if (rule.skip?.(file)) continue;
     const found = rule.count(source);
     const allowance = allowed[file] ?? 0;
     if (found > allowance)
@@ -118,6 +141,20 @@ describe("web structure guards", () => {
     ).toHaveLength(1);
     expect(
       scan(roles, { "./scratch.tsx": 'if (can("tasks.edit")) show()' }).over,
+    ).toEqual([]);
+    const keys = rules.find((rule) => rule.id === "web_inline_query_keys")!;
+    expect(
+      scan(keys, { "./scratch.ts": "useQuery({ queryKey: ['project', id, 'x'] })" }).over,
+    ).toHaveLength(1);
+    expect(
+      scan(keys, { "./scratch.ts": "useQuery({ queryKey: projectKeys.x(id) })" }).over,
+    ).toEqual([]);
+    const shells = rules.find((rule) => rule.id === "web_app_shell_in_pages")!;
+    expect(
+      scan(shells, { "./inbox/Scratch.tsx": "return <AppShell home user={user}>{page}</AppShell>" }).over,
+    ).toHaveLength(1);
+    expect(
+      scan(shells, { "./shell/Scratch.tsx": "return <AppShell home user={user}>{page}</AppShell>" }).over,
     ).toEqual([]);
     const kinds = rules[1];
     expect(

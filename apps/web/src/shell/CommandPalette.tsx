@@ -7,7 +7,9 @@ import slashClaims from 'virtual:modules/slots/slash'
 import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { MESSAGE_SHORTCUTS } from '../conversations/messageShortcuts'
-import { useHomeExperience, useHomeWorkspaceId, useProjectExperience, type Experience } from '../experience/layout'
+import { isWorkspacePath, legacyPathOf } from '../app/href'
+import { useWorkspaceHref, useWorkspaceId } from '../app/workspace'
+import { useHomeExperience, useProjectExperience, type Experience } from '../experience/layout'
 import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
 import { projectSettingsHref } from '../settings/paths'
@@ -35,6 +37,7 @@ import { SHORTCUTS } from './shortcutSheet'
 import { parseTaskKey } from './shortcuts'
 import { useProjectByKey } from './useProjectByKey'
 import { projectPath, useRouteProject } from './useRouteProject'
+import { queryKeys } from '../api/queryKeys'
 
 
 /** A module's palette entry (M1.4), as the menu lists it. */
@@ -60,7 +63,7 @@ function useTaskResults(query: string, current: Project | null) {
   const target = key ? keyProject : current
   const enabled = Boolean(target && settled.length >= 2)
   const results = useQuery({
-    queryKey: ['project', target?.id ?? '', 'command-menu', 'tasks', settled],
+    queryKey: queryKeys.commandMenuTasks(target?.id ?? '', settled),
     queryFn: async () => {
       if (!target) return []
       const results = await searchWorkItemReferences(target.id, settled)
@@ -97,7 +100,8 @@ export function CommandPalette() {
   // those of a module that can be off while the person's settings load.
   const projectExperience = useProjectExperience(current?.id)
   const homeExperience = useHomeExperience()
-  const homeId = useHomeWorkspaceId()
+  const homeId = useWorkspaceId()
+  const toWorkspace = useWorkspaceHref()
   const direct = useDirectOverview()
   const { mutateAsync: updateNavigation } = useUpdateProjectNavigation()
   const { mutateAsync: switchProject } = useSwitchProject()
@@ -121,7 +125,8 @@ export function CommandPalette() {
 
   const items = useMemo<CommandItem[]>(() => {
     if (state.open !== 'commands') return []
-    const go = (to: string) => () => navigate(to)
+    // A workspace's pages open in the workspace the person is in.
+    const go = (to: string) => () => navigate(isWorkspacePath(to) ? toWorkspace(to) : to)
     const list: CommandItem[] = []
 
     // Where you were last, for opening the menu and pressing Enter.
@@ -406,7 +411,7 @@ export function CommandPalette() {
       })
     }
     return list
-  }, [current, direct.data, homeId, location.pathname, navigate, notificationPause, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
+  }, [current, direct.data, homeId, location.pathname, navigate, toWorkspace, notificationPause, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
 
   // AWD-75: an entry follows the module of where it leads, there: in another
   // project, that project's modules off (from the projects lists, so no
@@ -635,7 +640,7 @@ type Owner = { projectId?: string | null; organizationId?: string; whiteboard?: 
  * its own page.
  */
 function destination(href: string, queryClient: QueryClient, homeId: string | null): Pick<CommandItem, 'module' | 'project' | 'ownerUnknown'> {
-  const path = href.split(/[?#]/)[0]
+  const path = legacyPathOf(href.split(/[?#]/)[0])
   const module = moduleOfPath(path) ?? undefined
   const project = /^\/projects\/([^/]+)/.exec(path)?.[1]
   if (project) return { module, project }

@@ -60,7 +60,7 @@ import { ReplyingTo } from './ReplyQuote'
 import { Bold, Code, Italic, Paperclip, SquareCode, TextQuote, Type } from '../files/icons'
 import { useDraftSync } from './draftSync'
 import { useToastOffset } from './toastOffset'
-import { useHomeWorkspaceId } from '../experience/layout'
+import { useWorkspaceId } from '../app/workspace'
 import { shownStatus, useStatuses } from '../status/api'
 import { StatusText } from '../status/StatusText'
 import '../styles/conversation.css'
@@ -254,7 +254,7 @@ function ComposerBox({
   const [active, setActive] = useState(0)
   // C2.15: statuses next to the names offered for a mention.
   const mentionStatuses = useStatuses(
-    useHomeWorkspaceId(),
+    useWorkspaceId(),
     suggestions.flatMap((suggestion) => (suggestion.kind === 'mention' ? [suggestion.actor.id] : [])),
   )
   const [searching, setSearching] = useState(false)

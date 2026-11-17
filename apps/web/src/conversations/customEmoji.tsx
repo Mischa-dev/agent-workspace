@@ -6,7 +6,7 @@ import { useState, type FormEvent } from 'react'
 
 import { callOp, newRequestId } from '../api/ops'
 import { toastError } from '../app/mutations'
-import { useHomeWorkspaceId } from '../experience/layout'
+import { useWorkspaceId } from '../app/workspace'
 import { Button, Dialog, TextField, showToast } from '../ui'
 import { customEmojiKeys } from './customEmojiQuery'
 
@@ -23,7 +23,7 @@ function base64Of(file: File): Promise<string> {
 
 /** "Add an emoji": a name and a small image, for everyone in the workspace. */
 export function CustomEmojiDialog({ onClose, workspace }: { onClose: () => void; workspace?: string | null }) {
-  const home = useHomeWorkspaceId()
+  const home = useWorkspaceId()
   const workspaceId = workspace || home
   const queryClient = useQueryClient()
   const [name, setName] = useState('')

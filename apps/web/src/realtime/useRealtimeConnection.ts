@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { origins } from '../api/client'
-import { queryKeys } from '../api/queryKeys'
+import { isThingKey, isThingReferencesKey, queryKeys } from '../api/queryKeys'
 import { currentQueryScopeGeneration } from '../api/queryScope'
 import { coalesceDeltaBatch } from '../app/streaming'
 import {
@@ -105,9 +105,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
         void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
         // DMs and groups live in a Project the client does not list, so
         // refresh the Messages overview on any change.
-        void queryClient.invalidateQueries({ queryKey: ['direct'] })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.direct })
         // The inbox reads names and previews live, so any change can show there.
-        void queryClient.invalidateQueries({ queryKey: ['inbox'] })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.inbox })
         void queryClient.invalidateQueries({
           predicate: (query) =>
             query.queryKey[0] === 'project' &&
@@ -125,10 +125,12 @@ export function useRealtimeConnection(): RealtimeContextValue {
         invalidationTimers.delete(key)
         void queryClient.invalidateQueries({
           predicate: (query) =>
-            query.queryKey[0] === 'things' &&
-            ((CONVERSATION_THINGS.has(String(query.queryKey[1])) && query.queryKey[2] === conversationId) ||
-              // A message may have added or dropped a link: "Referenced in" lists refetch.
-              query.queryKey[3] === 'references'),
+            [...CONVERSATION_THINGS].some((kind) => isThingKey(query.queryKey, kind, conversationId)) ||
+            // A message may have added or dropped a link: "Referenced in" lists refetch.
+            isThingReferencesKey(query.queryKey) ||
+            // A comment or a resolved thread changes the open things' discussion
+            // summaries (cell marks, thread counts); only mounted ones refetch.
+            (query.queryKey[0] === 'op' && query.queryKey[2] === 'comment_list' && query.getObserversCount() > 0),
         })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)
@@ -164,13 +166,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
             query.queryKey[2] !== 'work-items',
         })
         // My work lists tasks across projects, so it isn't under the project key.
-        void queryClient.invalidateQueries({ queryKey: ['my-work'] })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.myWork })
         // A task embedded in a page as a card, and "Referenced in" lists its
         // description or comments may have changed.
         void queryClient.invalidateQueries({
-          predicate: (query) =>
-            query.queryKey[0] === 'things' &&
-            ((query.queryKey[1] === 'task' && query.queryKey[2] === workItemId) || query.queryKey[3] === 'references'),
+          predicate: (query) => isThingKey(query.queryKey, 'task', workItemId) || isThingReferencesKey(query.queryKey),
         })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)
@@ -178,11 +178,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
 
     const refetchAuthenticatedState = () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
-      void queryClient.invalidateQueries({ queryKey: ['direct'] })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.direct })
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'project',
       })
-      void queryClient.invalidateQueries({ queryKey: ['inbox'] })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.inbox })
     }
 
     const queueDelta = (
@@ -335,16 +335,14 @@ export function useRealtimeConnection(): RealtimeContextValue {
           }
           if (modulesChanged(queryClient, envelope)) return
           if (envelope.type === 'custom_emoji.changed') {
-            // A workspace's own emoji changed: its pickers read the list
-            // again (`customEmojiKeys.list`, spelled out to keep that code out of this chunk).
+            // A workspace's own emoji changed: its pickers read the list again.
             const workspaceId = typeof envelope.payload?.workspaceId === 'string' ? envelope.payload.workspaceId : null
-            void queryClient.invalidateQueries({ queryKey: workspaceId ? ['custom-emoji', workspaceId] : ['custom-emoji'] })
+            void queryClient.invalidateQueries({ queryKey: workspaceId ? queryKeys.customEmojiOf(workspaceId) : queryKeys.customEmoji })
             return
           }
           if (envelope.type === 'account.status.changed') {
             // Someone's status changed: the names that show it read it again.
-            // The key is `statusKeys.all`, spelled out so status code stays out of this chunk.
-            void queryClient.invalidateQueries({ queryKey: ['statuses'] })
+            void queryClient.invalidateQueries({ queryKey: queryKeys.statuses })
             return
           }
           if (

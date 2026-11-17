@@ -5,6 +5,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { callOp, newRequestId } from '../api/ops'
+import { queryKeys } from '../api/queryKeys'
 
 export type AccountStatus = {
   accountId: string
@@ -19,8 +20,8 @@ export type AccountStatus = {
 }
 
 export const statusKeys = {
-  all: ['statuses'] as const,
-  list: (workspaceId: string, accountIds: readonly string[]) => ['statuses', workspaceId, [...accountIds].sort().join(',')] as const,
+  all: queryKeys.statuses,
+  list: (workspaceId: string, accountIds: readonly string[]) => [...queryKeys.statuses, workspaceId, [...accountIds].sort().join(',')] as const,
 }
 
 export function setStatus(

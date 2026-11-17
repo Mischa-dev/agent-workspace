@@ -36,6 +36,7 @@ pub(super) fn writer(principal: &McpPrincipal) -> Writer {
         actor_id: principal.actor_id,
         actor_kind: principal.actor_kind,
         via_grant_id: principal.via_grant_id(),
+        confined_project: super::common::confined_project(principal),
     }
 }
 

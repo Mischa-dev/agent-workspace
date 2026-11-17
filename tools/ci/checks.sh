@@ -321,6 +321,7 @@ fi
 run_web_checks() {
   step "web tests" pnpm test &&
     step "web build" pnpm build &&
+    web_built=1 &&
     web_budget_base &&
     step "web asset budgets" pnpm check:assets &&
     step "performance tools" pnpm check:performance-tools &&
@@ -382,12 +383,14 @@ run_browser_smoke() {
   # anything this user still has there is left over: stop it.
   if [ -n "${CI_LOCK_DIR:-}" ]; then
     local server_port="${E2E_SERVER_PORT:-3190}"
-    python3 tools/ci/free_ports.py "${server_port}" "$((server_port + 1))" "${E2E_WEB_PORT:-5190}"
+    python3 tools/ci/free_ports.py "${server_port}" "$((server_port + 1))" "${E2E_WEB_PORT:-5190}" "$((${E2E_WEB_PORT:-5190} + 1))"
   fi
   local database_name
   database_name="aw_e2e_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_' | tr 'A-Z' 'a-z')"
+  # The static-host spec serves this run's web build when there is one, and
+  # builds its own otherwise (apps/web/e2e/static-host.spec.ts).
   E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
-    E2E_DATABASE_NAME="${database_name}" \
+    E2E_DATABASE_NAME="${database_name}" E2E_STATIC_DIST="${web_built:+dist}" \
     pnpm test:e2e || return
   [ "${CI_UI_TOUR:-}" = channel ] || return 0
   run_ui_tour "${binary}" "${database_name}"
@@ -405,7 +408,7 @@ run_ui_tour() {
   rm -rf "${output}/tour" "${output}/state/tour.json"
   if [ -n "${CI_LOCK_DIR:-}" ]; then
     local server_port="${E2E_SERVER_PORT:-3190}"
-    python3 tools/ci/free_ports.py "${server_port}" "$((server_port + 1))" "${E2E_WEB_PORT:-5190}"
+    python3 tools/ci/free_ports.py "${server_port}" "$((server_port + 1))" "${E2E_WEB_PORT:-5190}" "$((${E2E_WEB_PORT:-5190} + 1))"
   fi
   started=$(date +%s)
   E2E_SERVER_BINARY="$1" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \

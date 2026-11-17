@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
-import { useHomeWorkspaceId } from '../experience/layout'
+import { useWorkspaceHref, useWorkspaceId } from '../app/workspace'
 import { AppShell } from '../shell/AppShell'
 import { Button, ButtonLink, EmptyState } from '../ui'
 import { moduleName } from './names'
@@ -13,7 +13,8 @@ import { moduleName } from './names'
 export function TurnedOffPage({ module }: { module: string }) {
   const session = useAuthenticatedSession()
   const navigate = useNavigate()
-  const workspaceId = useHomeWorkspaceId()
+  const workspaceId = useWorkspaceId()
+  const href = useWorkspaceHref()
   const name = moduleName(module)
   const manages = session.organizations.some(
     (organization) => organization.id === workspaceId && (organization.role === 'owner' || organization.role === 'admin'),
@@ -24,7 +25,7 @@ export function TurnedOffPage({ module }: { module: string }) {
         <EmptyState
           action={
             <>
-              <Button onClick={() => navigate('/home')} variant="primary">
+              <Button onClick={() => navigate(href('/home'))} variant="primary">
                 Go to Home
               </Button>
               {manages ? <ButtonLink to="/settings/workspace/modules">Turn modules on or off</ButtonLink> : null}

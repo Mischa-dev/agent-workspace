@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { normalizeConversationActor } from '../conversations/sidebarApi'
 import type { ConversationActor } from '../conversations/types'
 
@@ -29,7 +30,7 @@ export type DirectOverview = {
   capabilities: { startConversation: boolean; manageAgents: boolean }
 }
 
-export const directQueryKey = ['direct'] as const
+export const directQueryKey = queryKeys.direct
 
 type WireRecord = Record<string, unknown>
 

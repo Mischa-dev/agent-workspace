@@ -1,5 +1,10 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
+import { isThingKey, isThingReferencesKey } from '../api/queryKeys'
+import { collectionKeys } from '../collections/keys'
+import { isPageKey, memoryKeys } from '../memory/keys'
+import { sheetKeys } from '../sheets/keys'
+import { whiteboardKeys } from '../whiteboards/keys'
 import { field, uuid, type RealtimeEnvelope } from './realtimeModel'
 
 /**
@@ -114,9 +119,14 @@ function later(key: string, delay: number, run: () => void) {
   )
 }
 
-const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => {
-  const [scope, id, area, kind] = query.queryKey
-  return scope === 'project' && id === projectId && area === 'memory' && (kind === 'pages' || kind === 'page')
+const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => isPageKey(query.queryKey, projectId)
+
+/** A thing's discussion summary (`comment_list` through `opQuery`), for one thing or any. */
+export function isCommentSummary(key: readonly unknown[], thingId?: string) {
+  if (key[0] !== 'op' || key[2] !== 'comment_list') return false
+  if (!thingId) return true
+  const input = key[3] as { thing?: { id?: unknown } } | undefined
+  return input?.thing?.id === thingId
 }
 
 /**
@@ -127,10 +137,6 @@ const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => {
  * and a record beside them) and so does the project's list of collections,
  * which counts records.
  */
-/** A thing embedded in a page (`ModuleEmbed`'s `['things', kind, id]`). */
-function isThing(key: readonly unknown[], kind: string, id: string) {
-  return key[0] === 'things' && key[1] === kind && key[2] === id
-}
 
 export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelope) {
   const board = whiteboardChange(event)
@@ -139,7 +145,7 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
     // Board lists, and a board embedded in a page as a card.
     later(`whiteboards:${board.whiteboardId}`, BOARD_LIST_DELAY_MS, () =>
       void queryClient.invalidateQueries({
-        predicate: (query) => query.queryKey[0] === 'whiteboards' || isThing(query.queryKey, 'whiteboard', board.whiteboardId),
+        predicate: (query) => query.queryKey[0] === whiteboardKeys.all[0] || isThingKey(query.queryKey, 'whiteboard', board.whiteboardId),
       }),
     )
     return
@@ -147,16 +153,18 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
   const sheet = sheetChange(event)
   if (sheet) {
     later(`sheet:${event.projectId}:${sheet.sheetId}`, COLLECTION_DELAY_MS, () => {
-      void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'sheets', sheet.sheetId] })
-      void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'sheets', 'list'] })
+      void queryClient.invalidateQueries({ queryKey: sheetKeys.one(event.projectId, sheet.sheetId) })
+      void queryClient.invalidateQueries({ queryKey: sheetKeys.list(event.projectId) })
+      // Its cell discussions' anchors may have moved with rows and columns.
+      void queryClient.invalidateQueries({ predicate: (query) => isCommentSummary(query.queryKey, sheet.sheetId) })
     })
     return
   }
   const collection = collectionChange(event)
   if (collection) {
     later(`collection:${event.projectId}:${collection.collectionId}`, COLLECTION_DELAY_MS, () => {
-      void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'collections', collection.collectionId] })
-      void queryClient.invalidateQueries({ queryKey: ['project', event.projectId, 'collections', 'list'] })
+      void queryClient.invalidateQueries({ queryKey: collectionKeys.one(event.projectId, collection.collectionId) })
+      void queryClient.invalidateQueries({ queryKey: collectionKeys.lists(event.projectId) })
     })
     return
   }
@@ -164,7 +172,7 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
   if (discussion) {
     later(`discussion:${discussion.pageId}`, DISCUSSION_DELAY_MS, () =>
       void queryClient.invalidateQueries({
-        queryKey: ['project', event.projectId, 'memory', 'page', discussion.pageId, 'discussion'],
+        queryKey: memoryKeys.discussion(event.projectId, discussion.pageId),
       }),
     )
     return
@@ -178,7 +186,7 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
     later(`pages:${event.projectId}:${page.pageId}`, PAGE_DETAILS_DELAY_MS, () =>
       void queryClient.invalidateQueries({
         // ...and "Referenced in" lists, since the page may link differently now.
-        predicate: (query) => pageQuery(query) || isThing(query.queryKey, 'page', page.pageId) || (query.queryKey[0] === 'things' && query.queryKey[3] === 'references'),
+        predicate: (query) => pageQuery(query) || isThingKey(query.queryKey, 'page', page.pageId) || isThingReferencesKey(query.queryKey),
       }),
     )
   }

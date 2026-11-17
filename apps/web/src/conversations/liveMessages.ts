@@ -1,5 +1,6 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
+import { queryKeys } from '../api/queryKeys'
 import type { MessageUpdate } from '../realtime/realtimeModel'
 import { REMOVED_MESSAGE_CONTENT } from './sidebarApi'
 import { isThreadsKey } from './threadModel'
@@ -324,7 +325,7 @@ export function dropRemovedMessage(
   queryClient.setQueriesData({ predicate: (query) => isMemoryKey(query.queryKey, 'pins') }, (data: unknown) =>
     withoutMessageItems(data, 'pins', messageId),
   )
-  queryClient.setQueriesData({ queryKey: ['search'] }, (data: unknown) => withoutMessageItems(data, 'hits', messageId))
+  queryClient.setQueriesData({ queryKey: queryKeys.searchAll }, (data: unknown) => withoutMessageItems(data, 'hits', messageId))
   // Thread boards and sidebars list threads with an origin message. Only touch
   // caches that change, so the rest keep their freshness.
   const neutralized = (data: unknown) => {

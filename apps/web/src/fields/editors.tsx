@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { collectionKeys } from '../collections/keys'
 import { listPages, memoryKeys } from '../memory/api'
 import { Avatar, Button, TextArea, TextField, actorKind } from '../ui'
 import { Calendar, ComboboxList, Popover } from '../ui/pickers'
@@ -272,7 +273,7 @@ function RecordEditor({
   const debounced = useDebouncedValue(query, 200)
   const collection = field.collection ?? ''
   const records = useQuery({
-    queryKey: ['project', projectId, 'collections', collection, 'records', 'pick', debounced.trim()],
+    queryKey: collectionKeys.recordPick(projectId, collection, debounced.trim()),
     enabled: Boolean(collection),
     queryFn: async () => {
       const params = new URLSearchParams({ limit: '20' })

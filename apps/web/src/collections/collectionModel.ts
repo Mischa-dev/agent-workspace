@@ -264,16 +264,10 @@ export function calendarMonth(value: string | null, today = new Date()): Date {
 
 export const monthKey = (month: Date) => `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`
 
-/** A calendar's records by day (YYYY-MM-DD), in the order they loaded. */
-export function recordsByDay(records: readonly CollectionRecord[], dateField: string): Map<string, CollectionRecord[]> {
-  const days = new Map<string, CollectionRecord[]>()
-  for (const record of records) {
-    const value = record.values[dateField]
-    if (typeof value !== 'string' || !value) continue
-    const day = value.slice(0, 10)
-    days.set(day, [...(days.get(day) ?? []), record])
-  }
-  return days
+/** The day (YYYY-MM-DD) a calendar puts a record on, or null when its date field is empty. */
+export function recordDay(record: CollectionRecord, dateField: string): string | null {
+  const value = record.values[dateField]
+  return typeof value === 'string' && value ? value.slice(0, 10) : null
 }
 
 /** Fields a calendar can show records by. */

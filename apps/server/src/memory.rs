@@ -125,6 +125,8 @@ pub struct Writer {
     pub actor_id: Uuid,
     pub actor_kind: ActorKind,
     pub via_grant_id: Option<Uuid>,
+    /// The one space a project-scoped credential is held to, if any.
+    pub confined_project: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1282,6 +1284,7 @@ pub(crate) fn browser_writer(principal: &AuthenticatedActor) -> Result<Writer, A
         actor_id: principal.actor_id,
         actor_kind: parse_actor_kind(&principal.actor_kind)?,
         via_grant_id: None,
+        confined_project: None,
     })
 }
 

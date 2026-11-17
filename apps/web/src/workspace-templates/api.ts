@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { refreshLayouts } from '../experience/api'
 import { onboardingKeys } from '../onboarding/api'
 import { roleKeys } from '../settings/workspace/roles'
@@ -84,9 +85,9 @@ export const removeTemplate = (organizationId: string, templateId: string) =>
 /** After a template is used: everything it can touch reads again. */
 export function refreshAfterTemplate(queryClient: QueryClient, organizationId: string) {
   void queryClient.invalidateQueries({ queryKey: templateKeys.workspace(organizationId) })
-  void queryClient.invalidateQueries({ queryKey: ['organization', organizationId, 'modules'] })
+  void queryClient.invalidateQueries({ queryKey: queryKeys.workspaceModules(organizationId) })
   void queryClient.invalidateQueries({ queryKey: roleKeys.roles(organizationId) })
   void queryClient.invalidateQueries({ queryKey: onboardingKeys.root })
-  void queryClient.invalidateQueries({ queryKey: ['projects'] })
+  void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
   void refreshLayouts(queryClient)
 }

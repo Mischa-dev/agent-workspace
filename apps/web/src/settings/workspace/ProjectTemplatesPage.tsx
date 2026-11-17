@@ -17,7 +17,7 @@ export default function ProjectTemplatesPage({ projects, workspace }: SettingsPa
     queryFn: () => listProjectTemplates(organizationId, showArchived),
     enabled: Boolean(organizationId),
   })
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['organization', organizationId, 'project-templates'] })
+  const refresh = () => queryClient.invalidateQueries({ queryKey: viewKeys.projectTemplateLists(organizationId) })
   const archive = useMutation({
     mutationFn: (input: { template: ProjectTemplate; archived: boolean; undo?: boolean }) =>
       updateProjectTemplate(input.template, { archived: input.archived }, crypto.randomUUID()),

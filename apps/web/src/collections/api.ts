@@ -3,6 +3,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-qu
 import { requestJson } from '../api/client'
 import { normalizeField, normalizeReferences, normalizeValues, type DateBucket, type FieldClause, type FieldDefinition, type FieldReference, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import type { ViewKind } from '../views/kinds'
+import { collectionKeys } from './keys'
 
 /**
  * Collections (AWD-90) on the web side: a project's own record types, each
@@ -292,13 +293,7 @@ export const collectionPath = (projectId: string, collectionId: string) => `${pr
 /** Where a collection's fields are added and changed, for the fields kit's dialogs. */
 export const fieldScope = (projectId: string, collectionId: string) => ({ projectId, path: `${collectionPath(projectId, collectionId)}/fields` })
 
-export const collectionKeys = {
-  all: (projectId: string) => ['project', projectId, 'collections'] as const,
-  list: (projectId: string, includeArchived: boolean) => ['project', projectId, 'collections', 'list', includeArchived] as const,
-  one: (projectId: string, collectionId: string) => ['project', projectId, 'collections', collectionId] as const,
-  records: (projectId: string, collectionId: string, query: string) => ['project', projectId, 'collections', collectionId, 'records', query] as const,
-  record: (projectId: string, collectionId: string, recordId: string) => ['project', projectId, 'collections', collectionId, 'record', recordId] as const,
-}
+export { collectionKeys } from './keys'
 
 export async function listCollections(projectId: string, includeArchived = false) {
   const payload = await requestJson<{ collections?: unknown[]; canBuild?: boolean }>(`${projectPath(projectId)}${includeArchived ? '?includeArchived=true' : ''}`)
