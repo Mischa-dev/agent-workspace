@@ -92,8 +92,8 @@ pub async fn dispatch(
     call(state, request, input).await
 }
 
-/// A space's key (such as "AWD") in the input's `spaceId` or `projectId`,
-/// replaced by its id, on every edge (MCP's own key resolution does the
+/// A space's key (such as "AWD") in the input's `spaceId` or `projectId`
+/// (or a package's `target.spaceId`), replaced by its id, on every edge (MCP's own key resolution does the
 /// same for its tools). A key resolves only among spaces the caller is an
 /// enabled member of and can reach, in the named workspace when there is
 /// one; an unknown or ambiguous key is left for the input to refuse.
@@ -102,9 +102,9 @@ async fn space_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
-    for field in ["spaceId", "projectId"] {
+    for field in ["/spaceId", "/projectId", "/target/spaceId"] {
         let Some(key) = input
-            .get(field)
+            .pointer(field)
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|key| {
@@ -140,8 +140,8 @@ async fn space_keys_to_ids(
         .fetch_all(&state.pool)
         .await
         .map_err(|error| OpError::logged("space key", &error.into()))?;
-        if let [id] = found.as_slice() {
-            input[field] = Value::String(id.to_string());
+        if let ([id], Some(slot)) = (found.as_slice(), input.pointer_mut(field)) {
+            *slot = Value::String(id.to_string());
         }
     }
     task_keys_to_ids(state, request, input).await

@@ -243,6 +243,15 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
     )
     .await;
     assert_eq!(preview["outcome"], "ok", "{preview}");
+    // The space may be named by its key, as anywhere else.
+    let by_key = tool(
+        &world,
+        "rook",
+        "package_preview",
+        json!({"package": bugs(true), "target": {"spaceId": "WORK"}}),
+    )
+    .await;
+    assert_eq!(by_key["value"]["planHash"], preview["value"]["planHash"], "{by_key}");
     let refused = tool(
         &world,
         "rook",

@@ -443,7 +443,16 @@ pub async fn plan(
     let plan_hash = format!(
         "sha256:{}",
         hex::encode(Sha256::digest(
-            canonical(&json!({ "digest": digest, "target": target, "items": items })).as_bytes()
+            canonical(&json!({
+                "digest": digest,
+                "target": target,
+                "items": items,
+                // What the switches item would turn off and on: another
+                // admin's switch change since the preview makes it stale.
+                "turnsOff": turns_off,
+                "turnsOn": turns_on,
+            }))
+            .as_bytes()
         ))
     );
     Ok(Plan {
