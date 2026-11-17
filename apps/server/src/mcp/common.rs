@@ -147,6 +147,15 @@ impl<T> ToolResult<T> {
                     .to_owned(),
                 retry_category: Some("do_not_retry".to_owned()),
             },
+            // A budget charged where the call lands, such as the
+            // workspace's shared one (H1.1).
+            AppError::RateLimited {
+                retry_after_seconds,
+            } => Self::TemporarilyUnavailable {
+                message: format!(
+                    "Too many calls just now. Try again in {retry_after_seconds} seconds."
+                ),
+            },
             error => {
                 tracing::error!(
                     operation,
