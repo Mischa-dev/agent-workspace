@@ -3545,6 +3545,74 @@
         ],
         "type": "object"
       },
+      "TransferOutput": {
+        "description": "One transfer, with where its archive downloads from once it's ready.",
+        "properties": {
+          "byteSize": {
+            "description": "The archive's size, once written.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "counts": {
+            "description": "How many of each kind it holds."
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "direction": {
+            "description": "`export` or `import`.",
+            "type": "string"
+          },
+          "downloadUrl": {
+            "description": "Where the archive downloads from, with your own sign-in, while it's\nkept.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "description": "When an export's archive goes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "requestedByActorId": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`queued`, `running`, `succeeded`, `failed`, or `expired` once an\nexport's archive is gone.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "direction",
+          "state",
+          "requestedByActorId",
+          "counts",
+          "createdAt"
+        ],
+        "type": "object"
+      },
       "UnattributedUsageLine": {
         "properties": {
           "accountId": {
@@ -36578,6 +36646,346 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/workspace_export_start": {
+      "post": {
+        "description": "Start writing the whole workspace to one archive: its spaces, conversations (never DMs or groups), tasks, pages with every version, records, files and settings, with a profile for each member. Secrets and connections are named, never their values. It runs in the background; workspace_transfer_get shows when it's ready and where only you can download it, for 7 days. Needs \"Export the workspace\" where it acts.",
+        "operationId": "workspace_export_start",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "WorkspaceExportStartInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One transfer, with where its archive downloads from once it's ready.",
+                          "properties": {
+                            "byteSize": {
+                              "description": "The archive's size, once written.",
+                              "format": "int64",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "counts": {
+                              "description": "How many of each kind it holds."
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "direction": {
+                              "description": "`export` or `import`.",
+                              "type": "string"
+                            },
+                            "downloadUrl": {
+                              "description": "Where the archive downloads from, with your own sign-in, while it's\nkept.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "error": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "expiresAt": {
+                              "description": "When an export's archive goes.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "finishedAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "requestedByActorId": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "`queued`, `running`, `succeeded`, `failed`, or `expired` once an\nexport's archive is gone.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "direction",
+                            "state",
+                            "requestedByActorId",
+                            "counts",
+                            "createdAt"
+                          ],
+                          "title": "TransferOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One transfer, with where its archive downloads from once it's ready.",
+                          "properties": {
+                            "byteSize": {
+                              "description": "The archive's size, once written.",
+                              "format": "int64",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "counts": {
+                              "description": "How many of each kind it holds."
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "direction": {
+                              "description": "`export` or `import`.",
+                              "type": "string"
+                            },
+                            "downloadUrl": {
+                              "description": "Where the archive downloads from, with your own sign-in, while it's\nkept.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "error": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "expiresAt": {
+                              "description": "When an export's archive goes.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "finishedAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "requestedByActorId": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "`queued`, `running`, `succeeded`, `failed`, or `expired` once an\nexport's archive is gone.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "direction",
+                            "state",
+                            "requestedByActorId",
+                            "counts",
+                            "createdAt"
+                          ],
+                          "title": "TransferOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Export the workspace",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
     "/api/v2/w/{workspace}/ops/workspace_store_get": {
       "post": {
         "description": "Where the workspace's new uploads are stored: its own S3-compatible bucket (address, bucket, region, prefix; never its keys), or nothing when they go to the server's own store. Needs \"Manage settings\" where it acts.",
@@ -37358,6 +37766,570 @@
           "workspace"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/workspace_transfer_get": {
+      "post": {
+        "description": "One export or import you started in this workspace: whether it's queued, running, done or failed, what it holds, and where its archive downloads from while it's kept. Needs \"Export the workspace\" where it acts.",
+        "operationId": "workspace_transfer_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "transferId": {
+                    "description": "The transfer, as workspace_export_start gave it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transferId"
+                ],
+                "title": "WorkspaceTransferGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One transfer, with where its archive downloads from once it's ready.",
+                          "properties": {
+                            "byteSize": {
+                              "description": "The archive's size, once written.",
+                              "format": "int64",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "counts": {
+                              "description": "How many of each kind it holds."
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "direction": {
+                              "description": "`export` or `import`.",
+                              "type": "string"
+                            },
+                            "downloadUrl": {
+                              "description": "Where the archive downloads from, with your own sign-in, while it's\nkept.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "error": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "expiresAt": {
+                              "description": "When an export's archive goes.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "finishedAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "requestedByActorId": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "`queued`, `running`, `succeeded`, `failed`, or `expired` once an\nexport's archive is gone.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "direction",
+                            "state",
+                            "requestedByActorId",
+                            "counts",
+                            "createdAt"
+                          ],
+                          "title": "TransferOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One transfer, with where its archive downloads from once it's ready.",
+                          "properties": {
+                            "byteSize": {
+                              "description": "The archive's size, once written.",
+                              "format": "int64",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "counts": {
+                              "description": "How many of each kind it holds."
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "direction": {
+                              "description": "`export` or `import`.",
+                              "type": "string"
+                            },
+                            "downloadUrl": {
+                              "description": "Where the archive downloads from, with your own sign-in, while it's\nkept.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "error": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "expiresAt": {
+                              "description": "When an export's archive goes.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "finishedAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "requestedByActorId": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "`queued`, `running`, `succeeded`, `failed`, or `expired` once an\nexport's archive is gone.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "direction",
+                            "state",
+                            "requestedByActorId",
+                            "counts",
+                            "createdAt"
+                          ],
+                          "title": "TransferOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "See a workspace export",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/workspace_transfer_list": {
+      "post": {
+        "description": "The exports and imports of this workspace that you started, newest first, each with its state and download address while it's kept. Needs \"Export the workspace\" where it acts.",
+        "operationId": "workspace_transfer_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "WorkspaceTransferListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "transfers": {
+                              "description": "Newest first, at most 50.",
+                              "items": {
+                                "$ref": "#/components/schemas/TransferOutput"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "transfers"
+                          ],
+                          "title": "TransferList",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "transfers": {
+                              "description": "Newest first, at most 50.",
+                              "items": {
+                                "$ref": "#/components/schemas/TransferOutput"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "transfers"
+                          ],
+                          "title": "TransferList",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List workspace exports",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "query"
       }
     }
   },

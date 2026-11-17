@@ -117,6 +117,8 @@ pub enum Permission {
     ModulesManage,
     // H1.24: deleting the whole workspace.
     WorkspaceDelete,
+    // H1.9: exporting the whole workspace as one archive.
+    WorkspaceExport,
 }
 
 /// Where a permission is checked: in a project (by the role someone has
@@ -202,7 +204,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 68] = [
+pub const PERMISSIONS: [PermissionInfo; 69] = [
     on(
         "space",
         Level::See,
@@ -946,6 +948,16 @@ pub const PERMISSIONS: [PermissionInfo; 68] = [
         "settings",
         "Delete the workspace",
         "Schedule the whole workspace for deletion, or cancel that within 14 days.",
+        PermissionScope::Workspace,
+        OWNERS,
+    ),
+    // H1.9: the whole workspace as one archive, to keep or to move.
+    permission(
+        Permission::WorkspaceExport,
+        "workspace.export",
+        "settings",
+        "Export the workspace",
+        "Download the whole workspace as one archive: its spaces, conversations, tasks, pages, files and history, never secrets.",
         PermissionScope::Workspace,
         OWNERS,
     ),

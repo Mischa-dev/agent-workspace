@@ -145,6 +145,8 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("project_page_documents", WORKSPACE_ID),
     ("project_page_revisions", WORKSPACE_ID),
     ("history_archives", WORKSPACE_ID),
+    ("workspace_transfers", WORKSPACE_ID),
+    ("workspace_import_ids", WORKSPACE_ID),
     ("project_page_suggestions", WORKSPACE_ID),
     ("project_pages", WORKSPACE_ID),
     ("project_task_settings", WORKSPACE_ID),

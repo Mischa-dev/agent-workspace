@@ -229,3 +229,36 @@ pub fn register_jobs(registry: &mut JobRegistry) {
     });
     registry.every(ARCHIVE_KIND, Duration::from_secs(24 * 60 * 60));
 }
+
+/// Every cold page version's body in `workspace`, read from its files
+/// without warming any row: for an export, which carries each version
+/// whole. A network call per file: never inside a transaction.
+pub async fn cold_page_bodies(
+    state: &AppState,
+    workspace: Uuid,
+) -> Result<std::collections::HashMap<(Uuid, i64), String>, AppError> {
+    let archives = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (Uuid, String, String)>(
+            "SELECT DISTINCT archive.thing_id, archive.store_id, archive.object_key \
+             FROM history_archives archive \
+             JOIN project_page_revisions revision ON revision.archive_id = archive.id \
+             WHERE archive.workspace_id = $1 AND archive.kind = 'page' \
+               AND revision.body IS NULL",
+        )
+        .bind(workspace)
+        .fetch_all(&mut *connection)
+        .await
+    })
+    .await?;
+    let mut bodies = std::collections::HashMap::new();
+    for (page, store_id, key) in archives {
+        let store = FileStore::resolve(state, &store_id).await?;
+        let file: PageFile =
+            serde_json::from_slice(&gunzip(&store.read_all(&key, MAX_FILE_BYTES).await?)?)
+                .map_err(|_| AppError::Internal("an archived page history file is damaged"))?;
+        for kept in file.versions {
+            bodies.insert((page, kept.version), kept.body);
+        }
+    }
+    Ok(bodies)
+}

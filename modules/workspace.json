@@ -8,7 +8,7 @@
   "switchable": false,
   "needs": [],
   "worksWith": [],
-  "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage", "webhooks.manage", "automations.manage", "modules.build", "modules.manage", "workspace.delete"],
+  "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage", "webhooks.manage", "automations.manage", "modules.build", "modules.manage", "workspace.delete", "workspace.export"],
   "tools": {
     "briefing": "query",
     "settings_get": "describe",
@@ -38,6 +38,9 @@
     "workspace_store_get": "describe",
     "workspace_store_set": "change",
     "workspace_store_revoke": "change",
+    "workspace_export_start": "create",
+    "workspace_transfer_get": "describe",
+    "workspace_transfer_list": "query",
     "module_list": "describe",
     "module_create": "create",
     "module_open": "describe",
@@ -112,7 +115,7 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["account.access_changed", "account.status_changed", "custom_emoji.changed", "file.attached", "file.removed", "file.upload_started", "link.created", "link.deleted", "workspace.file_store_changed", "workspace.lifecycle_changed"],
+    "emits": ["account.access_changed", "account.status_changed", "custom_emoji.changed", "file.attached", "file.removed", "file.upload_started", "link.created", "link.deleted", "workspace.file_store_changed", "workspace.lifecycle_changed", "workspace.transfer_changed"],
     "listens": []
   },
   "notifications": ["thing_update"],

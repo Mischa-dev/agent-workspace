@@ -1621,6 +1621,22 @@
     "title": "Keep workspace"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.transfer_changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_export_start",
+    "permission": "workspace.export",
+    "preview": false,
+    "proposable": false,
+    "title": "Export the workspace"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -1665,5 +1681,33 @@
     "preview": false,
     "proposable": false,
     "title": "Use the workspace's own file bucket"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_transfer_get",
+    "permission": "workspace.export",
+    "preview": false,
+    "proposable": false,
+    "title": "See a workspace export"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_transfer_list",
+    "permission": "workspace.export",
+    "preview": false,
+    "proposable": false,
+    "title": "List workspace exports"
   }
 ]

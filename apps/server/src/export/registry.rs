@@ -258,6 +258,14 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "history_archives",
                 "where this server keeps cold page versions (K3.25); an export carries each version's body in its row",
             ),
+            (
+                "workspace_transfers",
+                "this server's record of exports and imports (H1.9): an archive never carries itself",
+            ),
+            (
+                "workspace_import_ids",
+                "how one import mapped an archive's ids on this server (H1.10)",
+            ),
             ("events_default", "a partition of the server's event log"),
             ("events_p0", "a partition of the server's event log"),
             (

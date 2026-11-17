@@ -131,6 +131,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/project-templates",
     "/api/v1/organizations/{organization_id}/roles",
     "/api/v1/organizations/{organization_id}/secrets",
+    "/api/v1/organizations/{organization_id}/transfers/{transfer_id}/archive",
     "/api/v1/organizations/{organization_id}/workspace-templates",
     "/api/v1/organizations/{organization_id}/server",
     "/api/v1/pages/{id}",
@@ -945,6 +946,26 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
                 "/api/v1/organizations/{}/invitations",
                 b.organization
             )],
+            vec![],
+        ),
+        // H1.9: an export's archive is its requester's alone; B's never
+        // downloads in A, nor A's under B's address.
+        case(
+            "/api/v1/organizations/{organization_id}/transfers/{transfer_id}/archive",
+            vec![format!(
+                "/api/v1/organizations/{}/transfers/{}/archive",
+                a.organization, a.export
+            )],
+            vec![
+                format!(
+                    "/api/v1/organizations/{}/transfers/{}/archive",
+                    b.organization, b.export
+                ),
+                format!(
+                    "/api/v1/organizations/{}/transfers/{}/archive",
+                    a.organization, b.export
+                ),
+            ],
             vec![],
         ),
         case(
@@ -2134,6 +2155,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "workflow_get",
     "workspace_store_get",
     "workspace_template_list",
+    "workspace_transfer_get",
+    "workspace_transfer_list",
 ];
 
 pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
@@ -2310,6 +2333,22 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "workspace_store_get",
             vec![json!({})],
             vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // H1.9: B's exports never show in A.
+        case(
+            "workspace_transfer_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "workspace_transfer_get",
+            vec![json!({"transferId": a.export})],
+            vec![
+                json!({"workspace": b.organization, "transferId": b.export}),
+                json!({"transferId": b.export}),
+            ],
             vec![],
         ),
         // C2.19: B's own emoji never list in A.

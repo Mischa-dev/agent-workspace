@@ -190,6 +190,8 @@ export type ThingInput = { id: string; kind: SubjectKind }
 
 export type ThreadRef = { id: string; name: string; status: string }
 
+export type TransferOutput = { byteSize?: number | null; counts: unknown; createdAt: string; direction: string; downloadUrl?: string | null; error?: string | null; expiresAt?: string | null; finishedAt?: string | null; id: string; requestedByActorId: string; state: string }
+
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
 export type ViewWrite = { columns?: ColumnWrite[] | null; dateField?: string | null; filters?: FilterWrite[] | null; groupBucket?: DateBucket | null; groupBy?: string | null; name?: string | null; position?: number | null; remove?: boolean | null; sort?: SortWrite[] | null; titleWidth?: number | null; type?: string | null; view?: string | null }
@@ -620,6 +622,10 @@ export type WorkspaceDeleteCancelInput = Record<string, never>
 
 export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
 
+export type WorkspaceExportStartInput = Record<string, never>
+
+export type WorkspaceExportStartOutput = { byteSize?: number | null; counts: unknown; createdAt: string; direction: string; downloadUrl?: string | null; error?: string | null; expiresAt?: string | null; finishedAt?: string | null; id: string; requestedByActorId: string; state: string }
+
 export type WorkspaceStoreGetInput = Record<string, never>
 
 export type WorkspaceStoreGetOutput = { moving: boolean; store?: WorkspaceStoreView | null }
@@ -631,6 +637,14 @@ export type WorkspaceStoreRevokeOutput = { moving: boolean; store?: WorkspaceSto
 export type WorkspaceStoreSetInput = { accessKeyId: string; bucket: string; endpoint: string; moveExisting?: boolean; pathStyle?: boolean; prefix?: string; region: string; secretAccessKey: string }
 
 export type WorkspaceStoreSetOutput = { moving: boolean; store?: WorkspaceStoreView | null }
+
+export type WorkspaceTransferGetInput = { transferId: string }
+
+export type WorkspaceTransferGetOutput = { byteSize?: number | null; counts: unknown; createdAt: string; direction: string; downloadUrl?: string | null; error?: string | null; expiresAt?: string | null; finishedAt?: string | null; id: string; requestedByActorId: string; state: string }
+
+export type WorkspaceTransferListInput = Record<string, never>
+
+export type WorkspaceTransferListOutput = { transfers: TransferOutput[] }
 
 export type Operations = {
   activity_list: { input: ActivityListInput; output: ActivityListOutput }
@@ -738,9 +752,12 @@ export type Operations = {
   whiteboard_update_elements: { input: WhiteboardUpdateElementsInput; output: WhiteboardUpdateElementsOutput }
   workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
   workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
+  workspace_export_start: { input: WorkspaceExportStartInput; output: WorkspaceExportStartOutput }
   workspace_store_get: { input: WorkspaceStoreGetInput; output: WorkspaceStoreGetOutput }
   workspace_store_revoke: { input: WorkspaceStoreRevokeInput; output: WorkspaceStoreRevokeOutput }
   workspace_store_set: { input: WorkspaceStoreSetInput; output: WorkspaceStoreSetOutput }
+  workspace_transfer_get: { input: WorkspaceTransferGetInput; output: WorkspaceTransferGetOutput }
+  workspace_transfer_list: { input: WorkspaceTransferListInput; output: WorkspaceTransferListOutput }
 }
 
 export type OpName = keyof Operations

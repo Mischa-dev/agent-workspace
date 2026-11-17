@@ -509,6 +509,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_upload_finish",
     "workspace_store_set",
     "workspace_store_revoke",
+    "workspace_export_start",
     "label_write",
     "layout_preset_write",
     "field_write",
@@ -7254,6 +7255,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .without_own("needs a bucket to probe; files_links.rs covers setting one"),
         mcp_case(
             "workspace_store_revoke",
+            json!({}),
+            vec![json!({"workspace": b.organization})],
+        ),
+        // H1.9: an export starts in the caller's own workspace only.
+        mcp_case(
+            "workspace_export_start",
             json!({}),
             vec![json!({"workspace": b.organization})],
         ),

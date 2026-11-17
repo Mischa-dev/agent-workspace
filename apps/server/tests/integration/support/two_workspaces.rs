@@ -112,6 +112,8 @@ pub(crate) struct World {
     pub(crate) module: Uuid,
     /// A package install (M1.9) in the project, that made nothing.
     pub(crate) package_install: Uuid,
+    /// A finished export of the workspace (H1.9), by its owner.
+    pub(crate) export: Uuid,
 }
 
 /// The app on a fresh schema with workspaces A and B built, signed in as
@@ -336,6 +338,27 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
             tiny_png(),
         )
         .expect("preview image");
+    }
+    // Each owner's finished export (H1.9), so its download is a case.
+    for world in [&mut a, &mut b] {
+        let (status, started) = send(
+            &app,
+            world.browser.request(
+                "POST",
+                &format!(
+                    "/api/v2/w/{}/ops/workspace_export_start",
+                    world.organization
+                ),
+                Some(&format!("fixture-export-{}", world.organization.simple())),
+                json!({}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "export: {status} {started}");
+        world.export = string_at(&started, "/value/id").parse().expect("export id");
+        agent_workspace_server::export::transfer::run_export(&state, world.export)
+            .await
+            .expect("export runs");
     }
     Some(TwoWorkspaces {
         app,
@@ -1755,6 +1778,7 @@ async fn build_workspace(
         custom_emoji,
         module,
         package_install,
+        export: Uuid::nil(),
     }
 }
 

@@ -2365,3 +2365,67 @@ async fn links_by_hand_need_edit_on_the_start_and_sight_of_the_end() {
     assert_eq!(gone["value"]["changed"], true, "{gone}");
     world.finish().await;
 }
+
+/// H1.9: only someone who may export the workspace starts an export, and
+/// only the one who asked sees or downloads it.
+#[tokio::test]
+async fn an_export_is_for_its_requester_alone() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("privacy_workspace_export")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let lena = &world.people["lena"];
+    let (status, refused) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &route("workspace_export_start"),
+            Some("lena-export"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{status} {refused}");
+    let (status, started) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("workspace_export_start"),
+            Some("owner-export"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{status} {started}");
+    let id = started["value"]["id"].as_str().expect("id").to_owned();
+    agent_workspace_server::export::transfer::run_export(&world.state, id.parse().expect("uuid"))
+        .await
+        .expect("export runs");
+    for (op, body) in [
+        ("workspace_transfer_get", json!({ "transferId": id })),
+        ("workspace_transfer_list", json!({})),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser.request("POST", &route(op), None, body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    let archive = agent_workspace_server::export::transfer::download_path(
+        world.organization,
+        id.parse().expect("uuid"),
+    );
+    let (status, _) = send(
+        &world.app,
+        lena.browser.request("GET", &archive, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a member never downloads it");
+    world.finish().await;
+}

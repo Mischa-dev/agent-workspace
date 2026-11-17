@@ -550,6 +550,12 @@ pub static WORKSPACE_FILE_STORE_CHANGED: EventType = fact(
     None,
     "The workspace's own file bucket was set or stopped",
 );
+pub static WORKSPACE_TRANSFER_CHANGED: EventType = fact(
+    "workspace.transfer_changed",
+    "workspace",
+    Some("workspace_transfer"),
+    "A workspace export or import moved on",
+);
 pub static ACCOUNT_STATUS_CHANGED: EventType = signal(
     "account.status_changed",
     "workspace",
@@ -692,6 +698,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &FILE_REMOVED,
         &FILE_UPLOAD_STARTED,
         &WORKSPACE_FILE_STORE_CHANGED,
+        &WORKSPACE_TRANSFER_CHANGED,
         &ACCOUNT_STATUS_CHANGED,
         &CUSTOM_EMOJI_CHANGED,
         &NOTIFICATION_CHANGED,

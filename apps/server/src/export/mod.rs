@@ -12,7 +12,9 @@
 //! parts (live page documents, sheets' cells, whiteboard elements, files)
 //! are H1.9's.
 
+pub mod ops;
 pub mod registry;
+pub mod transfer;
 
 use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
@@ -95,7 +97,7 @@ pub enum ExportError {
     Database(#[from] sqlx::Error),
 }
 
-fn identifier(name: &'static str) -> &'static str {
+pub(crate) fn identifier(name: &'static str) -> &'static str {
     assert!(
         !name.is_empty()
             && name
