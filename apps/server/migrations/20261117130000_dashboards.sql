@@ -39,3 +39,8 @@ CREATE UNIQUE INDEX dashboards_name_unique
 CREATE INDEX dashboards_by_project ON dashboards (space_id, position);
 CREATE INDEX dashboards_by_workspace ON dashboards (workspace_id);
 SELECT tenancy_protect('dashboards', 'workspace_id');
+
+-- Dashboards are their own module now, so their permissions are listed
+-- under it (policy::PERMISSIONS says the same).
+UPDATE permission_catalogue SET module = 'dashboards'
+WHERE key IN ('dashboards.view', 'dashboards.edit');

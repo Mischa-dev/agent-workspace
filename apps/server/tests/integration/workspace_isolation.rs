@@ -2045,6 +2045,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "message_draft_list",
     "custom_emoji_list",
     "comment_list",
+    "dashboard_get",
+    "dashboard_list",
     "whiteboard_template_list",
     "milestone_list",
     "module_list",
@@ -2352,6 +2354,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "view_list",
             vec![json!({"collection": a.collection})],
             vec![json!({"collection": b.collection})],
+            vec![],
+        ),
+        // T1.32: B's dashboards neither list nor open in A.
+        case(
+            "dashboard_list",
+            vec![json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project})],
+            vec![],
+        ),
+        case(
+            "dashboard_get",
+            vec![json!({"dashboard": a.dashboard})],
+            vec![json!({"dashboard": b.dashboard})],
             vec![],
         ),
         by_project("automation_list"),
@@ -2902,16 +2917,6 @@ async fn check_mcp(
 
     // P0.23: a read-only tool changes nothing. A's rows are digested before
     // and after each tool's calls; only the columns reads may touch differ.
-    // The first read of a project's views makes its built-in ones (until
-    // T1.40 drops saved_views); read them once first, as the web does on
-    // opening a project, so that isn't counted against the first view tool.
-    let (status, body) = get_text(
-        app,
-        &a.browser,
-        &format!("/api/v1/projects/{}/views", a.project),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
     let a_ids = sweep_ids(pool, a.organization).await;
     let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
     // Fingerprints first, so a write landing during the digest is caught
