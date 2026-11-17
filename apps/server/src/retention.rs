@@ -353,7 +353,6 @@ pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
         refresh_eligible AS (SELECT id FROM mcp_oauth_refresh_tokens WHERE (used_at IS NOT NULL OR revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '30 days' FOR UPDATE),
         refresh_links AS (UPDATE mcp_oauth_refresh_tokens SET rotated_to_token_id=NULL WHERE rotated_to_token_id IN (SELECT id FROM refresh_eligible) RETURNING 1),
         oauth_refresh_tokens AS (DELETE FROM mcp_oauth_refresh_tokens WHERE id IN (SELECT id FROM refresh_eligible) RETURNING 1),
-        published_outbox AS (DELETE FROM outbox_events WHERE published_at <= now() - interval '30 days' RETURNING 1),
         completed_temporary_jobs AS (DELETE FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days' RETURNING 1),
         stopped_instances AS (DELETE FROM server_instances WHERE coalesce(stopped_at, heartbeat_at) <= now() - interval '7 days' RETURNING 1),
         old_access_disagreements AS (DELETE FROM access_disagreements WHERE last_seen_at <= now() - interval '30 days' RETURNING 1)
@@ -362,7 +361,6 @@ pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
              + (SELECT count(*) FROM oauth_authorization_codes)
              + (SELECT count(*) FROM oauth_access_tokens)
              + (SELECT count(*) FROM oauth_refresh_tokens)
-             + (SELECT count(*) FROM published_outbox)
              + (SELECT count(*) FROM completed_temporary_jobs)
              + (SELECT count(*) FROM stopped_instances)
              + (SELECT count(*) FROM old_access_disagreements)

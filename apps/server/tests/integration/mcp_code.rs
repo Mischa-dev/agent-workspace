@@ -1682,7 +1682,8 @@ async fn removing_a_sponsored_prompt_scrubs_the_execution_request_too() {
         "agent_runs",
         "external_execution_requests",
         "idempotency_keys",
-        "outbox_events",
+        "events",
+        "event_staging",
     ] {
         assert_eq!(
             super::message_edits::copies(&setup.pool, table, secret).await,

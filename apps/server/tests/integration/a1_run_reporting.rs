@@ -312,9 +312,10 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
         "{stored}"
     );
     assert!(stored.contains("dana"), "the rest is kept: {stored}");
-    let events = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events WHERE event_type = 'run.changed' AND resource_id = $1",
-    )
+    let events = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {n} outbox WHERE event_type = 'run.changed' AND resource_id = $1",
+        n = crate::support::NOTICES
+    ))
     .bind(run)
     .fetch_one(&setup.pool)
     .await

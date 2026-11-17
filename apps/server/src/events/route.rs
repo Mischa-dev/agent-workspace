@@ -8,17 +8,15 @@
 //! turns the event (IDs only) into the events below and hands them to both.
 //! Everything after that goes through the job queue, so it survives
 //! restarts and runs on any server. The router runs under its
-//! `consumer:router` lease on whichever instance holds it; the outbox
-//! publisher also nudges an `events.router` job (one at a time) so routing
-//! goes on wherever jobs run.
+//! `consumer:router` lease on whichever instance holds it.
 //!
 //! Each event has a key that names what happened (`run:<id>:completed`), so
-//! the same change seen twice, from a redelivered outbox event or from two
-//! events about one pull request, is delivered and acted on once.
+//! the same change seen twice, from a retried batch or from two events
+//! about one pull request, is delivered and acted on once.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -28,13 +26,10 @@ use crate::{
     error::AppError,
     jobs::{self, JobContext, JobError, JobRegistry, NewJob},
     mcp::McpPrincipal,
-    outbox::{ClaimedOutboxEvent, OutboxEventPayload},
     policy::ActorKind,
 };
 
 pub const ROUTE_KIND: &str = "events.route";
-/// One pass of the router over the log, nudged by the outbox publisher.
-pub const ROUTER_KIND: &str = "events.router";
 
 /// Every event type, as webhooks name them.
 pub const EVENT_TYPES: &[(&str, &str)] = &[
@@ -65,12 +60,6 @@ pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register(ROUTE_KIND, |context: JobContext| async move {
         let payload: RoutePayload = context.job.payload_as()?;
         route(&context.state, &payload)
-            .await
-            .map_err(|error| JobError::retry(error.log_category()))?;
-        Ok(())
-    });
-    registry.register(ROUTER_KIND, |context: JobContext| async move {
-        run_router(&context.state.pool)
             .await
             .map_err(|error| JobError::retry(error.log_category()))?;
         Ok(())
@@ -151,68 +140,172 @@ fn thing_of(event_type: &str, subject: &Subject) -> Option<ThingRef> {
     }
 }
 
+/// One logged event's routing job: the events webhooks and rules hear for
+/// it, made when the router read it. IDs only.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RoutePayload {
     pub event_id: Uuid,
     pub project_id: Uuid,
     pub organization_id: Uuid,
-    pub source: RouteSource,
+    pub events: Vec<Event>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub(crate) enum RouteSource {
-    Message {
-        conversation_id: Uuid,
-        message_id: Uuid,
-        author_actor_id: Uuid,
-    },
-    Run {
-        conversation_id: Uuid,
-        agent_run_id: Uuid,
-        state: RunState,
-    },
-    WorkItem {
-        work_item_id: Uuid,
-        version: i64,
-    },
-    /// Records written in one go (AWD-110). A change too big to name its
-    /// records names none, and routes nothing.
-    Collection {
-        collection_id: Uuid,
-        record_ids: Vec<Uuid>,
-    },
-}
-
-/// What an outbox payload routes as, if anything.
-fn route_source(payload: OutboxEventPayload) -> Option<RouteSource> {
-    Some(match payload {
-        OutboxEventPayload::MessageCreated(created) => RouteSource::Message {
-            conversation_id: created.conversation_id,
-            message_id: created.message_id,
-            author_actor_id: created.author_actor_id,
-        },
-        OutboxEventPayload::AgentRunUpdated(updated) => RouteSource::Run {
-            conversation_id: updated.conversation_id,
-            agent_run_id: updated.agent_run_id,
-            state: updated.state?,
-        },
-        OutboxEventPayload::WorkItemUpdated(updated) => RouteSource::WorkItem {
-            work_item_id: updated.work_item_id,
-            version: updated.version,
-        },
-        OutboxEventPayload::CollectionUpdated(updated) if !updated.record_ids.is_empty() => {
-            RouteSource::Collection {
-                collection_id: updated.collection_id,
-                record_ids: updated.record_ids,
-            }
+/// The events webhooks and rules hear for one logged event; none for most.
+/// Writers emit these facts themselves (K3.7), so this only renames them
+/// into the webhook shape: a run that ended is heard as `run.updated` and
+/// `run.finished`, and each event gets the key that names what happened.
+async fn heard(
+    connection: &mut sqlx::PgConnection,
+    logged: &super::LoggedEvent,
+) -> Result<Vec<Event>, AppError> {
+    let Some(project_id) = logged.space_id else {
+        return Ok(Vec::new());
+    };
+    let id_in = |key: &str| {
+        logged
+            .payload
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+    };
+    let text_in = |key: &str| {
+        logged
+            .payload
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let event = |event_type: &str, key: String, actor_id: Option<Uuid>, subject: Subject| Event {
+        event_type: event_type.to_owned(),
+        key,
+        organization_id: logged.workspace_id,
+        project_id,
+        occurred_at: logged.created_at,
+        actor_id,
+        thing: thing_of(event_type, &subject),
+        subject,
+    };
+    let Some(thing) = logged.thing_id else {
+        return Ok(Vec::new());
+    };
+    let event_type = logged.event_type.as_str();
+    Ok(match event_type {
+        "message.created" => vec![event(
+            event_type,
+            format!("message:{thing}"),
+            id_in("authorActorId").or(logged.actor_account_id),
+            Subject {
+                conversation_id: id_in("conversationId"),
+                message_id: Some(thing),
+                ..Subject::default()
+            },
+        )],
+        "task.created" => vec![event(
+            event_type,
+            format!("task.created:{thing}"),
+            logged.actor_account_id,
+            Subject {
+                work_item_id: Some(thing),
+                ..Subject::default()
+            },
+        )],
+        "task.updated" => vec![event(
+            event_type,
+            format!(
+                "task.updated:{thing}:{}",
+                logged.thing_version.unwrap_or_default()
+            ),
+            logged.actor_account_id,
+            Subject {
+                work_item_id: Some(thing),
+                changed_fields: logged.changes.clone(),
+                ..Subject::default()
+            },
+        )],
+        "record.created" | "record.updated" => vec![event(
+            event_type,
+            format!("record:{}", logged.id),
+            logged.actor_account_id,
+            Subject {
+                record_id: Some(thing),
+                collection_id: id_in("collectionId"),
+                changed_fields: logged.changes.clone(),
+                ..Subject::default()
+            },
+        )],
+        "pull_request.merged"
+        | "pull_request.closed"
+        | "pull_request.checks_failed"
+        | "pull_request.checks_passed" => {
+            let state = text_in("state").unwrap_or_default();
+            let key = match event_type {
+                "pull_request.merged" | "pull_request.closed" => format!("pr:{thing}:{state}"),
+                _ => format!(
+                    "pr:{thing}:{}:{state}",
+                    text_in("headSha").unwrap_or_default()
+                ),
+            };
+            vec![event(
+                event_type,
+                key,
+                None,
+                Subject {
+                    pull_request_id: Some(thing),
+                    work_item_id: id_in("workItemId"),
+                    agent_run_id: id_in("agentRunId"),
+                    state: Some(state),
+                    ..Subject::default()
+                },
+            )]
         }
-        _ => return None,
+        // The conversation's run (its own notice); A1's run record is
+        // heard through it until runs move to one record (lane E).
+        "run.updated" | "run.finished"
+            if logged.legacy_type.as_deref() == Some("conversation.agent_run.updated") =>
+        {
+            let Some(state) = text_in("state").and_then(|state| state.parse::<RunState>().ok())
+            else {
+                return Ok(Vec::new());
+            };
+            let (requester, work_item_id) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+                r#"
+                SELECT run.requesting_actor_id,
+                       (SELECT launch.work_item_id FROM launches launch
+                        WHERE launch.agent_run_id = run.id LIMIT 1)
+                FROM agent_runs run WHERE run.id = $1
+                "#,
+            )
+            .bind(thing)
+            .fetch_optional(&mut *connection)
+            .await?
+            .unwrap_or((Uuid::nil(), None));
+            let actor = (!requester.is_nil()).then_some(requester);
+            let state_name = state.to_string();
+            let subject = Subject {
+                agent_run_id: Some(thing),
+                conversation_id: id_in("conversationId"),
+                work_item_id,
+                state: Some(state_name.clone()),
+                ..Subject::default()
+            };
+            let mut events = vec![event(
+                "run.updated",
+                format!("run:{thing}:{state_name}"),
+                actor,
+                subject.clone(),
+            )];
+            if state.is_terminal() {
+                events.push(event(
+                    "run.finished",
+                    format!("run.finished:{thing}"),
+                    actor,
+                    subject,
+                ));
+            }
+            events
+        }
+        _ => Vec::new(),
     })
 }
 
@@ -247,69 +340,6 @@ async fn listening(
     .await?)
 }
 
-/// Called by the outbox publisher inside the transaction that marks an
-/// event published: when the event would route and its project listens,
-/// make sure one `events.router` pass is queued. The router reads the
-/// log, not the outbox; this only says "look now".
-///
-/// An event queued before the log existed (left unpublished across the
-/// upgrade) has no log entry, so it is put in the log here, with its own
-/// id and time, before the pass is queued; otherwise it would be marked
-/// published and never routed.
-///
-/// The pass is queued for no workspace: the router's cursor is shared by
-/// every workspace, so it must read the whole log, not one workspace's
-/// rows.
-pub async fn queue_route(
-    transaction: &mut Transaction<'_, Postgres>,
-    claim: &ClaimedOutboxEvent,
-) -> Result<bool, AppError> {
-    let Ok(payload) = claim.decode() else {
-        return Ok(false);
-    };
-    if route_source(payload.clone()).is_none() {
-        return Ok(false);
-    }
-    if listening(transaction, claim.project_id()).await?.is_none() {
-        return Ok(false);
-    }
-    let logged = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (SELECT 1 FROM events WHERE id = $1)
-            OR EXISTS (SELECT 1 FROM event_staging WHERE id = $1)
-        "#,
-    )
-    .bind(claim.event_id())
-    .fetch_one(&mut **transaction)
-    .await?;
-    if !logged {
-        super::legacy::mirror(
-            transaction,
-            claim.event_id(),
-            claim.project_id(),
-            &payload,
-            claim.payload_json(),
-        )
-        .await?;
-        // Keep when it happened: task activity and record history are
-        // matched to their event by this time.
-        sqlx::query(
-            "UPDATE event_staging SET created_at = outbox.created_at \
-             FROM outbox_events outbox \
-             WHERE event_staging.id = $1 AND outbox.event_id = $1",
-        )
-        .bind(claim.event_id())
-        .execute(&mut **transaction)
-        .await?;
-    }
-    jobs::enqueue(
-        &mut **transaction,
-        NewJob::new(ROUTER_KIND).unique(ROUTER_KIND),
-    )
-    .await?;
-    Ok(true)
-}
-
 /// The router: a consumer of the log that queues one `events.route` job
 /// per event that has somewhere to go.
 pub struct Router;
@@ -323,8 +353,8 @@ impl super::Consumer for Router {
         ROUTER
     }
 
-    /// From the log's start: everything in the log was written after the
-    /// outbox stopped routing, so nothing is routed twice or skipped.
+    /// From the log's start, so nothing written before the router's first
+    /// round is skipped.
     fn starts_at_head(&self) -> bool {
         false
     }
@@ -335,19 +365,19 @@ impl super::Consumer for Router {
         batch: &[super::LoggedEvent],
     ) -> Result<(), super::ConsumerError> {
         for event in batch {
-            let (Some(legacy_type), Some(project_id)) = (&event.legacy_type, event.space_id) else {
+            let Some(project_id) = event.space_id else {
                 continue;
             };
-            let Ok(payload) = OutboxEventPayload::from_json(legacy_type, event.payload.clone())
-            else {
+            if !is_event_type(&event.event_type) {
                 continue;
-            };
-            let Some(source) = route_source(payload) else {
-                continue;
-            };
+            }
             let Some(organization_id) = listening(transaction, project_id).await? else {
                 continue;
             };
+            let events = heard(transaction, event).await?;
+            if events.is_empty() {
+                continue;
+            }
             jobs::enqueue(
                 &mut **transaction,
                 NewJob::new(ROUTE_KIND)
@@ -356,7 +386,7 @@ impl super::Consumer for Router {
                         event_id: event.id,
                         project_id,
                         organization_id,
-                        source,
+                        events,
                     })
                     .unique(format!("events.route:{}", event.id)),
             )
@@ -366,26 +396,9 @@ impl super::Consumer for Router {
     }
 }
 
-/// One `events.router` pass: positions for what is staged, then the
-/// router's rounds until it is caught up (or another runner holds it).
-pub async fn run_router(pool: &PgPool) -> Result<usize, AppError> {
-    let mut runner = super::consumer::Runner::new(Router);
-    let mut handled = 0;
-    for _ in 0..50 {
-        super::sequencer::step(pool).await?;
-        let round = runner.round(pool).await?;
-        handled += round.handled + round.parked;
-        if round.busy || round.handled + round.parked == 0 {
-            break;
-        }
-    }
-    Ok(handled)
-}
-
-/// Turns one outbox event into events and hands them to webhooks and
-/// automations. Public so tests can route without the job queue.
+/// Hands one logged event's webhook events to webhooks and automations.
 pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<usize, AppError> {
-    let events = expand(&state.pool, payload).await?;
+    let events = &payload.events;
     // AWD-75: with Automations off (it holds webhooks too), nothing follows
     // the workspace's events; nor do events of a module that's off.
     let modules = {
@@ -395,7 +408,7 @@ pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<us
     if !modules.contains("automations") {
         return Ok(0);
     }
-    for event in &events {
+    for event in events {
         let direct =
             sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
                 .bind(event.project_id)
@@ -532,338 +545,6 @@ pub(crate) fn public_origin(state: &AppState) -> String {
         .public_origin
         .clone()
         .unwrap_or_else(|| format!("http://{}", state.config.server_addr))
-}
-
-#[derive(FromRow)]
-struct ActivityRow {
-    kind: String,
-    actor_id: Option<Uuid>,
-    changed_fields: Option<serde_json::Value>,
-}
-
-#[derive(FromRow)]
-struct LinkedPullRequest {
-    id: Uuid,
-    head_sha: String,
-    state: String,
-    checks_state: String,
-}
-
-async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, AppError> {
-    let occurred_at =
-        sqlx::query_scalar::<_, DateTime<Utc>>("SELECT created_at FROM events WHERE id = $1")
-            .bind(payload.event_id)
-            .fetch_optional(crate::db::scoped(pool))
-            .await?
-            .unwrap_or_else(Utc::now);
-    let event = |event_type: &str, key: String, actor_id: Option<Uuid>, subject: Subject| Event {
-        event_type: event_type.to_owned(),
-        key,
-        organization_id: payload.organization_id,
-        project_id: payload.project_id,
-        occurred_at,
-        actor_id,
-        thing: thing_of(event_type, &subject),
-        subject,
-    };
-    let mut events = Vec::new();
-    match &payload.source {
-        RouteSource::Message {
-            conversation_id,
-            message_id,
-            author_actor_id,
-        } => {
-            events.push(event(
-                "message.created",
-                format!("message:{message_id}"),
-                Some(*author_actor_id),
-                Subject {
-                    conversation_id: Some(*conversation_id),
-                    message_id: Some(*message_id),
-                    ..Subject::default()
-                },
-            ));
-        }
-        RouteSource::Run {
-            conversation_id,
-            agent_run_id,
-            state,
-        } => {
-            let (requester, work_item_id) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
-                r#"
-                SELECT run.requesting_actor_id,
-                       (SELECT launch.work_item_id FROM launches launch
-                        WHERE launch.agent_run_id = run.id LIMIT 1)
-                FROM agent_runs run WHERE run.id = $1
-                "#,
-            )
-            .bind(agent_run_id)
-            .fetch_optional(crate::db::scoped(pool))
-            .await?
-            .unwrap_or((Uuid::nil(), None));
-            let state_name = state.to_string();
-            let subject = Subject {
-                agent_run_id: Some(*agent_run_id),
-                conversation_id: Some(*conversation_id),
-                work_item_id,
-                state: Some(state_name.to_owned()),
-                ..Subject::default()
-            };
-            let actor = (!requester.is_nil()).then_some(requester);
-            events.push(event(
-                "run.updated",
-                format!("run:{agent_run_id}:{state_name}"),
-                actor,
-                subject.clone(),
-            ));
-            if state.is_terminal() {
-                events.push(event(
-                    "run.finished",
-                    format!("run.finished:{agent_run_id}"),
-                    actor,
-                    subject,
-                ));
-            }
-            events.extend(
-                linked_pull_requests(pool, payload, PullRequestLink::Run(*agent_run_id))
-                    .await?
-                    .into_iter()
-                    .map(|(event_type, key, subject)| {
-                        let subject = Subject {
-                            agent_run_id: Some(*agent_run_id),
-                            work_item_id,
-                            ..subject
-                        };
-                        event(event_type, key, None, subject)
-                    }),
-            );
-        }
-        RouteSource::WorkItem {
-            work_item_id,
-            version,
-        } => {
-            let activities = sqlx::query_as::<_, ActivityRow>(
-                r#"
-                SELECT activity.kind, activity.actor_id,
-                       activity.payload->'changedFields' AS changed_fields
-                FROM events event
-                JOIN work_item_activity activity
-                  ON activity.project_id = event.space_id
-                 AND activity.work_item_id = $2
-                 AND activity.created_at = event.created_at
-                WHERE event.id = $1
-                ORDER BY activity.created_at, activity.id
-                "#,
-            )
-            .bind(payload.event_id)
-            .bind(work_item_id)
-            .fetch_all(crate::db::scoped(pool))
-            .await?;
-            let created = activities
-                .iter()
-                .find(|activity| activity.kind == "work_item_created");
-            if let Some(activity) = created {
-                events.push(event(
-                    "task.created",
-                    format!("task.created:{work_item_id}"),
-                    activity.actor_id,
-                    Subject {
-                        work_item_id: Some(*work_item_id),
-                        ..Subject::default()
-                    },
-                ));
-            } else if let Some(activity) = activities.first() {
-                let mut changed = activities
-                    .iter()
-                    .filter_map(|activity| activity.changed_fields.as_ref())
-                    .filter_map(serde_json::Value::as_array)
-                    .flatten()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>();
-                for activity in &activities {
-                    match activity.kind.as_str() {
-                        "work_item_archived" => changed.push("archived".to_owned()),
-                        "work_item_restored" => changed.push("restored".to_owned()),
-                        _ => {}
-                    }
-                }
-                changed.sort();
-                changed.dedup();
-                events.push(event(
-                    "task.updated",
-                    format!("task.updated:{work_item_id}:{version}"),
-                    activity.actor_id,
-                    Subject {
-                        work_item_id: Some(*work_item_id),
-                        changed_fields: changed,
-                        ..Subject::default()
-                    },
-                ));
-            }
-            events.extend(
-                linked_pull_requests(pool, payload, PullRequestLink::WorkItem(*work_item_id))
-                    .await?
-                    .into_iter()
-                    .map(|(event_type, key, subject)| {
-                        let subject = Subject {
-                            work_item_id: Some(*work_item_id),
-                            ..subject
-                        };
-                        event(event_type, key, None, subject)
-                    }),
-            );
-        }
-        RouteSource::Collection {
-            collection_id,
-            record_ids,
-        } => {
-            // The records' history written with this event (same
-            // transaction, same time): one event per record, keyed by its
-            // history entry, so a redelivery lands once.
-            let entries = sqlx::query_as::<_, RecordHistoryRow>(
-                r#"
-                SELECT history.id, history.record_id, history.action, history.actor_id,
-                       history.changes
-                FROM events event
-                JOIN collection_record_history history
-                  ON history.project_id = event.space_id
-                 AND history.record_id = ANY($2)
-                 AND history.created_at = event.created_at
-                WHERE event.id = $1
-                ORDER BY history.created_at, history.id
-                "#,
-            )
-            .bind(payload.event_id)
-            .bind(record_ids)
-            .fetch_all(crate::db::scoped(pool))
-            .await?;
-            for entry in entries {
-                let created = entry.action == "created";
-                let mut changed = if created {
-                    Vec::new()
-                } else {
-                    entry
-                        .changes
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|change| change["name"].as_str().map(str::to_owned))
-                        .collect::<Vec<_>>()
-                };
-                if matches!(entry.action.as_str(), "archived" | "restored") {
-                    changed.push(entry.action.clone());
-                }
-                changed.sort();
-                changed.dedup();
-                events.push(event(
-                    if created {
-                        "record.created"
-                    } else {
-                        "record.updated"
-                    },
-                    format!("record:{}", entry.id),
-                    Some(entry.actor_id),
-                    Subject {
-                        record_id: Some(entry.record_id),
-                        collection_id: Some(*collection_id),
-                        changed_fields: changed,
-                        ..Subject::default()
-                    },
-                ));
-            }
-        }
-    }
-    Ok(events)
-}
-
-#[derive(FromRow)]
-struct RecordHistoryRow {
-    id: Uuid,
-    record_id: Uuid,
-    action: String,
-    actor_id: Uuid,
-    changes: serde_json::Value,
-}
-
-enum PullRequestLink {
-    Run(Uuid),
-    WorkItem(Uuid),
-}
-
-/// Pull request events for the PRs linked to a run or task, keyed by what
-/// they say (checks on a commit, merged, closed), so each lands once.
-async fn linked_pull_requests(
-    pool: &PgPool,
-    payload: &RoutePayload,
-    link: PullRequestLink,
-) -> Result<Vec<(&'static str, String, Subject)>, AppError> {
-    let rows = match link {
-        PullRequestLink::Run(run_id) => {
-            sqlx::query_as::<_, LinkedPullRequest>(
-                r#"
-                SELECT DISTINCT pr.id, pr.head_sha, pr.state, pr.checks_state
-                FROM github_pull_request_workspace_links link
-                JOIN github_pull_requests pr
-                  ON pr.project_id = link.project_id AND pr.id = link.github_pull_request_id
-                WHERE link.project_id = $1 AND link.agent_run_id = $2
-                "#,
-            )
-            .bind(payload.project_id)
-            .bind(run_id)
-            .fetch_all(crate::db::scoped(pool))
-            .await?
-        }
-        PullRequestLink::WorkItem(work_item_id) => {
-            sqlx::query_as::<_, LinkedPullRequest>(
-                r#"
-                SELECT DISTINCT pr.id, pr.head_sha, pr.state, pr.checks_state
-                FROM github_pull_request_work_item_links link
-                JOIN github_pull_requests pr
-                  ON pr.project_id = link.project_id AND pr.id = link.github_pull_request_id
-                WHERE link.project_id = $1 AND link.work_item_id = $2
-                "#,
-            )
-            .bind(payload.project_id)
-            .bind(work_item_id)
-            .fetch_all(crate::db::scoped(pool))
-            .await?
-        }
-    };
-    let mut events = Vec::new();
-    for row in rows {
-        let subject = |state: &str| Subject {
-            pull_request_id: Some(row.id),
-            state: Some(state.to_owned()),
-            ..Subject::default()
-        };
-        match row.state.as_str() {
-            "merged" => events.push((
-                "pull_request.merged",
-                format!("pr:{}:merged", row.id),
-                subject("merged"),
-            )),
-            "closed" => events.push((
-                "pull_request.closed",
-                format!("pr:{}:closed", row.id),
-                subject("closed"),
-            )),
-            _ => match row.checks_state.as_str() {
-                "failure" => events.push((
-                    "pull_request.checks_failed",
-                    format!("pr:{}:{}:failure", row.id, row.head_sha),
-                    subject("failure"),
-                )),
-                "success" => events.push((
-                    "pull_request.checks_passed",
-                    format!("pr:{}:{}:success", row.id, row.head_sha),
-                    subject("success"),
-                )),
-                _ => {}
-            },
-        }
-    }
-    Ok(events)
 }
 
 #[cfg(test)]

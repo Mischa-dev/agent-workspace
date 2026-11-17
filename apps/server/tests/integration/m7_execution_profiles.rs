@@ -498,7 +498,7 @@ async fn insert_thread(
 }
 
 async fn effect_counts(pool: &PgPool) -> (i64, i64, i64, i64, i64, i64, i64) {
-    sqlx::query_as(
+    sqlx::query_as(&format!(
         r#"
         SELECT
             (SELECT count(*) FROM agent_runs),
@@ -507,9 +507,10 @@ async fn effect_counts(pool: &PgPool) -> (i64, i64, i64, i64, i64, i64, i64) {
             (SELECT count(*) FROM provider_sessions),
             (SELECT count(*) FROM agent_approvals),
             (SELECT count(*) FROM messages),
-            (SELECT count(*) FROM outbox_events)
+            (SELECT count(*) FROM {n} outbox)
         "#,
-    )
+        n = crate::support::NOTICES
+    ))
     .fetch_one(pool)
     .await
     .expect("count execution side effects")
@@ -519,7 +520,7 @@ async fn conversation_effect_counts(
     pool: &PgPool,
     conversation_id: Uuid,
 ) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
-    sqlx::query_as(
+    sqlx::query_as(&format!(
         r#"
         SELECT
             (SELECT count(*) FROM agent_runs WHERE conversation_id = $1),
@@ -536,9 +537,10 @@ async fn conversation_effect_counts(
               WHERE run.conversation_id = $1),
             (SELECT count(*) FROM messages WHERE conversation_id = $1),
             (SELECT count(*) FROM conversation_entries WHERE conversation_id = $1),
-            (SELECT count(*) FROM outbox_events WHERE conversation_id = $1)
+            (SELECT count(*) FROM {n} outbox WHERE conversation_id = $1)
         "#,
-    )
+        n = crate::support::NOTICES
+    ))
     .bind(conversation_id)
     .fetch_one(pool)
     .await

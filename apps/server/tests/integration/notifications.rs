@@ -4,7 +4,6 @@
 //! occurrence delivered twice, someone changing another person's
 //! notifications, and a comment @mention that reaches nobody.
 
-use agent_workspace_server::realtime::{RealtimeHub, publish_ready_outbox_batch};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -17,19 +16,12 @@ use super::{
     },
 };
 
-/// Publishes everything in the outbox, including the events notifications
-/// themselves enqueue.
+/// Runs the log's consumers until they have caught up, including the
+/// events notifications themselves stage.
 pub(super) async fn drain(setup: &Setup) {
-    let hub = RealtimeHub::new(1024);
-    for _ in 0..50 {
-        let published = publish_ready_outbox_batch(&setup.pool, &hub, "notifications-test")
-            .await
-            .expect("publish outbox batch");
-        if published == 0 {
-            return;
-        }
-    }
-    panic!("outbox never drained");
+    agent_workspace_server::events::catch_up(&setup.pool)
+        .await
+        .expect("catch up with the log");
 }
 
 pub(super) async fn inbox(setup: &Setup, browser: &Browser, query: &str) -> Value {
@@ -139,8 +131,8 @@ async fn mentions_reach_the_person_once_and_follow_the_message() {
             .contains("this one")
     );
 
-    // Redelivered events are applied once.
-    sqlx::query("UPDATE outbox_events SET published_at = NULL, attempt_count = 0 WHERE event_type = 'conversation.message.created'")
+    // Events read again are applied once.
+    sqlx::query("UPDATE event_consumers SET position = 0 WHERE name = 'notifications'")
         .execute(&setup.pool)
         .await
         .expect("replay events");
@@ -170,7 +162,12 @@ async fn mentions_reach_the_person_once_and_follow_the_message() {
             .expect("preview")
             .contains("palette")
     );
-    for table in ["notifications", "notification_occurrences", "outbox_events"] {
+    for table in [
+        "notifications",
+        "notification_occurrences",
+        "events",
+        "event_staging",
+    ] {
         assert_eq!(
             super::message_edits::copies(&setup.pool, table, "this one").await,
             0,
@@ -536,7 +533,10 @@ async fn people_read_archive_snooze_and_restore_their_own() {
 
     // The browser is told about each change.
     let announced = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events WHERE event_type = 'notifications.updated' AND resource_id = $1",
+        &format!(
+"SELECT count(*) FROM {n} outbox WHERE event_type = 'notifications.updated' AND resource_id = $1",
+ n = crate::support::NOTICES
+),
     )
     .bind(mara)
     .fetch_one(&setup.pool)

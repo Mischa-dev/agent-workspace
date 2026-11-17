@@ -59,7 +59,7 @@ async fn authenticated_interrupt_idles_only_an_unowned_provider_session() {
     );
 
     let (run_state, session_state, finished, interruption_entries, outbox_events) =
-        sqlx::query_as::<_, (String, String, bool, i64, i64)>(
+        sqlx::query_as::<_, (String, String, bool, i64, i64)>(&format!(
             r#"
             SELECT
                 run.state,
@@ -76,7 +76,7 @@ async fn authenticated_interrupt_idles_only_an_unowned_provider_session() {
                 ),
                 (
                     SELECT count(*)
-                    FROM outbox_events event
+                    FROM {n} event
                     WHERE event.event_type = 'conversation.agent_run.updated'
                       AND event.conversation_id = run.conversation_id
                       AND event.resource_id = run.id
@@ -85,7 +85,8 @@ async fn authenticated_interrupt_idles_only_an_unowned_provider_session() {
             JOIN provider_sessions session ON session.id = run.provider_session_id
             WHERE run.id = $1
             "#,
-        )
+            n = crate::support::NOTICES
+        ))
         .bind(interrupted_run_id)
         .fetch_one(&harness.pool)
         .await
@@ -217,7 +218,7 @@ async fn provider_turn_failure_idles_its_linked_session_without_live_credentials
         "The agent's turn failed. The worktree was preserved."
     );
 
-    let (failure_entries, outbox_events) = sqlx::query_as::<_, (i64, i64)>(
+    let (failure_entries, outbox_events) = sqlx::query_as::<_, (i64, i64)>(&format!(
         r#"
         SELECT
             (
@@ -230,12 +231,13 @@ async fn provider_turn_failure_idles_its_linked_session_without_live_credentials
             ),
             (
                 SELECT count(*)
-                FROM outbox_events event
+                FROM {n} event
                 WHERE event.event_type = 'conversation.agent_run.updated'
                   AND event.resource_id = $1
             )
         "#,
-    )
+        n = crate::support::NOTICES
+    ))
     .bind(run_id)
     .fetch_one(&harness.pool)
     .await
