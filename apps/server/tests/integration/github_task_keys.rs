@@ -84,7 +84,7 @@ async fn a_pull_request_naming_a_task_key_is_suggested_on_that_task_only() {
         )
         .await;
         tasks.push(
-            created["workItemId"]
+            created["value"]["workItemId"]
                 .as_str()
                 .unwrap_or_else(|| panic!("task: {created}"))
                 .parse::<Uuid>()
@@ -123,7 +123,7 @@ async fn a_pull_request_naming_a_task_key_is_suggested_on_that_task_only() {
     .await;
     let beta_key = key_of(
         pool,
-        beta_task["workItemId"]
+        beta_task["value"]["workItemId"]
             .as_str()
             .unwrap_or_else(|| panic!("beta task: {beta_task}"))
             .parse()
@@ -369,7 +369,7 @@ async fn a_suggested_pull_request_is_confirmed_or_dismissed_on_the_task() {
         json!({"projectId": aw, "title": "Fix the board"}),
     )
     .await;
-    let task: Uuid = created["workItemId"]
+    let task: Uuid = created["value"]["workItemId"]
         .as_str()
         .unwrap_or_else(|| panic!("task: {created}"))
         .parse()
@@ -613,7 +613,7 @@ async fn merging_checks_the_pull_request_before_it_asks_github() {
         json!({"projectId": aw, "title": "Ship offline mode"}),
     )
     .await;
-    let task = created["workItemId"]
+    let task = created["value"]["workItemId"]
         .as_str()
         .unwrap_or_else(|| panic!("task: {created}"))
         .to_owned();

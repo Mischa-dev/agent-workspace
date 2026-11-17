@@ -490,7 +490,10 @@ async fn quiet_writes_emit_their_events() {
         json!({"projectId": project, "title": "Paint"}),
     )
     .await;
-    let task = task["workItemId"].as_str().expect("task").to_owned();
+    let task = task["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     call(
         "task_comment",
         json!({"taskId": task, "text": "secret plan", "clientRequestId": "k3-8-comment"}),

@@ -476,7 +476,7 @@ async fn an_anchored_agent_s_lists_span_the_projects_it_reaches() {
             json!({"projectId": project, "title": title}),
         )
         .await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
     let session = initialize(app, &ada_token).await.expect("agent");
     // A list naming no project spans both and leaves out Home base's tasks.

@@ -46,6 +46,7 @@ fn id_of(result: &Value) -> String {
     for path in [
         "/id",
         "/task/id",
+        "/workItemId",
         "/whiteboard/id",
         "/page/id",
         "/decision/id",

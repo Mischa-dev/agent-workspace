@@ -451,7 +451,13 @@ async fn only_people_who_can_post_can_react() {
         json!({"messageId": "not a message", "emoji": "eyes"}),
     )
     .await;
-    assert_eq!(refused["field"], "messageId", "{refused}");
+    // K2.7: an operation's input fails to read as a whole, so the answer
+    // names the input when serde doesn't say which field.
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    assert!(
+        refused["field"] == "messageId" || refused["field"] == "input",
+        "{refused}"
+    );
     assert_eq!(
         sqlx::query_scalar::<_, String>(
             "SELECT string_agg(emoji, '' ORDER BY created_at) FROM message_reactions WHERE message_id = $1",

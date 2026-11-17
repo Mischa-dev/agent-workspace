@@ -70,8 +70,8 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
             json!({"projectId": project, "title": title}),
         )
         .await;
-        assert_eq!(created["outcome"], "applied", "{created}");
-        assert_eq!(created["key"], "WORK-1", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
+        assert_eq!(created["value"]["key"], "WORK-1", "{created}");
     }
 
     // Archiving by a key both workspaces use would hit one at random.
@@ -193,7 +193,7 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
             json!({"projectId": project, "title": "Task"}),
         )
         .await;
-        assert_eq!(made["outcome"], "applied", "{made}");
+        assert_eq!(made["outcome"], "ok", "{made}");
         tasks.push(
             sqlx::query_scalar::<_, Uuid>(
                 "SELECT id FROM work_items WHERE project_id = $1::uuid AND number = 1",

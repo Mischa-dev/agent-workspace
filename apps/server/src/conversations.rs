@@ -1,3 +1,6 @@
+// K2.7: the message operations.
+pub mod ops;
+
 use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},

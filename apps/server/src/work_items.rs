@@ -91,6 +91,7 @@ pub(crate) mod import_parse;
 pub(crate) mod imports;
 pub(crate) mod list;
 mod moves;
+pub(crate) mod ops;
 mod planning;
 pub(crate) mod project_templates;
 pub(crate) mod templates;

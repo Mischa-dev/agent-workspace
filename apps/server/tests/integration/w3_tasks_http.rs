@@ -1334,7 +1334,7 @@ async fn every_status_change_says_what_changed() {
     for title in ["Dragged", "Marked ready", "Updated", "Blocked"] {
         let created = call("task_create", json!({"projectId": work, "title": title})).await;
         tasks.push(
-            created["workItemId"]
+            created["value"]["workItemId"]
                 .as_str()
                 .unwrap_or_else(|| panic!("task: {created}"))
                 .parse::<Uuid>()
@@ -1452,7 +1452,7 @@ async fn every_status_change_says_what_changed() {
         json!({"taskId": tasks[2], "expectedVersion": version(tasks[2]).await, "status": review_name, "clientRequestId": "p12-update"}),
     )
     .await;
-    assert_eq!(updated["outcome"], "applied", "{updated}");
+    assert_eq!(updated["outcome"], "ok", "{updated}");
     let blocked = call(
         "task_mark_blocked",
         json!({"workItemId": tasks[3], "expectedVersion": version(tasks[3]).await, "reason": "Waiting on the design", "clientRequestId": "p12-blocked"}),

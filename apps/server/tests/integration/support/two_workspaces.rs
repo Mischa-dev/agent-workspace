@@ -99,6 +99,10 @@ pub(crate) struct World {
     pub(crate) task_file: Uuid,
     /// The link preview `file_message` shows, made ready by the test.
     pub(crate) link_preview: Uuid,
+    /// A built module (M1.6) in the project, holding nothing.
+    pub(crate) module: Uuid,
+    /// A package install (M1.9) in the project, that made nothing.
+    pub(crate) package_install: Uuid,
 }
 
 /// The app on a fresh schema with workspaces A and B built, signed in as
@@ -1615,6 +1619,45 @@ async fn build_workspace(
         .fetch_one(pool)
         .await
         .expect("workspace slug");
+    let module = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO modules (id, workspace_id, space_id, module_key, name, created_by_actor_id)
+        SELECT $1, $2, $3::uuid, 'local.tracker', $4, actor_id
+        FROM organization_memberships WHERE organization_id = $2 AND role = 'owner' LIMIT 1
+        "#,
+    )
+    .bind(module)
+    .bind(organization)
+    .bind(&project)
+    .bind(format!("Tracker{m}"))
+    .execute(pool)
+    .await
+    .expect("built module");
+    let package_install = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        WITH package AS (
+            INSERT INTO packages (id, workspace_id, package_key, version, name, document, digest, source)
+            VALUES ($1, $2, 'fixture', '1.0.0', 'Fixture', '{}'::jsonb, 'sha256:0', 'upload')
+            RETURNING id
+        )
+        INSERT INTO package_installs (
+            id, workspace_id, space_id, package_id, state, plan, plan_hash, installed_by_actor_id
+        )
+        SELECT $3, $2, $4::uuid, package.id, 'installed', '[]'::jsonb, 'sha256:0', membership.actor_id
+        FROM package, organization_memberships membership
+        WHERE membership.organization_id = $2 AND membership.role = 'owner'
+        LIMIT 1
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(organization)
+    .bind(package_install)
+    .bind(&project)
+    .execute(pool)
+    .await
+    .expect("package install");
 
     World {
         marker,
@@ -1663,6 +1706,8 @@ async fn build_workspace(
         file_message,
         task_file,
         link_preview,
+        module,
+        package_install,
     }
 }
 

@@ -98,8 +98,8 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
                 json!({"projectId": "WORK", "title": title, "clientRequestId": key}),
             )
             .await;
-            assert_eq!(made["outcome"], "applied", "{made}");
-            made["key"].as_str().expect("key").to_owned()
+            assert_eq!(made["outcome"], "ok", "{made}");
+            made["value"]["key"].as_str().expect("key").to_owned()
         }
     };
     let launch = |key: String, client: &'static str| {
