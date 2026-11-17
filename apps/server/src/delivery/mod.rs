@@ -70,21 +70,29 @@ pub async fn poll(
     let wait = wait.min(MAX_WAIT);
     let (delivery, after) = crate::db::scoped_one(&state.pool, async |connection| {
         let delivery = connections::for_caller(connection, caller, named).await?;
+        let kept_from = oldest(connection).await? - 1;
         let after = match cursor.map(str::trim).filter(|cursor| !cursor.is_empty()) {
             Some(cursor) => {
                 let after = cursor::decode(&delivery.cursor_key, delivery.id, cursor)
                     .ok_or(AppError::Validation("cursor"))?;
+                if after < kept_from {
+                    return Err(AppError::Conflict(
+                        "cursor_expired",
+                        "This cursor is older than the events kept. Call briefing to catch up, then read without a cursor.",
+                    ));
+                }
                 connections::mark_read(connection, delivery.id, after).await?;
                 after
             }
+            // Where it last read, unless those events are gone: then from
+            // the oldest kept, which is where a read without a cursor
+            // recovers after `cursor_expired`.
+            None if delivery.read_cursor < kept_from => {
+                connections::mark_read(connection, delivery.id, kept_from).await?;
+                kept_from
+            }
             None => delivery.read_cursor,
         };
-        if after < oldest(connection).await? - 1 {
-            return Err(AppError::Conflict(
-                "cursor_expired",
-                "This cursor is older than the events kept. Call briefing to catch up, then read without a cursor.",
-            ));
-        }
         Ok::<_, AppError>((delivery, after))
     })
     .await?;

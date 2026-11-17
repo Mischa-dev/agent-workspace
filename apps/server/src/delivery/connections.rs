@@ -333,6 +333,47 @@ pub async fn new_signing_secret(
     Ok(secret)
 }
 
+/// A workspace is being deleted: each connection at home there that reaches
+/// other workspaces the account is still in moves its home to the one the
+/// account joined first. Its signing secrets were kept in the old home, so
+/// they go, and its webhook stops until it is saved again (which makes a new
+/// secret). Every other connection at home there goes with the workspace.
+pub async fn rehome_from(connection: &mut PgConnection, workspace: Uuid) -> Result<(), AppError> {
+    let moved = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        WITH next_home AS (
+            SELECT DISTINCT ON (delivery.id) delivery.id, membership.organization_id
+            FROM agent_connections delivery
+            JOIN organization_memberships membership
+              ON membership.actor_id = delivery.account_id
+             AND membership.enabled
+             AND membership.organization_id <> $1
+            WHERE delivery.home_workspace_id = $1 AND delivery.reaches_all
+              AND delivery.source_connection_id IS NULL AND delivery.state <> 'removed'
+            ORDER BY delivery.id, membership.created_at, membership.organization_id
+        )
+        UPDATE agent_connections delivery
+        SET home_workspace_id = next_home.organization_id,
+            state = CASE WHEN delivery.webhook_url IS NOT NULL AND delivery.state = 'active'
+                         THEN 'push_disabled' ELSE delivery.state END,
+            disabled_reason = CASE WHEN delivery.webhook_url IS NOT NULL
+                                   THEN 'Its home workspace was deleted. Save the webhook again for a new signing secret.'
+                                   ELSE delivery.disabled_reason END,
+            version = delivery.version + 1, updated_at = now()
+        FROM next_home
+        WHERE next_home.id = delivery.id
+        RETURNING delivery.id
+        "#,
+    )
+    .bind(workspace)
+    .fetch_all(&mut *connection)
+    .await?;
+    for id in moved {
+        clear_signing_secrets(connection, id, None).await?;
+    }
+    Ok(())
+}
+
 /// Remove a connection's signing secrets (only those in `state` when
 /// given), and their values from the store.
 pub async fn clear_signing_secrets(

@@ -207,6 +207,57 @@ async fn events_follow_access_when_read_and_dms_stay_private() {
 }
 
 #[tokio::test]
+async fn a_read_without_a_cursor_recovers_once_its_place_is_gone() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("delivery_expired")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let general = channel(&world, "general").await;
+    // Rook reads to here, so its connection keeps this place.
+    let start = read(&world, rook, None).await["nextCursor"].clone();
+    read(&world, rook, Some(&start)).await;
+    // What came after goes with retention before Rook reads it.
+    post(&world, &general, "old", mention("old ", rook.actor)).await;
+    agent_workspace_server::events::catch_up(world.pool())
+        .await
+        .expect("sequence events");
+    // (as retention does, for every event so far)
+    let gone = sqlx::query("DELETE FROM events")
+        .execute(world.pool())
+        .await
+        .expect("retention")
+        .rows_affected();
+    assert!(gone > 0);
+    post(&world, &general, "new", mention("new ", rook.actor)).await;
+
+    // The old cursor is refused, with the way back...
+    agent_workspace_server::events::catch_up(world.pool())
+        .await
+        .expect("sequence events");
+    let (_, refused) = rook
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "event_list",
+                arguments: json!({ "cursor": start }),
+            },
+        )
+        .await;
+    assert_eq!(refused["code"], "cursor_expired", "{refused}");
+    // ...which works: a read without one starts from the oldest kept.
+    let heard = read(&world, rook, None).await;
+    assert_eq!(of_type(&heard, "message.mentioned").len(), 1, "{heard}");
+    let again = read(&world, rook, None).await;
+    assert_eq!(of_type(&again, "message.mentioned").len(), 1, "{again}");
+    world.finish().await;
+}
+
+#[tokio::test]
 async fn pushes_are_signed_the_standard_way_and_carry_no_text() {
     let Some(world) = WorldBuilder::default()
         .project("WORK")
