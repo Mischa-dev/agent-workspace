@@ -15,7 +15,7 @@
     "later_update": "change"
   },
   "routes": ["/api/v1/inbox*", "/api/v1/later*"],
-  "events": { "emits": [], "listens": [] },
+  "events": { "emits": ["notification.changed"], "listens": [] },
   "notifications": ["reminder"],
   "search": [],
   "automations": { "triggers": [], "actions": [] },

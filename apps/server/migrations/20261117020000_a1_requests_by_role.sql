@@ -56,3 +56,4 @@ UPDATE notifications
 UPDATE requests SET legacy_source = NULL WHERE legacy_source = 'person_question';
 DROP FUNCTION requests_sync_question(UUID);
 DROP TABLE person_questions;
+DROP FUNCTION events_from_person_questions();

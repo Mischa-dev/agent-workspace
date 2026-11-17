@@ -154,10 +154,11 @@ fn reporter(call: &OpCall<'_>) -> Reporter {
 }
 
 /// Reports are rate limited per account: batch activities instead.
-fn report_rate(call: &OpCall<'_>) -> Result<(), OpError> {
+async fn report_rate(call: &OpCall<'_>) -> Result<(), OpError> {
     call.state
         .rate_limits
         .check_run_report(call.account_id())
+        .await
         .map_err(OpError::from)
 }
 
@@ -370,7 +371,7 @@ impl Operation for RunCreate {
     type Output = RunCreateOutput;
 
     async fn run(call: &mut OpCall<'_>, input: RunCreateInput) -> Result<RunCreateOutput, OpError> {
-        report_rate(call)?;
+        report_rate(call).await?;
         let space = call.ctx.space_id.ok_or(OpError::not_found("That space"))?;
         let initial = match input.state.as_deref() {
             None | Some("working") => RunState::Working,
@@ -485,7 +486,7 @@ impl Operation for RunUpdateOp {
     type Output = RunRecordValue;
 
     async fn run(call: &mut OpCall<'_>, input: RunUpdateInput) -> Result<RunRecordValue, OpError> {
-        report_rate(call)?;
+        report_rate(call).await?;
         let run_id = input.run_id.id();
         let next = match input.state.as_deref().map(str::parse::<RunState>) {
             None => None,
@@ -641,7 +642,7 @@ impl Operation for RunActivityReport {
         call: &mut OpCall<'_>,
         input: RunActivityReportInput,
     ) -> Result<RunActivityOutput, OpError> {
-        report_rate(call)?;
+        report_rate(call).await?;
         let run_id = input.run_id.id();
         if serde_json::to_vec(&input.activities).map_or(usize::MAX, |bytes| bytes.len())
             > MAX_CALL_BYTES
@@ -810,7 +811,7 @@ impl Operation for RunUsageReport {
         call: &mut OpCall<'_>,
         input: RunUsageReportInput,
     ) -> Result<RunUsageReportOutput, OpError> {
-        report_rate(call)?;
+        report_rate(call).await?;
         let space = call.ctx.space_id.ok_or_else(|| {
             OpError::invalid(
                 "spaceId",
@@ -937,7 +938,7 @@ impl Operation for RunResultReport {
         call: &mut OpCall<'_>,
         input: RunResultReportInput,
     ) -> Result<RunResultOutput, OpError> {
-        report_rate(call)?;
+        report_rate(call).await?;
         let run_id = input.run_id.id();
         own_run(call, run_id).await?;
         let results = input

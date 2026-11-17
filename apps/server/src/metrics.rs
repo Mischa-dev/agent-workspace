@@ -45,8 +45,18 @@ struct Registry {
     browser_errors_dropped: Mutex<u64>,
     browser_window: Mutex<Option<(Instant, u32)>>,
     server_errors: Mutex<BTreeMap<&'static str, u64>>,
+    live: Mutex<Live>,
     tenancy_transactions: Mutex<BTreeMap<&'static str, u64>>,
     tenancy_unscoped_sites: Mutex<BTreeMap<(&'static str, u32), u64>>,
+}
+
+/// This process's wake listener and tail (K5.4).
+#[derive(Clone, Copy, Default)]
+struct Live {
+    listener_up: bool,
+    tail_position: i64,
+    tail_lag: i64,
+    tail_gaps: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -89,6 +99,23 @@ pub fn observe_job(kind: &str, elapsed: Duration, succeeded: bool) {
 /// Record a job that ran out of attempts.
 pub fn job_dead(kind: &str) {
     bump(&registry().jobs_dead, kind.to_owned());
+}
+
+/// Whether this process's wake listener is connected (K5.4).
+pub fn listener_up(up: bool) {
+    if let Ok(mut live) = registry().live.lock() {
+        live.listener_up = up;
+    }
+}
+
+/// Where this process's tail got to, how far behind the head it is, and
+/// any gaps it found (K5.4).
+pub fn tail_moved(position: i64, lag: i64, gaps: u64) {
+    if let Ok(mut live) = registry().live.lock() {
+        live.tail_position = position;
+        live.tail_lag = lag;
+        live.tail_gaps += gaps;
+    }
 }
 
 /// Record a server error by category (`AppError::log_category`).
@@ -422,7 +449,69 @@ async fn render(state: &AppState) -> Result<String, AppError> {
         queue.oldest_due_seconds
     );
 
-    let runs = crate::runs::reads::builtin_state_counts(&state.pool).await?;
+    // The event log (K3.3): events waiting for a position, and how far
+    // behind each consumer is.
+    let (staged, oldest_staged) = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (i64, f64)>(
+            "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now() - min(staged_at)), 0)::float8 \
+         FROM event_staging",
+        )
+        .fetch_one(&mut *connection)
+        .await
+    })
+    .await?;
+    out.push_str("# HELP aw_event_staging Events waiting for a position in the log.\n");
+    out.push_str("# TYPE aw_event_staging gauge\n");
+    let _ = writeln!(out, "aw_event_staging {staged}");
+    out.push_str("# TYPE aw_event_staging_oldest_seconds gauge\n");
+    let _ = writeln!(out, "aw_event_staging_oldest_seconds {oldest_staged:.3}");
+    let consumers = crate::db::scoped_one(&state.pool, async |connection| sqlx::query_as::<_, (String, i64, i64)>(
+        r#"
+        SELECT consumer.name,
+               GREATEST((SELECT next_position - 1 FROM event_position_counter) - consumer.position, 0),
+               (SELECT count(*) FROM event_consumer_failures failure
+                WHERE failure.consumer = consumer.name AND failure.resolved_at IS NULL)
+        FROM event_consumers consumer ORDER BY consumer.name
+        "#,
+    )
+    .fetch_all(&mut *connection).await).await?;
+    out.push_str("# HELP aw_event_consumer_lag Events a consumer has yet to handle.\n");
+    out.push_str("# TYPE aw_event_consumer_lag gauge\n");
+    for (name, lag, _) in &consumers {
+        let _ = writeln!(out, "aw_event_consumer_lag{{consumer=\"{name}\"}} {lag}");
+    }
+    out.push_str("# TYPE aw_event_consumer_parked gauge\n");
+    for (name, _, parked) in &consumers {
+        let _ = writeln!(
+            out,
+            "aw_event_consumer_parked{{consumer=\"{name}\"}} {parked}"
+        );
+    }
+
+    // Live updates across processes (K5.4): this process's listener and
+    // tail, and the database's notification queue.
+    let live = registry.live.lock().map(|live| *live).unwrap_or_default();
+    out.push_str("# HELP aw_event_listener_up Whether this process hears database wakes.\n");
+    out.push_str("# TYPE aw_event_listener_up gauge\n");
+    let _ = writeln!(out, "aw_event_listener_up {}", u8::from(live.listener_up));
+    out.push_str("# HELP aw_event_tail_lag Positions this process's tail is behind the head.\n");
+    out.push_str("# TYPE aw_event_tail_lag gauge\n");
+    let _ = writeln!(out, "aw_event_tail_lag {}", live.tail_lag);
+    out.push_str("# TYPE aw_event_tail_position gauge\n");
+    let _ = writeln!(out, "aw_event_tail_position {}", live.tail_position);
+    out.push_str("# HELP aw_event_tail_gaps_total Gaps in positions the tail found (a bug).\n");
+    out.push_str("# TYPE aw_event_tail_gaps_total counter\n");
+    let _ = writeln!(out, "aw_event_tail_gaps_total {}", live.tail_gaps);
+    let queue_usage = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, f64>("SELECT pg_notification_queue_usage()")
+            .fetch_one(&mut *connection)
+            .await
+    })
+    .await?;
+    out.push_str("# TYPE aw_notification_queue_usage gauge\n");
+    let _ = writeln!(out, "aw_notification_queue_usage {queue_usage:.6}");
+
+    let runs = crate::runs::reads::builtin_state_counts(crate::db::scoped(&state.pool)).await?;
     out.push_str("# HELP aw_agent_runs Runs that are live or changed in the last day, by state.\n");
     out.push_str("# TYPE aw_agent_runs gauge\n");
     for (run_state, count) in runs {

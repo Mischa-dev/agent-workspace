@@ -198,7 +198,7 @@ async fn revoke_session(
     ApiPath(session_id): ApiPath<Uuid>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if session_id == principal.session_id {
         return Err(AppError::Conflict("session", "sign out to end this one"));
     }
@@ -227,7 +227,7 @@ async fn revoke_session(
     )
     .await?;
     transaction.commit().await?;
-    state.realtime.revoke_session(session_id);
+    crate::realtime::ephemeral::revoke_session(&state, session_id).await;
     crate::auth::workos::revoke_provider_session(&state, session_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -263,7 +263,7 @@ async fn revoke_other_sessions(
     principal: AuthenticatedActor,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<RevokedResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let revoked =
         revoke_sessions_except(&mut transaction, principal.user_id, principal.session_id).await?;
@@ -278,7 +278,7 @@ async fn revoke_other_sessions(
     .await?;
     transaction.commit().await?;
     for session_id in &revoked {
-        state.realtime.revoke_session(*session_id);
+        crate::realtime::ephemeral::revoke_session(&state, *session_id).await;
         crate::auth::workos::revoke_provider_session(&state, *session_id).await;
     }
     Ok(Json(RevokedResponse {
@@ -311,7 +311,7 @@ async fn verify_current_password(
     submitted: &mut String,
 ) -> Result<Option<()>, AppError> {
     let submitted = Zeroizing::new(std::mem::take(submitted));
-    state.rate_limits.check_login(&principal.login_name)?;
+    state.rate_limits.check_login(&principal.login_name).await?;
     let stored = sqlx::query_scalar::<_, String>(
         "SELECT password_phc FROM user_password_credentials WHERE user_id = $1",
     )
@@ -338,7 +338,7 @@ async fn change_password(
     principal: AuthenticatedActor,
     ApiJson(mut request): ApiJson<ChangePasswordRequest>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if !(12..=1024).contains(&request.new_password.len()) {
         return Err(AppError::Validation("new password"));
     }
@@ -387,7 +387,7 @@ async fn change_password(
     .await?;
     transaction.commit().await?;
     for session_id in revoked {
-        state.realtime.revoke_session(session_id);
+        crate::realtime::ephemeral::revoke_session(&state, session_id).await;
         crate::auth::workos::revoke_provider_session(&state, session_id).await;
     }
     Ok(StatusCode::NO_CONTENT)
@@ -765,7 +765,10 @@ async fn login_two_factor(
     if challenge.authentication_epoch != challenge.current_epoch {
         return Err(AppError::NotFound("login challenge"));
     }
-    state.rate_limits.check_login(&challenge.login_name)?;
+    state
+        .rate_limits
+        .check_login_on(&mut transaction, &challenge.login_name)
+        .await?;
     let factor = load_factor(&mut transaction, challenge.user_id)
         .await?
         .filter(|factor| factor.confirmed_at.is_some())
@@ -808,12 +811,13 @@ async fn login_two_factor(
         .await?;
         transaction.commit().await?;
         let _ = challenge.failed_attempts;
-        state.rate_limits.note_login_failure();
+        state.rate_limits.note_login_failure().await;
         return Err(AppError::InvalidCredentials);
     }
     state
         .rate_limits
-        .note_login_success(&challenge.login_name.to_ascii_lowercase());
+        .note_login_success_on(&mut transaction, &challenge.login_name.to_ascii_lowercase())
+        .await;
     sqlx::query("UPDATE login_challenges SET consumed_at = now() WHERE id = $1")
         .bind(challenge.id)
         .execute(&mut *transaction)
@@ -968,7 +972,7 @@ async fn two_factor_setup(
     principal: AuthenticatedActor,
     ApiJson(mut request): ApiJson<PasswordConfirmation>,
 ) -> Result<Json<SetupResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let keys = secrets::keyring(&state.config)?;
     if verify_current_password(&state, &principal, &mut request.current_password)
         .await?
@@ -1041,8 +1045,8 @@ async fn two_factor_confirm(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<CodeRequest>,
 ) -> Result<Json<RecoveryCodesResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    state.rate_limits.check_login(&principal.login_name)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
+    state.rate_limits.check_login(&principal.login_name).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let factor = load_factor(&mut transaction, principal.user_id)
         .await?
@@ -1087,8 +1091,8 @@ async fn two_factor_recovery_codes(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<CodeRequest>,
 ) -> Result<Json<RecoveryCodesResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    state.rate_limits.check_login(&principal.login_name)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
+    state.rate_limits.check_login(&principal.login_name).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let factor = load_factor(&mut transaction, principal.user_id)
         .await?
@@ -1139,7 +1143,7 @@ async fn two_factor_disable(
     principal: AuthenticatedActor,
     ApiJson(mut request): ApiJson<DisableRequest>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if verify_current_password(&state, &principal, &mut request.current_password)
         .await?
         .is_none()
@@ -1320,7 +1324,7 @@ async fn create_api_token(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<CreateTokenRequest>,
 ) -> Result<(StatusCode, Json<CreatedToken>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let name = request.name.trim().to_owned();
     validate_token_name(&name)?;
     let mut scopes = request.scopes.clone();
@@ -1365,7 +1369,7 @@ async fn revoke_api_token(
     ApiPath(credential_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<RevokeTokenRequest>,
 ) -> Result<Json<TokenView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let owner = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT actor_id FROM mcp_client_credentials
@@ -1441,7 +1445,7 @@ async fn write_appearance(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<AppearanceRequest>,
 ) -> Result<Json<AppearanceResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     validate_appearance(&request.appearance)?;
     let updated = sqlx::query_scalar::<_, i64>(
         r#"

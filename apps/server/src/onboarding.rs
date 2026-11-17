@@ -341,7 +341,7 @@ async fn update_http(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateRequest>,
 ) -> Result<Json<Onboarding>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let actor_id = principal.actor_id;
     membership(&state.pool, organization_id, actor_id).await?;
     if let Some(project_id) = request.project_id {

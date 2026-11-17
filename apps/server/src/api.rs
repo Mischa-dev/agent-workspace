@@ -190,7 +190,7 @@ async fn start_agent_run(
     ApiPath(conversation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<StartRunRequest>,
 ) -> Result<(StatusCode, Json<StartRunResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let (status, response) = start_run_in(
         &state,
         &principal,
@@ -440,7 +440,7 @@ async fn retry_agent_run(
     ApiPath(predecessor_run_id): ApiPath<Uuid>,
     ApiJson(_request): ApiJson<EmptyCommand>,
 ) -> Result<(StatusCode, Json<StartRunResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let (status, response) = retry_run_in(
         &state,
         &principal,
@@ -637,7 +637,7 @@ async fn acknowledge_run_failure(
     ApiPath(run_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<FailureAcknowledgementRequest>,
 ) -> Result<Json<EmptyCommand>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let conversation_id =
         sqlx::query_scalar::<_, Uuid>("SELECT conversation_id FROM agent_runs WHERE id = $1")
             .bind(run_id)
@@ -953,7 +953,7 @@ async fn respond_to_approval(
     ApiPath(approval_id): ApiPath<Uuid>,
     ApiJson(response): ApiJson<ApprovalResponse>,
 ) -> Result<Json<ApprovalView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if let Some(external_request_id) = sponsored_execution_request(&state, approval_id).await? {
         return crate::external_execution::respond_to_sponsored_execution(
             &state,
@@ -1262,7 +1262,7 @@ async fn interrupt_agent_run(
     principal: AuthenticatedActor,
     ApiPath(run_id): ApiPath<Uuid>,
 ) -> Result<Json<RunView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let project_id = interrupt_run_in(
         &state,
         &principal,

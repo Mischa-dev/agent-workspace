@@ -134,6 +134,31 @@ pub(crate) const RULES: &[Rule] = &[
         ceiling: VENDOR_NAMES_CORE_CEILING,
         count: vendor_names_core,
     },
+    Rule {
+        id: "session_advisory_locks",
+        agents_rule: "rule 14, \"Built for cheap hosting\" (take a lease)",
+        ceiling: SESSION_ADVISORY_LOCKS_CEILING,
+        count: session_advisory_locks,
+    },
+    Rule {
+        id: "pooler_safe_sql",
+        agents_rule: "rule 14, \"Built for cheap hosting\" (SET LOCAL only, no hand PREPARE)",
+        ceiling: POOLER_SAFE_SQL_CEILING,
+        count: pooler_safe_sql,
+    },
+    Rule {
+        id: "listen_outside_wake",
+        agents_rule: "rule 14, \"Built for cheap hosting\" (LISTEN only in realtime/wake.rs)",
+        ceiling: LISTEN_OUTSIDE_WAKE_CEILING,
+        count: listen_outside_wake,
+    },
+    Rule {
+        id: "transactions_across_calls",
+        agents_rule: "rule 14, \"Built for cheap hosting\" (no transaction held across a \
+                      network call)",
+        ceiling: TRANSACTIONS_ACROSS_CALLS_CEILING,
+        count: transactions_across_calls,
+    },
 ];
 
 // The most each rule's allowances may add up to: today's total, set when
@@ -164,6 +189,14 @@ const CONVERSATION_LISTINGS_CEILING: usize = 70;
 // suggested batch (usage/alerts.rs).
 const NOTIFICATION_DETAIL_TEXT_CEILING: usize = 4;
 const VENDOR_NAMES_CORE_CEILING: usize = 10;
+// K5.17 (ruling R24 rule 3): what a transaction-mode pooler can't carry.
+const SESSION_ADVISORY_LOCKS_CEILING: usize = 0;
+const POOLER_SAFE_SQL_CEILING: usize = 0;
+const LISTEN_OUTSIDE_WAKE_CEILING: usize = 0;
+// Binding a WorkOS agent identity holds the connection's grant locks
+// across the provider calls on purpose, so removal can't race attachment
+// (auth/workos/agents.rs); its owner is A2.
+const TRANSACTIONS_ACROSS_CALLS_CEILING: usize = 3;
 
 /// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds). Every
 /// allowance of theirs names the K1 slice that removes it and why it is
@@ -508,6 +541,134 @@ pub(crate) fn notification_detail_text(source: &str) -> usize {
 const DETAIL_TEXT_KEYS: [&str; 4] = ["\"preview\":", "\"body\":", "\"text\":", "\"quote\":"];
 
 /// Files a rule never reads, since they are where the thing belongs.
+/// The statements of the string literals, whitespace collapsed. SQL here
+/// is written in upper case, so a statement keyword is matched as written
+/// (prose that starts with "Set" isn't SQL).
+fn statements(source: &str) -> impl Iterator<Item = String> {
+    sql(source).flat_map(|sql| {
+        sql.split(';')
+            .map(|statement| statement.trim().to_owned())
+            .filter(|statement| !statement.is_empty())
+            .collect::<Vec<_>>()
+    })
+}
+
+/// A session-level advisory lock, which outlives the transaction and so
+/// can't go through a transaction pooler (`pg_advisory_lock(`,
+/// `pg_try_advisory_lock(`, `pg_advisory_unlock(`); the `_xact_` forms are
+/// fine.
+pub(crate) fn session_advisory_locks(source: &str) -> usize {
+    sql(source)
+        .map(|sql| {
+            let sql = sql.to_ascii_lowercase();
+            [
+                "pg_advisory_lock(",
+                "pg_try_advisory_lock(",
+                "pg_advisory_unlock(",
+            ]
+            .iter()
+            .map(|call| sql.matches(call).count())
+            .sum::<usize>()
+        })
+        .sum()
+}
+
+/// SQL a transaction pooler can't carry between transactions: a `SET`
+/// without `LOCAL` (or `TRANSACTION`/`CONSTRAINTS`, which end with the
+/// transaction), `set_config(…, false)`, and `PREPARE`/`DEALLOCATE` by hand.
+pub(crate) fn pooler_safe_sql(source: &str) -> usize {
+    let statements = statements(source)
+        .filter(|statement| {
+            let session_set = statement.starts_with("SET ")
+                && !["SET LOCAL ", "SET TRANSACTION ", "SET CONSTRAINTS "]
+                    .iter()
+                    .any(|scoped| statement.starts_with(scoped));
+            session_set
+                || statement.starts_with("PREPARE ")
+                || statement.starts_with("DEALLOCATE")
+                || statement.starts_with("RESET ")
+        })
+        .count();
+    let session_configs = sql(source)
+        .map(|sql| {
+            let sql = sql.to_ascii_lowercase();
+            sql.match_indices("set_config(")
+                .filter(|(index, call)| {
+                    let rest = &sql[index + call.len()..];
+                    let mut depth = 1;
+                    let close = rest.char_indices().find_map(|(at, character)| {
+                        match character {
+                            '(' => depth += 1,
+                            ')' => depth -= 1,
+                            _ => {}
+                        }
+                        (depth == 0).then_some(at)
+                    });
+                    close.is_some_and(|close| {
+                        rest[..close].rsplit(',').next().map(str::trim) == Some("false")
+                    })
+                })
+                .count()
+        })
+        .sum::<usize>();
+    statements + session_configs
+}
+
+/// A `LISTEN` (or a listener) anywhere but the one wake listener: a pooler
+/// can't hold one, so it has its own connection there.
+pub(crate) fn listen_outside_wake(source: &str) -> usize {
+    let statements = statements(source)
+        .filter(|statement| statement.starts_with("LISTEN ") || statement.starts_with("UNLISTEN"))
+        .count();
+    statements + in_code(source, |line| line.matches("PgListener").count())
+}
+
+/// What counts as a call that leaves the process.
+const NETWORK_CALLS: [&str; 8] = [
+    "reqwest::",
+    ".send().await",
+    "Command::new(",
+    "outbound::",
+    "ProviderClient",
+    "client_for(",
+    "pinned_client(",
+    "webhook_client(",
+];
+
+/// A call that leaves the process (an HTTP client, a provider, a child
+/// process) between a transaction's `begin` and its `commit` or `rollback`
+/// in the same block: the transaction holds its connection and locks for as
+/// long as the other side takes. A scan by lines, so a moved call can hide
+/// from it; the allowances say where today's are.
+pub(crate) fn transactions_across_calls(source: &str) -> usize {
+    let mut found = 0;
+    let mut depth: i64 = 0;
+    let mut open: Option<i64> = None;
+    for (_, line) in code_lines(source) {
+        let begins = line.contains(".begin()")
+            || line.contains(".begin_with(")
+            || line.contains("scoped_tx(");
+        if open.is_none() && begins {
+            open = Some(depth);
+        } else if open.is_some() {
+            if line.contains(".commit()") || line.contains(".rollback()") {
+                open = None;
+            } else {
+                found += NETWORK_CALLS
+                    .iter()
+                    .filter(|call| line.contains(*call))
+                    .count()
+                    .min(1);
+            }
+        }
+        depth += line.matches('{').count() as i64 - line.matches('}').count() as i64;
+        if open.is_some_and(|start| depth < start) {
+            open = None;
+        }
+    }
+    found
+}
+
 fn exempt(rule: &str, path: &str) -> bool {
     // The access module and the account mechanics are where these belong
     // (K1 guard 1).
@@ -527,6 +688,8 @@ fn exempt(rule: &str, path: &str) -> bool {
         "agent_runs_sql" | "active_run_states_literal" => {
             path.starts_with("runs/") || path.starts_with("hosts/builtin/")
         }
+        // The one listener (K5.4); its own connection, never the pool's.
+        "listen_outside_wake" => path == "realtime/wake.rs",
         _ => false,
     }
 }
@@ -884,6 +1047,70 @@ mod tests {
         assert_eq!(table_rule("record_references"), Some("link_tables"));
         assert_eq!(table_rule("page_annotations"), Some("comment_tables"));
         assert_eq!(table_rule("settings"), None);
+    }
+
+    /// K5.17: the pooler guards fail on a planted session lock, a planted
+    /// plain `SET` and a planted transaction across an HTTP call, and pass
+    /// their transaction-scoped neighbours.
+    #[test]
+    fn pooler_guards_catch_what_a_pooler_cant_carry() {
+        let literal = |sql: &str| format!("let q = r#\"{sql}\"#;");
+        assert_eq!(
+            session_advisory_locks(&literal("SELECT pg_advisory_lock(42)")),
+            1
+        );
+        assert_eq!(
+            session_advisory_locks(&literal("SELECT pg_try_advisory_lock(1); SELECT 1")),
+            1
+        );
+        assert_eq!(
+            session_advisory_locks(&literal("SELECT pg_advisory_xact_lock(42)")),
+            0
+        );
+        assert_eq!(pooler_safe_sql(&literal("SET search_path TO x")), 1);
+        assert_eq!(pooler_safe_sql(&literal("SET statement_timeout = 0")), 1);
+        assert_eq!(pooler_safe_sql(&literal("PREPARE q AS SELECT 1")), 1);
+        assert_eq!(
+            pooler_safe_sql(&literal("SELECT set_config('app.x', $1, false)")),
+            1
+        );
+        assert_eq!(
+            pooler_safe_sql(&literal("SET LOCAL lock_timeout = '1s'")),
+            0
+        );
+        assert_eq!(
+            pooler_safe_sql(&literal("BEGIN; SELECT set_config('app.x', 'y', true)")),
+            0
+        );
+        assert_eq!(
+            pooler_safe_sql(&literal("UPDATE things SET title = $1 WHERE id = $2")),
+            0
+        );
+        assert_eq!(listen_outside_wake(&literal("LISTEN events")), 1);
+        assert_eq!(
+            listen_outside_wake("let listener = PgListener::connect(url).await?;"),
+            1
+        );
+        let across = r#"
+async fn notify(pool: &PgPool, client: &reqwest::Client) -> Result<(), Error> {
+    let mut transaction = pool.begin().await?;
+    lock(&mut transaction).await?;
+    client.post(url).send().await?;
+    transaction.commit().await?;
+    Ok(())
+}
+"#;
+        assert_eq!(transactions_across_calls(across), 1);
+        let after = r#"
+async fn notify(pool: &PgPool, client: &reqwest::Client) -> Result<(), Error> {
+    let mut transaction = pool.begin().await?;
+    lock(&mut transaction).await?;
+    transaction.commit().await?;
+    client.post(url).send().await?;
+    Ok(())
+}
+"#;
+        assert_eq!(transactions_across_calls(after), 0);
     }
 
     #[test]

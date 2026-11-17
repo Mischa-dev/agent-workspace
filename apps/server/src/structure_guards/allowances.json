@@ -26,7 +26,7 @@
     "memory.rs": 2,
     "notifications.rs": 2,
     "projects.rs": 7,
-    "realtime.rs": 2,
+    "realtime/hub.rs": 2,
     "repositories.rs": 2,
     "roles.rs": 2,
     "scheduler.rs": 2,
@@ -51,7 +51,7 @@
     "conversations.rs": 16,
     "direct.rs": 6,
     "environments.rs": 5,
-    "events.rs": 4,
+    "events/route.rs": 4,
     "execution.rs": 1,
     "external_agents.rs": 1,
     "external_events.rs": 2,
@@ -162,7 +162,7 @@
     "notifications.rs": 4,
     "provider.rs": 26,
     "push/actions.rs": 1,
-    "recovery.rs": 10,
+    "recovery.rs": 9,
     "requests/legacy.rs": 3,
     "run_log.rs": 3,
     "scheduler.rs": 16,
@@ -171,14 +171,14 @@
   "background_spawns": {
     "github.rs": 1,
     "harnesses.rs": 1,
-    "main.rs": 6,
     "provider.rs": 1,
     "provider/claude_cloud.rs": 1,
     "provider/codex_cloud.rs": 1,
     "provider/line_process.rs": 2,
     "repositories.rs": 1,
     "retention.rs": 1,
-    "scheduler.rs": 1
+    "scheduler.rs": 1,
+    "server.rs": 6
   },
   "conversation_inserts": {
     "conversations.rs": 2,
@@ -256,7 +256,6 @@
     "provider/codex_cloud.rs": 1,
     "provider/demo.rs": 2,
     "provider/registry.rs": 1,
-    "rate_limit.rs": 2,
     "secrets.rs": 1
   },
   "raw_role_checks": {
@@ -300,12 +299,13 @@
     "work_item_workflow.rs": 1,
     "work_items.rs": 1
   },
+  "transactions_across_calls": {
+    "auth/workos/agents.rs": 3
+  },
   "vendor_names_core": {
     "agent_setup_links.rs": 2,
     "environments.rs": 2,
     "error.rs": 1,
-    "main.rs": 1,
-    "mcp.rs": 1,
     "mcp/description_words.rs": 1,
     "mcp/oauth.rs": 1,
     "settings.rs": 1

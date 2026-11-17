@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    cluster::{Cluster, Lease, LeaseName},
     domain::{RunState, allocate_conversation_sequence},
     error::AppError,
     git_runtime::{
@@ -63,9 +64,27 @@ struct ClaimedRun {
     claim_id: Uuid,
 }
 
+/// Something may be ready to start: the built-in host's holder looks now
+/// (K5.3). Here when this instance holds it; otherwise a wake on the control
+/// channel reaches the holder, whose one-second tick is the safety net. A
+/// state without a cluster (a test's) drains here, as before.
 pub fn kick(state: AppState) {
     tokio::spawn(async move {
-        if let Err(error) = drain(&state).await {
+        let result = match state.supervisors.cluster() {
+            None => drain(&state, None).await,
+            Some(cluster) => match cluster.held_lease(&LeaseName::BuiltinHost) {
+                Some(lease) => drain(&state, Some((cluster, &lease))).await,
+                None => crate::db::scoped_one(&state.pool, async |connection| {
+                    sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
+                        .execute(&mut *connection)
+                        .await
+                })
+                .await
+                .map(|_| ())
+                .map_err(AppError::from),
+            },
+        };
+        if let Err(error) = result {
             tracing::error!(
                 error_category = error.log_category(),
                 "Agent Run scheduler kick failed"
@@ -74,10 +93,62 @@ pub fn kick(state: AppState) {
     });
 }
 
+/// One pass now, for tests and tools that drive the queue themselves.
 pub async fn drain_now(state: &AppState) -> Result<(), AppError> {
-    drain(state).await
+    drain(state, None).await
 }
 
+/// The built-in host (K5.3): only the holder of the `builtin-host` lease
+/// recovers runs, admits them and runs host jobs. Every instance stands by
+/// and takes over when the holder's lease runs out or is released.
+pub async fn run_host(
+    state: AppState,
+    cluster: Cluster,
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), AppError> {
+    state.supervisors.set_cluster(cluster.clone());
+    crate::cluster::while_held(
+        cluster.clone(),
+        LeaseName::BuiltinHost,
+        shutdown,
+        move |lease| host(state.clone(), cluster.clone(), lease),
+    )
+    .await;
+    Ok(())
+}
+
+async fn host(state: AppState, cluster: Cluster, lease: Lease) -> Result<(), AppError> {
+    let result = async {
+        crate::recovery::reconcile_owned(&state, &cluster, &lease).await?;
+        let jobs = crate::jobs::default_registry();
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {}
+                // A kick from another instance, or a lease let go.
+                () = cluster.released() => {}
+                () = lease.lost.cancelled() => return Ok(()),
+            }
+            if let Err(error) = drain(&state, Some((&cluster, &lease))).await {
+                tracing::error!(
+                    error_category = error.log_category(),
+                    "Agent Run scheduler pass failed"
+                );
+            }
+            if let Err(error) = crate::jobs::run_due_host(&state, &jobs, &lease).await {
+                tracing::warn!(error_category = error.log_category(), "host jobs failed");
+            }
+        }
+    }
+    .await;
+    // Losing the lease stops every local turn before anyone else may
+    // recover them.
+    state.supervisors.stop_local_turns().await;
+    result
+}
+
+/// Drain every second without a lease: for tests of the queue alone. A
+/// server runs [`run_host`].
 pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) -> Result<(), AppError> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -85,7 +156,7 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) -> Result
             // A database blip must not stop the server: log and try again
             // on the next tick, as the outbox publisher does.
             _ = interval.tick() => {
-                if let Err(error) = drain(&state).await {
+                if let Err(error) = drain(&state, None).await {
                     tracing::error!(
                         error_category = error.log_category(),
                         "Agent Run scheduler pass failed"
@@ -101,8 +172,13 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) -> Result
     }
 }
 
-async fn drain(state: &AppState) -> Result<(), AppError> {
-    while let Some(run) = claim_next(state).await? {
+/// Admit what can start. With a lease, every claim is fenced by it, and a
+/// lost lease admits nothing more.
+async fn drain(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Result<(), AppError> {
+    while let Some(run) = claim_next(state, fence).await? {
+        if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {
+            return Err(AppError::LeaseLost);
+        }
         let run_id = run.run_id;
         if let Err(error) = admit(state, run).await {
             tracing::error!(
@@ -230,9 +306,12 @@ enum Claim {
     Nothing,
 }
 
-async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
+async fn claim_next(
+    state: &AppState,
+    fence: Option<(&Cluster, &Lease)>,
+) -> Result<Option<ClaimedRun>, AppError> {
     loop {
-        match claim_one(state).await? {
+        match claim_one(state, fence).await? {
             Claim::Run(run) => return Ok(Some(*run)),
             Claim::Cancelled => {}
             Claim::Nothing => return Ok(None),
@@ -246,7 +325,7 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
 /// their own, the candidate is chosen without row locks (the advisory lock
 /// keeps claims one at a time), then the thread is taken, waiting briefly
 /// (`THREAD_LOCK_TIMEOUT`), and only then the run.
-async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
+async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Result<Claim, AppError> {
     sqlx::query(
         r#"
         UPDATE agent_runs
@@ -264,6 +343,10 @@ async fn claim_one(state: &AppState) -> Result<Claim, AppError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('agent_workspace_scheduler', 0))")
         .execute(&mut *transaction)
         .await?;
+    // Only the built-in host's holder claims (K5.3).
+    if let Some((cluster, lease)) = fence {
+        cluster.fence(&mut transaction, lease).await?;
+    }
     // The host-wide cap only counts runs on this server; cloud harnesses
     // never wait on it (H8).
     let cloud_kinds = state.supervisors.cloud_kinds();

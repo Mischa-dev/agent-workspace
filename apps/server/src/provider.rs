@@ -752,25 +752,23 @@ async fn drive_turn(
     provider_thread_id: String,
     turn_id: String,
 ) -> Result<(), AppError> {
+    // Losing the built-in host's lease stops this turn like a shutdown does:
+    // the run stays as it is for the next holder to recover (K5.3).
+    let _active = state.supervisors.turn_started();
+    let lease_lost = state.supervisors.host_lease_lost();
+    let stopping = || state.supervisors.is_shutting_down() || lease_lost.is_cancelled();
     let mut message = PlainTextMessageBuffer::default();
     let message_stream_id = Uuid::now_v7();
-    // A1.9: this process drives the run while it holds the run's lease.
-    if !crate::hosts::builtin::lease::take(&state.pool, run_id).await? {
-        tracing::warn!(%run_id, "another process drives this run; not driving it here");
-        provider.shutdown().await;
-        return Ok(());
-    }
-    let mut renewal = crate::hosts::builtin::lease::Renewal::default();
     loop {
         tokio::select! {
             event = provider.next_event() => {
                 let event = match event {
                     Ok(event) => event,
                     Err(error) => {
-                        if !state.supervisors.is_shutting_down() {
+                        if !stopping() {
                             sleep(Duration::from_millis(100)).await;
                         }
-                        if state.supervisors.is_shutting_down() {
+                        if stopping() {
                             provider.shutdown().await;
                             return Ok(());
                         }
@@ -781,18 +779,19 @@ async fn drive_turn(
                     HarnessEvent::Request(request) => handle_provider_request(
                         &state,
                         &mut provider,
-                        &mut renewal,
                         project_id,
                         run_id,
                         conversation_id,
                         request,
+                        &lease_lost,
                     ).await?,
                     HarnessEvent::MessageDelta(delta) => {
                         if let Err(error) = message.push(&delta) {
                             provider.shutdown().await;
                             return Err(provider_message_error(run_id, error));
                         }
-                        state.realtime.publish(RealtimeEvent {
+                        // To the conversation's sockets on every instance (K5.5).
+                        crate::realtime::ephemeral::stream_delta(&state, RealtimeEvent {
                             event_id: Uuid::now_v7(),
                             kind: "message.delta",
                             project_id,
@@ -802,7 +801,7 @@ async fn drive_turn(
                                 "agent_run_id": run_id,
                                 "delta": delta
                             }),
-                        });
+                        }).await;
                     }
                     HarnessEvent::ItemStarted(event)
                         if event.kind == ItemKind::CommandExecution => {
@@ -870,13 +869,7 @@ async fn drive_turn(
                 }
             }
             () = sleep(Duration::from_millis(500)) => {
-                if state.supervisors.is_shutting_down() {
-                    provider.shutdown().await;
-                    return Ok(());
-                }
-                if !renewal.keep(&state.pool, run_id).await? {
-                    // Its lease lapsed and another process recovered it.
-                    tracing::warn!(%run_id, "lost the run's lease; stopped driving it");
+                if stopping() {
                     provider.shutdown().await;
                     return Ok(());
                 }
@@ -906,6 +899,10 @@ async fn drive_turn(
                 provider.shutdown().await;
                 return Ok(());
             }
+            () = lease_lost.cancelled() => {
+                provider.shutdown().await;
+                return Ok(());
+            }
         }
     }
 }
@@ -913,11 +910,11 @@ async fn drive_turn(
 async fn handle_provider_request(
     state: &AppState,
     provider: &mut Box<dyn HarnessSession>,
-    renewal: &mut crate::hosts::builtin::lease::Renewal,
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
     request: HarnessRequest,
+    lease_lost: &tokio_util::sync::CancellationToken,
 ) -> Result<(), AppError> {
     if request.kind == RequestKind::Unsupported {
         provider
@@ -1007,14 +1004,7 @@ async fn handle_provider_request(
 
     loop {
         sleep(Duration::from_millis(300)).await;
-        if state.supervisors.is_shutting_down() {
-            let _ = provider.answer(request, HarnessAnswer::Deny).await;
-            provider.shutdown().await;
-            return Ok(());
-        }
-        // A run waiting for an answer is still driven here: keep its lease.
-        if !renewal.keep(&state.pool, run_id).await? {
-            tracing::warn!(%run_id, "lost the run's lease while it waited; stopped driving it");
+        if state.supervisors.is_shutting_down() || lease_lost.is_cancelled() {
             let _ = provider.answer(request, HarnessAnswer::Deny).await;
             provider.shutdown().await;
             return Ok(());
@@ -1437,11 +1427,11 @@ async fn insert_entry(
 const FAIL_RUN_ATTEMPTS: u32 = 4;
 const FAIL_RUN_FIRST_RETRY: Duration = Duration::from_millis(500);
 
-/// A1.9: a turn that failed must not leave its run "working" because the
-/// database was briefly unreachable when it said so. Each failure is logged
-/// and retried; if every attempt fails, the run's lease stops being renewed
-/// (its driver has ended), so lapsed-lease recovery interrupts it within a
-/// couple of minutes. Nothing is dropped silently.
+/// A turn that failed must not leave its run "working" because the database
+/// was briefly unreachable when it said so. Each failure is logged and
+/// retried; if every attempt fails, the run is left to the built-in host's
+/// reconciliation (K5.3), which interrupts it when the lease next changes
+/// hands. Nothing is dropped silently.
 async fn fail_run_reliably(
     state: &AppState,
     project_id: Uuid,
@@ -1469,7 +1459,7 @@ async fn fail_run_reliably(
     }
     tracing::error!(
         %run_id,
-        "left the failed turn's run to recovery once its lease lapses"
+        "left the failed turn's run to the built-in host's reconciliation"
     );
 }
 

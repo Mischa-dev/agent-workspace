@@ -26,10 +26,29 @@ use futures_util::{
 };
 use sqlx::{
     Describe, Either, Execute, Executor, PgConnection, PgPool, Postgres, Transaction,
-    postgres::{PgQueryResult, PgRow, PgStatement, PgTypeInfo},
+    postgres::{PgConnectOptions, PgPoolOptions, PgQueryResult, PgRow, PgStatement, PgTypeInfo},
 };
 
 use crate::tenancy::{self, Tenancy};
+
+/// How the server connects: the database URL, with as many prepared
+/// statements per connection as configured (none behind a transaction-mode
+/// pooler, K5.17).
+pub fn connect_options(config: &crate::config::AppConfig) -> Result<PgConnectOptions, sqlx::Error> {
+    Ok(config
+        .database_url
+        .expose()
+        .parse::<PgConnectOptions>()?
+        .statement_cache_capacity(config.database_statement_cache))
+}
+
+/// The server's pool, sized and connected as configured.
+pub async fn connect(config: &crate::config::AppConfig) -> Result<PgPool, sqlx::Error> {
+    PgPoolOptions::new()
+        .max_connections(config.database_max_connections)
+        .connect_with(connect_options(config)?)
+        .await
+}
 
 /// Begins a transaction in the current tenancy scope.
 ///

@@ -508,7 +508,7 @@ async fn change_reaction(
     name: &str,
     reacted: bool,
 ) -> Result<Json<MessageReactionsResponse>, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     let choice = by_name(name).ok_or(AppError::Validation("reaction"))?;
     let actor = MessageCommandActor {
         actor_id: principal.actor_id,

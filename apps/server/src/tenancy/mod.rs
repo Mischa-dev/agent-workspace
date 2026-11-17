@@ -72,6 +72,17 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     ("jobs.queue", &["jobs.rs"]),
     // Taking, renewing and releasing a server-wide maintenance lease.
     ("maintenance.lease", &["maintenance_lease.rs"]),
+    // The event log's own loops: the sequencer, the tail that feeds
+    // sockets and the ordered consumers, which read every workspace's
+    // events (each reader filters per socket or per subscription).
+    (
+        "events.log",
+        &[
+            "events/sequencer.rs",
+            "realtime/tail.rs",
+            "events/consumer.rs",
+        ],
+    ),
 ];
 
 impl Tenancy {

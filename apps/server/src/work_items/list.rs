@@ -2200,7 +2200,8 @@ pub(super) async fn list_work_items(
 ) -> Result<Json<TaskListResponse>, AppError> {
     state
         .rate_limits
-        .check_expensive_read(principal.session_id)?;
+        .check_expensive_read(principal.session_id)
+        .await?;
     let membership = project_membership(&state.pool, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -2260,7 +2261,8 @@ pub(super) async fn list_work_item_groups(
 ) -> Result<Json<GroupsResponse>, AppError> {
     state
         .rate_limits
-        .check_expensive_read(principal.session_id)?;
+        .check_expensive_read(principal.session_id)
+        .await?;
     let membership = project_membership(&state.pool, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -2327,7 +2329,8 @@ pub(super) async fn get_work_item_board(
 ) -> Result<Json<BoardResponse>, AppError> {
     state
         .rate_limits
-        .check_expensive_read(principal.session_id)?;
+        .check_expensive_read(principal.session_id)
+        .await?;
     let membership = project_membership(&state.pool, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;

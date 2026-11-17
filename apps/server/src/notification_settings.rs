@@ -746,7 +746,7 @@ async fn set_channel_http(
     principal: AuthenticatedActor,
     ApiJson(change): ApiJson<ChannelChange>,
 ) -> Result<Json<NotificationSettingsView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let organization_id =
         home_workspace(&state.pool, principal.actor_id, change.organization_id).await?;
     let group = Group::parse(&change.group).ok_or(AppError::Validation("group"))?;
@@ -780,7 +780,7 @@ async fn set_mute_http(
     principal: AuthenticatedActor,
     ApiJson(change): ApiJson<MuteChange>,
 ) -> Result<Json<NotificationSettingsView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let group = match change.group.as_str() {
         "all" => None,
         other => Some(Group::parse(other).ok_or(AppError::Validation("group"))?),
@@ -827,7 +827,7 @@ async fn set_conversation_level_http(
     ApiPath(conversation_id): ApiPath<Uuid>,
     ApiJson(change): ApiJson<ConversationLevelChange>,
 ) -> Result<Json<ConversationLevelView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     Ok(Json(
         set_conversation_level(
             &state.pool,

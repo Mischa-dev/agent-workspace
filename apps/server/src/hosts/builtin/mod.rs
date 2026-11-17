@@ -16,7 +16,6 @@ use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 pub mod capacity;
-pub mod lease;
 
 use crate::{
     AppState,
@@ -229,8 +228,6 @@ pub async fn transition(
                    ELSE started_at
                END,
                finished_at = CASE WHEN $4 THEN now() ELSE finished_at END,
-               driver_instance_id = CASE WHEN $4 THEN NULL ELSE driver_instance_id END,
-               driver_lease_expires_at = CASE WHEN $4 THEN NULL ELSE driver_lease_expires_at END,
                updated_at = now()
          WHERE id = $1
         "#,

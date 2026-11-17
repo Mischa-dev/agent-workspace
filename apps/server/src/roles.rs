@@ -1159,7 +1159,7 @@ pub(crate) async fn create(
     .execute(&mut **transaction)
     .await
     .map_err(name_taken)?;
-    crate::modules::gate::forget(organization_id);
+    crate::modules::gate::forget_everywhere(transaction, organization_id).await?;
     let view = read(transaction, caller, organization_id, id).await?;
     auditor
         .record(
@@ -1333,7 +1333,7 @@ pub(crate) async fn change(
     .execute(&mut **transaction)
     .await
     .map_err(name_taken)?;
-    crate::modules::gate::forget(organization_id);
+    crate::modules::gate::forget_everywhere(transaction, organization_id).await?;
     let after = read(transaction, caller, organization_id, role_id).await?;
     auditor
         .record(
@@ -1395,7 +1395,7 @@ pub(crate) async fn remove(
         .bind(role_id)
         .execute(&mut **transaction)
         .await?;
-    crate::modules::gate::forget(organization_id);
+    crate::modules::gate::forget_everywhere(transaction, organization_id).await?;
     auditor
         .record(
             transaction,
@@ -2056,7 +2056,7 @@ async fn create_role_route(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<RoleInput>,
 ) -> Result<(StatusCode, Json<RoleView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
     let auditor = Auditor::Browser {
@@ -2075,7 +2075,7 @@ async fn change_role_route(
     ApiPath((organization_id, role_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<RoleChange>,
 ) -> Result<Json<RoleView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.expected_version.is_none() {
         return Err(AppError::Validation("expectedVersion"));
     }
@@ -2104,7 +2104,7 @@ async fn remove_role_route(
     principal: AuthenticatedActor,
     ApiPath((organization_id, role_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
     let auditor = Auditor::Browser {
@@ -2132,7 +2132,7 @@ async fn assign_role_route(
     ApiPath((organization_id, actor_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<AssignRequest>,
 ) -> Result<Json<Assignment>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
     let auditor = Auditor::Browser {
@@ -2174,7 +2174,7 @@ async fn set_agent_limit_route(
     ApiPath((organization_id, actor_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<AgentLimitRequest>,
 ) -> Result<Json<AgentLimitResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
     let auditor = Auditor::Browser {

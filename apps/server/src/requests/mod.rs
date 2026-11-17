@@ -457,6 +457,16 @@ pub async fn open(
     .bind(on_expiry)
     .execute(&mut **transaction)
     .await?;
+    stage_event(
+        transaction,
+        &crate::events::catalog::REQUEST_RAISED,
+        request_id,
+        origin.workspace_id,
+        Some(space_id),
+        1,
+        origin.account_id,
+    )
+    .await?;
     Ok(Raised {
         request_id,
         client_request_id,
@@ -1037,6 +1047,21 @@ async fn settle(
     else {
         return Ok(None);
     };
+    let ty = match status {
+        "answered" => &crate::events::catalog::REQUEST_ANSWERED,
+        "expired" => &crate::events::catalog::REQUEST_EXPIRED,
+        _ => &crate::events::catalog::REQUEST_CANCELLED,
+    };
+    stage_event(
+        transaction,
+        ty,
+        row.id,
+        row.workspace_id,
+        row.space_id,
+        row.version,
+        by.unwrap_or(row.raised_by_account_id),
+    )
+    .await?;
     // Its cards have been dealt with.
     let read = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
@@ -1084,6 +1109,36 @@ async fn settle(
         }
     }
     Ok(Some(row))
+}
+
+/// Stage a request's event in the log. It names the request and its status,
+/// never its words; whoever may see the request may hear it.
+async fn stage_event(
+    transaction: &mut Transaction<'_, Postgres>,
+    ty: &'static crate::events::EventType,
+    request_id: Uuid,
+    workspace_id: Uuid,
+    space_id: Option<Uuid>,
+    version: i64,
+    actor: Uuid,
+) -> Result<(), AppError> {
+    use crate::events::{Audience, NewEvent};
+    let event = NewEvent {
+        id: Uuid::now_v7(),
+        ty,
+        workspace_id: Some(workspace_id),
+        space_id,
+        thing: Some((request_id, "request")),
+        access_thing: None,
+        version: Some(version),
+        changes: &["status"],
+        audience: Audience::Thing,
+        payload: serde_json::json!({}),
+        actor: Some(actor),
+        legacy_type: None,
+    };
+    crate::events::emit(transaction, event).await?;
+    Ok(())
 }
 
 /// The raiser hears that a request settled: a card in their inbox (in a

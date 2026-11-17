@@ -5,10 +5,10 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    cluster::{Cluster, Lease},
     domain::RunState,
     error::AppError,
     git_runtime::worktree_is_dirty,
-    hosts::builtin::lease,
     outbox,
     provider::{self, ProviderRecovery},
 };
@@ -27,75 +27,55 @@ struct RecoverableRun {
 /// provider Thread is resumed and read before the application decides whether
 /// completion is provable. Any ambiguous state terminates as interrupted while
 /// retaining the exact worktree.
-///
-/// A1.9: only runs no live process drives are taken (`lease`): at start-up,
-/// runs with no lease, a lapsed one or this process's own. Returns how many
-/// runs it took.
 pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppError> {
-    // Queued work has no provider or filesystem ownership yet. A process loss
-    // only invalidates its short scheduler lease; the owned scheduler will
-    // admit it normally after startup.
-    sqlx::query(
+    reconcile(state, None).await
+}
+
+/// What the built-in host's holder does as it takes the lease (K5.3), at
+/// startup or when it takes over from a holder that died: recover the runs
+/// that were running, each transition fenced by the lease, then the
+/// worktrees and approvals.
+pub async fn reconcile_owned(
+    state: &AppState,
+    cluster: &Cluster,
+    lease: &Lease,
+) -> Result<(), AppError> {
+    let recovered = reconcile(state, Some((cluster, lease))).await?;
+    if recovered > 0 {
+        tracing::warn!(recovered, "reconciled non-terminal Agent Runs");
+    }
+    let inspected_worktrees = reconcile_registered_worktrees(state).await?;
+    let canceled_approvals = cancel_terminal_run_approvals(state).await?;
+    tracing::info!(
+        inspected_worktrees,
+        canceled_approvals,
+        "built-in host reconciliation completed"
+    );
+    Ok(())
+}
+
+// A queued run's scheduler claim is left alone: a lapsed one is cleared by
+// the next claim, and a live one belongs to whoever holds it (K5.3).
+async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Result<u64, AppError> {
+    let runs = sqlx::query_as::<_, RecoverableRun>(
         r#"
-        UPDATE agent_runs
-           SET scheduler_claim_id = NULL,
-               scheduler_claimed_at = NULL,
-               scheduler_lease_expires_at = NULL,
-               updated_at = now()
-         WHERE state IN ('created', 'queued')
-           AND scheduler_claim_id IS NOT NULL
+        SELECT run.id, run.state AS previous_state, run.conversation_id,
+               conversation.project_id
+        -- visibility: recovery reads only the project of each run's own conversation
+        FROM agent_runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        WHERE run.state IN ('starting', 'working', 'blocked', 'recovering')
+        ORDER BY run.created_at
         "#,
     )
-    .execute(crate::db::scoped(&state.pool))
+    .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let recovered = reconcile(state, lease::Recover::AtStart).await?;
 
-    let idled_provider_sessions = idle_terminal_provider_sessions(&state.pool).await?;
-    if idled_provider_sessions > 0 {
-        tracing::warn!(
-            idled_provider_sessions,
-            "reconciled active provider Sessions without a non-terminal Agent Run"
-        );
-    }
-
-    Ok(recovered)
-}
-
-/// A1.9: recover runs whose driver stopped renewing its lease while this
-/// process was running (the driving process died, or its turn ended without
-/// recording how). Runs on a job, so any process may do it, once.
-pub async fn recover_lapsed_runs(state: &AppState) -> Result<u64, AppError> {
-    reconcile(state, lease::Recover::Lapsed).await
-}
-
-async fn reconcile(state: &AppState, which: lease::Recover) -> Result<u64, AppError> {
-    let candidates = lease::recoverable(&state.pool, which).await?;
-    let mut recovered = 0;
-    for run_id in candidates {
+    for run in &runs {
         let mut transition = crate::db::scoped_tx(&state.pool).await?;
-        let Some(previous_state) = lease::claim_for_recovery(&mut transition, run_id).await? else {
-            // Another process has it, or it finished meanwhile.
-            transition.rollback().await?;
-            continue;
-        };
-        let (conversation_id, project_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
-            r#"
-            SELECT run.conversation_id, conversation.project_id
-            -- visibility: recovery reads its own run's conversation
-            FROM agent_runs run
-            JOIN conversations conversation ON conversation.id = run.conversation_id
-            WHERE run.id = $1
-            "#,
-        )
-        .bind(run_id)
-        .fetch_one(&mut *transition)
-        .await?;
-        let run = RecoverableRun {
-            id: run_id,
-            previous_state,
-            conversation_id,
-            project_id,
-        };
+        if let Some((cluster, lease)) = fence {
+            cluster.fence(&mut transition, lease).await?;
+        }
         crate::hosts::builtin::transition(&mut transition, run.id, RunState::Recovering, None)
             .await?;
         outbox::enqueue_agent_run_updated(
@@ -106,156 +86,157 @@ async fn reconcile(state: &AppState, which: lease::Recover) -> Result<u64, AppEr
         )
         .await?;
         transition.commit().await?;
-        recovered += 1;
-        recover_one(state, &run).await?;
-    }
-    Ok(recovered)
-}
 
-/// Finish recovering one run this process now drives: complete it when the
-/// provider proves it finished, follow it when it still runs where it runs,
-/// otherwise interrupt it with the reason.
-async fn recover_one(state: &AppState, run: &RecoverableRun) -> Result<(), AppError> {
-    let worktree = sqlx::query_as::<_, (Uuid, String, String, String)>(
-        r#"
-        SELECT gw.id, gw.path, repository.mirror_path, rw.branch_name
-        FROM agent_runs ar
-        JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
-        JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
-        JOIN repositories repository ON repository.id = ar.repository_id
-        WHERE ar.id = $1
-          AND gw.state IN ('creating', 'ready', 'dirty', 'missing', 'failed')
-        "#,
-    )
-    .bind(run.id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?;
+        let worktree = sqlx::query_as::<_, (Uuid, String, String, String)>(
+            r#"
+            SELECT gw.id, gw.path, repository.mirror_path, rw.branch_name
+            FROM agent_runs ar
+            JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
+            JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
+            JOIN repositories repository ON repository.id = ar.repository_id
+            WHERE ar.id = $1
+              AND gw.state IN ('creating', 'ready', 'dirty', 'missing', 'failed')
+            "#,
+        )
+        .bind(run.id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
 
-    let (worktree_path, worktree_state, dirty) = match worktree {
-        Some((worktree_id, path, mirror, branch)) => {
-            let inspection_path = PathBuf::from(path.clone());
-            let mirror = PathBuf::from(mirror);
-            let (worktree_state, dirty) = tokio::task::spawn_blocking(move || {
-                inspect_owned_worktree(&mirror, &inspection_path, &branch)
-            })
-            .await
-            .map_err(|_| AppError::Internal("join recovery Git inspection"))?;
-            sqlx::query(
-                r#"
-                UPDATE git_worktrees
-                SET state = $2, dirty = $3,
-                    last_inspected_at = now(), updated_at = now()
-                WHERE id = $1
-                "#,
+        let (worktree_path, worktree_state, dirty) = match worktree {
+            Some((worktree_id, path, mirror, branch)) => {
+                let inspection_path = PathBuf::from(path.clone());
+                let mirror = PathBuf::from(mirror);
+                let (worktree_state, dirty) = tokio::task::spawn_blocking(move || {
+                    inspect_owned_worktree(&mirror, &inspection_path, &branch)
+                })
+                .await
+                .map_err(|_| AppError::Internal("join recovery Git inspection"))?;
+                sqlx::query(
+                    r#"
+                    UPDATE git_worktrees
+                    SET state = $2, dirty = $3,
+                        last_inspected_at = now(), updated_at = now()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(worktree_id)
+                .bind(worktree_state)
+                .bind(dirty)
+                .execute(crate::db::scoped(&state.pool))
+                .await?;
+                (Some(PathBuf::from(path)), worktree_state, dirty)
+            }
+            None => (None, "missing", false),
+        };
+
+        let provider_outcome = match &worktree_path {
+            Some(path) if matches!(worktree_state, "ready" | "dirty") => {
+                provider::inspect_provider_for_recovery(state, run.id, path.clone()).await
+            }
+            _ => ProviderRecovery::Unavailable,
+        };
+
+        let recovered_completion = match &provider_outcome {
+            ProviderRecovery::Completed { message } => provider::complete_recovered_run(
+                state,
+                run.id,
+                message,
+                &run.previous_state,
+                worktree_state,
+                dirty,
             )
-            .bind(worktree_id)
-            .bind(worktree_state)
-            .bind(dirty)
-            .execute(crate::db::scoped(&state.pool))
-            .await?;
-            (Some(PathBuf::from(path)), worktree_state, dirty)
+            .await
+            .is_ok(),
+            _ => false,
+        };
+        if recovered_completion {
+            continue;
         }
-        None => (None, "missing", false),
-    };
-
-    let provider_outcome = match &worktree_path {
-        Some(path) if matches!(worktree_state, "ready" | "dirty") => {
-            provider::inspect_provider_for_recovery(state, run.id, path.clone()).await
+        // A cloud task keeps running while this server restarts: follow it
+        // again rather than interrupting the run.
+        if let (ProviderRecovery::Resumed { latest_turn_status }, Some(path)) =
+            (&provider_outcome, &worktree_path)
+            && latest_turn_status == "inProgress"
+            && provider::follow_recovered_run(state, run.id, path.clone())
+                .await
+                .unwrap_or(false)
+        {
+            continue;
         }
-        _ => ProviderRecovery::Unavailable,
-    };
 
-    let recovered_completion = match &provider_outcome {
-        ProviderRecovery::Completed { message } => provider::complete_recovered_run(
-            state,
+        let provider_resumed = matches!(
+            &provider_outcome,
+            ProviderRecovery::Completed { .. }
+                | ProviderRecovery::Resumed { .. }
+                | ProviderRecovery::MismatchedTurn
+                | ProviderRecovery::RejectedMessage
+        );
+        let reason = match &provider_outcome {
+            ProviderRecovery::Resumed { latest_turn_status } => {
+                let status = known_turn_status(latest_turn_status);
+                format!(
+                    "Service restarted during a run. The provider Thread resumed, but its latest turn was {status} and could not be safely continued; the worktree was preserved for retry."
+                )
+            }
+            ProviderRecovery::Completed { .. } => {
+                "Service restarted during a run. Provider completion was observed but could not be reconciled transactionally; the worktree was preserved for inspection.".to_owned()
+            }
+            ProviderRecovery::UnboundTurn => {
+                "Service restarted after the provider Thread was recorded but before an exact turn identity was durable. No older provider result was inferred; the worktree was preserved for explicit retry.".to_owned()
+            }
+            ProviderRecovery::MismatchedTurn => {
+                "Service restarted during a run, but the provider's latest turn did not match the durable turn identity. The ambiguous provider history and worktree were preserved for inspection.".to_owned()
+            }
+            ProviderRecovery::RejectedMessage => {
+                "Service restarted during a run. Provider completion contained an invalid or oversized Message, so the run was interrupted and the worktree was preserved for inspection.".to_owned()
+            }
+            ProviderRecovery::Unavailable if dirty => {
+                "Service restarted during a run. Provider resume was unavailable and the dirty worktree was preserved; inspect it before retrying.".to_owned()
+            }
+            ProviderRecovery::Unavailable => {
+                "Service restarted during a run. Provider resume was unavailable, so the worktree was preserved for an explicit retry.".to_owned()
+            }
+        };
+
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        crate::hosts::builtin::transition(
+            &mut transaction,
             run.id,
-            message,
-            &run.previous_state,
+            RunState::Interrupted,
+            Some(&reason),
+        )
+        .await?;
+        retain_workspace(&mut transaction, run.id).await?;
+        cancel_pending_approvals(&mut transaction, run.id).await?;
+        insert_recovery_event(
+            &mut transaction,
+            run,
+            &reason,
+            "interrupted",
             worktree_state,
             dirty,
+            provider_resumed,
         )
-        .await
-        .is_ok(),
-        _ => false,
-    };
-    if recovered_completion {
-        return Ok(());
-    }
-    // A cloud task keeps running while this server restarts: follow it
-    // again rather than interrupting the run.
-    if let (ProviderRecovery::Resumed { latest_turn_status }, Some(path)) =
-        (&provider_outcome, &worktree_path)
-        && latest_turn_status == "inProgress"
-        && provider::follow_recovered_run(state, run.id, path.clone())
-            .await
-            .unwrap_or(false)
-    {
-        return Ok(());
+        .await?;
+        outbox::enqueue_agent_run_updated(
+            &mut transaction,
+            run.project_id,
+            run.conversation_id,
+            run.id,
+        )
+        .await?;
+        transaction.commit().await?;
     }
 
-    let provider_resumed = matches!(
-        &provider_outcome,
-        ProviderRecovery::Completed { .. }
-            | ProviderRecovery::Resumed { .. }
-            | ProviderRecovery::MismatchedTurn
-            | ProviderRecovery::RejectedMessage
-    );
-    let reason = match &provider_outcome {
-        ProviderRecovery::Resumed { latest_turn_status } => {
-            let status = known_turn_status(latest_turn_status);
-            format!(
-                "Service restarted during a run. The provider Thread resumed, but its latest turn was {status} and could not be safely continued; the worktree was preserved for retry."
-            )
-        }
-        ProviderRecovery::Completed { .. } => {
-            "Service restarted during a run. Provider completion was observed but could not be reconciled transactionally; the worktree was preserved for inspection.".to_owned()
-        }
-        ProviderRecovery::UnboundTurn => {
-            "Service restarted after the provider Thread was recorded but before an exact turn identity was durable. No older provider result was inferred; the worktree was preserved for explicit retry.".to_owned()
-        }
-        ProviderRecovery::MismatchedTurn => {
-            "Service restarted during a run, but the provider's latest turn did not match the durable turn identity. The ambiguous provider history and worktree were preserved for inspection.".to_owned()
-        }
-        ProviderRecovery::RejectedMessage => {
-            "Service restarted during a run. Provider completion contained an invalid or oversized Message, so the run was interrupted and the worktree was preserved for inspection.".to_owned()
-        }
-        ProviderRecovery::Unavailable if dirty => {
-            "Service restarted during a run. Provider resume was unavailable and the dirty worktree was preserved; inspect it before retrying.".to_owned()
-        }
-        ProviderRecovery::Unavailable => {
-            "Service restarted during a run. Provider resume was unavailable, so the worktree was preserved for an explicit retry.".to_owned()
-        }
-    };
+    let idled_provider_sessions = idle_terminal_provider_sessions(&state.pool).await?;
+    if idled_provider_sessions > 0 {
+        tracing::warn!(
+            idled_provider_sessions,
+            "reconciled active provider Sessions without a non-terminal Agent Run"
+        );
+    }
 
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    crate::hosts::builtin::transition(
-        &mut transaction,
-        run.id,
-        RunState::Interrupted,
-        Some(&reason),
-    )
-    .await?;
-    retain_workspace(&mut transaction, run.id).await?;
-    cancel_pending_approvals(&mut transaction, run.id).await?;
-    insert_recovery_event(
-        &mut transaction,
-        run,
-        &reason,
-        "interrupted",
-        worktree_state,
-        dirty,
-        provider_resumed,
-    )
-    .await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        run.project_id,
-        run.conversation_id,
-        run.id,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(())
+    Ok(runs.len() as u64)
 }
 
 async fn idle_terminal_provider_sessions(pool: &PgPool) -> Result<u64, AppError> {
