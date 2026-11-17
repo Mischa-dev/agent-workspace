@@ -94,6 +94,7 @@ fn split(markdown: &str) -> Source {
 pub async fn list(
     transaction: &mut Transaction<'_, Postgres>,
     viewer: Uuid,
+    reach: crate::drafts::Reach,
     project_id: Uuid,
 ) -> Result<Vec<TemplateSummary>, AppError> {
     let mut templates = BUILT_IN
@@ -119,13 +120,16 @@ pub async fn list(
         WHERE page.is_template AND page.archived_at IS NULL
           AND project.organization_id = here.organization_id
           AND project.archived_at IS NULL
-          AND actor_can_access_project($1, NULL, project.id)
+          AND actor_can_access_project($1, $3, project.id)
+          AND ($4::uuid IS NULL OR project.id = $4)
         ORDER BY page.project_id <> $2, lower(page.title), page.id
         LIMIT 200
         "#,
     )
     .bind(viewer)
     .bind(project_id)
+    .bind(reach.connection_id)
+    .bind(reach.confined_space)
     .fetch_all(&mut **transaction)
     .await?;
     templates.extend(

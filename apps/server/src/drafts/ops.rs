@@ -169,10 +169,15 @@ impl Operation for MessageDraftList {
     ) -> Result<MessageDraftListOutput, OpError> {
         let account = call.account_id();
         let workspace_id: Uuid = call.ctx.workspace_id;
+        let reach = super::Reach {
+            connection_id: call.ctx.caller.connection_id,
+            confined_space: call.ctx.caller.confined_space,
+        };
         let connection = &mut **call.tx().await?;
         let drafts = super::listed(
             connection,
             account,
+            reach,
             Some(workspace_id),
             input.conversation_id.map(IdRef::id),
         )

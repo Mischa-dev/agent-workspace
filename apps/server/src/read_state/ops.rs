@@ -70,6 +70,7 @@ impl Operation for ConversationsMarkRead {
     ) -> Result<ConversationsMarkedRead, OpError> {
         let actor = call.account_id();
         let connection = call.ctx.caller.connection_id;
+        let confined = call.ctx.caller.confined_space;
         let workspace_id = call.ctx.workspace_id;
         let space_id = input.space_id.and(call.ctx.space_id);
         if input.space_id.is_some() && space_id.is_none() {
@@ -91,6 +92,7 @@ impl Operation for ConversationsMarkRead {
               AND ($4::uuid IS NULL OR conversation.project_id = $4)
               AND conversation.next_entry_sequence - 1 > COALESCE(mark.highest_seen_sequence, 0)
               AND actor_can_access_project($2, $3, conversation.project_id)
+              AND ($6::uuid IS NULL OR conversation.project_id = $6)
               AND conversation_readable_by(conversation.id, $2)
             ORDER BY conversation.id
             LIMIT $5
@@ -101,6 +103,7 @@ impl Operation for ConversationsMarkRead {
         .bind(connection)
         .bind(space_id)
         .bind(MAX_MARKED + 1)
+        .bind(confined)
         .fetch_all(&mut **tx)
         .await
         .map_err(crate::error::AppError::from)?;

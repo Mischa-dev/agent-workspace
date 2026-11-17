@@ -143,22 +143,40 @@ pub async fn save(
         .execute(&mut **transaction)
         .await?;
     }
-    let view = listed(transaction, account_id, None, Some(conversation_id))
-        .await?
-        .into_iter()
-        .next();
+    // The conversation was checked against the caller already.
+    let view = listed(
+        transaction,
+        account_id,
+        Reach::default(),
+        None,
+        Some(conversation_id),
+    )
+    .await?
+    .into_iter()
+    .next();
     Ok(Saved {
         view,
         kept_newer: newer,
     })
 }
 
+/// What narrows a listing past the account's own access.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Reach {
+    /// An agent's connection, whose rules decide the spaces it reaches.
+    pub connection_id: Option<Uuid>,
+    /// The one space a project-scoped credential is held to.
+    pub confined_space: Option<Uuid>,
+}
+
 /// `account`'s drafts in `workspace` (or in one conversation), newest
-/// first, in conversations they can still read. A recoverable copy shows
-/// for a day.
+/// first, in conversations they can still read and in spaces the caller
+/// reaches: an agent's connection's spaces, or the one space a scoped
+/// credential is held to. A recoverable copy shows for a day.
 pub async fn listed(
     connection: &mut PgConnection,
     account_id: Uuid,
+    reach: Reach,
     workspace_id: Option<Uuid>,
     conversation_id: Option<Uuid>,
 ) -> Result<Vec<DraftView>, AppError> {
@@ -175,7 +193,8 @@ pub async fn listed(
         WHERE draft.account_id = $1
           AND ($2::uuid IS NULL OR draft.workspace_id = $2)
           AND ($3::uuid IS NULL OR draft.conversation_id = $3)
-          AND actor_can_access_project($1, NULL, draft.space_id)
+          AND actor_can_access_project($1, $5, draft.space_id)
+          AND ($6::uuid IS NULL OR draft.space_id = $6)
           AND conversation_readable_by(draft.conversation_id, $1)
         ORDER BY draft.updated_at DESC
         LIMIT $4
@@ -185,6 +204,8 @@ pub async fn listed(
     .bind(workspace_id)
     .bind(conversation_id)
     .bind(MAX_LISTED)
+    .bind(reach.connection_id)
+    .bind(reach.confined_space)
     .fetch_all(&mut *connection)
     .await?)
 }

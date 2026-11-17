@@ -1899,3 +1899,68 @@ async fn a_project_scoped_credential_copies_templates_only_from_its_project() {
         "{from_secret}"
     );
 }
+
+/// The same credential lists the person's drafts in its project only.
+#[tokio::test]
+async fn a_project_scoped_credential_lists_drafts_only_from_its_project() {
+    let Some(setup) = setup("mcp_board_scoped_drafts").await else {
+        return;
+    };
+    let app = &setup.app;
+    let home = create_project(&setup, "HOME", "Home").await;
+    create_project(&setup, "SECRET", "Secret").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    for project in ["HOME", "SECRET"] {
+        let created = tool(
+            app,
+            &codex,
+            &session,
+            "channel_create",
+            json!({"projectId": project, "name": "general"}),
+        )
+        .await;
+        assert_eq!(created["outcome"], "ok", "{created}");
+        let channel = created["value"]["id"].as_str().expect("channel").to_owned();
+        let saved = tool(
+            app,
+            &codex,
+            &session,
+            "message_draft_set",
+            json!({"conversationId": channel, "draft": {"text": format!("{project} draft")}}),
+        )
+        .await;
+        assert_eq!(saved["outcome"], "ok", "{saved}");
+    }
+    let everywhere = tool(app, &codex, &session, "message_draft_list", json!({})).await;
+    assert!(
+        everywhere.to_string().contains("SECRET draft"),
+        "{everywhere}"
+    );
+
+    let scoped = mcp::issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            project_id: home.parse().expect("home ID"),
+            actor_id: owner(&setup, &home).await,
+            client_name: "scoped-test".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("issue credential")
+    .token;
+    let scoped_session = initialize(app, &scoped).await.expect("scoped MCP");
+    let listed = tool(
+        app,
+        &scoped,
+        &scoped_session,
+        "message_draft_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(listed.to_string().contains("HOME draft"), "{listed}");
+    assert!(!listed.to_string().contains("SECRET draft"), "{listed}");
+}
