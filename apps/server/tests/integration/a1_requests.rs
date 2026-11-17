@@ -6,13 +6,7 @@
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{
-    a1_runs_record::{insert_run, schema_before, seed},
-    agent_interface::{connect_app, create_agent, initialize, tool},
-    mcp_admin::{create_project, setup},
-    mcp_tasks::add_member,
-    message_edits::add_person,
-};
+use super::a1_runs_record::{insert_run, schema_before, seed};
 
 const REQUESTS_MIGRATION: i64 = 20261114074500;
 
@@ -199,7 +193,8 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
         status: status.to_owned(),
         answer,
         answered_by_account_id: by,
-        legacy_source: Some("person_question".to_owned()),
+        // A1.8: questions are requests of their own now.
+        legacy_source: None,
     };
     assert_eq!(
         copied(&pool, asked).await,
@@ -223,57 +218,4 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
         .await
         .expect("count");
     assert_eq!(total, 6, "each old row is copied once");
-}
-
-#[tokio::test]
-async fn a_question_asked_and_answered_the_old_way_is_on_both_records() {
-    let Some(setup) = setup("a1_requests_dual").await else {
-        return;
-    };
-    let app = &setup.app;
-    let project = create_project(&setup, "ASK", "Asking").await;
-    let (_mara, mara_browser) = add_person(&setup, &[&project], "mara").await;
-    let (scout, scout_token) = create_agent(app, &setup.browser, &project, "Scout", "scout").await;
-    add_member(&setup, &project, scout, "member").await;
-    let scout_session = initialize(app, &scout_token).await.expect("Scout MCP");
-    let asked = tool(
-        app,
-        &scout_token,
-        &scout_session,
-        "ask_person",
-        json!({"projectId": project, "person": "@mara", "question": "Ship it?",
-               "options": ["Yes", "No"]}),
-    )
-    .await;
-    assert_eq!(asked["outcome"], "ok", "{asked}");
-    let question = asked["value"]["questionId"]
-        .as_str()
-        .expect("question")
-        .parse::<Uuid>()
-        .expect("question UUID");
-    let record = copied(&setup.pool, question).await;
-    assert_eq!(record.status, "open");
-    assert_eq!(record.raised_by_account_id, scout);
-    assert_eq!(record.legacy_source.as_deref(), Some("person_question"));
-
-    let mara_app = connect_app(app, &mara_browser, "Mara's app", "full").await;
-    let mara_session = initialize(app, &mara_app).await.expect("Mara MCP");
-    let answered = tool(
-        app,
-        &mara_app,
-        &mara_session,
-        "question_answer",
-        json!({"questionId": question, "optionId": "1", "text": "Go"}),
-    )
-    .await;
-    assert_eq!(answered["outcome"], "ok", "{answered}");
-    let record = copied(&setup.pool, question).await;
-    assert_eq!(record.status, "answered");
-    assert_eq!(record.answer, Some(json!({"optionId": "1", "text": "Go"})));
-    let old = sqlx::query_scalar::<_, String>("SELECT status FROM person_questions WHERE id = $1")
-        .bind(question)
-        .fetch_one(&setup.pool)
-        .await
-        .expect("old row");
-    assert_eq!(old, "answered");
 }

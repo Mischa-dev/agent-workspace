@@ -1021,7 +1021,7 @@ pub(super) async fn message_items(
     to: i64,
 ) -> Result<Vec<MessageItem>, AppError> {
     let viewer = principal.actor_id;
-    let rows = sqlx::query_as::<_, MessageRow>(
+    let rows = sqlx::query_as::<_, MessageRow>(&format!(
         r#"
         SELECT entry.sequence, entry.created_at::text AS at,
                message.id AS message_id, message.author_actor_id AS author_id,
@@ -1051,11 +1051,12 @@ pub(super) async fn message_items(
         LEFT JOIN project_memberships remover
           ON remover.project_id = message.project_id
          AND remover.actor_id = message.removed_by_actor_id
-        LEFT JOIN agent_run_events event ON event.id = entry.agent_run_event_id
+        {run_events}
         WHERE entry.conversation_id = $1 AND entry.sequence BETWEEN $2 AND $3
         ORDER BY entry.sequence
         "#,
-    )
+        run_events = crate::runs::sql::ENTRY_EVENT_JOIN,
+    ))
     .bind(conversation_id)
     .bind(from)
     .bind(to)

@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     cluster::{Cluster, Lease},
-    domain::{RunState, transition_run},
+    domain::RunState,
     error::AppError,
     git_runtime::worktree_is_dirty,
     outbox,
@@ -61,6 +61,7 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
         r#"
         SELECT run.id, run.state AS previous_state, run.conversation_id,
                conversation.project_id
+        -- visibility: recovery reads only the project of each run's own conversation
         FROM agent_runs run
         JOIN conversations conversation ON conversation.id = run.conversation_id
         WHERE run.state IN ('starting', 'working', 'blocked', 'recovering')
@@ -75,7 +76,8 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
         if let Some((cluster, lease)) = fence {
             cluster.fence(&mut transition, lease).await?;
         }
-        transition_run(&mut transition, run.id, RunState::Recovering, None).await?;
+        crate::hosts::builtin::transition(&mut transition, run.id, RunState::Recovering, None)
+            .await?;
         outbox::enqueue_agent_run_updated(
             &mut transition,
             run.project_id,
@@ -197,7 +199,7 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
         };
 
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        transition_run(
+        crate::hosts::builtin::transition(
             &mut transaction,
             run.id,
             RunState::Interrupted,

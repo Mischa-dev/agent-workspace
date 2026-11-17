@@ -108,7 +108,10 @@ impl Group {
             }
             kind::THING_UPDATE => Self::Following,
             kind::REMINDER | kind::SCHEDULED_SEND_FAILED => Self::Reminders,
-            kind::APPROVAL_REQUESTED | kind::RUN_WAITING | kind::QUESTION_ASKED => Self::Approvals,
+            kind::APPROVAL_REQUESTED
+            | kind::RUN_WAITING
+            | kind::REQUEST_RAISED
+            | kind::REQUEST_ANSWERED => Self::Approvals,
             kind::RUN_COMPLETED | kind::RUN_FAILED => Self::Runs,
             kind::ASSIGNED | kind::TASK_CHANGED => Self::Tasks,
             kind::CHECKS_FAILED | kind::REVIEW_REQUESTED => Self::PullRequests,

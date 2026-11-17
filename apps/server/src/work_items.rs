@@ -1650,18 +1650,21 @@ async fn work_with_worker(
         "Work Item {work_item_key} ({work_item_id}).\n\nUser instructions:\n{}",
         request.prompt
     );
-    let (_, Json(run)) = crate::api::start_agent_run(
-        State(state.clone()),
-        headers,
-        principal.clone(),
-        ApiPath(thread_id),
-        ApiJson(crate::api::StartRunRequest {
+    // The same creation path as every other start (A1.10), not the HTTP
+    // handler: the run is admitted, capped and given defaults by one rule.
+    let (_, run) = crate::api::start_run_in(
+        &state,
+        &principal,
+        None,
+        thread_id,
+        crate::api::StartRunRequest {
             prompt: provider_prompt,
             repository_id: Some(repository_id),
             config: None,
             provider_account_id: None,
             agent_profile_id: None,
-        }),
+        },
+        IdempotencyKey::from_headers(&headers),
     )
     .await?;
     let response = WorkWithWorkerResponse { thread_id, run };
@@ -4061,7 +4064,9 @@ const WORK_ITEM_SELECT: &str = concat!(
                     'parentChannelId', channel.id,
                     'parentChannelName', channel.name,
                     'archivedAt', thread.archived_at::text,
-                    'newestRunState', newest_run.state,
+                    'newestRunState', "#,
+    crate::runs::sql::newest_state_in_thread!(),
+    r#",
                     'href', '/projects/' || item.project_id || '/threads/' || thread.id
                 ) ORDER BY link.created_at, thread.id
             )
@@ -4070,14 +4075,6 @@ const WORK_ITEM_SELECT: &str = concat!(
               ON thread.project_id = link.project_id AND thread.id = link.conversation_id
             JOIN conversations channel
               ON channel.project_id = thread.project_id AND channel.id = thread.parent_channel_id
-            LEFT JOIN LATERAL (
-                SELECT run.state
-                FROM agent_runs run
-                WHERE run.project_id = thread.project_id
-                  AND run.conversation_id = thread.id
-                ORDER BY run.created_at DESC, run.id DESC
-                LIMIT 1
-            ) newest_run ON true
             WHERE link.project_id = item.project_id AND link.work_item_id = item.id
               AND conversation_visible_to(thread.id, $3)
         ), '[]'::jsonb) AS linked_threads,

@@ -241,6 +241,16 @@ const HTTP_ROUTES: &[&str] = &[
 /// sign-in plumbing, so the guard only looks under `/api/v1`.)
 const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
     (
+        "/api/v1/host/commands",
+        "a host's own command queue (A1.12), signed in with the host's key, never a \
+         person's session; it lists only that host's commands; covered in a1_host_protocol",
+    ),
+    (
+        "/api/v1/host/commands/{command_id}",
+        "one of a host's own commands (A1.12), by the host's key; another host's command \
+         is not found; covered in a1_host_protocol",
+    ),
+    (
         "/api/v1/realtime",
         "WebSocket upgrade; covered by the realtime part of the fixture test, which \
          subscribes as A and checks no B event arrives",
@@ -2020,7 +2030,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "label_list",
     "field_list",
     "later_list",
-    "question_list",
+    "request_list",
+    "request_get",
     "launch_list",
     "message_history",
     "message_draft_list",
@@ -2052,10 +2063,13 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "repository_list",
     "role_get",
     "role_list",
+    "run_activity_list",
+    "run_detail_get",
     "run_get",
     "run_list",
     "run_steps",
     "run_usage",
+    "agent_usage_list",
     "search",
     "settings_get",
     "status_list",
@@ -2497,12 +2511,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
             vec![],
         ),
+        // A1.8: a request (the run's approval) is read where its run is.
         case(
-            "question_list",
+            "request_get",
+            vec![json!({"requestId": a.approval.to_string()})],
+            vec![json!({"requestId": b.approval.to_string()})],
+            vec![],
+        ),
+        case(
+            "request_list",
             vec![
                 json!({}),
-                json!({"role": "for_me"}),
-                json!({"status": "answered"}),
+                json!({"role": "raised"}),
+                json!({"role": "raised", "status": "answered"}),
             ],
             vec![],
             vec![],
@@ -2656,6 +2677,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"runId": b.run.to_string()})],
             vec![],
         ),
+        // A1.5: the run view and its activities, for any run.
+        case(
+            "run_detail_get",
+            vec![json!({"runId": a.run.to_string()})],
+            vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
+        case(
+            "run_activity_list",
+            vec![json!({"runId": a.run.to_string(), "afterSeq": 0})],
+            vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
         case(
             "run_usage",
             vec![
@@ -2666,6 +2700,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![json!({"projectId": b.project})],
             vec![],
+        ),
+        // A1.15: usage by agent, only from runs in spaces the caller opens.
+        case(
+            "agent_usage_list",
+            vec![json!({})],
+            vec![],
+            vec![json!({"days": 400})],
         ),
         case(
             "repository_list",

@@ -155,6 +155,13 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = record.project_id \
          WHERE record.id = $1 AND subject_visible_to('record', record.id, $2)",
     ),
+    // A1.8: a request goes by request_visible_to, which holds its
+    // conversation's and run's visibility.
+    (
+        "request",
+        "SELECT request.workspace_id, request.space_id FROM requests request \
+         WHERE request.id = $1 AND request_visible_to(request.id, $2)",
+    ),
 ];
 
 /// The kinds `locate` knows; a test checks every operation's thing kind is
@@ -221,8 +228,8 @@ async fn thing(
     let Some((_, sql)) = KINDS.iter().find(|(known, _)| *known == kind) else {
         return Err(OpError::Unavailable);
     };
-    // Only a registry thing (a workspace board) may come back without a
-    // space.
+    // Only a registry thing (a workspace board) or a workspace-level
+    // request may come back without a space.
     let row = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(sql)
         .bind(id)
         .bind(viewer)
@@ -256,6 +263,7 @@ fn what_of(kind: &str) -> &'static str {
         "sheet" => "That sheet",
         "whiteboard" => "That whiteboard",
         "record" => "That record",
+        "request" => "That request",
         _ => "That",
     }
 }

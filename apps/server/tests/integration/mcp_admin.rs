@@ -1236,7 +1236,7 @@ async fn a_fresh_project_gets_its_worker_when_someone_connects_codex() {
                 data_root.to_string_lossy().into_owned(),
             ),
             (
-                "AGENT_WORKSPACE_CODEX_HOME_ROOT",
+                "AGENT_WORKSPACE_PROVIDER_HOME_ROOT",
                 data_root
                     .join("codex/profiles")
                     .to_string_lossy()

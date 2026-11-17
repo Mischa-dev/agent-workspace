@@ -2,17 +2,26 @@
 //! which carry its bearer token. Managing hosts (list, enrolment codes,
 //! binding agents, unlinking) is the `host_*` operations in `hosts::ops`.
 
+use std::{convert::Infallible, time::Duration};
+
+use agent_workspace_host_protocol::{Ack, AckReply, CommandList};
 use axum::{
     Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-    routing::post,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode, header::ACCEPT},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::{get, post},
 };
-use serde_json::json;
+use futures_util::stream::{self, Stream};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use uuid::Uuid;
 
 use super::{
-    HostRow,
+    HostRow, commands,
     protocol::{self, HostError},
 };
 use crate::{AppState, error::ApiJson};
@@ -25,6 +34,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/host/describe", post(describe_route))
         .route("/api/v1/host/heartbeat", post(heartbeat_route))
         .route("/api/v1/host/notices", post(notice_route))
+        .route("/api/v1/host/commands", get(commands_route))
+        .route("/api/v1/host/commands/{command_id}", get(command_route))
+        .route("/api/v1/host/commands/{command_id}/ack", post(ack_route))
 }
 
 // ---------------------------------------------------------------- hosts
@@ -72,6 +84,16 @@ impl IntoResponse for HostError {
                 "agent_unknown",
                 "No agent with that hostAgentRef is bound to this host.".to_owned(),
             ),
+            Self::CommandUnknown => (
+                StatusCode::NOT_FOUND,
+                "command_unknown",
+                "This host has no command with that id.".to_owned(),
+            ),
+            Self::CommandClosed => (
+                StatusCode::GONE,
+                "command_closed",
+                "That command expired or was replaced; don't carry it out.".to_owned(),
+            ),
             Self::App(error) => return error.into_response(),
         };
         (
@@ -116,7 +138,7 @@ async fn enrol_route(
     protocol_header(&headers)?;
     Ok((
         StatusCode::CREATED,
-        Json(protocol::enrol(&state.pool, request).await?),
+        Json(protocol::enrol(&state, request).await?),
     ))
 }
 
@@ -147,4 +169,107 @@ async fn notice_route(
 ) -> Result<Json<protocol::NoticeReply>, HostError> {
     let host = host_caller(&state, &headers).await?;
     Ok(Json(protocol::notice(&state.pool, &host, request).await?))
+}
+
+// ------------------------------------------------------------- commands
+
+#[derive(Debug, Default, Deserialize)]
+struct CommandsQuery {
+    /// The `next` of the last answer (0 at first).
+    after: Option<i64>,
+    /// Seconds to wait for a command (at most 30).
+    wait: Option<u64>,
+}
+
+/// How long one stream stays open before the host reconnects (with
+/// `Last-Event-ID`), so no request holds a server for long.
+const STREAM_FOR: Duration = Duration::from_secs(300);
+
+/// A1.12: the host's commands. A long-poll by default; with `Accept:
+/// text/event-stream`, a stream of `host.command` events from `after` (or
+/// `Last-Event-ID`). Either counts as a heartbeat.
+async fn commands_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<CommandsQuery>,
+) -> Result<Response, HostError> {
+    let host = host_caller(&state, &headers).await?;
+    let resume = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<i64>().ok());
+    let after = resume.or(query.after).unwrap_or(0).max(0);
+    let streamed = headers
+        .get(ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/event-stream"));
+    if streamed {
+        return Ok(Sse::new(command_stream(state, host, after))
+            .keep_alive(KeepAlive::default())
+            .into_response());
+    }
+    let listed: CommandList =
+        commands::long_poll(&state.pool, &host, after, query.wait.unwrap_or(0)).await?;
+    Ok(Json(listed).into_response())
+}
+
+fn command_stream(
+    state: AppState,
+    host: HostRow,
+    after: i64,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    let until = tokio::time::Instant::now() + STREAM_FOR;
+    stream::unfold(
+        (state, host, after, Vec::<Event>::new()),
+        move |(state, host, mut after, mut queued)| async move {
+            loop {
+                if let Some(event) = queued.pop() {
+                    return Some((Ok(event), (state, host, after, queued)));
+                }
+                if tokio::time::Instant::now() >= until {
+                    return None;
+                }
+                let listed = commands::long_poll(&state.pool, &host, after, 15)
+                    .await
+                    .ok()?;
+                after = listed.next;
+                // Popped from the end, so queued newest first.
+                queued = listed
+                    .commands
+                    .iter()
+                    .rev()
+                    .filter_map(|command| {
+                        Event::default()
+                            .id(command.seq.to_string())
+                            .event("host.command")
+                            .json_data(command)
+                            .ok()
+                    })
+                    .collect();
+            }
+        },
+    )
+}
+
+/// A1.12: one command whole, with any credential minted for it.
+async fn command_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(command_id): Path<Uuid>,
+) -> Result<Json<Value>, HostError> {
+    let host = host_caller(&state, &headers).await?;
+    Ok(Json(commands::fetch(&state, &host, command_id).await?))
+}
+
+/// A1.12: the host's answer to a command.
+async fn ack_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(command_id): Path<Uuid>,
+    ApiJson(ack): ApiJson<Ack>,
+) -> Result<Json<AckReply>, HostError> {
+    let host = host_caller(&state, &headers).await?;
+    Ok(Json(
+        commands::ack(&state.pool, &host, command_id, ack).await?,
+    ))
 }

@@ -47,8 +47,6 @@ const MAX_GUIDE_CHARS: usize = 4_000;
 /// The skills' instructions written into a prompt, together. Skills past it
 /// are listed by name and link only.
 const MAX_SKILLS_CHARS: usize = 4_000;
-const ACTIVE_RUN_STATES: &str =
-    "('created', 'queued', 'starting', 'working', 'blocked', 'recovering')";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -820,7 +818,7 @@ const LAUNCH_VIEW_SELECT: &str = r#"
            COALESCE(launch.overrides ->> 'harness', environment.harness) AS harness,
            launch.start_when, launch.start_at, launch.state, launch.status_reason,
            launch.agent_run_id, launch.run_id,
-           COALESCE(run.state, reported.state) AS run_state, launch.position,
+           {RUN_STATE} AS run_state, launch.position,
            launch.created_at, launch.started_at
     FROM launches launch
     JOIN projects project ON project.id = launch.project_id
@@ -831,10 +829,16 @@ const LAUNCH_VIEW_SELECT: &str = r#"
      AND membership.actor_id = launch.requested_by_actor_id
     LEFT JOIN project_environments environment
       ON environment.project_id = launch.project_id AND environment.id = launch.environment_id
-    LEFT JOIN agent_runs run ON run.id = launch.agent_run_id
-    -- A runner's run (A1.4) reports for itself: it has no built-in row.
-    LEFT JOIN runs reported ON reported.id = launch.run_id AND launch.agent_run_id IS NULL
 "#;
+
+/// [`LAUNCH_VIEW_SELECT`] with its run's state: the built-in row's, or (a
+/// runner's run, A1.4) the state of the run that reports for itself.
+fn launch_view_select() -> String {
+    LAUNCH_VIEW_SELECT.replace(
+        "{RUN_STATE}",
+        &crate::runs::sql::launch_run_state("launch.agent_run_id", "launch.run_id"),
+    )
+}
 
 fn launch_view(
     state: &AppState,
@@ -913,8 +917,9 @@ async fn views_by_id(
     let manage = can_manage(state, caller, project_id).await;
     let sees_tasks = sees_tasks(state, caller, project_id).await?;
     let rows = sqlx::query_as::<_, LaunchViewRow>(&format!(
-        "{LAUNCH_VIEW_SELECT} WHERE launch.project_id = $1 AND launch.id = ANY($2) \
-         ORDER BY launch.position"
+        "{} WHERE launch.project_id = $1 AND launch.id = ANY($2) \
+         ORDER BY launch.position",
+        launch_view_select()
     ))
     .bind(project_id)
     .bind(ids)
@@ -1061,29 +1066,14 @@ pub(crate) async fn account_load(
     executor: impl PgExecutor<'_>,
     account_id: Uuid,
 ) -> Result<i64, AppError> {
-    Ok(sqlx::query_scalar::<_, i64>(&format!(
-        r#"
-        SELECT count(*)
-        FROM agent_runs run
-        JOIN execution_profiles profile ON profile.id = run.execution_profile_id
-        WHERE profile.provider_account_id = $1 AND run.state IN {ACTIVE_RUN_STATES}
-        "#
-    ))
-    .bind(account_id)
-    .fetch_one(executor)
-    .await?)
+    crate::hosts::builtin::capacity::account_load(executor, account_id).await
 }
 
 async fn thread_busy(
     executor: impl PgExecutor<'_>,
     conversation_id: Uuid,
 ) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(&format!(
-        "SELECT EXISTS (SELECT 1 FROM agent_runs WHERE conversation_id = $1 AND state IN {ACTIVE_RUN_STATES})"
-    ))
-    .bind(conversation_id)
-    .fetch_one(executor)
-    .await?)
+    crate::hosts::builtin::thread_busy(executor, conversation_id).await
 }
 
 /// When the account's usage window resets, from the harness.
@@ -1747,14 +1737,11 @@ async fn reusable_thread(
           AND conversation_visible_to(conversation.id, $3)
           AND ($4::uuid IS NULL OR conversation.repository_id IS NULL
                OR conversation.repository_id = $4)
-          AND NOT EXISTS (
-              SELECT 1 FROM agent_runs run
-              WHERE run.conversation_id = conversation.id
-                AND run.state IN {ACTIVE_RUN_STATES}
-          )
+          AND NOT {active_run}
         ORDER BY link.created_at DESC
         LIMIT 1
-        "#
+        "#,
+        active_run = crate::runs::sql::conversation_has_active_run("conversation.id"),
     ))
     .bind(project_id)
     .bind(work_item_id)
@@ -2582,16 +2569,18 @@ pub(crate) async fn list_for(
     let visible =
         "(launch.conversation_id IS NULL OR conversation_visible_to(launch.conversation_id, $2))";
     let queued = sqlx::query_as::<_, LaunchViewRow>(&format!(
-        "{LAUNCH_VIEW_SELECT} WHERE launch.project_id = $1 AND launch.state = 'queued' AND {visible} \
-         ORDER BY launch.position LIMIT 200"
+        "{} WHERE launch.project_id = $1 AND launch.state = 'queued' AND {visible} \
+         ORDER BY launch.position LIMIT 200",
+        launch_view_select()
     ))
     .bind(project_id)
     .bind(caller.actor_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let recent = sqlx::query_as::<_, LaunchViewRow>(&format!(
-        "{LAUNCH_VIEW_SELECT} WHERE launch.project_id = $1 AND launch.state <> 'queued' AND {visible} \
-         ORDER BY launch.updated_at DESC, launch.id DESC LIMIT 50"
+        "{} WHERE launch.project_id = $1 AND launch.state <> 'queued' AND {visible} \
+         ORDER BY launch.updated_at DESC, launch.id DESC LIMIT 50",
+        launch_view_select()
     ))
     .bind(project_id)
     .bind(caller.actor_id)
