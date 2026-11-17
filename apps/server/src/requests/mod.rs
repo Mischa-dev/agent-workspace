@@ -1193,7 +1193,7 @@ async fn tell_raiser(
             "Your request was answered; read it with request_get",
             "request",
             row.id,
-            "/inbox",
+            &crate::addresses::Target::Inbox.legacy_path(),
         )
         .await?;
     }
@@ -1251,8 +1251,10 @@ pub async fn announce_raised(
             }
         }
         let href = match (row.conversation_id, row.work_item_id) {
-            (None, Some(task_id)) => format!("/projects/{space_id}/work-items/{task_id}"),
-            _ => "/inbox".to_owned(),
+            (None, Some(task_id)) => {
+                crate::addresses::Target::task(space_id, task_id).legacy_path()
+            }
+            _ => crate::addresses::Target::Inbox.legacy_path(),
         };
         let notification = crate::notifications::NewNotification {
             project_id: space_id,

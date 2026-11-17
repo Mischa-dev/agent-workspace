@@ -157,10 +157,11 @@ raising a number.
    same transaction.
 7. **Every conversation read goes through `conversation_visible_to`.** It is
    the only gate (K1 owns its body; K4 and C1 each own one helper inside it;
-   never `CREATE OR REPLACE` it or a helper you don't own). Until K4 makes it
-   whole, it only says whether the conversation is project-wide or the viewer
-   is on its member list, so pair it with a membership check
-   (`actor_can_access_project` or the membership join). A query that lists
+   never `CREATE OR REPLACE` it or a helper you don't own). Since K4.4 it is
+   whole (an active account; DMs and groups for participants only; channels
+   for readers of the space). Until K4.6 moves the routes onto it alone, keep
+   pairing it with a membership check (`actor_can_access_project` or the
+   membership join) where a route already does. A query that lists
    conversations or messages (a sidebar, a list, a search, a count) filters
    every row by the rule, even after a project check: being in a project,
    including the hidden direct project or the direct scope, doesn't make its
@@ -193,9 +194,9 @@ raising a number.
     registry lands, a new module is a manifest, a server folder and a web
     `module.ts`. A user-facing part checks `shows(part)`.
 13. **Addresses are built in one place.** Build links to things with the
-    builder that exists (`projects/locations.ts` on the web; K3's links module
-    and W1's `app/href.ts` replace it), never by pasting `"/projects/…"` or
-    `"/w/…"`.
+    builder that exists (the server's `addresses` module; on the web
+    `projects/locations.ts`, which W1's `app/href.ts` replaces), never by
+    pasting `"/projects/…"` or `"/w/…"`.
 14. **Built for cheap hosting** (ruling R24). Database use is pooler-safe:
     settings only by `SET LOCAL` inside a transaction, no session advisory
     locks (take a lease), no hand `PREPARE`, no transaction held across a
@@ -213,6 +214,19 @@ raising a number.
 17. **Web data comes from the generated client.** No new hand-written API type
     or `requestJson` call in a module that has moved to `callOp`; invalidate
     exactly the things an event names, never a whole project.
+
+Spaces (K4) are the places inside a workspace where work lives: a
+project, a team's space, someone's personal space or the workspace's own
+space. They are stored in `projects` until K4.22 renames it, so new code
+says space: new tables name `workspace_id` and `space_id`, never
+`organization_id` or `project_id` (ruling R1), the kind is read through
+`spaces::SpaceKind`, never compared as a literal, and only the spaces
+module makes a space. Guards in `apps/server/src/spaces/guards.rs` hold
+this: the stored kinds match `SpaceKind`, kind literals only go down, no
+new code inserts a space, new tables use the new names, and every SQL
+string that reads `conversations` or `messages` carries
+`conversation_visible_to` (rule 7) or is listed, with its reason, in
+`spaces/conversation_query_allowlist.txt`, which only shrinks.
 
 Shared test fixtures are in `apps/server/tests/integration/support/`: a test
 database from the run's template, one app builder, a world with people,

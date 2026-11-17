@@ -18,6 +18,7 @@ use super::{
     mcp_tasks::{add_member, space},
     message_edits::{add_person, create_channel, direct_space, owner_id, say, text},
     support::{
+        agents_suggest,
         app::{Browser, connect_app, create_agent, initialize, send, tool},
         world::{Setup, create_project, setup},
     },
@@ -157,6 +158,8 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         keys(&role(&listed, "viewer")["permissions"])
             .iter()
             .all(|key| key.ends_with(".view")
+                || key.ends_with(".see")
+                || key == "spaces.browse"
                 || matches!(
                     key.as_str(),
                     "runs.report" | "requests.raise" | "requests.answer"
@@ -173,9 +176,21 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{contractor}");
+    // K1.9: closed under levels (editing tasks holds the levels below it,
+    // posting holds seeing conversations), with the required keys.
     assert_eq!(
         keys(&contractor["permissions"]),
-        ["projects.view", "tasks.view", "tasks.edit", "channels.post"]
+        [
+            "projects.view",
+            "tasks.view",
+            "tasks.comment",
+            "tasks.suggest",
+            "tasks.edit_own",
+            "tasks.edit",
+            "channels.post",
+            "conversations.see",
+            "pages.see"
+        ]
     );
     let (status, beyond) = create_role(
         &setup,
@@ -185,24 +200,15 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{beyond}");
 
-    // Built-in roles keep their permissions; their words can change.
+    // Changing a starting role's words keeps its permissions. (K1.10: its
+    // permissions are data an owner may edit, the Owner role's aside:
+    // `every_membership_names_a_role_row_and_starting_roles_are_data`.)
     let member = role(&listed, "member").clone();
     let member_path = format!(
         "{}/{}",
         roles_path(&setup),
         member["id"].as_str().expect("id")
     );
-    let (status, refused) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &member_path,
-            None,
-            json!({"expectedVersion": member["version"], "permissions": ["tasks.view"]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     let (status, renamed) = send(
         app,
         setup.browser.request(
@@ -649,9 +655,17 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     assert_eq!(mine["outcome"], "ok", "{mine}");
     assert_eq!(mine["value"]["actingAs"], "person");
     let may = keys(&mine["value"]["project"]["thisConnectionMay"]);
+    // K1.9: posting implies seeing conversations, and reading pages is
+    // required, so a limit always includes them.
     assert_eq!(
         may,
-        ["projects.view", "tasks.view", "channels.post"],
+        [
+            "projects.view",
+            "tasks.view",
+            "channels.post",
+            "conversations.see",
+            "pages.see"
+        ],
         "{mine}"
     );
     assert!(keys(&mine["value"]["project"]["permissions"]).contains(&"tasks.create".to_owned()));
@@ -806,7 +820,12 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     assert_eq!(mine["value"]["actingAs"], "agent");
     assert_eq!(
         keys(&mine["value"]["project"]["permissions"]),
-        ["projects.view", "tasks.view"]
+        [
+            "projects.view",
+            "tasks.view",
+            "conversations.see",
+            "pages.see"
+        ]
     );
     // Without "see tasks", search and overviews leave tasks out.
     let search = json!({"query": "Allowed", "kinds": ["tasks"], "projectId": work});
@@ -839,8 +858,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     .await;
     assert_eq!(opened["value"]["tasks"]["next"], json!([]), "{opened}");
 
-    // Only a person changes roles: never an agent as itself, never a
-    // member's app.
+    // Changing roles takes "Manage roles", which a member's role doesn't
+    // hold: not the member agent, not a member's app.
     let refused = tool(
         app,
         &mara_token,
@@ -1221,7 +1240,8 @@ async fn task_files_follow_who_can_see_tasks() {
     assert_eq!(opened["value"]["text"], "task notes", "{opened}");
 
     // Without "see tasks" in Tom's role, the file is gone for him.
-    sqlx::query("UPDATE workspace_roles SET permissions = ARRAY['tasks.edit'] WHERE id = $1")
+    // (K1.9: editing tasks would imply seeing them, so the role keeps none.)
+    sqlx::query("UPDATE workspace_roles SET permissions = '{}' WHERE id = $1")
         .bind(
             editors["id"]
                 .as_str()
@@ -2435,6 +2455,26 @@ async fn set_project_role(
     .await
 }
 
+/// Limits what `actor`'s apps and agents may do, everywhere. K1.9 closes a
+/// role under its levels (editing tasks implies seeing them), but not a
+/// limit, so a limit is how a caller ends up changing tasks it can't see.
+async fn limit_apps(setup: &Setup, actor: Uuid, permissions: &[&str]) {
+    let (status, limit) = send(
+        &setup.app,
+        setup.browser.request(
+            "PUT",
+            &format!(
+                "/api/v1/organizations/{}/members/{actor}/agent-limit",
+                setup.organization_id
+            ),
+            None,
+            json!({ "permissions": permissions }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+}
+
 /// `actor`'s plain workspace role.
 async fn workspace_role(setup: &Setup, actor: Uuid) -> String {
     sqlx::query_scalar::<_, String>(
@@ -2675,6 +2715,128 @@ async fn connecting_an_app_as_an_agent_stays_within_the_project_role() {
         authorizes_as_agent(&setup, &alex_browser, connection).await,
         "a plain admin in the project connects an app as the agent"
     );
+}
+
+/// AWD-181: disabling an agent turns its workspace membership off, and a
+/// named manager (an admin without `agents.manage_any`) still re-enables it
+/// and removes it afterwards. The manager's own membership must be on.
+#[tokio::test]
+async fn a_named_manager_reenables_and_removes_an_agent_they_disabled() {
+    let Some(setup) = setup("awd181_disabled_agent_managed").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let project = work.parse::<Uuid>().expect("project");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    make_admin(&setup, alex).await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is an admin in Work");
+    let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    name_manager(&setup, mara, alex).await;
+    let update = |connection: Uuid, body: Value| {
+        alex_browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/external-agents/{connection}"),
+            None,
+            body,
+        )
+    };
+
+    let (connection, version, _) = agent_connection(&setup, mara).await;
+    let (status, disabled) = send(
+        app,
+        update(
+            connection,
+            json!({"expectedVersion": version, "enabled": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    let enabled = sqlx::query_scalar::<_, bool>(
+        "SELECT enabled FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(mara)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("mara's membership");
+    assert!(!enabled, "disabling turns the agent's membership off");
+
+    let (_, version, _) = agent_connection(&setup, mara).await;
+    let (status, reenabled) = send(
+        app,
+        update(
+            connection,
+            json!({"expectedVersion": version, "enabled": true}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a named manager re-enables: {reenabled}"
+    );
+    let (_, version, state) = agent_connection(&setup, mara).await;
+    assert_eq!(state, "active");
+
+    let (status, disabled) = send(
+        app,
+        update(
+            connection,
+            json!({"expectedVersion": version, "enabled": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    let (_, version, _) = agent_connection(&setup, mara).await;
+
+    // A manager whose own membership is off manages nothing.
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = false WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is turned off");
+    let remove = || {
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/external-agents/{connection}/remove"),
+            None,
+            json!({"expectedVersion": version}),
+        )
+    };
+    let (status, refused) = send(app, remove()).await;
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "a disabled manager removed an agent: {refused}"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = true WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(setup.organization_id)
+    .bind(alex)
+    .execute(&setup.pool)
+    .await
+    .expect("alex is back");
+
+    let (status, removed) = send(app, remove()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a named manager removes a disabled agent: {removed}"
+    );
+    let (_, _, state) = agent_connection(&setup, mara).await;
+    assert_eq!(state, "removed");
 }
 
 /// A project invitation with a custom role based on Admin never makes a
@@ -3161,9 +3323,10 @@ async fn archiving_without_see_tasks_reveals_no_task() {
 }
 
 /// A rule run by hand loads a task only if its maker may see tasks there
-/// now: "run now" goes through the same check as an event. A role that may
-/// edit tasks but not see them gets a skipped run, never the task's title;
-/// with "see tasks" the title reaches the notification.
+/// now: "run now" goes through the same check as an event. K1.9: a role that
+/// may edit tasks sees them, so its run brings the title to the
+/// notification. (Without "see tasks", which now takes an app's limit, the
+/// run is skipped: `a_browser_rule_run_through_an_app_keeps_to_the_apps_limit`.)
 #[tokio::test]
 async fn a_rule_run_by_hand_shows_only_tasks_its_maker_sees() {
     let Some(setup) = setup("awd74_rule_run").await else {
@@ -3173,19 +3336,23 @@ async fn a_rule_run_by_hand_shows_only_tasks_its_maker_sees() {
     let work = create_project(&setup, "WORK", "Work").await;
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
     let task = owner_task(&setup, &work, "Secret rule plan").await;
-    let (status, blind) = create_role(
+    let (status, editors) = create_role(
         &setup,
         &setup.browser,
-        json!({"name": "Blind editors", "baseRole": "member", "permissions": ["tasks.edit"]}),
+        json!({"name": "Editors", "baseRole": "member", "permissions": ["tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert!(
+        keys(&editors["permissions"]).contains(&"tasks.view".to_owned()),
+        "editing implies seeing: {editors}"
+    );
     let (status, changed) = set_project_role(
         &setup,
         &work,
         bea,
-        "bea-blind",
-        json!({"roleId": blind["id"]}),
+        "bea-editors",
+        json!({"roleId": editors["id"]}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
@@ -3207,34 +3374,7 @@ async fn a_rule_run_by_hand_shows_only_tasks_its_maker_sees() {
     let rule_id = rule["id"].as_str().expect("rule").to_owned();
     let run_path = format!("/api/v1/projects/{work}/automations/{rule_id}/run");
 
-    // Without "see tasks": skipped, and the title goes nowhere.
-    let (status, run) = send(
-        app,
-        bea_browser.request("POST", &run_path, None, json!({"workItemId": task})),
-    )
-    .await;
-    assert!(status.is_success(), "{status}: {run}");
-    assert_eq!(run["state"], "skipped", "{run}");
-    assert!(!run.to_string().contains("Secret rule plan"), "{run}");
-    assert_eq!(notified_of(&setup, bea, "Secret rule plan").await, 0);
-
-    // With it, the same run tells her the title.
-    let (status, seeing) = create_role(
-        &setup,
-        &setup.browser,
-        json!({"name": "Seeing editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{seeing}");
-    let (status, changed) = set_project_role(
-        &setup,
-        &work,
-        bea,
-        "bea-seeing",
-        json!({"roleId": seeing["id"]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{changed}");
+    // Her role edits tasks, so it sees them: her run tells her the title.
     let (status, run) = send(
         app,
         bea_browser.request("POST", &run_path, None, json!({"workItemId": task})),
@@ -4062,8 +4202,9 @@ async fn a_project_invitation_lapses_when_its_issuers_project_role_narrows_below
 }
 
 /// Working on a task with a worker makes a thread named after the task, so
-/// it needs "see tasks": a role that may edit tasks and start runs but not
-/// see tasks is refused before any thread is made.
+/// it needs "see tasks": a role that may start runs but not see tasks is
+/// refused before any thread is made. (K1.9: editing tasks implies seeing
+/// them.)
 #[tokio::test]
 async fn working_with_a_worker_needs_see_tasks() {
     let Some(setup) = setup("awd74_work_with_worker").await else {
@@ -4078,7 +4219,7 @@ async fn working_with_a_worker_needs_see_tasks() {
     let (status, doers) = create_role(
         &setup,
         &setup.browser,
-        json!({"name": "Blind doers", "baseRole": "member", "permissions": ["tasks.edit", "runs.launch", "channels.post"]}),
+        json!({"name": "Blind doers", "baseRole": "member", "permissions": ["runs.launch", "channels.post"]}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{doers}");
@@ -4121,9 +4262,10 @@ async fn working_with_a_worker_needs_see_tasks() {
 }
 
 /// Preparing or archiving a repository answers with the repository (owner,
-/// name, clone URL, branch), so it needs "see code" as well as "manage code":
-/// a role that manages code without seeing it is refused, and the repository
-/// is left as it was.
+/// name, clone URL, branch), so it needs "see code" as well as "manage code".
+/// K1.9: managing code implies seeing it, so a role saved with "manage code"
+/// holds "see code"; an admin-based role without code is refused, and the
+/// repository is left as it was.
 #[tokio::test]
 async fn managing_a_repository_needs_see_code() {
     let Some(setup) = setup("awd74_repository_manage").await else {
@@ -4150,10 +4292,21 @@ async fn managing_a_repository_needs_see_code() {
     .execute(&setup.pool)
     .await
     .expect("repository");
+    let (status, managers) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Code keepers", "baseRole": "admin", "permissions": ["code.manage"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{managers}");
+    assert!(
+        keys(&managers["permissions"]).contains(&"code.view".to_owned()),
+        "managing code implies seeing it: {managers}"
+    );
     let (status, keepers) = create_role(
         &setup,
         &setup.browser,
-        json!({"name": "Blind code keepers", "baseRole": "admin", "permissions": ["code.manage", "tasks.view"]}),
+        json!({"name": "Blind code keepers", "baseRole": "admin", "permissions": ["tasks.view"]}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{keepers}");
@@ -4171,7 +4324,7 @@ async fn managing_a_repository_needs_see_code() {
     )
     .execute(&setup.pool)
     .await
-    .expect("bea manages code without seeing it");
+    .expect("bea is an admin without code");
     let base = format!("/api/v1/projects/{work}/repositories/{repository}");
     let version: i64 = sqlx::query_scalar("SELECT version FROM repositories WHERE id = $1")
         .bind(repository)
@@ -4207,9 +4360,10 @@ async fn managing_a_repository_needs_see_code() {
 }
 
 /// A comment that references another task shows that task's title and
-/// status only to someone who may see tasks: posting or editing it with a
-/// role that may edit but not see tasks returns the reference by id and
-/// key alone; with "see tasks" the title and status come back.
+/// status only to someone who may see tasks. K1.9: commenting on tasks
+/// implies seeing them, so a commenter always gets the title and status, on
+/// posting and on editing. (A comment can only reference a task in its own
+/// project, so the hidden answer is no longer reachable from the web.)
 #[tokio::test]
 async fn comment_references_show_titles_only_with_see_tasks() {
     let Some(setup) = setup("awd74_comment_refs").await else {
@@ -4227,6 +4381,10 @@ async fn comment_references_show_titles_only_with_see_tasks() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert!(
+        keys(&editors["permissions"]).contains(&"tasks.view".to_owned()),
+        "editing implies seeing: {editors}"
+    );
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4243,27 +4401,20 @@ async fn comment_references_show_titles_only_with_see_tasks() {
         ]})
     };
     let comments = format!("/api/v1/projects/{work}/work-items/{on}/comments");
-
-    // Without "see tasks": the reference, by id and key only.
     let (status, posted) = send(
         app,
         bea_browser.request(
             "POST",
             &comments,
-            Some("bea-comment-blind"),
+            Some("bea-comment"),
             json!({"content": content("See ")}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{posted}");
     let reference = &posted["comment"]["referencedWorkItems"][0];
-    assert_eq!(reference["id"], secret.to_string(), "{posted}");
-    assert_eq!(reference["title"], "", "{posted}");
-    assert_eq!(reference["statusCategory"], "", "{posted}");
-    assert!(
-        !posted.to_string().contains("Secret referenced task"),
-        "{posted}"
-    );
+    assert_eq!(reference["title"], "Secret referenced task", "{posted}");
+    assert_ne!(reference["statusCategory"], "", "{posted}");
     let comment_id = posted["comment"]["id"]
         .as_str()
         .expect("comment")
@@ -4280,90 +4431,15 @@ async fn comment_references_show_titles_only_with_see_tasks() {
     .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
     assert_eq!(
-        edited["comment"]["referencedWorkItems"][0]["title"], "",
+        edited["comment"]["referencedWorkItems"][0]["title"], "Secret referenced task",
         "{edited}"
     );
-    assert!(
-        !edited.to_string().contains("Secret referenced task"),
-        "{edited}"
-    );
-
-    // AWD-95: replying to someone else's comment quotes it only for those
-    // who may see tasks; Bea gets its id, without its author or words, now
-    // and on a retry.
-    let (status, owners) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &comments,
-            Some("owner-private-words"),
-            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Budget is 40k"}]}}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{owners}");
-    let owners = owners["comment"]["id"]
-        .as_str()
-        .expect("owner comment")
-        .to_owned();
-    for _ in 0..2 {
-        let (status, replied) = send(
-            app,
-            bea_browser.request(
-                "POST",
-                &comments,
-                Some("bea-blind-reply"),
-                json!({"content": content("Noted, "), "replyToCommentId": owners}),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{replied}");
-        assert_eq!(replied["comment"]["replyTo"]["commentId"], owners.as_str());
-        assert!(replied["comment"]["replyTo"]["text"].is_null(), "{replied}");
-        assert!(
-            replied["comment"]["replyTo"]["authorName"].is_null(),
-            "{replied}"
-        );
-        assert!(!replied.to_string().contains("40k"), "{replied}");
-    }
-
-    // With "see tasks": the title and status come back.
-    let (status, seeing) = create_role(
-        &setup,
-        &setup.browser,
-        json!({"name": "Seeing commenters", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{seeing}");
-    let (status, changed) = set_project_role(
-        &setup,
-        &work,
-        bea,
-        "bea-seeing-commenters",
-        json!({"roleId": seeing["id"]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{changed}");
-    let (status, posted) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &comments,
-            Some("bea-comment-seeing"),
-            json!({"content": content("Now see ")}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{posted}");
-    let reference = &posted["comment"]["referencedWorkItems"][0];
-    assert_eq!(reference["title"], "Secret referenced task", "{posted}");
-    assert_ne!(reference["statusCategory"], "", "{posted}");
 }
 
 /// AI suggestions are about tasks, so seeing one takes "see tasks" in its
-/// project: someone whose role there keeps "edit tasks" but not "see
-/// tasks" can't list them there, and deciding a known one is refused as
-/// not found, without its task, value or reason. With "see tasks" both work.
+/// project: an app whose limit keeps "edit tasks" but not "see tasks" can't
+/// list them there, and deciding a known one is refused, without its task,
+/// value or reason. With "see tasks" both work.
 #[tokio::test]
 async fn ai_suggestions_need_see_tasks() {
     let Some(setup) = setup("awd74_ai_suggestions").await else {
@@ -4398,22 +4474,8 @@ async fn ai_suggestions_need_see_tasks() {
     .execute(&setup.pool)
     .await
     .expect("suggestion");
-    let (status, editors) = create_role(
-        &setup,
-        &setup.browser,
-        json!({"name": "Blind editors", "baseRole": "member", "permissions": ["tasks.edit"]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
-    let (status, changed) = set_project_role(
-        &setup,
-        &work,
-        bea,
-        "bea-blind",
-        json!({"roleId": editors["id"]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{changed}");
+    // Her apps may edit tasks but not see them.
+    limit_apps(&setup, bea, &["tasks.edit"]).await;
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let session = initialize(app, &bea_app).await.expect("Bea's app");
 
@@ -4440,7 +4502,7 @@ async fn ai_suggestions_need_see_tasks() {
         json!({"projectId": work, "suggestionId": suggestion, "decision": "dismiss"}),
     )
     .await;
-    assert_eq!(decided["outcome"], "not_found", "{decided}");
+    assert_ne!(decided["outcome"], "ok", "{decided}");
     assert!(
         !decided.to_string().contains("Secret suggestion reason")
             && !decided.to_string().contains("Suggested task"),
@@ -4454,22 +4516,7 @@ async fn ai_suggestions_need_see_tasks() {
     assert_eq!(still, "pending");
 
     // With it: listed, and deciding returns the whole suggestion.
-    let (status, seeing) = create_role(
-        &setup,
-        &setup.browser,
-        json!({"name": "Seeing editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{seeing}");
-    let (status, changed) = set_project_role(
-        &setup,
-        &work,
-        bea,
-        "bea-seeing",
-        json!({"roleId": seeing["id"]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{changed}");
+    limit_apps(&setup, bea, &["tasks.view", "tasks.edit"]).await;
     let listed = tool(
         app,
         &bea_app,
@@ -4628,11 +4675,17 @@ async fn a_repeated_move_shows_the_title_only_where_tasks_are_seen() {
         .await
         .expect("rename the moved task");
 
-    // In Dest, Bea may create and change tasks but not see them.
+    // In Dest, Bea's apps may create and change tasks but not see them (a
+    // limit: K1.9 makes a role that changes tasks see them).
     let (status, blind) = create_role(
         &setup,
         &setup.browser,
-        json!({"name": "Blind creators", "baseRole": "member", "permissions": ["tasks.edit", "tasks.create"]}),
+        json!({
+            "name": "Blind creators",
+            "baseRole": "member",
+            "permissions": ["tasks.view", "tasks.edit", "tasks.create"],
+            "agentLimit": ["tasks.edit", "tasks.create"],
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{blind}");
@@ -5328,29 +5381,31 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
             .expect("target contents")
         }
     };
-    let set_work_role = |name: &'static str, permissions: Value, key: &'static str| {
-        let setup = &setup;
-        let work = work.clone();
-        async move {
-            let (status, role) = create_role(
-                setup,
-                &setup.browser,
-                json!({"name": name, "baseRole": "member", "permissions": permissions}),
-            )
-            .await;
-            assert_eq!(status, StatusCode::CREATED, "{role}");
-            let (status, changed) =
-                set_project_role(setup, &work, bea, key, json!({"roleId": role["id"]})).await;
-            assert_eq!(status, StatusCode::OK, "{changed}");
-        }
-    };
+    let set_work_role =
+        |name: &'static str, permissions: Value, limit: Value, key: &'static str| {
+            let setup = &setup;
+            let work = work.clone();
+            async move {
+                let mut body =
+                    json!({"name": name, "baseRole": "member", "permissions": permissions});
+                if !limit.is_null() {
+                    body["agentLimit"] = limit;
+                }
+                let (status, role) = create_role(setup, &setup.browser, body).await;
+                assert_eq!(status, StatusCode::CREATED, "{role}");
+                let (status, changed) =
+                    set_project_role(setup, &work, bea, key, json!({"roleId": role["id"]})).await;
+                assert_eq!(status, StatusCode::OK, "{changed}");
+            }
+        };
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let session = initialize(app, &bea_app).await.expect("Bea's app");
 
-    // Without "see tasks" in Work, nothing moves.
+    // Without "see tasks" in Work (her apps' limit there), nothing moves.
     let hidden = linked_task("Hidden move source").await;
     set_work_role(
         "Blind movers",
+        json!(["tasks.view", "tasks.edit", "tasks.delete"]),
         json!(["tasks.edit", "tasks.delete"]),
         "bea-blind-movers",
     )
@@ -5371,6 +5426,7 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
     set_work_role(
         "Movers",
         json!(["tasks.view", "tasks.edit", "tasks.delete"]),
+        Value::Null,
         "bea-movers",
     )
     .await;
@@ -5471,11 +5527,17 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
         );
     }
 
-    // Changing tasks without seeing them: its id and key only.
+    // Changing tasks without seeing them (an app limit; K1.9 makes a role
+    // that edits tasks see them): its id and key only.
     let (status, editors) = create_role(
         &setup,
         &setup.browser,
-        json!({"name": "Blind editors", "baseRole": "member", "permissions": ["tasks.edit"]}),
+        json!({
+            "name": "Blind editors",
+            "baseRole": "member",
+            "permissions": ["tasks.view", "tasks.edit"],
+            "agentLimit": ["tasks.edit"],
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{editors}");
@@ -5614,7 +5676,7 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
     let (status, blind) = create_role(
         &setup,
         &setup.browser,
-        json!({"name": "Blind elsewhere", "baseRole": "member", "permissions": ["tasks.edit"]}),
+        json!({"name": "Blind elsewhere", "baseRole": "viewer", "permissions": []}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{blind}");
@@ -5636,7 +5698,7 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
 /// The custom role `actor` holds in `project`, if any.
 async fn project_role_id(setup: &Setup, project: &str, actor: Uuid) -> Option<Uuid> {
     sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT role_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+        "SELECT custom_role_id(role_id) FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
     .bind(project.parse::<Uuid>().expect("project"))
     .bind(actor)
@@ -5677,8 +5739,21 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
     let Some(setup) = setup("k13_catalogue").await else {
         return;
     };
-    let rows = sqlx::query_as::<_, (String, String, String, bool, Vec<String>)>(
-        "SELECT key, module, scope, required, default_for FROM permission_catalogue ORDER BY key",
+    #[allow(clippy::type_complexity)]
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            bool,
+            Vec<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT key, module, scope, required, default_for, thing_kind, level \
+         FROM permission_catalogue ORDER BY key",
     )
     .fetch_all(&setup.pool)
     .await
@@ -5703,6 +5778,8 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
                 scope.to_owned(),
                 info.required,
                 default_for,
+                info.level.map(|(kind, _)| kind.to_owned()),
+                info.level.map(|(_, level)| level.key().to_owned()),
             )
         })
         .collect::<Vec<_>>();
@@ -5776,4 +5853,543 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
         !allows("viewer", Some(reader), "tasks.edit").await,
         "a custom role never holds more than its base"
     );
+}
+
+/// K1.9: a custom role saved before the catalogue's new shape means the same
+/// after it. One holding `pages.edit` holds `pages.comment` (page comments
+/// needed `pages.edit` before), and the backfill is safe to run again.
+#[tokio::test]
+async fn a_custom_role_keeps_its_meaning_when_the_catalogue_grows() {
+    let Some(setup) = setup("k19_catalogue_backfill").await else {
+        return;
+    };
+    let role = Uuid::now_v7();
+    // An old server's row: the keys it knew, no more.
+    sqlx::query(
+        "INSERT INTO workspace_roles (id, organization_id, key, name, base_role, permissions) \
+         VALUES ($1, $2, 'old-writers', 'Old writers', 'member', ARRAY['projects.view', 'pages.edit', 'tasks.edit'])",
+    )
+    .bind(role)
+    .bind(setup.organization_id)
+    .execute(&setup.pool)
+    .await
+    .expect("an old custom role");
+    for _ in 0..2 {
+        sqlx::raw_sql(include_str!(
+            "../../migrations/20261117001000_catalogue_levels.sql"
+        ))
+        .execute(&setup.pool)
+        .await
+        .expect("the backfill runs, and runs again");
+    }
+    let permissions = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT permissions FROM workspace_roles WHERE id = $1",
+    )
+    .bind(role)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("permissions");
+    for key in [
+        "pages.comment",
+        "pages.suggest",
+        "pages.edit_own",
+        "pages.see",
+        "tasks.view",
+        "tasks.comment",
+        "conversations.see",
+        "dashboards.view",
+    ] {
+        assert!(
+            permissions.iter().any(|held| held == key),
+            "{key} in {permissions:?}"
+        );
+    }
+    for key in ["sheets.comment", "code.view", "data.connect"] {
+        assert!(
+            !permissions.iter().any(|held| held == key),
+            "{key} in {permissions:?}"
+        );
+    }
+    let mut unique = permissions.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        permissions.len(),
+        "no key twice: {permissions:?}"
+    );
+    let allows = |key: &'static str| {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("SELECT role_allows('member', $1, $2)")
+                .bind(role)
+                .bind(key)
+                .fetch_one(&pool)
+                .await
+                .expect("role_allows")
+        }
+    };
+    assert!(allows("pages.comment").await);
+    assert!(!allows("sheets.comment").await);
+    // Rust reads the same.
+    let grant = agent_workspace_server::policy::RoleGrant::stored("member", Some(&permissions))
+        .expect("a member role");
+    assert!(
+        grant
+            .permissions()
+            .contains(agent_workspace_server::policy::Permission::PagesComment)
+    );
+}
+
+/// K1.10: every membership names a role row, and the starting roles hold
+/// their permissions as data. Old code that sets `role` alone gets that
+/// starting row; SQL's effective set of each starting role is the server's
+/// defaults; the Owner role can't be edited; editing Member changes what
+/// members may do in the workspace (the directory) and in a project
+/// (archiving a task).
+#[tokio::test]
+async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
+    use agent_workspace_server::policy::{MembershipRole, PERMISSIONS, Permission, PermissionSet};
+
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("k110_roles_as_data")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let organization = world.organization;
+    let work = world.project("WORK").to_owned();
+    let lena = &world.people["lena"];
+    for table in ["organization_memberships", "project_memberships"] {
+        let unnamed = sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT count(*) FROM {table} WHERE role_id IS NULL"
+        ))
+        .fetch_one(pool)
+        .await
+        .expect("count");
+        assert_eq!(unnamed, 0, "{table}");
+    }
+    // Old code sets `role` alone; the row follows.
+    let held = |role: &'static str| {
+        let work = work.clone();
+        async move {
+            sqlx::query("UPDATE project_memberships SET role = $3 WHERE project_id = $1::uuid AND actor_id = $2")
+                .bind(&work)
+                .bind(lena.actor)
+                .bind(role)
+                .execute(pool)
+                .await
+                .expect("old-style role change");
+            sqlx::query_scalar::<_, String>(
+                "SELECT held.key FROM project_memberships membership \
+                 JOIN workspace_roles held ON held.id = membership.role_id \
+                 WHERE membership.project_id = $1::uuid AND membership.actor_id = $2",
+            )
+            .bind(&work)
+            .bind(lena.actor)
+            .fetch_one(pool)
+            .await
+            .expect("held row")
+        }
+    };
+    assert_eq!(held("viewer").await, "viewer");
+    assert_eq!(held("member").await, "member");
+    // SQL's effective sets are the server's defaults.
+    let rows = sqlx::query_as::<_, (Uuid, String, Vec<String>)>(
+        "SELECT id, key, effective_permissions FROM workspace_roles \
+         WHERE organization_id = $1 AND built_in",
+    )
+    .bind(organization)
+    .fetch_all(pool)
+    .await
+    .expect("starting roles");
+    let keys = |set: PermissionSet| {
+        let mut keys = set
+            .keys()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    };
+    let mut ids = std::collections::BTreeMap::new();
+    for (id, key, effective) in rows {
+        let expected = match key.as_str() {
+            "owner" => {
+                let mut all = PERMISSIONS
+                    .iter()
+                    .map(|info| info.key.to_owned())
+                    .collect::<Vec<_>>();
+                all.sort();
+                all
+            }
+            "guest" => keys(PermissionSet::required()),
+            other => keys(PermissionSet::built_in(
+                MembershipRole::parse(other).expect("a starting role"),
+            )),
+        };
+        assert_eq!(effective, expected, "{key}");
+        ids.insert(key, id);
+    }
+    assert_eq!(ids.len(), 6, "{ids:?}");
+    // The Owner role can't be edited.
+    let owner_version =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM workspace_roles WHERE id = $1")
+            .bind(ids["owner"])
+            .fetch_one(pool)
+            .await
+            .expect("owner version");
+    let (status, refused) = send(
+        &world.app,
+        world.owner.browser.request(
+            "PATCH",
+            &format!(
+                "/api/v1/organizations/{organization}/roles/{}",
+                ids["owner"]
+            ),
+            None,
+            json!({"permissions": ["projects.view"], "expectedVersion": owner_version}),
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{status}: {refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Owner")),
+        "{refused}"
+    );
+    // A task Lena may archive, before the edit.
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("k110-task"),
+            json!({"title": "Kept"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {made}");
+    let task = made["workItem"]["id"]
+        .as_str()
+        .or_else(|| made["id"].as_str())
+        .unwrap_or_else(|| panic!("task id in {made}"))
+        .to_owned();
+    let members_seen = |browser: &super::support::app::Browser| {
+        let request = browser.request(
+            "GET",
+            &format!("/api/v1/organizations/{organization}/members"),
+            None,
+            Value::Null,
+        );
+        let app = world.app.clone();
+        async move {
+            let (status, listed) = send(&app, request).await;
+            assert_eq!(status, StatusCode::OK, "{listed}");
+            listed["members"].as_array().map_or(0, Vec::len)
+        }
+    };
+    assert!(members_seen(&lena.browser).await > 1);
+    // Edit Member: no "delete tasks" in projects, no directory in the
+    // workspace.
+    let narrowed = PermissionSet::built_in(MembershipRole::Member)
+        .keys()
+        .into_iter()
+        .filter(|key| {
+            *key != Permission::TasksDelete.info().key
+                && *key != Permission::DirectoryView.info().key
+        })
+        .collect::<Vec<_>>();
+    let member_version =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM workspace_roles WHERE id = $1")
+            .bind(ids["member"])
+            .fetch_one(pool)
+            .await
+            .expect("member version");
+    let (status, edited) = send(
+        &world.app,
+        world.owner.browser.request(
+            "PATCH",
+            &format!(
+                "/api/v1/organizations/{organization}/roles/{}",
+                ids["member"]
+            ),
+            None,
+            json!({"permissions": narrowed, "expectedVersion": member_version}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    let (customized, effective) = sqlx::query_as::<_, (bool, Vec<String>)>(
+        "SELECT customized, effective_permissions FROM workspace_roles WHERE id = $1",
+    )
+    .bind(ids["member"])
+    .fetch_one(pool)
+    .await
+    .expect("member row");
+    assert!(customized);
+    assert!(
+        !effective.iter().any(|key| key == "tasks.delete"),
+        "{effective:?}"
+    );
+    assert_eq!(
+        members_seen(&lena.browser).await,
+        1,
+        "only herself without the directory"
+    );
+    let (status, archived) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
+            Some("k110-archive"),
+            json!({"expectedVersion": 1}),
+        ),
+    )
+    .await;
+    assert!(
+        matches!(status, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+        "{status}: {archived}"
+    );
+    // The owner, holding everything, still archives it.
+    let (status, archived) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
+            Some("k110-owner-archive"),
+            json!({"expectedVersion": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{archived}");
+    world.finish().await;
+}
+
+/// K1.12: suggesting instead of editing is a permission, not an account
+/// kind. A new agent gets the workspace's role for new agents (the role new
+/// people get, unless an owner picks another) and edits pages directly.
+/// An agent given a "suggests" copy of Member suggests, until an owner gives
+/// it plain Member back. A person given that copy suggests too, through
+/// their app. Whoever edits a page decides its suggestions, agent or not; a
+/// suggester doesn't.
+#[tokio::test]
+async fn suggesting_is_a_role_not_an_account_kind() {
+    let Some(setup) = setup("k1_suggest").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (status, page) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({"title": "Plan", "body": "First we sketch.\n"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{page}");
+    let page = page["id"].as_str().expect("page").to_owned();
+    let workspace_role = |actor: Uuid| {
+        let pool = setup.pool.clone();
+        let organization = setup.organization_id;
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT role.key FROM organization_memberships membership \
+                 JOIN workspace_roles role ON role.id = membership.role_id \
+                 WHERE membership.organization_id = $1 AND membership.actor_id = $2",
+            )
+            .bind(organization)
+            .bind(actor)
+            .fetch_one(&pool)
+            .await
+            .expect("workspace role")
+        }
+    };
+    let append = |token: String, session: String, text: &'static str| {
+        let page = page.clone();
+        async move {
+            tool(
+                app,
+                &token,
+                &session,
+                "page_edit",
+                json!({"pageId": page, "edits": [{"op": "append", "markdown": text}]}),
+            )
+            .await
+        }
+    };
+    let decide = |token: String, session: String, suggestion: String| {
+        let page = page.clone();
+        async move {
+            tool(
+                app,
+                &token,
+                &session,
+                "page_suggestion_decide",
+                json!({"pageId": page, "suggestionId": suggestion, "decision": "accept"}),
+            )
+            .await
+        }
+    };
+
+    // A new agent is a Member and edits the owner's page directly.
+    let space = space(&setup).await;
+    let (rook, rook_token) = create_agent(app, &setup.browser, &space, "Rook", "rook").await;
+    add_member(&setup, &work, rook, "member").await;
+    assert_eq!(workspace_role(rook).await, "member");
+    let rook_session = initialize(app, &rook_token).await.expect("Rook");
+    let direct = append(rook_token.clone(), rook_session.clone(), "Then we build.").await;
+    assert_eq!(direct["outcome"], "ok", "{direct}");
+    assert!(direct["value"]["suggestion"].is_null(), "{direct}");
+
+    // Rook is given the "suggests" copy of Member: it now holds
+    // "Member, suggests" and its edits wait for someone who edits the page.
+    agents_suggest(&setup.pool).await;
+    assert_eq!(workspace_role(rook).await, "member-suggests");
+    let suggested = append(rook_token.clone(), rook_session.clone(), "Then we ship.").await;
+    assert_eq!(
+        suggested["value"]["suggestion"]["status"], "pending",
+        "{suggested}"
+    );
+    let rook_suggestion = suggested["value"]["suggestion"]["suggestionId"]
+        .as_str()
+        .expect("suggestion")
+        .to_owned();
+    let own = decide(
+        rook_token.clone(),
+        rook_session.clone(),
+        rook_suggestion.clone(),
+    )
+    .await;
+    assert_eq!(own["outcome"], "permission_denied", "{own}");
+
+    // A person holding the same role suggests too, through their app.
+    let listed = roles(&setup, &setup.browser).await;
+    let suggests = role(&listed, "member-suggests")["id"].clone();
+    let member = role(&listed, "member")["id"].clone();
+    let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        bea,
+        "bea-suggests",
+        json!({"roleId": suggests}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
+    let bea_session = initialize(app, &bea_app).await.expect("Bea's app");
+    let from_bea = append(bea_app.clone(), bea_session.clone(), "And we rest.").await;
+    assert_eq!(
+        from_bea["value"]["suggestion"]["status"], "pending",
+        "{from_bea}"
+    );
+    let bea_suggestion = from_bea["value"]["suggestion"]["suggestionId"]
+        .as_str()
+        .expect("suggestion")
+        .to_owned();
+
+    // The owner gives Rook plain Member: it edits directly again and decides
+    // suggestions on a page it didn't make, its own and Bea's.
+    let (status, changed) = set_project_role(
+        &setup,
+        &work,
+        rook,
+        "rook-member",
+        json!({"roleId": member}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let again = append(
+        rook_token.clone(),
+        rook_session.clone(),
+        "Then we celebrate.",
+    )
+    .await;
+    assert!(again["value"]["suggestion"].is_null(), "{again}");
+    for suggestion in [rook_suggestion, bea_suggestion] {
+        let accepted = decide(rook_token.clone(), rook_session.clone(), suggestion).await;
+        assert_eq!(accepted["outcome"], "ok", "{accepted}");
+    }
+
+    // An owner picks the role new agents get.
+    let (status, written) = send(
+        app,
+        setup.browser.request(
+            "PUT",
+            "/api/v1/settings/values/access.default_agent_role_id",
+            None,
+            json!({
+                "scope": "workspace",
+                "organizationId": setup.organization_id,
+                "value": suggests,
+                "expectedVersion": 0,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+    let (vale, _) = create_agent(app, &setup.browser, &space, "Vale", "vale").await;
+    assert_eq!(workspace_role(vale).await, "member-suggests");
+}
+
+/// K1.14a: an agent may hold any role. An owner makes an agent an admin of
+/// the workspace, and it then does what an admin does, such as making a
+/// role; nothing is held back because it is an agent. It still can't make
+/// itself, or anyone, an owner.
+#[tokio::test]
+async fn an_agent_made_admin_does_what_an_admin_does() {
+    let Some(setup) = setup("k114a_agent_admin").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (rook, rook_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Rook", "rook").await;
+    add_member(&setup, &work, rook, "member").await;
+    let listed = roles(&setup, &setup.browser).await;
+    let (status, made) = assign(
+        &setup,
+        &setup.browser,
+        rook,
+        &role(&listed, "admin")["id"],
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let session = initialize(app, &rook_token).await.expect("Rook");
+    let written = tool(
+        app,
+        &rook_token,
+        &session,
+        "role_write",
+        json!({"projectId": work, "name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let ownership = tool(
+        app,
+        &rook_token,
+        &session,
+        "role_assign",
+        json!({"projectId": work, "person": "@rook", "role": "owner"}),
+    )
+    .await;
+    assert_ne!(ownership["outcome"], "ok", "{ownership}");
+    let owners = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' AND enabled",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owners");
+    assert_eq!(owners, 1);
 }

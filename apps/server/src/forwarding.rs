@@ -142,13 +142,20 @@ fn available(row: SourceRow) -> ForwardedView {
         place: Some(place(&row.conversation_kind, &row.conversation_name)),
         text: (!row.removed).then_some(row.text),
         created_at: Some(crate::later::timestamp(row.created_at)),
-        href: Some(crate::later::message_href(
-            row.project_id,
-            row.direct_space,
-            row.conversation_id,
-            Some(&row.conversation_kind),
-            row.parent_conversation_id,
-            row.id,
+        // In today's shape: a quote's link stays inside the app, which reads
+        // both shapes, and is kept in replays (a stopgap until the send
+        // pipeline builds views with the server's addresses, C1).
+        href: Some(format!(
+            "{}#message-{}",
+            crate::later::message_target(
+                row.project_id,
+                row.direct_space,
+                row.conversation_id,
+                Some(&row.conversation_kind),
+                row.parent_conversation_id,
+            )
+            .legacy_path(),
+            row.id
         )),
     }
 }

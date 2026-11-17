@@ -512,8 +512,9 @@ async fn owners_add_change_and_remove_members() {
     assert_eq!(added["value"]["kind"], "agent");
     let again = set(json!({"projectId": work, "person": "mara"})).await;
     assert_eq!(again["outcome"], "ok", "adding twice is harmless: {again}");
-    let refused = set(json!({"projectId": work, "person": "@mara", "role": "admin"})).await;
-    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    // An agent holds any role a person can (K1.14a).
+    let admin = set(json!({"projectId": work, "person": "@mara", "role": "admin"})).await;
+    assert_eq!(admin["value"]["role"], "admin", "{admin}");
     let viewer = set(json!({"projectId": work, "person": "@mara", "role": "viewer"})).await;
     assert_eq!(viewer["value"]["role"], "viewer", "{viewer}");
     let own = set(json!({"projectId": work, "person": "@owner", "remove": true})).await;
@@ -1423,4 +1424,52 @@ async fn people_create_projects_through_their_apps() {
     )
     .await;
     assert_eq!(workflow["outcome"], "ok", "{workflow}");
+}
+
+/// K1.13: changing a project is decided by the role, never the kind of
+/// account. An agent holding Member is refused, as a person holding Member
+/// is; the same agent given an admin role (in the workspace and the
+/// project) renames the project.
+#[tokio::test]
+async fn an_agent_with_a_managing_role_changes_a_project() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("k113_agent_manages")
+        .await
+    else {
+        return;
+    };
+    let work = world.project("WORK").to_owned();
+    let rook = &world.agents["rook"];
+    let refused = tool(
+        &world.app,
+        &rook.token,
+        &rook.session,
+        "project_update",
+        json!({"projectId": work, "name": "Renamed by a member"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    sqlx::query("UPDATE organization_memberships SET role = 'admin', role_explicit = true WHERE actor_id = $1")
+        .bind(rook.actor)
+        .execute(world.pool())
+        .await
+        .expect("workspace admin");
+    sqlx::query("UPDATE project_memberships SET role = 'admin' WHERE actor_id = $1 AND project_id = $2::uuid")
+        .bind(rook.actor)
+        .bind(&work)
+        .execute(world.pool())
+        .await
+        .expect("project admin");
+    let renamed = tool(
+        &world.app,
+        &rook.token,
+        &rook.session,
+        "project_update",
+        json!({"projectId": work, "name": "Renamed by an admin"}),
+    )
+    .await;
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
+    world.finish().await;
 }

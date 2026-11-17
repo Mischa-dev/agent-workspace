@@ -89,21 +89,22 @@ pub fn schema(mut output: Value) -> Value {
         },
         "required": ["outcome", "value"],
     })];
-    for outcome in ERROR_OUTCOMES {
-        branches.push(json!({
-            "type": "object",
-            "properties": {
-                "outcome": { "const": outcome },
-                "message": { "type": "string" },
-                "retryCategory": { "type": "string" },
-                "field": { "type": "string" },
-                "code": { "type": "string" },
-                "module": { "type": "string" },
-                "details": { "type": "object" },
-            },
-            "required": ["outcome", "message", "retryCategory"],
-        }));
-    }
+    // One branch for every refusal: they share a shape, and a branch per
+    // outcome repeated in every operation's schema made the documents
+    // several times their size.
+    branches.push(json!({
+        "type": "object",
+        "properties": {
+            "outcome": { "enum": ERROR_OUTCOMES },
+            "message": { "type": "string" },
+            "retryCategory": { "type": "string" },
+            "field": { "type": "string" },
+            "code": { "type": "string" },
+            "module": { "type": "string" },
+            "details": { "type": "object" },
+        },
+        "required": ["outcome", "message", "retryCategory"],
+    }));
     let mut schema = json!({ "type": "object", "oneOf": branches });
     for (key, found) in definitions {
         schema[key] = found;
@@ -118,15 +119,13 @@ mod tests {
     #[test]
     fn the_envelope_schema_lists_every_outcome() {
         let schema = schema(json!({ "type": "object" }));
-        let outcomes = schema["oneOf"]
+        let branches = schema["oneOf"].as_array().expect("branches");
+        assert_eq!(branches[0]["properties"]["outcome"]["const"], "ok");
+        let refused = branches[1]["properties"]["outcome"]["enum"]
             .as_array()
-            .expect("branches")
-            .iter()
-            .map(|branch| branch["properties"]["outcome"]["const"].clone())
-            .collect::<Vec<_>>();
-        assert_eq!(outcomes[0], "ok");
+            .expect("refusals");
         for outcome in ERROR_OUTCOMES {
-            assert!(outcomes.contains(&json!(outcome)), "{outcome}");
+            assert!(refused.contains(&json!(outcome)), "{outcome}");
         }
         let ok = Envelope::Ok {
             value: json!({"id": 1}),

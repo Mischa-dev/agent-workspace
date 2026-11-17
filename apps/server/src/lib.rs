@@ -4,6 +4,7 @@ pub mod access;
 pub mod account;
 pub mod account_security;
 pub mod accounts;
+pub mod addresses;
 pub mod agent_docs;
 pub mod agent_parity;
 pub mod agent_profiles;
@@ -107,6 +108,7 @@ pub mod server;
 pub mod server_status;
 pub mod settings;
 pub mod sheets;
+pub mod spaces;
 pub mod storage_admission;
 #[cfg(test)]
 mod structure_guards;
@@ -130,7 +132,6 @@ pub mod work_item_planning;
 pub mod work_item_workflow;
 pub mod work_items;
 pub mod workspace;
-pub mod workspace_space;
 pub mod workspace_templates;
 
 use std::sync::Arc;
@@ -204,10 +205,10 @@ pub fn router(state: AppState) -> Router {
         .merge(mail::http::router())
         .merge(workspace::router())
         .merge(workspace::slug::router())
+        .merge(addresses::resolve::router())
         .merge(roles::router())
         .merge(workspace_templates::router())
         .merge(server_status::router())
-        .merge(access::http::router())
         .merge(onboarding::router())
         .merge(audit_log::router())
         .merge(search::router())

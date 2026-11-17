@@ -172,16 +172,11 @@ impl Operation for AgentManagersSet {
         .map_err(crate::error::AppError::from)?;
         changed.extend(unnamed.into_iter().map(|manager| (manager, false)));
         // Everyone whose rights changed hears of it in the same transaction
-        // (rule 6). The envelope needs a space: the workspace's own.
+        // (rule 6). The envelope needs a space: the workspace's own, which
+        // every workspace has and every member is in (K4.10), so realtime
+        // delivers it to each manager.
         if !changed.is_empty() {
-            let space = sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM projects WHERE organization_id = $1 \
-                 ORDER BY (kind = 'workspace') DESC, created_at LIMIT 1",
-            )
-            .bind(workspace_id)
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(crate::error::AppError::from)?;
+            let space = crate::spaces::workspace::ensure(tx, workspace_id).await?;
             for (manager, managing) in &changed {
                 crate::outbox::enqueue_typed(
                     tx,
