@@ -167,7 +167,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let token = issued.token;
 
     let stored_digest = sqlx::query_scalar::<_, Vec<u8>>(
-        "SELECT token_digest FROM mcp_client_credentials WHERE id = $1",
+        "SELECT token_digest FROM account_credentials WHERE id = $1",
     )
     .bind(issued.credential_id)
     .fetch_one(&pool)

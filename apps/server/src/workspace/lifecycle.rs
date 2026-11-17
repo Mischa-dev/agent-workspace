@@ -939,7 +939,7 @@ async fn retire_owned_accounts(
          updated_at = now() WHERE actor_id = ANY($1) AND enabled",
         "UPDATE project_memberships SET enabled = false, disabled_at = now(), \
          version = version + 1, updated_at = now() WHERE actor_id = ANY($1) AND enabled",
-        "UPDATE mcp_client_credentials SET status = 'revoked', revoked_at = now(), \
+        "UPDATE account_credentials SET status = 'revoked', revoked_at = now(), \
          version = version + 1, updated_at = now() WHERE actor_id = ANY($1) AND status = 'active'",
         "UPDATE mcp_oauth_grants SET revoked_at = now() \
          WHERE actor_id = ANY($1) AND revoked_at IS NULL",

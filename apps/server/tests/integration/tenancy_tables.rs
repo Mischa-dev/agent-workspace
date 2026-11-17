@@ -152,16 +152,16 @@ async fn every_table_belongs_to_a_workspace_or_says_why() {
             .iter()
             .any(|problem| problem.starts_with("new_things"))
     );
-    // (account_credentials is on the must-be-global list but not made yet.)
-    let mut with_credentials = tables.clone();
-    with_credentials.insert(
-        "account_credentials".to_owned(),
+    // (agent_outside_refs is on the must-be-global list but not made yet.)
+    let mut with_outside_refs = tables.clone();
+    with_outside_refs.insert(
+        "agent_outside_refs".to_owned(),
         BTreeSet::from(["id".to_owned(), "workspace_id".to_owned()]),
     );
     assert!(
-        problems(&with_credentials)
+        problems(&with_outside_refs)
             .iter()
-            .any(|problem| problem.starts_with("account_credentials"))
+            .any(|problem| problem.starts_with("agent_outside_refs"))
     );
 
     // No membership or role row names the direct scope (R20), once a

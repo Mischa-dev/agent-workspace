@@ -868,7 +868,7 @@ async fn create_backing_credential(
     let credential_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO mcp_client_credentials (
+        INSERT INTO account_credentials (
             id, project_id, actor_id, client_name, token_prefix, token_digest,
             scopes, expires_at, external_agent_connection_id
         ) VALUES ($1, $2, $3, 'OAuth grant', $4, $5, $6, now() + interval '10 years', $7)
@@ -1219,7 +1219,7 @@ pub async fn resolve_access_token(
         LEFT JOIN users user_account ON user_account.actor_id = grant_row.actor_id
         LEFT JOIN external_agent_connections connection
           ON connection.id = grant_row.external_agent_connection_id
-        LEFT JOIN mcp_client_credentials backing
+        LEFT JOIN account_credentials backing
           ON backing.id = grant_row.backing_credential_id
         LEFT JOIN project_memberships membership
           ON membership.project_id = grant_row.project_id AND membership.actor_id = grant_row.actor_id

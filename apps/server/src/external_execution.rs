@@ -252,7 +252,7 @@ async fn request_sponsored_execution_inner(
         r#"
         SELECT membership.role AS membership_role,
                workspace_role_permissions(membership.role_id) AS membership_role_permissions
-        FROM mcp_client_credentials credential
+        FROM account_credentials credential
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
         JOIN actors actor ON actor.id = credential.actor_id

@@ -509,7 +509,7 @@ async fn load_context(
                membership.role AS membership_role,
                workspace_role_permissions(membership.role_id) AS membership_role_permissions,
                connection.id AS connection_id
-        FROM mcp_client_credentials credential
+        FROM account_credentials credential
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
          AND connection.project_id = credential.project_id

@@ -5006,7 +5006,7 @@ pub(crate) async fn resolve_bearer_principal(
             c.client_name,
             c.token_digest,
             c.scopes
-        FROM mcp_client_credentials c
+        FROM account_credentials c
         JOIN actors a ON a.id = c.actor_id
         LEFT JOIN users u ON u.actor_id = c.actor_id
         LEFT JOIN external_agent_connections connection
@@ -5054,7 +5054,7 @@ pub(crate) async fn resolve_bearer_principal(
 
     sqlx::query(
         r#"
-        UPDATE mcp_client_credentials
+        UPDATE account_credentials
         SET last_used_at = now(), updated_at = now()
         WHERE id = $1
           AND (last_used_at IS NULL OR last_used_at < now() - make_interval(mins => $2::integer))
@@ -5185,7 +5185,7 @@ pub async fn issue_credential_as(
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let expires_at = sqlx::query_scalar::<_, String>(
         r#"
-        INSERT INTO mcp_client_credentials (
+        INSERT INTO account_credentials (
             id, project_id, actor_id, client_name, token_prefix, token_digest,
             scopes, expires_at
         )
@@ -5247,7 +5247,7 @@ pub async fn list_credentials(
             expires_at::text AS expires_at,
             revoked_at::text AS revoked_at,
             replaced_by_credential_id
-        FROM mcp_client_credentials
+        FROM account_credentials
         WHERE project_id = $1
         ORDER BY created_at DESC, id DESC
         LIMIT 100
@@ -5288,7 +5288,7 @@ pub async fn revoke_credential_as(
     }
     sqlx::query(
         r#"
-        UPDATE mcp_client_credentials
+        UPDATE account_credentials
         SET status = 'revoked', revoked_at = now(), version = version + 1, updated_at = now()
         WHERE id = $1 AND version = $2 AND status = 'active'
         "#,
@@ -5336,7 +5336,7 @@ pub async fn replace_credential(
     }
     let expires_at = sqlx::query_scalar::<_, String>(
         r#"
-        INSERT INTO mcp_client_credentials (
+        INSERT INTO account_credentials (
             id, project_id, actor_id, client_name, token_prefix, token_digest,
             scopes, expires_at
         )
@@ -5356,7 +5356,7 @@ pub async fn replace_credential(
     .await?;
     let updated = sqlx::query(
         r#"
-        UPDATE mcp_client_credentials
+        UPDATE account_credentials
         SET status = 'revoked', revoked_at = now(), replaced_by_credential_id = $3,
             version = version + 1, updated_at = now()
         WHERE id = $1 AND version = $2 AND status = 'active'
@@ -5538,7 +5538,7 @@ async fn credential_metadata_for_update(
             expires_at::text AS expires_at,
             revoked_at::text AS revoked_at,
             replaced_by_credential_id
-        FROM mcp_client_credentials
+        FROM account_credentials
         WHERE id = $1
         FOR UPDATE
         "#,

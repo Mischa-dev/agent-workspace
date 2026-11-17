@@ -124,7 +124,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     );
 
     let stored = sqlx::query_as::<_, (Vec<u8>, String, Option<Uuid>)>(
-        "SELECT token_digest, token_prefix, external_agent_connection_id FROM mcp_client_credentials WHERE id = $1",
+        "SELECT token_digest, token_prefix, external_agent_connection_id FROM account_credentials WHERE id = $1",
     )
     .bind(credential_id)
     .fetch_one(&pool)

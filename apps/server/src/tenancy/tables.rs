@@ -97,7 +97,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("layout_presets", ORGANIZATION_ID),
     ("link_previews", ORGANIZATION_ID),
     ("links", WORKSPACE_ID),
-    ("mcp_client_credentials", WORKSPACE_ID),
     ("mcp_oauth_access_tokens", WORKSPACE_ID),
     ("mcp_oauth_authorization_codes", WORKSPACE_ID),
     ("mcp_oauth_grants", WORKSPACE_ID),
@@ -335,6 +334,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "workos_login_attempts",
         "sign-in ceremonies, before any account is known",
+    ),
+    (
+        "account_credentials",
+        "an account's credentials belong to the account (R19); workspace_id only narrows one",
     ),
 ];
 

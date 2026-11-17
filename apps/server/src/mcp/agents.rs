@@ -521,7 +521,7 @@ async fn connection_methods(
     let tokens = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT DISTINCT credential.external_agent_connection_id
-        FROM mcp_client_credentials credential
+        FROM account_credentials credential
         WHERE credential.external_agent_connection_id = ANY($1)
           AND credential.status = 'active' AND credential.revoked_at IS NULL
           AND credential.expires_at > now()

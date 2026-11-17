@@ -23,7 +23,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("actor_id", "actors"),
                     ("project_id", "projects"),
                     ("session_id", "sessions"),
-                    ("mcp_credential_id", "mcp_client_credentials"),
+                    ("mcp_credential_id", "account_credentials"),
                     ("mcp_oauth_grant_id", "mcp_oauth_grants"),
                     ("external_agent_connection_id", "external_agent_connections"),
                 ],
@@ -190,7 +190,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "daily counts of calls to old operation names, kept to retire them (K2); this server's own measure",
             ),
             (
-                "mcp_client_credentials",
+                "account_credentials",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (

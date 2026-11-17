@@ -892,7 +892,7 @@ async fn agent_list_shows_work_and_never_secrets() {
 
     // No token, prefix, webhook or credential ID for anyone.
     let credentials = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM mcp_client_credentials WHERE external_agent_connection_id = $1",
+        "SELECT id FROM account_credentials WHERE external_agent_connection_id = $1",
     )
     .bind(connection)
     .fetch_all(pool)

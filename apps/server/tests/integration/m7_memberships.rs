@@ -155,7 +155,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
 
     assert_eq!(
         sqlx::query_as::<_, (String, i64, bool)>(
-            "SELECT status, version, revoked_at IS NOT NULL FROM mcp_client_credentials WHERE id = $1",
+            "SELECT status, version, revoked_at IS NOT NULL FROM account_credentials WHERE id = $1",
         )
         .bind(credential_id)
         .fetch_one(&pool)
@@ -227,7 +227,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     assert_eq!(enabled["role"], "viewer");
     assert_eq!(enabled["version"], 3);
     assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT status FROM mcp_client_credentials WHERE id = $1",)
+        sqlx::query_scalar::<_, String>("SELECT status FROM account_credentials WHERE id = $1",)
             .bind(credential_id)
             .fetch_one(&pool)
             .await
@@ -420,7 +420,7 @@ async fn add_credentials(pool: &PgPool, project_id: Uuid, actor_id: Uuid) -> Uui
     let credential_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO mcp_client_credentials (
+        INSERT INTO account_credentials (
           id, project_id, actor_id, client_name, token_prefix, token_digest,
           scopes, expires_at
         ) VALUES ($1, $2, $3, 'M7 member client', 'aw_mcp_m7member', $4,

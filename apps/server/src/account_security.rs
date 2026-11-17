@@ -1217,7 +1217,7 @@ const TOKEN_COLUMNS: &str = r#"
          THEN 'expired' ELSE credential.status END AS status,
     credential.created_at, credential.last_used_at, credential.expires_at,
     credential.revoked_at, credential.version
-    FROM mcp_client_credentials credential
+    FROM account_credentials credential
     JOIN projects project ON project.id = credential.project_id
 "#;
 
@@ -1373,7 +1373,7 @@ async fn revoke_api_token(
     require_authenticated_write(&state, &headers, &principal).await?;
     let owner = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT actor_id FROM mcp_client_credentials
+        SELECT actor_id FROM account_credentials
         WHERE id = $1 AND external_agent_connection_id IS NULL
         "#,
     )

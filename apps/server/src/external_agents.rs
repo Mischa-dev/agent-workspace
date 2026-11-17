@@ -1630,7 +1630,7 @@ async fn insert_credential(
 ) -> Result<String, AppError> {
     Ok(sqlx::query_scalar::<_, String>(
         r#"
-        INSERT INTO mcp_client_credentials (
+        INSERT INTO account_credentials (
             id, project_id, actor_id, client_name, token_prefix, token_digest,
             scopes, expires_at, external_agent_connection_id
         ) VALUES (
@@ -1659,7 +1659,7 @@ async fn revoke_credentials(
 ) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        UPDATE mcp_client_credentials
+        UPDATE account_credentials
         SET status = 'revoked', revoked_at = now(), version = version + 1,
             updated_at = now()
         WHERE external_agent_connection_id = $1 AND status = 'active'

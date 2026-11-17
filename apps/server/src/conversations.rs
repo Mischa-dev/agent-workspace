@@ -2086,7 +2086,7 @@ pub(crate) async fn append_message_command_with(
             SELECT $1, $2, $3, 'mcp_bearer', 'conversation.message_sent',
                    'message', $4, 'succeeded', 'mcp', credential.client_name,
                    credential.id, $5, jsonb_build_object('conversation_id', $6)
-            FROM mcp_client_credentials credential
+            FROM account_credentials credential
             WHERE credential.id = $7
             "#,
         )
@@ -2278,7 +2278,7 @@ pub(crate) async fn lock_message_conversation(
             sqlx::query_scalar::<_, Uuid>(
                 r#"
                 SELECT target.project_id
-                FROM conversations target, mcp_client_credentials credential
+                FROM conversations target, account_credentials credential
                 JOIN external_agent_connections connection
                   ON connection.id = credential.external_agent_connection_id
                 JOIN actors actor ON actor.id = credential.actor_id

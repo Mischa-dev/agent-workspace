@@ -1813,7 +1813,7 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
                EXISTS (
                    SELECT 1 FROM projects WHERE id = $3 AND archived_at IS NOT NULL
                ) AS project_archived,
-               (SELECT credential.id FROM mcp_client_credentials credential
+               (SELECT credential.id FROM account_credentials credential
                 WHERE $4::uuid IS NOT NULL
                   AND credential.external_agent_connection_id = $4
                   AND credential.actor_id = $1

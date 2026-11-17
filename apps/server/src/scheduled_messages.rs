@@ -762,7 +762,7 @@ async fn sender(
             };
             let credential_id = sqlx::query_scalar::<_, Uuid>(
                 r#"
-                SELECT credential.id FROM mcp_client_credentials credential
+                SELECT credential.id FROM account_credentials credential
                 WHERE credential.external_agent_connection_id = $1
                   AND credential.actor_id = $2
                   AND credential.status = 'active'

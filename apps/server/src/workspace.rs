@@ -912,7 +912,7 @@ async fn remove_from_workspace(
     .await?;
     sqlx::query(
         r#"
-        UPDATE mcp_client_credentials credential
+        UPDATE account_credentials credential
         SET status = 'revoked', version = credential.version + 1, revoked_at = now(),
             updated_at = now()
         FROM projects project

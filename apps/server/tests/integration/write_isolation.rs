@@ -1854,7 +1854,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         api_token: scalar(
             pool,
             r#"
-            SELECT id FROM mcp_client_credentials
+            SELECT id FROM account_credentials
             WHERE actor_id = $1 AND external_agent_connection_id IS NULL AND client_name LIKE 'Token %'
             "#,
             owner,
@@ -3685,7 +3685,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case(
             "POST /api/v1/account/api-tokens/{credential_id}/revoke",
             &[id(ax.api_token, bx.api_token)],
-            versioned("mcp_client_credentials", 0, json!({})),
+            versioned("account_credentials", 0, json!({})),
         ),
         path_case(
             "PATCH /api/v1/account/connected-apps/{id}",
