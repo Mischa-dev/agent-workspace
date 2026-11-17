@@ -1279,9 +1279,10 @@ impl Operation for AgentTemplateList {
             (None, _) => None,
         };
         let workspace = call.ctx.workspace_id;
+        let reader = call.account_id();
         let tx = call.tx().await?;
         Ok(AgentTemplateListOutput {
-            templates: install::agent_templates(tx, workspace, space).await?,
+            templates: install::agent_templates(tx, workspace, space, reader).await?,
         })
     }
 }

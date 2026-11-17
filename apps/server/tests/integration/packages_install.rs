@@ -370,3 +370,52 @@ async fn a_preview_never_reveals_a_channel_the_caller_cannot_see() {
     );
     world.finish().await;
 }
+
+#[tokio::test]
+async fn an_agent_template_in_a_space_shows_only_to_its_members() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("desk")
+        .build("m19_template_space")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool().clone();
+    let space = world.project("WORK").to_owned();
+    sqlx::query(
+        "INSERT INTO agent_templates (id, workspace_id, space_id, template_key, name, definition) \
+         SELECT $1, organization_id, id, 'closed_helper', 'Closed helper', \
+                '{\"instructions\": \"private\"}'::jsonb \
+         FROM projects WHERE id = $2::uuid",
+    )
+    .bind(Uuid::now_v7())
+    .bind(&space)
+    .execute(&pool)
+    .await
+    .expect("space template");
+    let set_membership = |enabled: bool| {
+        let pool = pool.clone();
+        let space = space.clone();
+        async move {
+            sqlx::query("UPDATE project_memberships SET enabled = $1 WHERE project_id = $2::uuid")
+                .bind(enabled)
+                .bind(&space)
+                .execute(&pool)
+                .await
+                .expect("membership");
+        }
+    };
+    // The owner's app, out of the space, lists the workspace's templates.
+    set_membership(false).await;
+    let hidden = tool(&world, "desk", "agent_template_list", json!({})).await;
+    assert_eq!(hidden["outcome"], "ok", "{hidden}");
+    assert_eq!(hidden["value"]["templates"], json!([]), "{hidden}");
+    set_membership(true).await;
+    let shown = tool(&world, "desk", "agent_template_list", json!({})).await;
+    assert_eq!(
+        shown["value"]["templates"][0]["key"], "closed_helper",
+        "{shown}"
+    );
+    world.finish().await;
+}

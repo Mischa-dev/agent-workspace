@@ -641,24 +641,31 @@ pub struct AgentTemplateView {
     pub install_id: Option<Uuid>,
 }
 
-/// The workspace's agent templates.
+/// The workspace's agent templates the reader can see: workspace-wide
+/// ones, and those in a space only to its current members.
 pub async fn agent_templates(
     connection: &mut PgConnection,
     workspace_id: Uuid,
     space_id: Option<Uuid>,
+    reader: Uuid,
 ) -> Result<Vec<AgentTemplateView>, AppError> {
     Ok(sqlx::query_as::<_, AgentTemplateView>(
         r#"
         SELECT id, template_key AS key, name, purpose, definition, space_id, install_id
-        FROM agent_templates
+        FROM agent_templates template
         WHERE workspace_id = $1 AND archived_at IS NULL
           AND ($2::uuid IS NULL OR space_id = $2)
+          AND (template.space_id IS NULL OR EXISTS (
+              SELECT 1 FROM project_memberships membership
+              WHERE membership.project_id = template.space_id
+                AND membership.actor_id = $3 AND membership.enabled))
         ORDER BY name, id
         LIMIT 200
         "#,
     )
     .bind(workspace_id)
     .bind(space_id)
+    .bind(reader)
     .fetch_all(&mut *connection)
     .await?)
 }
