@@ -1,0 +1,50 @@
+{
+  "client": [
+    { "type": "hello", "protocol": 2, "resumeFrom": "18342", "client": "web" }
+  ],
+  "server": [
+    { "type": "ready", "protocol": 2, "position": "18350", "resumed": true, "replayed": 8 },
+    {
+      "type": "event",
+      "position": "18343",
+      "event": {
+        "event_id": "0193a0aa-0000-7000-8000-000000000001",
+        "event_cursor": 18343,
+        "version": 1,
+        "project_id": "0192a0aa-0000-7000-8000-000000000002",
+        "conversationId": "0193a0aa-0000-7000-8000-000000000003",
+        "type": "conversation.message.created",
+        "occurred_at": "2026-11-14T10:02:03.120000Z",
+        "payload": {
+          "conversationId": "0193a0aa-0000-7000-8000-000000000003",
+          "messageId": "0193a0aa-0000-7000-8000-000000000004",
+          "sequence": 41,
+          "authorActorId": "0192a0aa-0000-7000-8000-000000000005"
+        }
+      }
+    },
+    {
+      "type": "access",
+      "added": {
+        "workspaces": [],
+        "spaces": ["0192a0aa-0000-7000-8000-000000000002"],
+        "conversations": []
+      },
+      "removed": {
+        "workspaces": [],
+        "spaces": [],
+        "conversations": ["0193a0aa-0000-7000-8000-000000000006"]
+      }
+    },
+    { "type": "resync", "reason": "too_far_behind", "position": "40112" },
+    {
+      "type": "ephemeral",
+      "kind": "stream.delta",
+      "conversationId": "0193a0aa-0000-7000-8000-000000000003",
+      "messageId": "0193a0aa-0000-7000-8000-000000000004",
+      "runId": null,
+      "delta": "next words"
+    },
+    { "type": "reconnect", "afterMs": 1800, "reason": "server_draining" }
+  ]
+}

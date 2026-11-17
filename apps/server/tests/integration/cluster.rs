@@ -330,7 +330,12 @@ async fn tail_until(
     while !ids.iter().all(|id| seen.iter().any(|(_, seen)| seen == id)) {
         let left = deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(left, receiver.recv()).await {
-            Ok(Ok(Tailed::Event(event))) => seen.push((event.position, event.id)),
+            // Only what the test staged: making its project stages its
+            // own events (a membership's access signal) first.
+            Ok(Ok(Tailed::Event(event))) if event.event_type == catalog::TASK_UPDATED.name => {
+                seen.push((event.position, event.id));
+            }
+            Ok(Ok(Tailed::Event(_))) => {}
             Ok(Ok(Tailed::Resync)) => panic!("the tail jumped"),
             Ok(Err(error)) => panic!("tail: {error}"),
             Err(_) => panic!(
@@ -1280,5 +1285,324 @@ async fn recovery_writes_nothing_once_the_host_is_lost() {
     let result =
         agent_workspace_server::recovery::reconcile_owned(&state, &old_holder, &lease).await;
     assert!(matches!(result, Err(AppError::LeaseLost)), "{result:?}");
+    cluster.finish().await;
+}
+
+/// A second project with a channel, made on A by the owner, with `people`
+/// added as members.
+async fn side_channel(
+    cluster: &crate::cluster_support::Cluster,
+    browser: &crate::agent_interface::Browser,
+    people: &[Uuid],
+) -> (Uuid, Uuid) {
+    let a = cluster.instance(0);
+    let (status, project) = a
+        .send(browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("k5-8-side"),
+            json!({"organizationId": cluster.organization_id, "key": "SIDE", "name": "Side"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let project: Uuid = project["id"]
+        .as_str()
+        .expect("project")
+        .parse()
+        .expect("id");
+    for person in people {
+        sqlx::query(
+            "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
+             SELECT $1, $2, actor_id, 'member', display_name, handle FROM project_memberships \
+             WHERE actor_id = $3 LIMIT 1",
+        )
+        .bind(Uuid::now_v7())
+        .bind(project)
+        .bind(person)
+        .execute(&cluster.pool)
+        .await
+        .expect("side membership");
+    }
+    let (status, channel) = a
+        .send(browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/channels"),
+            Some("k5-8-side-channel"),
+            json!({"name": "Side"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{channel}");
+    let channel = channel["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .parse()
+        .expect("id");
+    (project, channel)
+}
+
+/// Messages a socket hears, by conversation, until one in `last` arrives.
+async fn heard_until(socket: &mut crate::cluster_support::Socket, last: Uuid) -> Vec<Value> {
+    let mut heard = Vec::new();
+    loop {
+        match next_frame(socket, Duration::from_secs(3)).await {
+            Frame::Json(frame) => {
+                let event = if frame["type"] == "event" {
+                    frame["event"].clone()
+                } else {
+                    frame.clone()
+                };
+                let done = event["type"] == "conversation.message.created"
+                    && event["conversationId"] == last.to_string();
+                heard.push(frame);
+                if done {
+                    return heard;
+                }
+            }
+            other => panic!("{other:?} before the message in {last}; heard {heard:?}"),
+        }
+    }
+}
+
+/// K5.8: access is decided at subscribe time and again when it changes. A
+/// member taken out of a project through one instance hears nothing more
+/// from it on the other, and still hears the projects they are in.
+#[tokio::test]
+async fn removed_member_stops_hearing_at_once() {
+    let Some(cluster) = cluster("k5_8_removed", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, channel) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let (_, side) = side_channel(&cluster, &owner, &[mara]).await;
+    let mut on_b = cluster.instance(1).socket(&mara_browser).await;
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project)
+    .bind(mara)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("version");
+    let (status, body) = cluster
+        .instance(0)
+        .send(owner.request(
+            "PATCH",
+            &format!("/api/v1/projects/{project}/members/{mara}"),
+            Some("k5-8-disable"),
+            json!({"expectedVersion": version, "enabled": false}),
+        ))
+        .await;
+    assert!(status.is_success(), "{status} {body}");
+    say(cluster.instance(0), &owner, channel, "k5-8-after").await;
+    say(cluster.instance(0), &owner, side, "k5-8-side").await;
+    let heard = heard_until(&mut on_b, side).await;
+    assert!(
+        !heard
+            .iter()
+            .any(|frame| frame["conversationId"] == channel.to_string()),
+        "Mara heard the project she left: {heard:?}"
+    );
+    cluster.finish().await;
+}
+
+/// K5.8: a private group made after a socket opened is heard by its
+/// members at once, and by nobody else.
+#[tokio::test]
+async fn added_to_private_conversation_starts_hearing() {
+    let Some(cluster) = cluster("k5_8_added", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, channel) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let (_, rook) = add_person(&cluster, project, "rook").await;
+    for browser in [&owner, &mara_browser] {
+        let (status, body) = cluster
+            .instance(0)
+            .send(browser.request("GET", "/api/v1/direct", None, Value::Null))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let mut mara_on_b = cluster.instance(1).socket(&mara_browser).await;
+    let mut rook_on_b = cluster.instance(1).socket(&rook).await;
+    let (status, group) = cluster
+        .instance(0)
+        .send(owner.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("k5-8-group"),
+            json!({"memberIds": [mara]}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{group}");
+    let group: Uuid = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .parse()
+        .expect("id");
+    say(cluster.instance(0), &owner, group, "k5-8-in-group").await;
+    say(cluster.instance(0), &owner, channel, "k5-8-in-channel").await;
+    let heard = heard_until(&mut mara_on_b, channel).await;
+    assert!(
+        heard.iter().any(|frame| {
+            frame["type"] == "conversation.message.created"
+                && frame["conversationId"] == group.to_string()
+        }),
+        "Mara never heard the group she was added to: {heard:?}"
+    );
+    let heard = heard_until(&mut rook_on_b, channel).await;
+    assert!(
+        !heard
+            .iter()
+            .any(|frame| frame.to_string().contains(&group.to_string())),
+        "Rook heard {heard:?}"
+    );
+    cluster.finish().await;
+}
+
+/// The `ready` frame a protocol 2 socket gets, skipping what comes first.
+async fn ready_of(socket: &mut crate::cluster_support::Socket) -> (Vec<Value>, Value) {
+    let mut before = Vec::new();
+    loop {
+        match next_frame(socket, Duration::from_secs(3)).await {
+            Frame::Json(frame) if frame["type"] == "ready" => return (before, frame),
+            Frame::Json(frame) => before.push(frame),
+            other => panic!("{other:?} before ready; got {before:?}"),
+        }
+    }
+}
+
+/// K5.9: a protocol 2 socket that comes back with where it stopped is sent
+/// exactly what it missed and may see, in order, then `ready` with
+/// `resumed`, on whichever instance it reaches.
+#[tokio::test]
+async fn resume_replays_what_was_missed() {
+    let Some(cluster) = cluster("k5_9_resume", 2).await else {
+        return;
+    };
+    let owner = cluster.instance(0).login("owner").await;
+    let (project, channel) = work_channel(&cluster, &owner).await;
+    let (mara, mara_browser) = add_person(&cluster, project, "mara").await;
+    let (_, rook) = add_person(&cluster, project, "rook").await;
+    for browser in [&owner, &mara_browser] {
+        let (status, body) = cluster
+            .instance(0)
+            .send(browser.request("GET", "/api/v1/direct", None, Value::Null))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let mut first = cluster.instance(1).socket_v2(&rook, None).await;
+    let (_, ready) = ready_of(&mut first).await;
+    assert_eq!(ready["resumed"], false, "{ready}");
+    let stopped: i64 = ready["position"]
+        .as_str()
+        .expect("positions are strings")
+        .parse()
+        .expect("position");
+    drop(first);
+
+    // While Rook is away: a group he isn't in, and three channel messages.
+    let (status, group) = cluster
+        .instance(0)
+        .send(owner.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("k5-9-group"),
+            json!({"memberIds": [mara]}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{group}");
+    let group = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    say(
+        cluster.instance(0),
+        &owner,
+        group.parse().expect("id"),
+        "k5-9-secret",
+    )
+    .await;
+    let mut missed = Vec::new();
+    for key in ["k5-9-one", "k5-9-two", "k5-9-three"] {
+        missed.push(
+            say(cluster.instance(0), &owner, channel, key)
+                .await
+                .to_string(),
+        );
+    }
+
+    let mut back = cluster.instance(0).socket_v2(&rook, Some(stopped)).await;
+    let (replayed, ready) = ready_of(&mut back).await;
+    assert_eq!(ready["resumed"], true, "{ready}");
+    assert_eq!(
+        ready["replayed"].as_u64(),
+        Some(
+            replayed
+                .iter()
+                .filter(|frame| frame["type"] == "event")
+                .count() as u64
+        ),
+        "{ready}"
+    );
+    let messages = replayed
+        .iter()
+        .filter(|frame| frame["event"]["type"] == "conversation.message.created")
+        .map(|frame| {
+            frame["event"]["payload"]["messageId"]
+                .as_str()
+                .expect("message")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(messages, missed, "exactly the missed messages, in order");
+    assert!(
+        !replayed
+            .iter()
+            .any(|frame| frame.to_string().contains(&group)),
+        "the group's events stay private on replay: {replayed:?}"
+    );
+    let mut positions = replayed
+        .iter()
+        .filter(|frame| frame["type"] == "event")
+        .map(|frame| {
+            frame["position"]
+                .as_str()
+                .expect("position")
+                .parse::<i64>()
+                .expect("n")
+        });
+    let mut previous = stopped;
+    assert!(
+        positions.all(|position| {
+            let ordered = position > previous;
+            previous = position;
+            ordered
+        }),
+        "in position order, after where it stopped"
+    );
+    // Then live, with nothing repeated.
+    let live = say(cluster.instance(0), &owner, channel, "k5-9-live").await;
+    let heard = heard_until(&mut back, channel).await;
+    let messages = heard
+        .iter()
+        .filter(|frame| frame["event"]["type"] == "conversation.message.created")
+        .map(|frame| frame["event"]["payload"]["messageId"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(messages, vec![json!(live.to_string())], "{heard:?}");
+
+    // A position the server can't resume from (ahead of the log) asks the
+    // client to refetch.
+    let ahead = ready["position"]
+        .as_str()
+        .expect("p")
+        .parse::<i64>()
+        .expect("n")
+        + 1_000;
+    let mut lost = cluster.instance(1).socket_v2(&rook, Some(ahead)).await;
+    let (replayed, ready) = ready_of(&mut lost).await;
+    assert_eq!(ready["resumed"], false, "{ready}");
+    assert!(replayed.is_empty(), "{replayed:?}");
     cluster.finish().await;
 }

@@ -5,7 +5,9 @@
 
 pub mod ephemeral;
 mod hub;
+mod subscriptions;
 pub mod tail;
 pub mod wake;
+mod wire;
 
 pub use hub::*;

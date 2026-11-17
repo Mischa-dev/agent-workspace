@@ -153,6 +153,47 @@ impl Instance {
             .0
     }
 
+    /// A browser's protocol 2 socket on this instance (K5.9), having said
+    /// `hello` with where it would resume from.
+    pub(crate) async fn socket_v2(&self, browser: &Browser, resume_from: Option<i64>) -> Socket {
+        use futures_util::SinkExt;
+        use tokio_tungstenite::tungstenite::{
+            Message,
+            client::IntoClientRequest,
+            http::{
+                HeaderValue,
+                header::{COOKIE, ORIGIN},
+            },
+        };
+        let url = format!(
+            "{}/api/v1/realtime?v=2",
+            self.base.replacen("http://", "ws://", 1)
+        );
+        let mut request = url.into_client_request().expect("socket request");
+        request
+            .headers_mut()
+            .insert(ORIGIN, HeaderValue::from_static("http://127.0.0.1:3100"));
+        request.headers_mut().insert(
+            COOKIE,
+            HeaderValue::from_str(&browser.cookie).expect("cookie"),
+        );
+        let mut socket = tokio_tungstenite::connect_async(request)
+            .await
+            .expect("socket")
+            .0;
+        let hello = serde_json::json!({
+            "type": "hello",
+            "protocol": 2,
+            "resumeFrom": resume_from.map(|position| position.to_string()),
+            "client": "test",
+        });
+        socket
+            .send(Message::Text(hello.to_string().into()))
+            .await
+            .expect("hello");
+        socket
+    }
+
     /// What drains this instance before it stops (K5.7).
     pub(crate) fn drainer(&self) -> agent_workspace_server::server::Drainer {
         self.running.as_ref().expect("running").drainer()

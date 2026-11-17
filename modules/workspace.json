@@ -85,7 +85,7 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["file.attached", "file.removed", "link.created", "link.deleted", "workspace.lifecycle_changed"],
+    "emits": ["account.access_changed", "file.attached", "file.removed", "link.created", "link.deleted", "workspace.lifecycle_changed"],
     "listens": []
   },
   "notifications": [],

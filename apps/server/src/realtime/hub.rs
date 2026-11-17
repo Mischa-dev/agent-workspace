@@ -8,7 +8,7 @@ use std::{
 
 use axum::{
     extract::{
-        State, WebSocketUpgrade,
+        Query, State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket, close_code},
     },
     http::{HeaderMap, StatusCode},
@@ -22,6 +22,10 @@ use tokio::{
 };
 use uuid::Uuid;
 
+use super::{
+    subscriptions::{self, Hearing, Route, RouteAudience, SubscriptionSet},
+    wire::{self, WireQuery},
+};
 use crate::{
     AppState,
     auth::{AuthenticatedActor, load_authenticated_actor, origin_is_allowed},
@@ -60,8 +64,13 @@ pub struct RealtimeEvent {
 enum RealtimeDelivery {
     Durable {
         envelope: OutboxEnvelope,
+        /// Who hears it, from the log's audience (K5.8).
+        route: Route,
     },
     Ephemeral(RealtimeEvent),
+    /// What this account may hear changed (K5.8): its connections work
+    /// out their sets again before routing anything after it.
+    AccessChanged(Uuid),
     /// Every socket closes with 1012 and this reason, to reconnect and
     /// refetch: the tail skipped ahead (K5.5), or this instance is
     /// draining (K5.7).
@@ -73,7 +82,7 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope, .. } => envelope.event_id,
             Self::Ephemeral(event) => event.event_id,
-            Self::Restart(_) => Uuid::nil(),
+            Self::Restart(_) | Self::AccessChanged(_) => Uuid::nil(),
         }
     }
 
@@ -81,46 +90,24 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope, .. } => envelope.project_id,
             Self::Ephemeral(event) => event.project_id,
-            Self::Restart(_) => Uuid::nil(),
+            Self::Restart(_) | Self::AccessChanged(_) => Uuid::nil(),
         }
     }
 
+    #[cfg(test)]
     fn conversation_id(&self) -> Option<Uuid> {
         match self {
-            Self::Durable { envelope } => envelope.conversation_id,
+            Self::Durable { envelope, .. } => envelope.conversation_id,
             Self::Ephemeral(event) => event.conversation_id,
-            Self::Restart(_) => None,
+            Self::Restart(_) | Self::AccessChanged(_) => None,
         }
     }
 
     fn recipient_actor_id(&self) -> Option<Uuid> {
         match self {
-            Self::Durable { envelope } => envelope.recipient_actor_id,
-            Self::Ephemeral(_) | Self::Restart(_) => None,
+            Self::Durable { envelope, .. } => envelope.recipient_actor_id,
+            Self::Ephemeral(_) | Self::Restart(_) | Self::AccessChanged(_) => None,
         }
-    }
-
-    /// The board a `whiteboard.updated` event is about. Those events are
-    /// delivered by board visibility, not by membership of the envelope's
-    /// project (see `event_is_authorized`).
-    fn whiteboard_id(&self) -> Option<Uuid> {
-        match self {
-            Self::Durable { envelope } if envelope.event_type == "whiteboard.updated" => envelope
-                .payload
-                .get("whiteboardId")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| Uuid::parse_str(value).ok()),
-            _ => None,
-        }
-    }
-
-    /// A workspace-wide event (its lifecycle, H1.24): delivered to the
-    /// workspace's enabled members, whichever spaces they are in.
-    fn is_workspace_wide(&self) -> bool {
-        matches!(
-            self,
-            Self::Durable { envelope } if envelope.event_type == "workspace.lifecycle.changed"
-        )
     }
 
     fn is_visible_to_actor(&self, actor_id: Uuid) -> bool {
@@ -132,7 +119,9 @@ impl RealtimeDelivery {
         let json = match self {
             Self::Durable { envelope, .. } => serde_json::to_string(envelope),
             Self::Ephemeral(event) => serde_json::to_string(event),
-            Self::Restart(_) => return Err(RealtimePublishError::Serialization),
+            Self::Restart(_) | Self::AccessChanged(_) => {
+                return Err(RealtimePublishError::Serialization);
+            }
         }
         .map_err(|_| RealtimePublishError::Serialization)?;
         if json.len() > MAX_REALTIME_FRAME_BYTES {
@@ -184,10 +173,22 @@ impl RealtimeHub {
     /// A logged event, from this instance's tail, to its sockets as protocol
     /// 1's frame. Events that were never outbox events have no frame yet.
     pub fn deliver_logged(&self, event: &crate::events::LoggedEvent) {
+        if let Some(account) = access_changed(event) {
+            let _ = self.sender.send(RealtimeDelivery::AccessChanged(account));
+            return;
+        }
         let Some(envelope) = OutboxEnvelope::from_logged(event) else {
             return;
         };
-        if let Err(error) = OutboxPublisher::publish(self, &envelope) {
+        let Some(route) = Route::of_logged(event) else {
+            tracing::warn!(
+                event_id = %envelope.event_id,
+                event_position = envelope.event_cursor,
+                "logged event has no complete audience"
+            );
+            return;
+        };
+        if let Err(error) = self.publish_routed(&envelope, route) {
             tracing::warn!(
                 event_id = %envelope.event_id,
                 event_position = envelope.event_cursor,
@@ -242,11 +243,13 @@ impl RealtimeHub {
     }
 }
 
-impl OutboxPublisher for RealtimeHub {
-    type Error = RealtimePublishError;
-
-    fn publish(&self, envelope: &OutboxEnvelope) -> Result<(), Self::Error> {
-        let delivery = checked_delivery(envelope)?;
+impl RealtimeHub {
+    fn publish_routed(
+        &self,
+        envelope: &OutboxEnvelope,
+        route: Route,
+    ) -> Result<(), RealtimePublishError> {
+        let delivery = checked_delivery(envelope, route)?;
         // Validate and bound the exact frame before making it observable.
         delivery.to_wire_json()?;
         // No connected browser is still a successful broadcast operation:
@@ -256,7 +259,40 @@ impl OutboxPublisher for RealtimeHub {
     }
 }
 
-fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, RealtimePublishError> {
+impl OutboxPublisher for RealtimeHub {
+    type Error = RealtimePublishError;
+
+    /// An envelope with no log row behind it (tests): routed as narrowly as
+    /// its fields allow, a conversation as restricted.
+    fn publish(&self, envelope: &OutboxEnvelope) -> Result<(), Self::Error> {
+        self.publish_routed(envelope, envelope_route(envelope))
+    }
+}
+
+/// An envelope's route from its own fields alone, a conversation as
+/// restricted (fail closed).
+fn envelope_route(envelope: &OutboxEnvelope) -> Route {
+    let audience = match (envelope.recipient_actor_id, envelope.conversation_id) {
+        (Some(account), _) => RouteAudience::Account(account),
+        (None, Some(root)) => RouteAudience::Conversation {
+            root,
+            restricted: true,
+        },
+        (None, None) => RouteAudience::Space,
+    };
+    Route {
+        workspace: Uuid::nil(),
+        space: Some(envelope.project_id),
+        audience,
+        event_type: envelope.event_type.clone(),
+        about_account: None,
+    }
+}
+
+fn checked_delivery(
+    envelope: &OutboxEnvelope,
+    route: Route,
+) -> Result<RealtimeDelivery, RealtimePublishError> {
     {
         let payload_conversation_id = envelope
             .payload
@@ -389,6 +425,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
         }
         Ok(RealtimeDelivery::Durable {
             envelope: envelope.clone(),
+            route,
         })
     }
 }
@@ -412,9 +449,11 @@ fn ephemeral_event_is_valid(event: &RealtimeEvent) -> bool {
 
 pub async fn websocket(
     State(state): State<AppState>,
+    Query(wire_query): Query<WireQuery>,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
+    let protocol = wire_query.protocol();
     if !origin_is_allowed(&state.config, &headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -441,6 +480,7 @@ pub async fn websocket(
                 principal,
                 receiver,
                 session_revocations,
+                protocol,
             )
         })
         .into_response()
@@ -453,12 +493,80 @@ async fn serve_socket(
     original_principal: AuthenticatedActor,
     mut receiver: broadcast::Receiver<RealtimeDelivery>,
     mut session_revocations: broadcast::Receiver<Uuid>,
+    protocol: u8,
 ) {
     let mut revalidation = interval(SESSION_REVALIDATION_INTERVAL);
     revalidation.set_missed_tick_behavior(MissedTickBehavior::Delay);
     // Authentication was checked immediately before the upgrade. Consuming
     // the eager first tick prevents a redundant query on socket startup.
     revalidation.tick().await;
+    // What it may hear, worked out once now and again when access changes
+    // (K5.8), with a backstop every few minutes.
+    let mut subscription = match subscribe(&state, &original_principal).await {
+        Ok(subscription) => subscription,
+        Err(error) => {
+            tracing::error!(
+                error_category = error.log_category(),
+                "realtime subscription failed"
+            );
+            close_socket(&mut socket).await;
+            return;
+        }
+    };
+    let mut backstop = interval(SUBSCRIPTION_BACKSTOP_INTERVAL);
+    backstop.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    backstop.tick().await;
+    // Protocol 2: what it missed since `hello`'s position, then `ready`.
+    // Live events were already arriving in `receiver`; those the replay
+    // covered are dropped by position (catch up, then live).
+    let mut last_position = 0_i64;
+    if protocol == 2 {
+        let resume_from = wait_for_hello(&mut socket).await;
+        let mut sent = 0_usize;
+        let mut position = resume_from.unwrap_or(0);
+        let resumed = loop {
+            match replay(
+                &state,
+                &original_principal,
+                &mut subscription,
+                resume_from,
+                position,
+            )
+            .await
+            {
+                Ok(Replay::Batch {
+                    frames,
+                    events,
+                    through,
+                }) => {
+                    for frame in frames {
+                        if socket.send(Message::Text(frame.into())).await.is_err() {
+                            return;
+                        }
+                    }
+                    sent += events;
+                    position = through;
+                }
+                Ok(Replay::Done { head, resumed }) => {
+                    position = head;
+                    break resumed;
+                }
+                Err(error) => {
+                    tracing::error!(
+                        error_category = error.log_category(),
+                        "realtime resume failed"
+                    );
+                    close_socket(&mut socket).await;
+                    return;
+                }
+            }
+        };
+        last_position = position;
+        let ready = wire::ready(position, resumed, sent);
+        if socket.send(Message::Text(ready.into())).await.is_err() {
+            return;
+        }
+    }
 
     loop {
         tokio::select! {
@@ -481,46 +589,70 @@ async fn serve_socket(
                             skipped_events = skipped,
                             "realtime client lagged; forcing durable-state resynchronization"
                         );
+                        if protocol == 2 {
+                            let frame = wire::resync("too_far_behind", last_position);
+                            let _ = socket.send(Message::Text(frame.into())).await;
+                        }
                         close_socket_to_restart(&mut socket, REALTIME_RESYNC_CLOSE_REASON).await;
                         break;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
                 if let RealtimeDelivery::Restart(reason) = event {
+                    if protocol == 2 {
+                        let frame = if reason == SERVER_DRAINING_CLOSE_REASON {
+                            wire::reconnect(RECONNECT_AFTER_MS, reason)
+                        } else {
+                            wire::resync("too_far_behind", last_position)
+                        };
+                        let _ = socket.send(Message::Text(frame.into())).await;
+                    }
                     close_socket_to_restart(&mut socket, reason).await;
                     break;
                 }
-                let current_principal =
-                    match current_principal(&state, &headers, &original_principal).await {
-                        Ok(Some(principal)) => principal,
-                        Ok(None) => {
-                            close_socket(&mut socket).await;
+                if let RealtimeDelivery::Durable { envelope, .. } = &event
+                    && protocol == 2
+                    && envelope.event_cursor <= last_position
+                {
+                    // The replay sent it already.
+                    continue;
+                }
+                match refresh_if_changed(&state, &original_principal, &mut subscription, &event).await {
+                    Ok(Some(access)) if protocol == 2 => {
+                        if socket.send(Message::Text(access.into())).await.is_err() {
                             break;
                         }
-                        Err(error) => {
-                            tracing::error!(
-                                error_category = error.log_category(),
-                                "realtime session revalidation failed"
-                            );
-                            close_socket(&mut socket).await;
-                            break;
-                        }
-                    };
-                match event_is_authorized(&state, &current_principal, &event).await {
-                    Ok(true) => {}
-                    Ok(false) => continue,
+                    }
+                    Ok(_) => {}
                     Err(error) => {
                         tracing::error!(
                             error_category = error.log_category(),
-                            event_id = %event.event_id(),
-                            project_id = %event.project_id(),
-                            "realtime authorization failed"
+                            "realtime subscription failed"
                         );
                         close_socket(&mut socket).await;
                         break;
                     }
                 }
-                let json = match event.to_wire_json() {
+                let heard = match hears(&state, &original_principal, &subscription, &event)
+                    .await
+                {
+                    Ok(heard) => heard,
+                    Err(error) => {
+                        // Fail closed: it reconnects and works out its set afresh.
+                        tracing::error!(
+                            error_category = error.log_category(),
+                            event_id = %event.event_id(),
+                            project_id = %event.project_id(),
+                            "realtime subscription failed"
+                        );
+                        close_socket(&mut socket).await;
+                        break;
+                    }
+                };
+                if !heard {
+                    continue;
+                }
+                let json = match frame(&event, protocol) {
                     Ok(json) => json,
                     Err(error) => {
                         tracing::error!(
@@ -534,6 +666,9 @@ async fn serve_socket(
                 };
                 if socket.send(Message::Text(json.into())).await.is_err() {
                     break;
+                }
+                if let RealtimeDelivery::Durable { envelope, .. } = &event {
+                    last_position = last_position.max(envelope.event_cursor);
                 }
             }
             revoked = session_revocations.recv() => {
@@ -553,6 +688,23 @@ async fn serve_socket(
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => {}
+                }
+            }
+            _ = backstop.tick() => {
+                match subscribe(&state, &original_principal).await {
+                    Ok(fresh) => {
+                        let access = wire::access(&subscription, &fresh);
+                        subscription = fresh;
+                        if let (2, Some(access)) = (protocol, access)
+                            && socket.send(Message::Text(access.into())).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        close_socket(&mut socket).await;
+                        break;
+                    }
                 }
             }
             _ = revalidation.tick() => {
@@ -593,47 +745,169 @@ async fn current_principal(
     Ok(Some(current))
 }
 
+/// How long a connection's set may go without being worked out again,
+/// whatever the log says (K5.8's backstop).
+const SUBSCRIPTION_BACKSTOP_INTERVAL: Duration = Duration::from_secs(300);
+
+/// The connection's set, by the realtime policy for each space it holds.
+async fn subscribe(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+) -> Result<SubscriptionSet, AppError> {
+    let account = principal.actor_id;
+    let kind = principal.actor_kind.clone();
+    subscriptions::compute(&state.pool, account, |role, space| {
+        realtime_policy_allows(account, &kind, role, true, space, None).unwrap_or(false)
+    })
+    .await
+}
+
+/// How long a protocol 2 client waits before reconnecting to another
+/// instance when this one drains (it adds its own jitter).
+const RECONNECT_AFTER_MS: u64 = 1_000;
+/// Events one resume batch reads.
+const REPLAY_BATCH: i64 = 500;
+
+/// The account an `account.access_changed` signal is about.
+fn access_changed(event: &crate::events::LoggedEvent) -> Option<Uuid> {
+    (event.event_type == crate::events::catalog::ACCOUNT_ACCESS_CHANGED.name)
+        .then_some(event.audience_account_id)
+        .flatten()
+}
+
+/// The frame a delivery is sent as in the connection's protocol.
+fn frame(event: &RealtimeDelivery, protocol: u8) -> Result<String, RealtimePublishError> {
+    let json = event.to_wire_json()?;
+    if protocol != 2 {
+        return Ok(json);
+    }
+    Ok(match event {
+        RealtimeDelivery::Durable { envelope, .. } => wire::event(envelope.event_cursor, &json),
+        RealtimeDelivery::Ephemeral(delta) => {
+            wire::stream_delta(delta.conversation_id, &delta.payload)
+        }
+        RealtimeDelivery::Restart(_) | RealtimeDelivery::AccessChanged(_) => {
+            return Err(RealtimePublishError::Serialization);
+        }
+    })
+}
+
+/// A protocol 2 connection's `hello`: where it would resume from, if it
+/// says. Anything else first, or nothing in time, means no resume.
+async fn wait_for_hello(socket: &mut WebSocket) -> Option<i64> {
+    let first = tokio::time::timeout(wire::HELLO_WAIT, socket.recv())
+        .await
+        .ok()??
+        .ok()?;
+    let Message::Text(text) = first else {
+        return None;
+    };
+    match wire::ClientFrame::parse(&text)? {
+        wire::ClientFrame::Hello { resume_from } => resume_from,
+        wire::ClientFrame::Other => None,
+    }
+}
+
+/// One step of a resume.
+enum Replay {
+    /// Frames this connection may hear, from the log, through `through`.
+    Batch {
+        frames: Vec<String>,
+        events: usize,
+        through: i64,
+    },
+    /// Caught up to the head (or not resumable: `resumed` false).
+    Done { head: i64, resumed: bool },
+}
+
+/// The next batch of what the connection missed after `position`, routed
+/// by its set as live events are (access changes in the batch recompute
+/// it, in order). Each batch reads in a transaction of its own, closed
+/// before any frame is sent.
+async fn replay(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    subscription: &mut SubscriptionSet,
+    resume_from: Option<i64>,
+    position: i64,
+) -> Result<Replay, AppError> {
+    let (head, batch) = {
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        let head = crate::events::head(&mut connection).await?;
+        let Some(from) =
+            resume_from.filter(|from| *from <= head && head - *from <= wire::RESUME_LIMIT)
+        else {
+            return Ok(Replay::Done {
+                head,
+                resumed: false,
+            });
+        };
+        if position.max(from) >= head {
+            return Ok(Replay::Done {
+                head,
+                resumed: true,
+            });
+        }
+        let batch = crate::events::tail(&mut connection, position.max(from), REPLAY_BATCH).await?;
+        (head, batch)
+    };
+    let Some(through) = batch.last().map(|event| event.position) else {
+        return Ok(Replay::Done {
+            head,
+            resumed: true,
+        });
+    };
+    let mut frames = Vec::new();
+    let mut events = 0;
+    for logged in &batch {
+        if let Some(account) = access_changed(logged) {
+            let signal = RealtimeDelivery::AccessChanged(account);
+            if let Some(access) =
+                refresh_if_changed(state, principal, subscription, &signal).await?
+            {
+                frames.push(access);
+            }
+            continue;
+        }
+        let Some(envelope) = OutboxEnvelope::from_logged(logged) else {
+            continue;
+        };
+        let Some(route) = Route::of_logged(logged) else {
+            continue;
+        };
+        let Ok(delivery) = checked_delivery(&envelope, route) else {
+            continue;
+        };
+        if let Some(access) = refresh_if_changed(state, principal, subscription, &delivery).await? {
+            frames.push(access);
+        }
+        if hears(state, principal, subscription, &delivery).await?
+            && let Ok(frame) = frame(&delivery, 2)
+        {
+            frames.push(frame);
+            events += 1;
+        }
+    }
+    Ok(Replay::Batch {
+        frames,
+        events,
+        through,
+    })
+}
+
 #[derive(Debug, FromRow)]
 struct RealtimeMembership {
     role: String,
     enabled: bool,
 }
 
-async fn event_is_authorized(
+/// A streamed delta's check: the account's membership of its space now,
+/// and its conversation by the one gate.
+async fn ephemeral_is_authorized(
     state: &AppState,
     principal: &AuthenticatedActor,
-    event: &RealtimeDelivery,
+    delta: &RealtimeEvent,
 ) -> Result<bool, AppError> {
-    if !event.is_visible_to_actor(principal.actor_id) {
-        return Ok(false);
-    }
-    // A workspace's boards aren't in a project people belong to, so their
-    // events go to whoever can see the board right now.
-    if let Some(whiteboard_id) = event.whiteboard_id() {
-        return crate::whiteboards::visible_to(&state.pool, whiteboard_id, principal.actor_id)
-            .await;
-    }
-    if event.is_workspace_wide() {
-        // The envelope's space names the workspace; its members hear of it.
-        return sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT EXISTS (
-                SELECT 1
-                FROM projects p
-                JOIN organization_memberships om
-                  ON om.organization_id = p.organization_id
-                 AND om.actor_id = $1
-                 AND om.enabled
-                WHERE p.id = $2
-            )
-            "#,
-        )
-        .bind(principal.actor_id)
-        .bind(event.project_id())
-        .fetch_one(crate::db::scoped(&state.pool))
-        .await
-        .map_err(AppError::from);
-    }
     let membership = sqlx::query_as::<_, RealtimeMembership>(
         r#"
         SELECT pm.role, pm.enabled
@@ -659,8 +933,8 @@ async fn event_is_authorized(
         "#,
     )
     .bind(principal.actor_id)
-    .bind(event.project_id())
-    .bind(event.conversation_id())
+    .bind(delta.project_id)
+    .bind(delta.conversation_id)
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     let Some(membership) = membership else {
@@ -671,9 +945,58 @@ async fn event_is_authorized(
         &principal.actor_kind,
         &membership.role,
         membership.enabled,
-        event.project_id(),
-        event.conversation_id(),
+        delta.project_id,
+        delta.conversation_id,
     )
+}
+
+/// Before routing an access change about the connection, its set is
+/// worked out again; the answer is protocol 2's `access` frame, when
+/// anything changed.
+async fn refresh_if_changed(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    subscription: &mut SubscriptionSet,
+    event: &RealtimeDelivery,
+) -> Result<Option<String>, AppError> {
+    let changed = match event {
+        RealtimeDelivery::Durable { route, .. } => subscription.changed_by(route),
+        RealtimeDelivery::AccessChanged(account) => *account == subscription.account,
+        _ => false,
+    };
+    if !changed {
+        return Ok(None);
+    }
+    let fresh = subscribe(state, principal).await?;
+    let access = wire::access(subscription, &fresh);
+    *subscription = fresh;
+    Ok(access)
+}
+
+async fn hears(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    subscription: &SubscriptionSet,
+    event: &RealtimeDelivery,
+) -> Result<bool, AppError> {
+    if !event.is_visible_to_actor(principal.actor_id) {
+        return Ok(false);
+    }
+    match event {
+        RealtimeDelivery::Durable { route, .. } => match subscription.hears(route) {
+            Hearing::Yes => Ok(true),
+            Hearing::No => Ok(false),
+            Hearing::IfBoardVisible(board) => {
+                crate::whiteboards::visible_to(&state.pool, board, principal.actor_id).await
+            }
+        },
+        // Streamed words carry no audience and are never in the log: each
+        // is checked as it comes, as before K5.8.
+        RealtimeDelivery::Ephemeral(delta) => {
+            ephemeral_is_authorized(state, principal, delta).await
+        }
+        RealtimeDelivery::Restart(_) | RealtimeDelivery::AccessChanged(_) => Ok(false),
+    }
 }
 
 fn realtime_policy_allows(
@@ -1157,7 +1480,8 @@ mod tests {
             OutboxPublisher::publish(&RealtimeHub::new(1), &mismatched),
             Err(RealtimePublishError::InvalidMetadata)
         );
-        let delivery = RealtimeDelivery::Durable { envelope };
+        let route = super::envelope_route(&envelope);
+        let delivery = RealtimeDelivery::Durable { envelope, route };
 
         assert!(delivery.is_visible_to_actor(recipient));
         assert!(!delivery.is_visible_to_actor(other_project_member));
@@ -1260,7 +1584,8 @@ mod tests {
             OutboxPublisher::publish(&RealtimeHub::new(1), &read_without_actor),
             Err(RealtimePublishError::InvalidMetadata)
         );
-        let delivery = RealtimeDelivery::Durable { envelope };
+        let route = super::envelope_route(&envelope);
+        let delivery = RealtimeDelivery::Durable { envelope, route };
         assert!(delivery.is_visible_to_actor(removed));
         assert!(!delivery.is_visible_to_actor(other));
     }

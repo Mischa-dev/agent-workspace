@@ -498,6 +498,15 @@ pub static ACCOUNT_MANAGERS_CHANGED: EventType = signal(
     "Who manages an agent or app changed",
 )
 .legacy(&["account.managers.changed"]);
+/// Who may read what changed for an account (K5.8): staged by triggers
+/// on memberships, whatever wrote them, so live connections work out what
+/// they hear again.
+pub static ACCOUNT_ACCESS_CHANGED: EventType = signal(
+    "account.access_changed",
+    "workspace",
+    None,
+    "What someone may see changed",
+);
 /// Every event type, in module order.
 pub fn catalog() -> &'static [&'static EventType] {
     static CATALOG: &[&EventType] = &[
@@ -558,6 +567,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &FILE_REMOVED,
         &NOTIFICATION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
+        &ACCOUNT_ACCESS_CHANGED,
     ];
     CATALOG
 }
@@ -617,7 +627,10 @@ mod tests {
     /// The triggers of K3.8 stage events by name in SQL; each is here.
     #[test]
     fn every_type_a_trigger_stages_is_in_the_catalogue() {
-        let sql = include_str!("../../migrations/20261114194000_events_for_quiet_writes.sql");
+        let sql = concat!(
+            include_str!("../../migrations/20261114194000_events_for_quiet_writes.sql"),
+            include_str!("../../migrations/20261117140000_access_changed_signal.sql"),
+        );
         let mut found = 0;
         for piece in sql.split('\'') {
             let dotted = piece.split('.').count() >= 2
