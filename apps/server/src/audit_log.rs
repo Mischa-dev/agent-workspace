@@ -213,43 +213,6 @@ async fn require_reader(
     }
 }
 
-/// Both sources as one `event` relation, for `$1` the workspace. A fact's
-/// action is its type (`task.updated`); its metadata holds the keys of what
-/// changed, the version and who asked for it, never content.
-fn combined() -> String {
-    format!(
-        r#"
-    WITH event AS (
-        SELECT audit.id, audit.organization_id, audit.occurred_at, audit.action,
-               audit.outcome, audit.actor_id, audit.project_id, audit.channel,
-               audit.client_name, audit.target_kind, audit.target_id, audit.metadata
-        FROM audit_events audit
-        WHERE audit.organization_id = $1
-          AND NOT (audit.outcome = 'succeeded' AND audit.target_id IS NOT NULL
-                   AND EXISTS (SELECT 1 FROM events fact
-                               WHERE fact.thing_id = audit.target_id
-                                 AND fact.workspace_id = audit.organization_id
-                                 AND fact.class = 'fact'
-                                 AND (fact.request_id = audit.request_id
-                                      OR fact.created_at = audit.occurred_at)))
-        UNION ALL
-        SELECT fact.id, fact.workspace_id, fact.created_at, fact.type, 'succeeded',
-               fact.actor_account_id, fact.space_id,
-               CASE WHEN fact.via_credential_id IS NOT NULL THEN 'mcp' END,
-               {app}, COALESCE(fact.thing_kind, 'workspace'), fact.thing_id,
-               jsonb_strip_nulls(jsonb_build_object(
-                   'changes', to_jsonb(fact.changes),
-                   'version', fact.thing_version,
-                   'conversation_id', fact.conversation_id,
-                   'requestedBy', fact.requested_by_account_id))
-        FROM events fact
-        WHERE fact.workspace_id = $1 AND fact.class = 'fact'
-    )
-    "#,
-        app = crate::events::activity::app_of("fact.via_credential_id"),
-    )
-}
-
 /// Events in the workspace the reader may see: everything but events about
 /// conversations or messages they can't see. `$1` is the workspace, `$2`
 /// the reader.
@@ -318,7 +281,7 @@ async fn list_events(
         ORDER BY event.occurred_at DESC, event.id DESC
         LIMIT $12
         "#,
-        combined = combined(),
+        combined = crate::events::activity::audit_relation(),
     ))
     .bind(organization_id)
     .bind(principal.actor_id)
@@ -482,7 +445,7 @@ async fn facets(
         WHERE channel IS NOT NULL
         ORDER BY 1
         "#,
-        combined = combined(),
+        combined = crate::events::activity::audit_relation(),
     ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
@@ -494,7 +457,7 @@ async fn facets(
         WHERE client_name IS NOT NULL
         GROUP BY client_name ORDER BY max(occurred_at) DESC LIMIT 50
         "#,
-        combined = combined(),
+        combined = crate::events::activity::audit_relation(),
     ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
@@ -505,7 +468,7 @@ async fn facets(
         SELECT DISTINCT split_part(action, '.', 1) FROM event
         ORDER BY 1
         "#,
-        combined = combined(),
+        combined = crate::events::activity::audit_relation(),
     ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))

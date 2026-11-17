@@ -92,6 +92,44 @@ pub(crate) fn app_of(column: &str) -> String {
     )
 }
 
+/// The audit trail's two sources (`audit_log.rs`) as one `event` relation,
+/// for `$1` the workspace: `audit_events` and the log's facts. A fact's
+/// action is its type (`task.updated`); its metadata holds the keys of what
+/// changed, the version and who asked for it, never content.
+pub(crate) fn audit_relation() -> String {
+    format!(
+        r#"
+    WITH event AS (
+        SELECT audit.id, audit.organization_id, audit.occurred_at, audit.action,
+               audit.outcome, audit.actor_id, audit.project_id, audit.channel,
+               audit.client_name, audit.target_kind, audit.target_id, audit.metadata
+        FROM audit_events audit
+        WHERE audit.organization_id = $1
+          AND NOT (audit.outcome = 'succeeded' AND audit.target_id IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM events fact
+                               WHERE fact.thing_id = audit.target_id
+                                 AND fact.workspace_id = audit.organization_id
+                                 AND fact.class = 'fact'
+                                 AND (fact.request_id = audit.request_id
+                                      OR fact.created_at = audit.occurred_at)))
+        UNION ALL
+        SELECT fact.id, fact.workspace_id, fact.created_at, fact.type, 'succeeded',
+               fact.actor_account_id, fact.space_id,
+               CASE WHEN fact.via_credential_id IS NOT NULL THEN 'mcp' END,
+               {app}, COALESCE(fact.thing_kind, 'workspace'), fact.thing_id,
+               jsonb_strip_nulls(jsonb_build_object(
+                   'changes', to_jsonb(fact.changes),
+                   'version', fact.thing_version,
+                   'conversation_id', fact.conversation_id,
+                   'requestedBy', fact.requested_by_account_id))
+        FROM events fact
+        WHERE fact.workspace_id = $1 AND fact.class = 'fact'
+    )
+    "#,
+        app = app_of("fact.via_credential_id"),
+    )
+}
+
 /// The facts about `thing` in `workspace` that `reader` may see, newest
 /// first, before `before` (a position) when given. The caller has already
 /// shown that `reader` sees the thing.

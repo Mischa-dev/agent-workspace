@@ -243,3 +243,83 @@ async fn the_audit_trail_names_who_how_and_for_whom_and_keeps_private_conversati
     assert_eq!(mine["outcome"], "ok", "a member reads it: {mine}");
     world.finish().await;
 }
+
+/// K3 guard 3: the log carries ids, kinds and field names, never anyone's
+/// words. Workspace B's world puts its marker into every text it writes
+/// (messages, comments, pages, cells) and every name; after it is built and
+/// the log has caught up, no event's payload holds the marker except under
+/// a key that names something (a title or a name, which rule 10 allows).
+#[tokio::test]
+async fn the_log_carries_no_text() {
+    let Some(fixture) = super::support::two_workspaces::two_workspaces("k3_21_no_text").await
+    else {
+        return;
+    };
+    agent_workspace_server::events::catch_up(&fixture.pool)
+        .await
+        .expect("catch up");
+    let marker = fixture.b.marker.to_ascii_lowercase();
+    let rows = sqlx::query_as::<_, (String, Value)>(
+        "SELECT type, payload FROM events \
+         UNION ALL SELECT type, payload FROM event_staging",
+    )
+    .fetch_all(&fixture.pool)
+    .await
+    .expect("events");
+    assert!(!rows.is_empty(), "the world logged nothing");
+    // The marker is really in B's words, and B's writes are in the log.
+    let (said, logged) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT (SELECT count(*) FROM messages WHERE lower(plain_text) LIKE '%' || $1 || '%'), \
+                (SELECT count(*) FROM events WHERE workspace_id = $2)",
+    )
+    .bind(&marker)
+    .bind(fixture.b.organization)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("sanity");
+    assert!(said > 0 && logged > 0, "messages {said}, events {logged}");
+    let mut found = Vec::new();
+    for (ty, payload) in &rows {
+        text_under(&payload, &marker, "", &mut |path| {
+            found.push(format!("{ty}: {path}"));
+        });
+    }
+    found.sort();
+    found.dedup();
+    assert!(found.is_empty(), "text in the log: {found:#?}");
+    fixture.finish().await;
+}
+
+/// Keys whose value names a thing rather than holding someone's words.
+const NAME_KEYS: &[&str] = &[
+    "title",
+    "name",
+    "displayName",
+    "display_name",
+    "key",
+    "handle",
+    "label",
+    "slug",
+];
+
+fn text_under(value: &Value, marker: &str, path: &str, found: &mut impl FnMut(String)) {
+    match value {
+        Value::String(text) => {
+            let key = path.rsplit('.').next().unwrap_or_default();
+            if text.to_ascii_lowercase().contains(marker) && !NAME_KEYS.contains(&key) {
+                found(path.to_owned());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                text_under(item, marker, path, found);
+            }
+        }
+        Value::Object(map) => {
+            for (key, item) in map {
+                text_under(item, marker, &format!("{path}.{key}"), found);
+            }
+        }
+        _ => {}
+    }
+}
