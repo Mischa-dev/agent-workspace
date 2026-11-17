@@ -53,6 +53,7 @@ macro_rules! read_op {
             const PERMISSION: Option<Perm> = None;
             const IDEMPOTENCY: Idempotency = Idempotency::None;
             const HELD_SPACE_BY_DEFAULT: bool = true;
+            const SPANS_WORKSPACES: bool = true;
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
 
@@ -60,7 +61,7 @@ macro_rules! read_op {
             type Output = $output;
 
             async fn run(call: &mut OpCall<'_>, input: $input) -> Result<$output, OpError> {
-                let principal = reader(call.ctx);
+                let principal = reader(call.state, call.ctx).await?;
                 tool_answer($command(call.state, &principal, input).await)
             }
         }

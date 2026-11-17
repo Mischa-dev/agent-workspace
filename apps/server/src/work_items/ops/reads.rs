@@ -8,6 +8,7 @@
 use uuid::Uuid;
 
 use crate::{
+    AppState,
     mcp::{
         McpPrincipal, ai_tools,
         task_commands::{principal_for, tool_answer},
@@ -28,13 +29,32 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<MyWorkGet>();
 }
 
-/// The caller as a read reads it: in the space the call located (or its
-/// credential is held to), otherwise across the projects it reaches in the
-/// call's workspace.
-pub(crate) fn reader(ctx: &OpContext) -> McpPrincipal {
+/// The caller as a read reads it: in the space the call named, otherwise
+/// across the projects it reaches in the call's workspace (every workspace
+/// for a spanning read). A credential held to one space reads from there,
+/// as the hand-written tools did: its space isn't one the call named. A
+/// connection that names no space keeps its credential's own project as
+/// its anchor (what an agent's reply inbox is read through), unnamed.
+pub(crate) async fn reader(state: &AppState, ctx: &OpContext) -> Result<McpPrincipal, OpError> {
     let mut principal = principal_for(ctx, None);
-    principal.project_explicit = principal.project_id != Uuid::nil();
-    principal
+    principal.project_explicit =
+        principal.project_id != Uuid::nil() && ctx.space_id != ctx.caller.confined_space;
+    if principal.project_id.is_nil()
+        && let Some(credential) = principal.mcp_credential_id
+    {
+        let anchor = sqlx::query_scalar::<_, Uuid>(
+            "SELECT project_id FROM mcp_client_credentials WHERE id = $1 AND actor_id = $2",
+        )
+        .bind(credential)
+        .bind(principal.actor_id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await
+        .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+        if let Some(anchor) = anchor {
+            principal.project_id = anchor;
+        }
+    }
+    Ok(principal)
 }
 
 /// A space named by id, key or link (the dispatcher turns a key into the
@@ -68,6 +88,7 @@ macro_rules! read_op {
             const PERMISSION: Option<Perm> = $perm;
             const IDEMPOTENCY: Idempotency = Idempotency::None;
             const HELD_SPACE_BY_DEFAULT: bool = true;
+            const SPANS_WORKSPACES: bool = true;
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
 
@@ -75,7 +96,7 @@ macro_rules! read_op {
             type Output = $output;
 
             async fn run(call: &mut OpCall<'_>, input: $input) -> Result<$output, OpError> {
-                let principal = reader(call.ctx);
+                let principal = reader(call.state, call.ctx).await?;
                 tool_answer($command(call.state, &principal, input).await)
             }
         }

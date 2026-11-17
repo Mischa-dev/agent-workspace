@@ -534,7 +534,11 @@ async fn every_edge_runs_the_same_operation() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    assert_eq!(status, StatusCode::OK, "{refused}");
+    assert_eq!(
+        refused["result"]["structuredContent"]["outcome"], "not_found",
+        "{refused}"
+    );
     let (status, opened) = rpc(
         app,
         &token,

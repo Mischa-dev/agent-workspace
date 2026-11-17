@@ -216,7 +216,7 @@ async fn every_served_revision_lists_reads_writes_and_resumes() {
         .await;
         assert_eq!(status, StatusCode::OK, "{revision} list: {listed}");
         let names = tool_names(&listed);
-        for expected in ["briefing", "projects_list", "decision_record"] {
+        for expected in ["briefing_get", "project_list", "decision_record"] {
             assert!(
                 names.contains(&expected.to_owned()),
                 "{revision}: {expected}"

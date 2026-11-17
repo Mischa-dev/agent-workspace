@@ -129,6 +129,10 @@ pub trait Operation: Send + Sync + 'static {
     /// credential is held to, and is authorized there (not against the
     /// workspace).
     const HELD_SPACE_BY_DEFAULT: bool = false;
+    /// A read that, naming no workspace for a caller who reaches several,
+    /// lists across all of them (each filtered by the caller's access
+    /// there) instead of asking which. Only reads may span.
+    const SPANS_WORKSPACES: bool = false;
     /// Removes or overwrites something a person would miss.
     const DESTRUCTIVE: bool = false;
     /// Offered as an automation action. Writes are by default.

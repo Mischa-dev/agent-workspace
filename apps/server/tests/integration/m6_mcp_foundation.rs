@@ -372,8 +372,8 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let project_tool = tools
         .pointer("/result/tools")
         .and_then(Value::as_array)
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "project_open"))
-        .expect("project_open tool");
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "project_get"))
+        .expect("project_get tool");
     // No exact tool count, so branches that each add a tool merge in either
     // order. Every tool must instead describe itself and carry valid schemas.
     // See docs/plans/mcp-tools.md for the tool list.

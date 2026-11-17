@@ -347,42 +347,66 @@ async fn pipeline<O: Operation>(
         .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     // A call that can't name its workspace needs none named when the
     // caller reaches only one.
+    // A spanning read that names none lists across every one (`spans`).
+    let mut spans = false;
     if request.workspace.is_none() && matches!(target, Target::Account | Target::Workspace(None)) {
         let reach = access_shim::reach(&mut connection, &request.caller).await?;
         match reach.as_slice() {
             [only] => request.workspace = Some(*only),
             [] => {}
+            _ if O::SPANS_WORKSPACES && !writes => spans = true,
             several => return Err(name_the_workspace(&mut connection, several).await),
         }
     }
-    let located = target::locate(
-        &mut connection,
-        &target,
-        request.caller.account_id,
-        request.workspace,
-    )
-    .await?;
-    let module = module_here::<O>(&mut connection, &request.caller, &located).await?;
-    let need = crate::access::Need::maybe(O::PERMISSION)
-        .writing(writes)
-        .in_module(module);
-    let _grant = crate::access::check(
-        &mut connection,
-        &request.caller,
-        need,
-        access_target(&target, &located),
-    )
-    .await
-    .map_err(|error| OpError::logged(O::NAME, &error))?
-    .map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
-    // H1.24: a suspended workspace, or one being deleted, refuses every
-    // call but the ones that still work then (keeping it).
-    crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)
-        .await?;
+    let located = if spans {
+        target::Located {
+            workspace_id: Uuid::nil(),
+            space_id: None,
+        }
+    } else {
+        target::locate(
+            &mut connection,
+            &target,
+            request.caller.account_id,
+            request.workspace,
+        )
+        .await?
+    };
+    if spans {
+        // Across workspaces only the credential is checked here; the read
+        // keeps to what the caller may see (and has on) in each one.
+        let _grant = crate::access::check(
+            &mut connection,
+            &request.caller,
+            crate::access::Need::SEE,
+            crate::access::Target::Account,
+        )
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error))?
+        .map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
+    } else {
+        let module = module_here::<O>(&mut connection, &request.caller, &located).await?;
+        let need = crate::access::Need::maybe(O::PERMISSION)
+            .writing(writes)
+            .in_module(module);
+        let _grant = crate::access::check(
+            &mut connection,
+            &request.caller,
+            need,
+            access_target(&target, &located),
+        )
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error))?
+        .map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
+        // H1.24: a suspended workspace, or one being deleted, refuses every
+        // call but the ones that still work then (keeping it).
+        crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)
+            .await?;
+    }
     drop(connection);
     // H1.1: an agent's or app's call spends its workspace's shared budget.
     // After the connection goes back: the shared counter takes its own.
-    if matches!(request.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) {
+    if !spans && matches!(request.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) {
         state
             .rate_limits
             .check_workspace_call(located.workspace_id)
@@ -466,7 +490,8 @@ async fn pipeline<O: Operation>(
         // Dropping the transaction rolls it back.
         return Ok(answer);
     }
-    if let Some(alias) = request.renamed_from {
+    // A spanning read has no one workspace to count its alias use in.
+    if let Some(alias) = request.renamed_from.filter(|_| !spans) {
         let workspace_id = ctx.workspace_id;
         let tx = call.tx().await?;
         super::aliases::count(tx, workspace_id, alias)
