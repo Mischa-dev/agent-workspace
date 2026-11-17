@@ -440,10 +440,7 @@ async fn request_sponsored_execution_inner(
         "Sponsored Worker execution is awaiting human approval",
         "external_execution_request",
         request_id,
-        &format!(
-            "/projects/{}/external-execution-requests/{request_id}",
-            principal.project_id
-        ),
+        &request_href(principal.project_id, request_id),
     )
     .await?;
     sqlx::query(
@@ -479,10 +476,7 @@ async fn request_sponsored_execution_inner(
         status: "pending".to_owned(),
         version: 1,
         idempotent_replay: false,
-        canonical_path: format!(
-            "/projects/{}/external-execution-requests/{request_id}",
-            principal.project_id
-        ),
+        canonical_path: request_href(principal.project_id, request_id),
     };
     idempotency::complete(
         &mut transaction,
@@ -605,9 +599,7 @@ pub(crate) async fn approval_settled(
                 "Sponsored Worker execution was denied",
                 "external_execution_request",
                 external_request_id,
-                &format!(
-                    "/projects/{project_id}/external-execution-requests/{external_request_id}"
-                ),
+                &request_href(project_id, external_request_id),
             )
             .await?;
         }
@@ -615,6 +607,9 @@ pub(crate) async fn approval_settled(
     }
     let context = sqlx::query_as::<_, SponsoredApprovalContext>(
         r#"
+        -- visibility: by id, for the sponsor answering the run request's
+        -- request (requests::may_answer checked them); locks the thread the
+        -- run will start in.
         SELECT request.project_id,
                request.external_agent_connection_id AS connection_id,
                request.requesting_actor_id,
@@ -710,10 +705,7 @@ pub(crate) async fn approval_settled(
         "Sponsored Worker execution was approved and queued",
         "external_execution_request",
         external_request_id,
-        &format!(
-            "/projects/{}/external-execution-requests/{external_request_id}",
-            context.project_id
-        ),
+        &request_href(context.project_id, external_request_id),
     )
     .await?;
     // The built-in host's holder starts it (K5.3).
@@ -919,4 +911,9 @@ fn require_policy(
     } else {
         Err(AppError::Forbidden)
     }
+}
+
+/// Where an external execution request's events point.
+fn request_href(project_id: Uuid, request_id: Uuid) -> String {
+    format!("/projects/{project_id}/external-execution-requests/{request_id}")
 }
