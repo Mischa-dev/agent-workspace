@@ -171,6 +171,25 @@ const KINDS: &[(&str, &str)] = &[
         "package_install",
         "SELECT workspace_id, space_id FROM package_installs WHERE id = $1 AND $2::uuid IS NOT NULL",
     ),
+    // K2.9: a reply request, for the agent it asks (claim, reply, pass,
+    // release); another agent's is not found.
+    (
+        "reply_request",
+        "SELECT project.organization_id, project.id FROM reply_requests request \
+         JOIN projects project ON project.id = request.project_id \
+         WHERE request.id = $1 AND request.agent_actor_id = $2",
+    ),
+    // K2.9: a reply request for anyone who sees its conversation (stop it,
+    // ask again).
+    (
+        "reply_request_seen",
+        "SELECT project.organization_id, project.id FROM reply_requests request \
+         JOIN projects project ON project.id = request.project_id \
+         WHERE request.id = $1 AND conversation_visible_to(request.conversation_id, $2) \
+           AND EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
+               AND membership.enabled)",
+    ),
     // A1.8: a request goes by request_visible_to, which holds its
     // conversation's and run's visibility.
     (

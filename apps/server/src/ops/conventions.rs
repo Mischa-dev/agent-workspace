@@ -62,6 +62,9 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "retry",
             // A group's agents take more turns (K2.8).
             "continue",
+            // An agent passes on, or a person stops, a reply request (K2.9).
+            "pass",
+            "stop",
             "remove",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",

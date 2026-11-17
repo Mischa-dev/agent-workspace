@@ -562,3 +562,57 @@ async fn a_part_from_another_workspace_never_joins() {
     );
     world.finish().await;
 }
+
+/// A collection and a form may share a name: each reference finds its own
+/// kind (the automation and the navigation the collection, not the form).
+#[tokio::test]
+async fn a_form_named_like_its_collection_keeps_the_references_apart() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("builder")
+        .build("m16_same_names")
+        .await
+    else {
+        return;
+    };
+    let made = tool(
+        &world,
+        "builder",
+        "module_create",
+        json!({
+            "spaceId": "WORK",
+            "key": "feedback",
+            "name": "Feedback",
+            "collections": [{"name": "Feedback", "fields": [{"name": "Notes", "type": "text"}]}],
+            "forms": [{"name": "Feedback", "collection": "Feedback",
+                       "fields": [{"field": "Notes"}]}],
+            "automations": [{"collection": "Feedback", "rule": {
+                "name": "Tell me about feedback",
+                "trigger": {"kind": "record_created"},
+                "actions": [{"kind": "notify", "recipients": "owner",
+                             "message": "New feedback: {{record.title}}"}]
+            }}],
+            "nav": [
+                {"label": "Feedback", "target": {"kind": "collection", "collection": "Feedback"}},
+                {"label": "Give feedback", "target": {"kind": "form", "form": "Feedback"}}
+            ],
+            "clientRequestId": "feedback-module",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let part = |kind: &str| {
+        made["value"]["parts"]
+            .as_array()
+            .expect("parts")
+            .iter()
+            .find(|part| part["kind"] == kind)
+            .and_then(|part| part["id"].as_str())
+            .expect("part")
+            .to_owned()
+    };
+    let (collection, form) = (part("collection"), part("form"));
+    assert_ne!(collection, form);
+    let nav = made["value"].to_string();
+    assert!(nav.contains(&collection) && nav.contains(&form), "{nav}");
+}

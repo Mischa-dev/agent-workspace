@@ -232,6 +232,9 @@ pub const ALIASES: &[Alias] = &[
     run_renamed!("mark_read" => "conversation_mark_read"),
     // K2.8: answered in the envelope already.
     run_renamed!("conversation_members" => "conversation_members_update"),
+    // K2.9: the reply tools answered in an envelope of their own; the
+    // operations' refusals carry a message too.
+    run_renamed!("reply_progress" => "reply_progress_report"),
     run_renamed!("briefing" => "briefing_get"),
     renamed!("settings_set" => "setting_update"),
     renamed!("project_member_set" => "member_update"),

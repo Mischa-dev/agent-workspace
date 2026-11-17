@@ -40,6 +40,10 @@ export type CarriedValue = { field: string; followsMove?: boolean; targetField: 
 
 export type ChangedTask = { finished?: boolean | null; id: string; key: string; status?: string | null; statusGroup?: string | null; title?: string | null }
 
+export type ClaimRun = { runId: string; state: string }
+
+export type ClaimSession = { externalRef: string; harness: string; state: string; url?: string | null }
+
 export type ClaimValue = { claimedAt: string; claimedBy: string; expiresAt: string; handoff?: HandoffNote | null; note?: string | null; taskId: string }
 
 export type ColumnWrite = { field: string; hidden?: boolean; width?: number | null }
@@ -49,6 +53,8 @@ export type CommentItem = { at: string; author: string; files?: FileSummary[]; i
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
+
+export type ContextMessage = { author: string; authorKind: string; createdAt: string; edited?: boolean; messageId: string; removed?: boolean; text: string }
 
 export type ConversationSummary = { id: string; kind: string; lastMessage?: LastMessage | null; members?: string | null; name: string; outcome?: string | null; parentId?: string | null; parentName?: string | null; projectId: string; projectName: string; status?: string | null; unreadCount: number; url: string }
 
@@ -588,6 +594,34 @@ export type RecurringUpdateInput = { assignee?: string | null; clearDueInDays?: 
 
 export type RecurringUpdateOutput = { created: boolean; deleted: boolean; recurring?: unknown }
 
+export type ReplyClaimInput = { requestId: string }
+
+export type ReplyClaimOutput = { instructions: string; recentMessages: ContextMessage[]; request: InboxItem; run?: ClaimRun | null; session?: ClaimSession | null }
+
+export type ReplyPassInput = { generation?: number | null; reason?: string | null; requestId: string }
+
+export type ReplyPassOutput = { messageId?: string | null; requestId: string; status: string }
+
+export type ReplyProgressReportInput = { generation: number; requestId: string; status: string }
+
+export type ReplyProgressReportOutput = { leaseExpiresAt: string; requestId: string; status: string }
+
+export type ReplyReleaseInput = { generation?: number | null; reason: string; requestId: string }
+
+export type ReplyReleaseOutput = { messageId?: string | null; requestId: string; status: string }
+
+export type ReplyRetryInput = { requestId: string }
+
+export type ReplyRetryOutput = { requestId: string; status: string }
+
+export type ReplySendInput = { attachmentIds?: string[] | null; final?: boolean | null; generation: number; requestId: string; text: string }
+
+export type ReplySendOutput = { messageId?: string | null; requestId: string; status: string }
+
+export type ReplyStopInput = { requestId: string }
+
+export type ReplyStopOutput = { requestId: string; status: string; stoppedRequestIds: string[] }
+
 export type RequestCancelInput = { requestId: string }
 
 export type RequestCancelOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
@@ -869,6 +903,13 @@ export type Operations = {
   project_list: { input: ProjectListInput; output: ProjectListOutput }
   recurring_create: { input: RecurringCreateInput; output: RecurringCreateOutput }
   recurring_update: { input: RecurringUpdateInput; output: RecurringUpdateOutput }
+  reply_claim: { input: ReplyClaimInput; output: ReplyClaimOutput }
+  reply_pass: { input: ReplyPassInput; output: ReplyPassOutput }
+  reply_progress_report: { input: ReplyProgressReportInput; output: ReplyProgressReportOutput }
+  reply_release: { input: ReplyReleaseInput; output: ReplyReleaseOutput }
+  reply_retry: { input: ReplyRetryInput; output: ReplyRetryOutput }
+  reply_send: { input: ReplySendInput; output: ReplySendOutput }
+  reply_stop: { input: ReplyStopInput; output: ReplyStopOutput }
   request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
   request_create: { input: RequestCreateInput; output: RequestCreateOutput }
   request_get: { input: RequestGetInput; output: RequestGetOutput }

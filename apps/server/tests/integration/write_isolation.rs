@@ -546,7 +546,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "pull_request_refresh",
     "reply_claim",
     "reply_pass",
-    "reply_progress",
+    "reply_progress_report",
     "reply_release",
     "reply_send",
     "reply_stop",
@@ -6481,7 +6481,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .by_agent(),
         mcp_case(
-            "reply_progress",
+            "reply_progress_report",
             json!({"requestId": sp.reply_claim, "generation": generation(sp.reply_claim), "status": "Looking"}),
             vec![json!({"requestId": bx.claimed_reply, "generation": generation(bx.claimed_reply), "status": "Looking"})],
         )

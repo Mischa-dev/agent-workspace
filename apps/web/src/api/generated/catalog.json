@@ -1049,6 +1049,118 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "reply.claimed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "reply_claim",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Claim reply request"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "reply.passed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "reply_pass",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Pass"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "reply.progress"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "messages",
+    "name": "reply_progress_report",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Report progress"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "reply.released"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "reply_release",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Release reply request"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "reply.retried"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "reply_retry",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Ask again"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "message.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "messages",
+    "name": "reply_send",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Send reply"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "reply.stopped"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "reply_stop",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop reply request"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "request.cancelled"
     ],
     "idempotent": true,

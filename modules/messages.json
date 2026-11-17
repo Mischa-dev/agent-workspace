@@ -31,7 +31,7 @@
     "inbox_list": "query",
     "reply_claim": "change",
     "reply_send": "create",
-    "reply_progress": "change",
+    "reply_progress_report": "create",
     "reply_pass": "change",
     "reply_release": "change",
     "reply_stop": "change",

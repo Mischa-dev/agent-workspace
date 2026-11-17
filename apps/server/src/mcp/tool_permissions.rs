@@ -67,14 +67,7 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("agent_list", None),
     ("people_search", None),
     ("inbox_list", None),
-    ("reply_claim", Some(ChannelsPost)),
     ("session_bind", None),
-    ("reply_send", Some(ChannelsPost)),
-    ("reply_progress", Some(ChannelsPost)),
-    ("reply_pass", Some(ChannelsPost)),
-    ("reply_release", Some(ChannelsPost)),
-    ("reply_stop", Some(ChannelsPost)),
-    ("reply_retry", Some(ChannelsPost)),
     // Custom fields (AWD-89): reading them is seeing tasks; defining them
     // is the workflow's permission. Values are set through task_update.
     // Collections (AWD-90): anyone in the project reads them; records need

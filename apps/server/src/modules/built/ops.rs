@@ -383,7 +383,10 @@ impl Operation for ModuleCreate {
             })?
         };
         let mut made: Vec<(&'static str, Uuid)> = Vec::new();
-        let mut by_name: BTreeMap<String, Uuid> = BTreeMap::new();
+        // Names from this call, one map per kind: a collection and a form
+        // may share a name ("Feedback").
+        let mut collections_named: BTreeMap<String, Uuid> = BTreeMap::new();
+        let mut forms_named: BTreeMap<String, Uuid> = BTreeMap::new();
 
         // Collections, then their fields and views.
         if let Some(space) = space {
@@ -475,7 +478,7 @@ impl Operation for ModuleCreate {
                     }
                 }
                 crate::outbox::enqueue_collection_updated(tx, space, collection.id, &[]).await?;
-                by_name.insert(collection_name.to_lowercase(), collection.id);
+                collections_named.insert(collection_name.to_lowercase(), collection.id);
                 made.push(("collection", collection.id));
             }
 
@@ -489,7 +492,7 @@ impl Operation for ModuleCreate {
                         message: "Name a form in 1 to 80 characters, on one line.".into(),
                     }
                 })?;
-                let collection_id = by_name
+                let collection_id = collections_named
                     .get(&inline.collection.trim().to_lowercase())
                     .copied()
                     .or_else(|| crate::ops::refs::parse_id(&inline.collection))
@@ -547,7 +550,7 @@ impl Operation for ModuleCreate {
                     Some((collection_id, form)),
                 )
                 .await?;
-                by_name.insert(form_name.to_lowercase(), form_id);
+                forms_named.insert(form_name.to_lowercase(), form_id);
                 made.push(("form", form_id));
             }
 
@@ -560,7 +563,7 @@ impl Operation for ModuleCreate {
             for (index, inline) in input.automations.iter().enumerate() {
                 let mut rule = inline.rule.clone();
                 if let Some(collection) = inline.collection.as_deref() {
-                    let id = by_name
+                    let id = collections_named
                         .get(&collection.trim().to_lowercase())
                         .ok_or_else(|| OpError::Invalid {
                             field: format!("automations[{index}].collection").into(),
@@ -617,9 +620,9 @@ impl Operation for ModuleCreate {
         for entry in &input.nav {
             let mut target = entry.target.clone();
             // A name from this call becomes the part's id.
-            for slot in ["collection", "form"] {
+            for (slot, named_here) in [("collection", &collections_named), ("form", &forms_named)] {
                 if let Some(named) = target.get(slot).and_then(Value::as_str)
-                    && let Some(id) = by_name.get(&named.trim().to_lowercase())
+                    && let Some(id) = named_here.get(&named.trim().to_lowercase())
                 {
                     target[slot] = id.to_string().into();
                 }

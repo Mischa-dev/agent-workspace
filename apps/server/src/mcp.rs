@@ -103,7 +103,7 @@ mod project_template_tools;
 mod publish_tools;
 mod reactions;
 mod reads;
-mod replies;
+pub(crate) mod replies;
 mod repository_tools;
 mod role_tools;
 mod run_pages;
@@ -996,27 +996,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Agents: claim a reply request before answering it. Returns the conversation and recent messages. Claiming again renews the 15-minute lease.",
-        annotations(
-            title = "Claim reply request",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn reply_claim(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<replies::ReplyClaimArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<replies::ReplyToolResult<replies::ClaimProjection>> {
-        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
-        Json(replies::reply_claim(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Agents: record your runner's own session (its session or thread id) in a conversation you were asked to reply in, so the thread links to it and later wakeups and reply_claim name it (sessionRef) for you to resume. Bind again to move it, or with state idle when you stop.",
         annotations(
             title = "Bind agent session",
@@ -1033,130 +1012,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<launch_tools::SessionBindValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(launch_tools::session_bind(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Agents: answer a claimed reply request. Posts your text in the conversation as you; @handles become mentions. Closes the request unless you pass final: false, which posts an interim message and keeps your claim.",
-        annotations(
-            title = "Send reply",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn reply_send(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<replies::ReplySendArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
-        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
-        Json(replies::reply_send(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Agents: say what you're doing on a claimed reply request, in one short line (\"Running the server tests\"). People see it next to your name until you reply. Also renews the claim, so report progress at least every 15 minutes during long work.",
-        annotations(
-            title = "Report progress",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn reply_progress(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<replies::ReplyProgressArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<replies::ReplyToolResult<replies::ProgressProjection>> {
-        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
-        Json(replies::reply_progress(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Agents: pass on an optional group reply request when you have nothing useful to add. Posts nothing.",
-        annotations(
-            title = "Pass",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn reply_pass(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<replies::ReplyPassArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
-        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
-        Json(replies::reply_pass(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Agents: give back a reply request you can't answer, with a reason people will see.",
-        annotations(
-            title = "Release reply request",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn reply_release(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<replies::ReplyReleaseArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
-        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
-        Json(replies::reply_release(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "People: ask an agent again about a reply request that expired, was released or was stopped, as the Retry button on its status line does. It goes back in the agent's inbox and the agent is woken. The agent must still be able to answer there.",
-        annotations(
-            title = "Retry agent",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn reply_retry(
-        &self,
-        Parameters(arguments): Parameters<replies::ReplyRetryArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<replies::ReplyToolResult<replies::RetryProjection>> {
-        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
-        Json(replies::reply_retry(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "People: stop an agent's work on a reply request, as the Stop button on its status line does. Its follow-ups queued behind it stop too. The agent hears at once, and its next call on the request is refused.",
-        annotations(
-            title = "Stop agent",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn reply_stop(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<replies::ReplyStopArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<replies::ReplyToolResult<replies::StopProjection>> {
-        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
-        Json(replies::reply_stop(&self.state, principal, arguments).await)
     }
 
     // -- Tasks ---------------------------------------------------------------

@@ -2714,33 +2714,13 @@ async fn call_tool(
     tool: &str,
     mut arguments: Value,
 ) -> Result<Value, String> {
-    // A tool that is an operation runs through the dispatcher, with this
-    // rule and run on its audit row.
-    if crate::ops::mcp::is_operation(tool) {
-        let request_id = arguments
-            .as_object_mut()
-            .and_then(|object| object.remove("clientRequestId"))
-            .and_then(|value| value.as_str().map(str::to_owned));
-        return run_operation(state, rule, acting, run_id, tool, arguments, request_id).await;
-    }
-    let result = mcp::call_tool_direct(state, principal_for(rule, acting), tool, arguments)
-        .await
-        .map_err(|error| match error {
-            mcp::DirectCallError::UnknownTool => "the tool is missing".to_owned(),
-            mcp::DirectCallError::InvalidArguments(message) => message,
-            mcp::DirectCallError::Refused(error) => error.to_string(),
-        })?;
-    match result.get("outcome").and_then(Value::as_str) {
-        None | Some("ok" | "applied") => Ok(result),
-        Some(_) => Err(result
-            .get("message")
-            .or_else(|| result.get("error"))
-            .and_then(Value::as_str)
-            .unwrap_or("the change was refused")
-            .chars()
-            .take(300)
-            .collect()),
-    }
+    // Every action runs an operation through the dispatcher, with this rule
+    // and run on its audit row (K2.18).
+    let request_id = arguments
+        .as_object_mut()
+        .and_then(|object| object.remove("clientRequestId"))
+        .and_then(|value| value.as_str().map(str::to_owned));
+    run_operation(state, rule, acting, run_id, tool, arguments, request_id).await
 }
 
 /// Run an operation as the rule's maker, confined to the rule's project as
