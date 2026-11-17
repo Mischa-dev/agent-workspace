@@ -225,6 +225,12 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The statuses an operation's own refusal answers with (its `outcome`
+/// says which), rather than the shared error body.
+fn refuses(status: &str) -> bool {
+    matches!(status, "403" | "404" | "409" | "422" | "503")
+}
+
 /// Moves a schema's `$defs` into `components.schemas` and points its
 /// references there. A definition keeps its own name when every tool that
 /// has one defines it the same way (shared message content, a thread's
@@ -507,15 +513,24 @@ pub(crate) fn document() -> Value {
                 "content": { "application/json": { "schema": output.clone() } },
             }),
         );
+        // The refusing statuses (403, 404, 409, 422, 503) share it through
+        // the 4XX and 5XX ranges; the statuses every operation answers the
+        // same way are named, which takes precedence over a range.
         for (status, _) in ERROR_STATUSES {
-            let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
-                json!({ "$ref": format!("#/components/responses/{refused}") })
-            } else {
+            if !refuses(status) {
                 // The same for every operation, so referenced rather than
                 // repeated, which keeps the document small as tools are added.
-                json!({ "$ref": format!("#/components/responses/Error{status}") })
-            };
-            responses.insert((*status).to_owned(), response);
+                responses.insert(
+                    (*status).to_owned(),
+                    json!({ "$ref": format!("#/components/responses/Error{status}") }),
+                );
+            }
+        }
+        for range in ["4XX", "5XX"] {
+            responses.insert(
+                range.to_owned(),
+                json!({ "$ref": format!("#/components/responses/{refused}") }),
+            );
         }
         paths.insert(
             format!("/{name}"),
@@ -558,7 +573,7 @@ pub(crate) fn document() -> Value {
             "schemas": components,
             "responses": ERROR_STATUSES
                 .iter()
-                .filter(|(status, _)| !matches!(*status, "403" | "404" | "409" | "422" | "503"))
+                .filter(|(status, _)| !refuses(status))
                 .map(|(status, description)| {
                     (
                         format!("Error{status}"),

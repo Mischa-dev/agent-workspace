@@ -383,6 +383,12 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          (tests/integration/a1_host_protocol.rs)",
     ),
     (
+        "POST /api/v1/host/agents/register",
+        "a host's own call with its own token, proposing an agent for a workspace that \
+         owns it or that its owner is in; any other is refused \
+         (tests/integration/agent_register.rs)",
+    ),
+    (
         "POST /api/v1/host/notices",
         "a host's own call with its own token, about agents bound to it \
          (tests/integration/a1_host_protocol.rs)",
@@ -450,6 +456,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "account_workspace_add",
     "agent_create",
     "agent_managers_set",
+    "agent_action_run",
+    "agent_register_decide",
     "agent_pause",
     "agent_resume",
     "agent_profile_write",
@@ -1227,6 +1235,8 @@ struct Targets {
     /// The workspace's hosts (A1.11): the agent is bound to the first two
     /// as "net-agent" (HTTP, MCP); the last two are for unlinking.
     hosts: [Uuid; 4],
+    /// An agent the third host proposed (A2.19), waiting for approval.
+    proposal: Uuid,
     owner: Uuid,
     /// The agent, as an actor.
     agent: Uuid,
@@ -1753,10 +1763,10 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         *host = sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version,
-                               described_agents, enrolled_by_account_id)
+                               described_agents, actions, enrolled_by_account_id)
             VALUES (gen_random_uuid(), $1, $2, $3, '2026-11',
                     '[{"hostAgentRef": "net-agent", "name": "Net", "backends": [], "actions": []}]',
-                    $4)
+                    '[{"id": "net-action", "label": "Net"}]', $4)
             RETURNING id
             "#,
         )
@@ -1782,6 +1792,20 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .expect("host agent");
         }
     }
+    let proposal = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO agent_proposals (id, workspace_id, host_id, host_agent_ref, display_name,
+                                     handle, client_request_id)
+        VALUES (gen_random_uuid(), $1, $2, 'net-proposed', 'Net proposed', $3, 'net-proposal')
+        RETURNING id
+        "#,
+    )
+    .bind(organization)
+    .bind(hosts[2])
+    .bind(format!("net-proposed-{tag}"))
+    .fetch_one(pool)
+    .await
+    .expect("proposal");
     // The owner's delivery connection, with a webhook to sign for (A2).
     let connection = {
         let mut database = pool.acquire().await.expect("connection");
@@ -1859,6 +1883,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         custom_emoji,
         comment_thread,
         hosts,
+        proposal,
         questions,
         reported_runs,
         custom_role,
@@ -7259,6 +7284,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .no_effect(vec![json!({"hostId": ax.hosts[1], "accountId": bx.agent})])
         .last(),
+        // A2.19: B's proposal isn't A's to decide, and B's host and agent
+        // aren't A's to run actions on.
+        mcp_case(
+            "agent_register_decide",
+            json!({"proposal": ax.proposal, "decision": "refuse"}),
+            vec![json!({"proposal": bx.proposal, "decision": "refuse"})],
+        ),
+        mcp_case(
+            "agent_action_run",
+            json!({"host": ax.hosts[2], "actionId": "net-action"}),
+            vec![
+                json!({"host": bx.hosts[2], "actionId": "net-action"}),
+                json!({"account": bx.agent, "actionId": "net-action"}),
+            ],
+        ),
         mcp_case(
             "host_unlink",
             json!({"hostId": ax.hosts[3]}),

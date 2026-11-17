@@ -31,6 +31,36 @@
     "title": "Add an agent you have to this workspace"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "agents",
+    "name": "agent_action_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "A host action's reply"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.action_run"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_action_run",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Run a host's action"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -63,6 +93,20 @@
     "title": "Set agent managers"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "agent_offer_list",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Ways to get a new agent"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -78,6 +122,22 @@
     "preview": false,
     "proposable": false,
     "title": "Pause agent"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "host.agent_registered"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "agent_register_decide",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Approve an agent a host made"
   },
   {
     "automation": true,

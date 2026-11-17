@@ -2054,6 +2054,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "sheet_read",
     "host_list",
     "account_joinable_list",
+    "agent_offer_list",
+    "agent_action_get",
     "inbox_list",
     "invitation_list",
     "label_list",
@@ -2377,6 +2379,23 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "account_joinable_list",
             vec![json!({}), json!({"workspace": a.organization})],
             vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // A2.19: the offers of the hosts you may use here; another
+        // workspace's aren't listed, and another's action reply isn't read.
+        case(
+            "agent_offer_list",
+            vec![json!({}), json!({"workspace": a.organization})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "agent_action_get",
+            vec![json!({"commandId": a.host_action})],
+            vec![
+                json!({"commandId": b.host_action}),
+                json!({"commandId": b.host_action, "workspace": b.organization}),
+            ],
             vec![],
         ),
         // A1.11: another workspace's hosts are out of reach.

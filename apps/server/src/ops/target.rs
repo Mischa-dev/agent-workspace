@@ -200,10 +200,11 @@ const KINDS: &[(&str, &str)] = &[
     // conversation's and run's visibility.
     (
         "request",
-        // A request to let an account in (A2.18) is about the workspace,
-        // though it is asked in the workspace's own space.
+        // A request to let an account in (A2.18) or add an agent a host
+        // made (A2.19) is about the workspace, though it is asked in the
+        // workspace's own space.
         "SELECT request.workspace_id, \
-                CASE WHEN request.subject_kind = 'account_join' THEN NULL \
+                CASE WHEN request.subject_kind IN ('account_join', 'agent_register') THEN NULL \
                      ELSE request.space_id END \
          FROM requests request \
          WHERE request.id = $1 AND request_visible_to(request.id, $2)",

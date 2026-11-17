@@ -34,6 +34,7 @@ pub mod commands;
 pub mod dispatch;
 pub mod ops;
 pub mod protocol;
+pub mod register;
 pub mod routes;
 
 /// The protocol version this server speaks, and every one it still serves.
@@ -691,7 +692,21 @@ pub async fn bind(
             message: "Binding that agent needs the agents.manage permission where it is a member.",
         });
     }
-    let lineage = described_lineage(&host.described_agents, &reference);
+    write_binding(transaction, &host, account_id, &reference, caller).await?;
+    let host = bump(transaction, host.id).await?;
+    view(transaction, caller, &host).await
+}
+
+/// The binding itself, once whoever asked may make it: refused when
+/// another agent already has that name on the host.
+pub(crate) async fn write_binding(
+    transaction: &mut Transaction<'_, Postgres>,
+    host: &HostRow,
+    account_id: Uuid,
+    reference: &str,
+    caller: Uuid,
+) -> Result<(), AppError> {
+    let lineage = described_lineage(&host.described_agents, reference);
     let taken = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
@@ -701,7 +716,7 @@ pub async fn bind(
         "#,
     )
     .bind(host.id)
-    .bind(&reference)
+    .bind(reference)
     .bind(account_id)
     .fetch_one(&mut **transaction)
     .await?;
@@ -711,7 +726,7 @@ pub async fn bind(
             message: "Another agent is bound to that name on this host. Unbind it first.",
         });
     }
-    let described = described_agent(&host.described_agents, &reference);
+    let described = described_agent(&host.described_agents, reference);
     sqlx::query(
         r#"
         INSERT INTO host_agents (
@@ -731,7 +746,7 @@ pub async fn bind(
     )
     .bind(host.id)
     .bind(account_id)
-    .bind(&reference)
+    .bind(reference)
     .bind(lineage)
     .bind(
         described
@@ -746,8 +761,7 @@ pub async fn bind(
     .bind(caller)
     .execute(&mut **transaction)
     .await?;
-    let host = bump(transaction, host.id).await?;
-    view(transaction, caller, &host).await
+    Ok(())
 }
 
 /// Stop `host` acting for agent `account_id`. Its runs there are

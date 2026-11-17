@@ -1015,6 +1015,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/host/agents/register",
+            Plumbing("a host proposing an agent it made, with its own credential"),
+        ),
+        (
+            Post,
             "/api/v1/host/commands/{command_id}/ack",
             Plumbing("a host acknowledging a command, with its own credential"),
         ),

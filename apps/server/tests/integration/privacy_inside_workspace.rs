@@ -1258,6 +1258,31 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
         .await;
         assert_ne!(body["outcome"], "ok", "lena runs {name}: {status} {body}");
     }
+    // A2.19: nor run a host's action for it, or approve an agent a host
+    // proposed (she can't add agents). agent_register.rs covers both with a
+    // real host.
+    for (name, input) in [
+        (
+            "agent_action_run",
+            json!({"account": rook, "actionId": "pause"}),
+        ),
+        (
+            "agent_register_decide",
+            json!({"proposal": Uuid::now_v7(), "decision": "approve"}),
+        ),
+    ] {
+        let (status, body) = send(
+            &world.app,
+            world.people["lena"].browser.request(
+                "POST",
+                &format!("/api/v2/w/{}/ops/{name}", world.organization),
+                Some(&format!("lena-{name}")),
+                input,
+            ),
+        )
+        .await;
+        assert_ne!(body["outcome"], "ok", "lena runs {name}: {status} {body}");
+    }
     let paused = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM account_statuses WHERE account_id = $1 AND paused_at IS NOT NULL",
     )

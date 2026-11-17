@@ -118,6 +118,8 @@ export type NavView = { icon?: string | null; id: string; label: string; target:
 
 export type NewSpace = { key: string; name: string }
 
+export type Offer = { hostId: string; hostName: string; offer: Record<string, unknown> }
+
 export type Operation = { arrowheads?: string | null; axis?: string | null; backgroundColor?: string | null; dataBase64?: string | null; direction?: string | null; dx?: number | null; dy?: number | null; edge?: string | null; fileId?: string | null; fillStyle?: string | null; fontSize?: number | null; frameId?: string | null; from?: string | null; gap?: number | null; height?: number | null; id?: string | null; ids?: string[] | null; link?: string | null; locked?: boolean | null; mimeType?: string | null; name?: string | null; op: string; opacity?: number | null; points?: number[][] | null; position?: string | null; roughness?: number | null; rounded?: boolean | null; strokeColor?: string | null; strokeStyle?: string | null; strokeWidth?: number | null; text?: string | null; textAlign?: string | null; to?: string | null; type?: string | null; width?: number | null; x?: number | null; y?: number | null }
 
 export type OperationResult = { ids: string[]; op: string }
@@ -204,6 +206,14 @@ export type AccountWorkspaceAddInput = { account: string; handle?: string | null
 
 export type AccountWorkspaceAddOutput = { accountId: string; requestId?: string | null; spaceId?: string | null; status: string }
 
+export type AgentActionGetInput = { commandId: string }
+
+export type AgentActionGetOutput = { commandId: string; reply?: Record<string, unknown> | null; state: string }
+
+export type AgentActionRunInput = { account?: string | null; actionId: string; host?: string | null; input?: Record<string, unknown> | null }
+
+export type AgentActionRunOutput = { commandId: string; reply?: Record<string, unknown> | null; state: string }
+
 export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
 
 export type AgentCreateOutput = { accountId: string; connectionId: string; credential?: string | null; credentialExpiresAt?: string | null; spaceId: string }
@@ -212,9 +222,17 @@ export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: st
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
 
+export type AgentOfferListInput = Record<string, never>
+
+export type AgentOfferListOutput = { offers: Offer[] }
+
 export type AgentPauseInput = { account: string; everywhere?: boolean; reason?: string | null }
 
 export type AgentPauseOutput = { account: string; changed: boolean; status: string }
+
+export type AgentRegisterDecideInput = { decision: string; proposal: string; roleId?: string | null }
+
+export type AgentRegisterDecideOutput = { accountId?: string | null; proposalId: string; status: string }
 
 export type AgentResumeInput = { account: string; everywhere?: boolean; reason?: string | null }
 
@@ -619,9 +637,13 @@ export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecyc
 export type Operations = {
   account_joinable_list: { input: AccountJoinableListInput; output: AccountJoinableListOutput }
   account_workspace_add: { input: AccountWorkspaceAddInput; output: AccountWorkspaceAddOutput }
+  agent_action_get: { input: AgentActionGetInput; output: AgentActionGetOutput }
+  agent_action_run: { input: AgentActionRunInput; output: AgentActionRunOutput }
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  agent_offer_list: { input: AgentOfferListInput; output: AgentOfferListOutput }
   agent_pause: { input: AgentPauseInput; output: AgentPauseOutput }
+  agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
   agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }

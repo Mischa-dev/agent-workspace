@@ -13,6 +13,7 @@ mod a1_runs_record;
 mod accounts;
 mod agent_interface;
 mod agent_join;
+mod agent_register;
 mod awd102_task_move;
 mod awd110_collection_forms;
 mod awd110_collection_views;

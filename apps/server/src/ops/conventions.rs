@@ -73,6 +73,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "resume",
             // An account joins a workspace (A2.18).
             "add",
+            // A host's published action runs (A2.19).
+            "run",
         ],
     ),
     (

@@ -220,6 +220,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
+                "account_join_requests",
+                "a pending ask to let an outside account in; asked again after import",
+            ),
+            (
                 "invite_tokens",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
@@ -1734,6 +1738,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "git_worktrees",
                 "a machine or session on this server; set up again after import",
+            ),
+            (
+                "agent_proposals",
+                "a host's pending offer of an agent; the host proposes it again after import",
             ),
             (
                 "host_commands",

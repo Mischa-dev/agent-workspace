@@ -34,6 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/host/describe", post(describe_route))
         .route("/api/v1/host/heartbeat", post(heartbeat_route))
         .route("/api/v1/host/notices", post(notice_route))
+        .route("/api/v1/host/agents/register", post(register_route))
         .route("/api/v1/host/commands", get(commands_route))
         .route("/api/v1/host/commands/{command_id}", get(command_route))
         .route("/api/v1/host/commands/{command_id}/ack", post(ack_route))
@@ -169,6 +170,22 @@ async fn notice_route(
 ) -> Result<Json<protocol::NoticeReply>, HostError> {
     let host = host_caller(&state, &headers).await?;
     Ok(Json(protocol::notice(&state.pool, &host, request).await?))
+}
+
+/// A2.19: the host proposes an agent it made, for a person to approve.
+async fn register_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<super::register::RegisterRequest>,
+) -> Result<(StatusCode, Json<super::register::Registered>), HostError> {
+    let host = host_caller(&state, &headers).await?;
+    let registered = super::register::propose(&state, &host, request).await?;
+    let status = if registered.status == "proposed" {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(registered)))
 }
 
 // ------------------------------------------------------------- commands

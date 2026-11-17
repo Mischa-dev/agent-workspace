@@ -79,6 +79,9 @@ pub(crate) struct World {
     pub(crate) run_thread: Uuid,
     pub(crate) run: Uuid,
     pub(crate) approval: Uuid,
+    /// An action the owner ran on a host of the workspace's (A2.19),
+    /// answered.
+    pub(crate) host_action: Uuid,
     pub(crate) plan: Uuid,
     pub(crate) import: String,
     /// The owner's webhook: a connection with an address (A2.6).
@@ -1033,6 +1036,55 @@ async fn build_workspace(
     )
     .await;
 
+    // A2.19: a host of the workspace's, and an action the owner ran on it.
+    let host_action = {
+        let owner = sqlx::query_scalar::<_, Uuid>(
+            "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
+        )
+        .bind(organization)
+        .fetch_one(pool)
+        .await
+        .expect("owner");
+        let account = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("host account");
+        let host = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version,
+                               actions, enrolled_by_account_id)
+            VALUES (gen_random_uuid(), $1, $2, $3, '2026-11', '[{"id": "net-action"}]', $4)
+            RETURNING id
+            "#,
+        )
+        .bind(account)
+        .bind(organization)
+        .bind(format!("Isolation host{m}"))
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("host");
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO host_commands (id, workspace_id, host_id, kind, body, state, ack,
+                                       acked_at, expires_at, invoked_by_account_id)
+            VALUES (gen_random_uuid(), $1, $2, 'action', '{"action": "net-action"}', 'acked',
+                    jsonb_build_object('outcome', 'done', 'message', $3::text), now(),
+                    now() + interval '1 day', $4)
+            RETURNING id
+            "#,
+        )
+        .bind(organization)
+        .bind(host)
+        .bind(format!("Action reply{m}"))
+        .bind(owner)
+        .fetch_one(pool)
+        .await
+        .expect("host action")
+    };
+
     // W12: what the run did and cost, an agent profile made from a
     // template, and a harness the workspace registered (a connected runner).
     let mut transaction = pool.begin().await.expect("run step transaction");
@@ -1697,6 +1749,7 @@ async fn build_workspace(
         run_thread,
         run,
         approval,
+        host_action,
         plan,
         import,
         webhook,
