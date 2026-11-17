@@ -19,7 +19,8 @@ use super::{
 };
 use crate::ops::{
     Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted, access_shim,
-    error::ConflictReason, refs::IdRef,
+    error::{ConflictReason, DenyReason},
+    refs::IdRef,
 };
 
 pub fn register_ops(registry: &mut Registry) {
@@ -370,6 +371,24 @@ impl Operation for PackageInstall {
             space_id: None,
         };
         let workspace_target = Target::Workspace(Some(workspace));
+        // A connection held to one space installs only into that space, and
+        // only what stays there: its workspace role came with the account.
+        if ctx.caller.confined_space.is_some()
+            && (ctx.space_id.is_none()
+                || plan
+                    .items
+                    .iter()
+                    .filter(live)
+                    .any(|line| line.kind == "role" || line.needs_admin))
+        {
+            return Err(OpError::Denied {
+                reason: DenyReason::Delegation,
+                message: "This connection is held to one space, so it can only install what \
+                          stays in that space. Reconnect it for your whole account to change \
+                          the workspace."
+                    .into(),
+            });
+        }
         if plan
             .items
             .iter()

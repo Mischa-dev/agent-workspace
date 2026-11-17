@@ -1015,6 +1015,41 @@ async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
         .await
         .expect("target tasks");
     assert_eq!(count, 0);
+
+    // Nor does it change the workspace through a package: not a role, and
+    // not a package that lands outside its project.
+    let package = json!({
+        "format": "agent-workspace-package/1",
+        "id": "escape",
+        "version": "1.0.0",
+        "name": "Escape",
+        "target": "workspace",
+        "contents": [{"kind": "role", "key": "boss", "body": {
+            "name": "Boss", "baseRole": "admin", "permissions": ["tasks.view"]}}],
+    });
+    let preview = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "package_preview",
+        json!({"package": package}),
+    )
+    .await;
+    let installed = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "package_install",
+        json!({"package": package, "planHash": preview["value"]["planHash"],
+               "clientRequestId": "escape-1"}),
+    )
+    .await;
+    assert_eq!(installed["outcome"], "permission_denied", "{installed}");
+    let roles: i64 = sqlx::query_scalar("SELECT count(*) FROM workspace_roles WHERE name = 'Boss'")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("roles");
+    assert_eq!(roles, 0);
 }
 
 #[tokio::test]
