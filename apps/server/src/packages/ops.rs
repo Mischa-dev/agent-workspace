@@ -1164,8 +1164,21 @@ impl Operation for PackageRemove {
                          WHERE id = ANY($1) AND archived_at IS NULL"
                     }
                     "page" | "skill" => {
-                        "UPDATE project_pages SET archived_at = now() \
-                         WHERE id = ANY($1) AND archived_at IS NULL"
+                        // Open pages hear of it, as from any page change.
+                        let changed = sqlx::query_as::<_, (Uuid, Uuid, i64)>(
+                            "UPDATE project_pages SET archived_at = now(), version = version + 1 \
+                             WHERE id = ANY($1) AND archived_at IS NULL \
+                             RETURNING id, project_id, version",
+                        )
+                        .bind(ids)
+                        .fetch_all(&mut **tx)
+                        .await
+                        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
+                        archived += changed.len();
+                        for (page, space, version) in changed {
+                            crate::page_docs::store::page_updated(tx, space, page, version).await?;
+                        }
+                        continue;
                     }
                     "form" => {
                         "UPDATE bug_report_links SET state = 'disabled' \

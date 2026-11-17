@@ -510,11 +510,35 @@ pub struct NavView {
     pub target: serde_json::Value,
 }
 
-pub async fn nav(connection: &mut PgConnection, module_id: Uuid) -> Result<Vec<NavView>, AppError> {
+/// A module's nav entries `reader` may follow: an entry whose collection,
+/// page or form is in a space they aren't in is left out.
+pub async fn nav(
+    connection: &mut PgConnection,
+    module_id: Uuid,
+    reader: Uuid,
+) -> Result<Vec<NavView>, AppError> {
     Ok(sqlx::query_as::<_, NavRow>(
-        "SELECT id, label, icon, target FROM module_nav WHERE module_id = $1 ORDER BY position, id",
+        r#"
+        SELECT nav.id, nav.label, nav.icon, nav.target FROM module_nav nav
+        WHERE nav.module_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM (
+                  SELECT project_id FROM collections
+                  WHERE id::text = nav.target->>'collection'
+                  UNION ALL
+                  SELECT project_id FROM project_pages WHERE id::text = nav.target->>'page'
+                  UNION ALL
+                  SELECT project_id FROM bug_report_links WHERE id::text = nav.target->>'form'
+              ) goes
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM project_memberships membership
+                  WHERE membership.project_id = goes.project_id
+                    AND membership.actor_id = $2 AND membership.enabled))
+        ORDER BY nav.position, nav.id
+        "#,
     )
     .bind(module_id)
+    .bind(reader)
     .fetch_all(&mut *connection)
     .await?
     .into_iter()

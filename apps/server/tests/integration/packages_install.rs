@@ -181,6 +181,18 @@ async fn a_package_installs_once_and_exports_back() {
     .await
     .expect("collection");
     assert!(archived);
+    // Open pages hear that the skill page went.
+    let page_heard = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM outbox_events event JOIN project_pages page \
+             ON page.id::text = event.payload->>'pageId' \
+         WHERE event.event_type = 'page.updated' AND page.title = 'Triage' \
+           AND page.archived_at IS NOT NULL \
+           AND (event.payload->>'version')::bigint = page.version",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("page events");
+    assert_eq!(page_heard, 1);
     world.finish().await;
 }
 

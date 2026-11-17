@@ -82,7 +82,7 @@ async fn view(call: &mut OpCall<'_>, module_id: Uuid) -> Result<ModuleView, OpEr
         archived: row.archived_at.is_some(),
         archived_parts: row.archived_parts.clone(),
         parts: super::parts(connection, row.id, reader).await?,
-        nav: super::nav(connection, row.id).await?,
+        nav: super::nav(connection, row.id, reader).await?,
     })
 }
 
