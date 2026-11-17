@@ -5636,7 +5636,7 @@
     },
     "/api/v2/w/{workspace}/ops/connection_create": {
       "post": {
-        "description": "Create a connection to be told through: its name, the webhook events are pushed to and its format (standard by default), whether it reaches every workspace, and what it subscribes to. For your own account, or an agent or app you manage (account). A webhook gets a signing secret, shown once.",
+        "description": "Create a connection to be told through: its name, the webhook events are pushed to and its format (standard by default), whether it reaches every workspace, and what it subscribes to. For your own account, or an agent or app you manage (account). A webhook gets a signing secret, shown once: a retry of the same call doesn't show it again (rotate it if it was lost).",
         "operationId": "connection_create",
         "parameters": [
           {

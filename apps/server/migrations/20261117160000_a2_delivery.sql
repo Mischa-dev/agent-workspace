@@ -181,8 +181,10 @@ AS $$
                    WHERE m.organization_id = ev.workspace_id AND m.actor_id = recipient
                      AND m.enabled)
                AND (ev.space_id IS NULL OR space_readable_by(ev.space_id, recipient))
-               AND (ev.access_thing_id IS NULL
-                    OR delivery_thing_visible(ev.access_thing_id, recipient))
+               -- The thing it is about too (a task needs tasks.view), when
+               -- no other thing is named to decide on.
+               AND (COALESCE(ev.access_thing_id, ev.thing_id) IS NULL
+                    OR delivery_thing_visible(COALESCE(ev.access_thing_id, ev.thing_id), recipient))
        END
 $$;
 

@@ -421,7 +421,8 @@ pub struct ConnectionWritten {
 const CREATE_DESCRIPTION: &str = "Create a connection to be told through: its name, the \
     webhook events are pushed to and its format (standard by default), whether it reaches every \
     workspace, and what it subscribes to. For your own account, or an agent or app you manage \
-    (account). A webhook gets a signing secret, shown once.";
+    (account). A webhook gets a signing secret, shown once: a retry of the same call doesn't \
+    show it again (rotate it if it was lost).";
 
 impl Operation for ConnectionCreate {
     const NAME: &'static str = "connection_create";
@@ -429,6 +430,7 @@ impl Operation for ConnectionCreate {
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const SHOWN_ONCE: &'static [&'static str] = &["webhookSecret"];
     const TITLE: &'static str = "Create connection";
     const DESCRIPTION: &'static str = CREATE_DESCRIPTION;
     const EMITS: &'static [&'static str] = &["connection.changed"];
@@ -463,6 +465,7 @@ impl Operation for ConnectionUpdate {
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const SHOWN_ONCE: &'static [&'static str] = &["webhookSecret"];
     const TITLE: &'static str = "Update connection";
     const DESCRIPTION: &'static str = "Change a connection: its name, the webhook events are \
         pushed to (\"\" stops pushes) and its format, whether it reaches every workspace, and \
@@ -781,6 +784,7 @@ impl Operation for ConnectionSecretRotate {
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const SHOWN_ONCE: &'static [&'static str] = &["webhookSecret"];
     const TITLE: &'static str = "Rotate connection secret";
     const EMITS: &'static [&'static str] = &["connection.changed"];
     const DESCRIPTION: &'static str = "Give a connection's webhook a new signing secret, shown \

@@ -70,9 +70,9 @@ imagesize = "0.15.0"
 mime_guess = "2.0.5"
 
 [dev-dependencies]
-agent-workspace-delivery-contract = { path = "../../crates/delivery-contract" }
-agent-workspace-host-conformance = { path = "../../crates/host-conformance" }
-agent-workspace-minimal-host = { path = "../../examples/minimal-host" }
+agent-workspace-delivery-contract = { version = "0.0.1", path = "../../crates/delivery-contract" }
+agent-workspace-host-conformance = { version = "0.0.1", path = "../../crates/host-conformance" }
+agent-workspace-minimal-host = { version = "0.0.1", path = "../../examples/minimal-host" }
 reqwest = { version = "0.12.28", default-features = false }
 tempfile = "3.23.0"
 tokio-tungstenite = "0.29.0"
