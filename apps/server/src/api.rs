@@ -1535,36 +1535,15 @@ pub(crate) async fn interrupt_run_in(
         return Ok(context.project_id);
     }
 
-    transition_run(
+    interrupt_run_unchecked(
         &mut transaction,
-        run_id,
-        RunState::Interrupted,
-        Some("Interrupted by the requesting Actor."),
-    )
-    .await?;
-    retain_run_workspace(&mut transaction, run_id).await?;
-    crate::provider::idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
-    let event_id = insert_significant_event(
-        &mut transaction,
-        run_id,
-        "run_interrupted",
-        "The run was interrupted.",
+        RunToStop {
+            run_id,
+            project_id: context.project_id,
+            conversation_id: context.conversation_id,
+        },
+        "Interrupted by the requesting Actor.",
         serde_json::json!({"actor_id": principal.actor_id()}),
-    )
-    .await?;
-    insert_event_entry(&mut transaction, context.conversation_id, event_id).await?;
-    sqlx::query(
-        "UPDATE agent_approvals SET status = 'canceled' WHERE agent_run_id = $1 AND status = 'pending'",
-    )
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await?;
-    crate::requests::legacy::run_approvals_written(&mut *transaction, run_id).await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        context.project_id,
-        context.conversation_id,
-        run_id,
     )
     .await?;
     idempotency::complete(
@@ -1578,6 +1557,73 @@ pub(crate) async fn interrupt_run_in(
     .await?;
     transaction.commit().await?;
     Ok(context.project_id)
+}
+
+/// A run to stop, with where it lives.
+#[derive(Clone, Copy, Debug, FromRow)]
+pub(crate) struct RunToStop {
+    pub run_id: Uuid,
+    pub project_id: Uuid,
+    pub conversation_id: Uuid,
+}
+
+/// Interrupt a run that hasn't finished: its state (which its driver
+/// watches, and stops the harness's turn on), its workspace kept, its
+/// pending approvals cancelled and open screens told. The caller has
+/// decided it may, and holds the run's row.
+async fn interrupt_run_unchecked(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run: RunToStop,
+    reason: &str,
+    payload: serde_json::Value,
+) -> Result<(), AppError> {
+    let run_id = run.run_id;
+    transition_run(transaction, run_id, RunState::Interrupted, Some(reason)).await?;
+    retain_run_workspace(transaction, run_id).await?;
+    crate::provider::idle_provider_session_for_terminal_run(transaction, run_id).await?;
+    let event_id = insert_significant_event(
+        transaction,
+        run_id,
+        "run_interrupted",
+        "The run was interrupted.",
+        payload,
+    )
+    .await?;
+    insert_event_entry(transaction, run.conversation_id, event_id).await?;
+    sqlx::query(
+        "UPDATE agent_approvals SET status = 'canceled' WHERE agent_run_id = $1 AND status = 'pending'",
+    )
+    .bind(run_id)
+    .execute(&mut **transaction)
+    .await?;
+    crate::requests::legacy::run_approvals_written(&mut **transaction, run_id).await?;
+    outbox::enqueue_agent_run_updated(transaction, run.project_id, run.conversation_id, run_id)
+        .await?;
+    Ok(())
+}
+
+/// Interrupt every run in `workspace` that hasn't finished (H1.24): a
+/// suspended workspace, or one being deleted, runs nothing. Inside the
+/// caller's transaction, which holds the workspace's row.
+pub(crate) async fn interrupt_workspace_runs(
+    connection: &mut sqlx::PgConnection,
+    workspace: Uuid,
+    why: &'static str,
+) -> Result<usize, AppError> {
+    use sqlx::Connection;
+    let mut transaction = connection.begin().await?;
+    let runs = crate::runs::active_in_workspace(&mut transaction, workspace).await?;
+    for run in &runs {
+        interrupt_run_unchecked(
+            &mut transaction,
+            *run,
+            "Stopped because the workspace was suspended or is being deleted.",
+            serde_json::json!({ "reason": why }),
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(runs.len())
 }
 
 pub(crate) async fn insert_significant_event(

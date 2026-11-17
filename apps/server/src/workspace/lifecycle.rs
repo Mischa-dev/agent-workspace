@@ -491,6 +491,9 @@ pub async fn suspend(
     .bind(reason.key())
     .execute(&mut *connection)
     .await?;
+    // Nothing keeps running in a suspended workspace: its runs stop now,
+    // and their drivers stop the harnesses' turns.
+    crate::api::interrupt_workspace_runs(connection, workspace, "workspace_suspended").await?;
     announce(connection, workspace, Lifecycle::Suspended).await
 }
 
@@ -575,6 +578,8 @@ pub async fn request_deletion(
             .max_attempts(20),
     )
     .await?;
+    // A workspace being deleted takes no work, so its runs stop too.
+    crate::api::interrupt_workspace_runs(connection, workspace, "workspace_deleting").await?;
     announce(connection, workspace, Lifecycle::Deleting).await?;
     Ok(delete_after)
 }
