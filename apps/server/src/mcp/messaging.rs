@@ -75,9 +75,11 @@ pub(crate) fn principal_of(ctx: &OpContext) -> McpPrincipal {
         actor_kind: ctx.caller.kind,
         // A credential held to one space is that space's, as it was before
         // the operation located the call at the workspace.
+        // A DM or group is found in the direct scope.
         project_id: ctx
             .space_id
             .or(ctx.caller.confined_space)
+            .or(ctx.direct.map(|_| crate::spaces::DIRECT))
             .unwrap_or_else(Uuid::nil),
         external_agent_connection_id: ctx.caller.connection_id,
         client_name,

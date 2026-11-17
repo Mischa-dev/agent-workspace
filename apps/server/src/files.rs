@@ -138,7 +138,11 @@ const READABLE: &str = r#"
     file.removed_at IS NULL
     AND file.blob_deleted_at IS NULL
     AND ($5::uuid IS NULL OR file.project_id = $5)
-    AND CASE WHEN $4 THEN actor_can_access_project($2, $3, file.project_id)
+    -- A DM's or group's file (no space) by the conversation's rule alone.
+    AND CASE WHEN file.project_id IS NULL
+             THEN file.conversation_id IS NOT NULL
+                  AND ($3::uuid IS NULL OR agent_connection_can_reach_direct($3))
+        WHEN $4 THEN actor_can_access_project($2, $3, file.project_id)
         ELSE EXISTS (
             SELECT 1
             FROM project_memberships membership
@@ -342,10 +346,10 @@ async fn organization_of(
         "SELECT organization_id FROM projects WHERE id = $1 \
          UNION ALL SELECT id FROM organizations WHERE id = $1 AND id = direct_scope_id()",
     )
-        .bind(project_id)
-        .fetch_optional(executor)
-        .await?
-        .ok_or(AppError::NotFound("project"))
+    .bind(project_id)
+    .fetch_optional(executor)
+    .await?
+    .ok_or(AppError::NotFound("project"))
 }
 
 /// Stores an upload in `destination` for `uploader` and returns it. The

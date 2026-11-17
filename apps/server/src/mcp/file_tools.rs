@@ -230,7 +230,7 @@ async fn list_message(
 ) -> Result<Option<Vec<FileRow>>, AppError> {
     let project_id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT project_id FROM messages
+        SELECT COALESCE(project_id, direct_scope_id()) FROM messages
         WHERE id = $1 AND removed_at IS NULL AND conversation_visible_to(conversation_id, $2)
         "#,
     )

@@ -569,9 +569,20 @@ pub(crate) async fn notify(
     project_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<(), AppError> {
+    // The conversation's own place: a DM's is the direct scope, whatever
+    // space the caller acts from.
+    let place = sqlx::query_scalar::<_, Uuid>(
+        "SELECT COALESCE(project_id, direct_scope_id()) FROM conversations \
+         -- visibility: the place of an event, which carries no content\n \
+         WHERE id = $1",
+    )
+    .bind(conversation_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or(project_id);
     enqueue_event(
         transaction,
-        project_id,
+        place,
         OutboxEventPayload::ReplyRequestsUpdated(ReplyRequestsUpdatedPayload { conversation_id }),
     )
     .await

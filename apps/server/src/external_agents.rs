@@ -427,15 +427,29 @@ async fn insert_agent(
         },
     )
     .await?;
+    // Its workspace name comes first: writing it joins the workspace's own
+    // space, where the membership then takes the asked role.
     sqlx::query(
         r#"
-        INSERT INTO project_memberships (
-            id, project_id, actor_id, role, display_name, handle,
-            invited_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (organization_id, actor_id) DO NOTHING
         "#,
     )
-    .bind(Uuid::now_v7())
+    .bind(organization_id)
+    .bind(actor_id)
+    .bind(&normalized.display_name)
+    .bind(&normalized.handle)
+    .execute(&mut **transaction)
+    .await
+    .map_err(map_database_error)?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE project_memberships
+        SET role = $3, display_name = $4, handle = $5, invited_by_actor_id = $6
+        WHERE project_id = $1 AND actor_id = $2
+        "#,
+    )
     .bind(project_id)
     .bind(actor_id)
     .bind(&normalized.role)
@@ -444,7 +458,28 @@ async fn insert_agent(
     .bind(created_by)
     .execute(&mut **transaction)
     .await
-    .map_err(map_database_error)?;
+    .map_err(map_database_error)?
+    .rows_affected();
+    if updated == 0 {
+        sqlx::query(
+            r#"
+            INSERT INTO project_memberships (
+                id, project_id, actor_id, role, display_name, handle,
+                invited_by_actor_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(actor_id)
+        .bind(&normalized.role)
+        .bind(&normalized.display_name)
+        .bind(&normalized.handle)
+        .bind(created_by)
+        .execute(&mut **transaction)
+        .await
+        .map_err(map_database_error)?;
+    }
     let (connection_id, credential) = connect(
         transaction,
         organization_id,

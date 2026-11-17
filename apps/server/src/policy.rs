@@ -349,7 +349,11 @@ pub fn agent_limit_hides(actor_id: Uuid, project_id: Uuid, permission: Permissio
 /// or group of `workspace_id` by its agent limit: a kept DM follows its
 /// workspace's limit; a personal one (the direct scope) is open to what
 /// the limit allows in any workspace. False outside such a call.
-pub fn agent_limit_hides_direct(actor_id: Uuid, workspace_id: Uuid, permission: Permission) -> bool {
+pub fn agent_limit_hides_direct(
+    actor_id: Uuid,
+    workspace_id: Uuid,
+    permission: Permission,
+) -> bool {
     AGENT_LIMITS
         .try_with(|limits| {
             (limits.actor_id == actor_id).then(|| match limits.organizations.get(&workspace_id) {

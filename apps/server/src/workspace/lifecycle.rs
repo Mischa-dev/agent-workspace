@@ -465,13 +465,14 @@ async fn conversation_scope(
         return Ok(None);
     };
     let space = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_scalar::<_, Uuid>(lookup)
+        sqlx::query_scalar::<_, Option<Uuid>>(lookup)
             .bind(id)
             .fetch_optional(connection)
             .await
     })
     .await?;
-    Ok(space.map(crate::modules::gate::Scope::Project))
+    // A DM or group is in no space, so no workspace closes it.
+    Ok(space.flatten().map(crate::modules::gate::Scope::Project))
 }
 
 /// Lock the workspace row and read its lifecycle.

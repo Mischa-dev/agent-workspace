@@ -537,6 +537,7 @@ pub(super) async fn message_schedule(
     let content = match message_content(
         state,
         principal,
+        Some(conversation_id),
         arguments.text.as_deref(),
         arguments.content.clone(),
         "message_schedule",
@@ -686,7 +687,15 @@ pub(super) async fn scheduled_message_update(
                         "Send between 1 and 20,000 characters.",
                     ));
                 }
-                Some(super::common::content_from_text(state, existing.project_id, text).await?)
+                Some(
+                    super::common::content_from_text(
+                        state,
+                        existing.project_id,
+                        Some(existing.conversation_id),
+                        text,
+                    )
+                    .await?,
+                )
             }
         };
         let mut updated = existing;

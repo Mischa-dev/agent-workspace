@@ -501,12 +501,11 @@ async fn create_many(
     if crate::spaces::kind::holds_messages(project_id) {
         return Ok(BatchResult::invalid("projectId", PROJECT_MESSAGE));
     }
-    let Some(project_key) = sqlx::query_scalar::<_, String>(
-        "SELECT project_key FROM projects WHERE id = $1",
-    )
-    .bind(project_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
+    let Some(project_key) =
+        sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(crate::db::scoped(&state.pool))
+            .await?
     else {
         return Ok(BatchResult::not_found(
             "That project wasn't found, or you can't see it.",

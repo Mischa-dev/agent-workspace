@@ -223,8 +223,12 @@ pub(crate) async fn bind(
             id, organization_id, project_id, conversation_id, agent_actor_id, source,
             harness, external_ref, url, state, agent_run_id, reply_request_id
         )
-        SELECT $1, project.organization_id, project.id, $3, $4, $5, $6, $7, $8, $9, $10, $11
-        FROM projects project WHERE project.id = $2
+        SELECT $1, conversation.workspace_id, conversation.project_id, $3, $4, $5, $6, $7, $8,
+               $9, $10, $11
+        FROM conversations conversation
+        -- visibility: the caller checked the agent may work there
+        WHERE conversation.id = $3
+          AND conversation.project_id IS NOT DISTINCT FROM NULLIF($2::uuid, direct_scope_id())
         ON CONFLICT (conversation_id, agent_actor_id) DO UPDATE
         SET source = EXCLUDED.source,
             harness = EXCLUDED.harness,

@@ -436,6 +436,18 @@ pub(crate) async fn add_person(
     .execute(&setup.pool)
     .await
     .expect("organization membership");
+    // Their workspace name, which also puts them in the workspace's space.
+    sqlx::query(
+        "INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle) \
+         VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, actor_id) DO NOTHING",
+    )
+    .bind(setup.organization_id)
+    .bind(actor_id)
+    .bind(display_name)
+    .bind(handle)
+    .execute(&setup.pool)
+    .await
+    .expect("workspace profile");
     for project in projects {
         // DMs live in no space (K4.17): the workspace membership is enough.
         let project = project.parse::<Uuid>().expect("project");

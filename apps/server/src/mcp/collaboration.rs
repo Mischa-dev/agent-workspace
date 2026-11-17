@@ -50,15 +50,19 @@ pub(super) async fn begin_authorized_read<'a>(
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
         JOIN actors actor ON actor.id = credential.actor_id
-        JOIN projects project ON project.id = $2
+        -- In a DM or group (the direct scope) the agent answers as a member
+        -- of its connection's own space.
+        JOIN projects project
+          ON project.id = COALESCE(NULLIF($2::uuid, direct_scope_id()), credential.project_id)
         JOIN project_memberships membership
-          ON membership.project_id = $2
+          ON membership.project_id = project.id
          AND membership.actor_id = credential.actor_id
         JOIN organization_memberships organization_membership
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = credential.actor_id
         WHERE credential.id = $1
-          AND agent_connection_can_access(connection.id, $2)
+          AND agent_connection_can_access(connection.id, project.id)
+          AND ($2 <> direct_scope_id() OR agent_connection_can_reach_direct(connection.id))
           AND credential.actor_id = $3
           AND credential.external_agent_connection_id = $4
           AND credential.status = 'active' AND credential.revoked_at IS NULL
@@ -313,7 +317,8 @@ async fn revalidate_connection(
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = connection.actor_id
         WHERE credential.id = $1
-          AND agent_connection_can_access(connection.id, $2)
+          AND agent_connection_can_access(connection.id, project.id)
+          AND ($2 <> direct_scope_id() OR agent_connection_can_reach_direct(connection.id))
           AND credential.actor_id = $3
           AND credential.external_agent_connection_id = $4
           AND credential.status = 'active'

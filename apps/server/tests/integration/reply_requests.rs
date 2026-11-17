@@ -957,12 +957,27 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         let agent = mara.actor_id.clone();
         let conversation = dm_id.clone();
         async move {
+            // A DM is in no space: the role comes from the workspace.
+            let _ = conversation;
+            // A workspace has no built-in viewer: a custom role reads only.
             sqlx::query(
-                "UPDATE project_memberships SET role = $3 WHERE actor_id = $1::uuid \
-                 AND project_id = (SELECT project_id FROM conversations WHERE id = $2::uuid)",
+                "INSERT INTO workspace_roles (id, organization_id, key, base_role, name) \
+                 SELECT gen_random_uuid(), organization_id, 'reader', 'viewer', 'Reader' \
+                 FROM organization_memberships WHERE actor_id = $1::uuid \
+                 ON CONFLICT (organization_id, key) DO NOTHING",
+            )
+            .bind(&agent)
+            .execute(&pool)
+            .await
+            .expect("reader role");
+            sqlx::query(
+                "UPDATE organization_memberships membership SET role = 'member', \
+                     role_id = (SELECT held.id FROM workspace_roles held \
+                                WHERE held.organization_id = membership.organization_id \
+                                  AND held.key = 'reader' AND $2 = 'viewer') \
+                 WHERE actor_id = $1::uuid",
             )
             .bind(agent)
-            .bind(conversation)
             .bind(role)
             .execute(&pool)
             .await
@@ -1750,7 +1765,11 @@ impl Owner {
     /// A new project in the owner's organization.
     async fn project(&self, app: &axum::Router, pool: &PgPool, space: &str, key: &str) -> String {
         let organization_id = sqlx::query_scalar::<_, String>(
-            "SELECT organization_id::text FROM projects WHERE id = $1::uuid",
+            // The direct scope is no space: then the owner's workspace.
+            "SELECT COALESCE( \
+                 (SELECT organization_id FROM projects WHERE id = $1::uuid), \
+                 (SELECT id FROM organizations WHERE id <> direct_scope_id() \
+                  ORDER BY created_at LIMIT 1))::text",
         )
         .bind(space)
         .fetch_one(pool)

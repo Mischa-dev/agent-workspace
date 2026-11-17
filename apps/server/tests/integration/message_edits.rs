@@ -151,6 +151,17 @@ pub(super) async fn add_person(setup: &Setup, projects: &[&str], login: &str) ->
     .execute(&setup.pool)
     .await
     .expect("organization membership");
+    // Their workspace name, which also puts them in the workspace's space.
+    sqlx::query(
+        "INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle) \
+         VALUES ($1, $2, $3, $3) ON CONFLICT (organization_id, actor_id) DO NOTHING",
+    )
+    .bind(setup.organization_id)
+    .bind(actor_id)
+    .bind(login)
+    .execute(&setup.pool)
+    .await
+    .expect("workspace profile");
     for project in projects {
         // DMs live in no space (K4.17): the workspace membership is enough.
         let project = project.parse::<Uuid>().expect("project");
@@ -225,6 +236,34 @@ pub(super) async fn add_person(setup: &Setup, projects: &[&str], login: &str) ->
 }
 
 pub(super) async fn set_role(pool: &PgPool, project: &str, actor: Uuid, role: &str) {
+    // DMs and groups are in no space: there the workspace role counts, and
+    // a workspace has no built-in viewer, so a custom role reads only.
+    if project.parse::<Uuid>().expect("project") == agent_workspace_server::spaces::DIRECT {
+        sqlx::query(
+            "INSERT INTO workspace_roles (id, organization_id, key, base_role, name) \
+             SELECT gen_random_uuid(), organization_id, 'reader', 'viewer', 'Reader' \
+             FROM organization_memberships WHERE actor_id = $1 \
+             ON CONFLICT (organization_id, key) DO NOTHING",
+        )
+        .bind(actor)
+        .execute(pool)
+        .await
+        .expect("reader role");
+        sqlx::query(
+            "UPDATE organization_memberships membership \
+             SET role = CASE WHEN $2 = 'viewer' THEN 'member' ELSE $2 END, \
+                 role_id = (SELECT held.id FROM workspace_roles held \
+                            WHERE held.organization_id = membership.organization_id \
+                              AND held.key = 'reader' AND $2 = 'viewer') \
+             WHERE actor_id = $1",
+        )
+        .bind(actor)
+        .bind(role)
+        .execute(pool)
+        .await
+        .expect("set workspace role");
+        return;
+    }
     sqlx::query("UPDATE project_memberships SET role = $3 WHERE project_id = $1 AND actor_id = $2")
         .bind(project.parse::<Uuid>().expect("project"))
         .bind(actor)

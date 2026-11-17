@@ -90,6 +90,8 @@ pub struct OpContext {
     pub workspace_id: Uuid,
     /// Today's project id.
     pub space_id: Option<Uuid>,
+    /// The DM or group the call is about, when it is in no space.
+    pub direct: Option<Uuid>,
     pub target: Target,
     /// Set for every write.
     pub request_id: Option<String>,

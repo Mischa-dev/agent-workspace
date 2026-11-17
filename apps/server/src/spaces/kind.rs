@@ -39,8 +39,9 @@ impl SpaceKind {
     pub const fn starting_modules(self) -> Option<&'static [&'static str]> {
         match self {
             // Messages too: channels need it, and comments on the
-            // workspace's own boards and sheets belong to it.
-            Self::Workspace => Some(&["pages", "whiteboards", "channels", "messages"]),
+            // workspace's own boards and sheets belong to it. Inbox: a
+            // reminder filed in the workspace is kept in its space.
+            Self::Workspace => Some(&["pages", "whiteboards", "channels", "messages", "inbox"]),
             // Drafts and notes: pages, boards, sheets and collections; no
             // chat, since nobody else is there.
             Self::Personal => Some(&["pages", "whiteboards", "sheets", "collections"]),

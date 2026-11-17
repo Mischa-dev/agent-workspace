@@ -297,16 +297,14 @@ async fn thing(
     // A conversation or message with no space is in a DM or group.
     let direct = match (kind, space_id) {
         ("conversation", None) => Some(id),
-        ("message" | "message_record", None) => {
-            sqlx::query_scalar::<_, Uuid>(
-                "-- visibility: the message was just found through conversation_visible_to\n\
+        ("message" | "message_record", None) => sqlx::query_scalar::<_, Uuid>(
+            "-- visibility: the message was just found through conversation_visible_to\n\
                  SELECT conversation_id FROM messages WHERE id = $1",
-            )
-                .bind(id)
-                .fetch_optional(&mut *connection)
-                .await
-                .map_err(|error| OpError::logged("locate", &error.into()))?
-        }
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?,
         _ => None,
     };
     Ok(Located {

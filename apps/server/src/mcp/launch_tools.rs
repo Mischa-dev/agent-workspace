@@ -496,11 +496,13 @@ pub(super) async fn session_bind(
         // connection still reaches the project.
         let Some(project_id) = sqlx::query_scalar::<_, Uuid>(
             r#"
-            SELECT conversation.project_id
+            SELECT COALESCE(conversation.project_id, direct_scope_id())
             FROM conversations conversation
             WHERE conversation.id = $1
               AND conversation_visible_to(conversation.id, $2)
-              AND actor_can_access_project($2, $3, conversation.project_id)
+              AND CASE WHEN conversation.project_id IS NULL
+                       THEN $3::uuid IS NULL OR agent_connection_can_reach_direct($3)
+                       ELSE actor_can_access_project($2, $3, conversation.project_id) END
               AND EXISTS (
                   SELECT 1 FROM reply_requests request
                   WHERE request.agent_actor_id = $2

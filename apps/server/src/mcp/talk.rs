@@ -1565,6 +1565,7 @@ pub(super) async fn message_send(
             match message_content(
                 state,
                 principal,
+                Some(conversation_id),
                 arguments.text.as_deref(),
                 arguments.content,
                 "message_send",
@@ -1723,6 +1724,7 @@ pub(super) async fn message_forward(
 pub(super) async fn message_content<T>(
     state: &AppState,
     principal: &McpPrincipal,
+    conversation: Option<Uuid>,
     text: Option<&str>,
     content: Option<MessageContent>,
     operation: &'static str,
@@ -1736,7 +1738,7 @@ pub(super) async fn message_content<T>(
                     "Send between 1 and 20,000 characters.",
                 ));
             }
-            content_from_text(state, principal.project_id, text)
+            content_from_text(state, principal.project_id, conversation, text)
                 .await
                 .map_err(|error| ToolResult::from_error(error, operation))
         }
@@ -1873,20 +1875,21 @@ pub(super) async fn conversation_start(
         if !crate::direct::may_start_any(&mut transaction, principal.actor_id).await? {
             return Ok(ToolResult::denied("You can't start conversations."));
         }
-        let people = match resolve_direct_people(state, principal.actor_id, &arguments.people).await? {
-            Ok(people) => people
-                .into_iter()
-                .filter(|id| *id != principal.actor_id)
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>(),
-            Err(person) => {
-                return Ok(ToolResult::invalid(
-                    "people",
-                    format!("{person} isn't someone you can message. Try people_search."),
-                ));
-            }
-        };
+        let people =
+            match resolve_direct_people(state, principal.actor_id, &arguments.people).await? {
+                Ok(people) => people
+                    .into_iter()
+                    .filter(|id| *id != principal.actor_id)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                Err(person) => {
+                    return Ok(ToolResult::invalid(
+                        "people",
+                        format!("{person} isn't someone you can message. Try people_search."),
+                    ));
+                }
+            };
         if people.is_empty() {
             return Ok(ToolResult::invalid(
                 "people",
@@ -1894,12 +1897,8 @@ pub(super) async fn conversation_start(
             ));
         }
         let (conversation_id, created, kind) = if people.len() == 1 && name.is_none() {
-            let (id, created) = crate::direct::open_dm_in(
-                &mut transaction,
-                principal.actor_id,
-                people[0],
-            )
-            .await?;
+            let (id, created) =
+                crate::direct::open_dm_in(&mut transaction, principal.actor_id, people[0]).await?;
             (id, created, OutboxConversationKind::Dm)
         } else {
             let id = crate::direct::create_group_in(
@@ -1941,7 +1940,8 @@ pub(super) async fn conversation_start(
             .filter(|v| !v.is_empty())
         {
             Some(text) => {
-                let content = content_from_text(state, space_id, text).await?;
+                let content =
+                    content_from_text(state, space_id, Some(conversation_id), text).await?;
                 match send(state, principal, conversation_id, content, &[], None, None).await {
                     ToolResult::Ok { value } => Some(value),
                     failed => return Ok(retype(failed)),
@@ -2174,7 +2174,8 @@ async fn post_optional(
         let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
         format!("thread-start.{origin_id}.{}", hex::encode(&digest[..16]))
     });
-    let content = content_from_text(state, principal.project_id, text).await?;
+    let content =
+        content_from_text(state, principal.project_id, Some(conversation_id), text).await?;
     Ok(
         match send(state, principal, conversation_id, content, &[], key, None).await {
             ToolResult::Ok { value } => Some(value),

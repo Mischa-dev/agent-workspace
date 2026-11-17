@@ -350,6 +350,15 @@ pub struct LoggedEvent {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl LoggedEvent {
+    /// Where it happened: its space, or the direct scope for a DM's or
+    /// group's event, which has none.
+    pub fn place(&self) -> Option<Uuid> {
+        self.space_id
+            .or((self.workspace_id == crate::spaces::DIRECT).then_some(crate::spaces::DIRECT))
+    }
+}
+
 /// The columns `LoggedEvent` reads, for queries over `events`.
 pub(crate) const LOGGED_EVENT_COLUMNS: &str = "position, id, workspace_id, space_id, thing_id, \
     thing_kind, access_thing_id, thing_version, type, class, changes, audience, conversation_id, \

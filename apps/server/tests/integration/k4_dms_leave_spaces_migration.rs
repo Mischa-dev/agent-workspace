@@ -29,7 +29,9 @@ const MESSAGE: &str = "00000000-0000-7000-8000-0000000000e1";
 
 fn seed() -> Vec<String> {
     vec![
-        format!("INSERT INTO organizations (id, name, slug) VALUES ('{WORKSPACE}', 'Acme', 'acme')"),
+        format!(
+            "INSERT INTO organizations (id, name, slug) VALUES ('{WORKSPACE}', 'Acme', 'acme')"
+        ),
         format!(
             "INSERT INTO actors (id, kind) VALUES ('{ANN}', 'human'), ('{BO}', 'human'), \
              ('{OUTSIDER}', 'human')"
@@ -151,7 +153,11 @@ async fn pre_r20_dms_are_personal_and_leave_their_space() {
     assert_eq!(workspace.to_string(), WORKSPACE);
     assert!(!kept);
     // Everything in it followed it out.
-    for table in ["messages", "conversation_read_states", "conversation_members"] {
+    for table in [
+        "messages",
+        "conversation_read_states",
+        "conversation_members",
+    ] {
         let left = one::<i64>(
             &pool,
             &format!(
@@ -207,11 +213,8 @@ async fn pre_r20_dms_are_personal_and_leave_their_space() {
         assert_eq!(visible, sees, "{account}");
     }
     // Its members may still post there, through their workspace roles.
-    let may_post = one::<Vec<String>>(
-        &pool,
-        &format!("SELECT direct_permissions('{DM}', '{BO}')"),
-    )
-    .await;
+    let may_post =
+        one::<Vec<String>>(&pool, &format!("SELECT direct_permissions('{DM}', '{BO}')")).await;
     assert!(
         may_post.iter().any(|key| key == "channels.post"),
         "{may_post:?}"

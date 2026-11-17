@@ -837,9 +837,7 @@ impl OutboxEnvelope {
     pub fn from_logged(event: &crate::events::LoggedEvent) -> Option<Self> {
         let event_type = event.legacy_type.as_deref()?;
         // A DM's event has no space; its frame names the direct scope.
-        let project_id = event.space_id.or(
-            (event.workspace_id == crate::spaces::DIRECT).then_some(crate::spaces::DIRECT),
-        )?;
+        let project_id = event.place()?;
         let decoded = OutboxEventPayload::from_json(event_type, event.payload.clone()).ok()?;
         Some(Self {
             event_id: event.id,

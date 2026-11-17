@@ -463,7 +463,8 @@ impl crate::events::Consumer for Notifier {
         batch: &[crate::events::LoggedEvent],
     ) -> Result<(), crate::events::ConsumerError> {
         for event in batch {
-            let (Some(notice), Some(project_id)) = (&event.legacy_type, event.space_id) else {
+            // A DM's event is in the direct scope.
+            let (Some(notice), Some(project_id)) = (&event.legacy_type, event.place()) else {
                 continue;
             };
             let Ok(payload) = OutboxEventPayload::from_json(notice, event.payload.clone()) else {

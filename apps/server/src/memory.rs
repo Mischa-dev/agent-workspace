@@ -1094,7 +1094,7 @@ pub async fn record_decision(
         let conversation_id = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT conversation_id FROM messages
-            WHERE id = $1 AND project_id = $2 AND removed_at IS NULL
+            WHERE id = $1 AND project_id IS NOT DISTINCT FROM $2 AND removed_at IS NULL
               AND conversation_visible_to(conversation_id, $3)
             FOR SHARE
             "#,
@@ -1262,7 +1262,7 @@ pub async fn set_pin(
         "message" => sqlx::query_scalar::<_, i32>(
             r#"
             SELECT 1 FROM messages
-            WHERE id = $1 AND project_id = $2 AND removed_at IS NULL
+            WHERE id = $1 AND project_id IS NOT DISTINCT FROM $2 AND removed_at IS NULL
               AND conversation_visible_to(conversation_id, $3)
             FOR SHARE
             "#,

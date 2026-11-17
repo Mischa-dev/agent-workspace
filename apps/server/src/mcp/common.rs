@@ -333,7 +333,8 @@ pub(super) async fn insert_audit(
     )
     .bind(Uuid::now_v7())
     .bind(principal.actor_id)
-    .bind(project_id)
+    // A DM or group is in no space.
+    .bind(crate::spaces::space_of(project_id))
     .bind(principal.authentication_class)
     .bind(action)
     .bind(target_kind)
@@ -543,23 +544,44 @@ struct HandleRow {
 pub(crate) async fn content_from_text(
     state: &AppState,
     project_id: Uuid,
+    conversation: Option<Uuid>,
     text: &str,
 ) -> Result<serde_json::Value, AppError> {
-    let handles = sqlx::query_as::<_, HandleRow>(
-        r#"
-        SELECT membership.actor_id, lower(membership.handle) AS handle
-        FROM project_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id
-        WHERE membership.project_id = $1 AND membership.enabled AND actor.status = 'active'
-          AND actor.kind IN ('human', 'external_agent')
-        "#,
-    )
-    .bind(project_id)
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?
-    .into_iter()
-    .map(|row| (row.handle, row.actor_id))
-    .collect::<HashMap<_, _>>();
+    // A DM or group is in no space: its own members, by the names they go
+    // by there, are the ones a handle can name.
+    let query = match conversation {
+        Some(conversation) if crate::spaces::kind::holds_messages(project_id) => {
+            sqlx::query_as::<_, HandleRow>(
+                r#"
+                SELECT member.actor_id, lower(profile.handle) AS handle
+                FROM conversations conversation
+                -- visibility: the names in a conversation the caller sends to, checked there
+                JOIN conversation_members member
+                  ON member.conversation_id = COALESCE(conversation.parent_channel_id, conversation.id)
+                JOIN actors actor ON actor.id = member.actor_id AND actor.status = 'active'
+                CROSS JOIN LATERAL account_profile(member.actor_id, conversation.workspace_id) profile
+                WHERE conversation.id = $1
+                "#,
+            )
+            .bind(conversation)
+        }
+        _ => sqlx::query_as::<_, HandleRow>(
+            r#"
+            SELECT membership.actor_id, lower(membership.handle) AS handle
+            FROM project_memberships membership
+            JOIN actors actor ON actor.id = membership.actor_id
+            WHERE membership.project_id = $1 AND membership.enabled AND actor.status = 'active'
+              AND actor.kind IN ('human', 'external_agent')
+            "#,
+        )
+        .bind(project_id),
+    };
+    let handles = query
+        .fetch_all(crate::db::scoped(&state.pool))
+        .await?
+        .into_iter()
+        .map(|row| (row.handle, row.actor_id))
+        .collect::<HashMap<_, _>>();
     Ok(serde_json::json!({ "version": 1, "nodes": text_nodes(text, &handles) }))
 }
 
@@ -572,7 +594,7 @@ pub(super) async fn comment_content_from_text(
     project_id: Uuid,
     text: &str,
 ) -> Result<serde_json::Value, AppError> {
-    let content = content_from_text(state, project_id, text).await?;
+    let content = content_from_text(state, project_id, None, text).await?;
     let project_key =
         sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
             .bind(project_id)

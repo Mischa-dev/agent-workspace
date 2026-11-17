@@ -388,6 +388,7 @@ async fn pipeline<O: Operation>(
         trace_id: request.trace_id,
         workspace_id: located.workspace_id,
         space_id: located.space_id,
+        direct: located.direct,
         target: target.clone(),
         request_id: key
             .as_ref()

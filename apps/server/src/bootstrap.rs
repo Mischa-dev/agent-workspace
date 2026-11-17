@@ -467,11 +467,6 @@ pub async fn bootstrap_development_member(
               ON organization_member.actor_id = actor.id
              AND organization_member.organization_id = $2
              AND organization_member.enabled
-            JOIN projects project ON project.organization_id = $2
-            JOIN project_memberships project_member
-              ON project_member.project_id = project.id
-             AND project_member.actor_id = actor.id
-             AND project_member.enabled
             WHERE actor.id = $1
               AND actor.kind = 'human'
               AND actor.status = 'active'

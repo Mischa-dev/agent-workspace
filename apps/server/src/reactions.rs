@@ -377,7 +377,7 @@ pub(crate) async fn set_reaction(
         r#"
         SELECT removed_at IS NOT NULL
         FROM messages
-        WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+        WHERE id = $1 AND conversation_id = $2 AND project_id IS NOT DISTINCT FROM $3
         "#,
     )
     .bind(message_id)

@@ -200,7 +200,9 @@ pub(crate) async fn post(
 
     let content = match body {
         CommentBody::Content(content) => content,
-        CommentBody::Text(text) => crate::mcp::content_from_text(state, project_id, &text).await?,
+        CommentBody::Text(text) => {
+            crate::mcp::content_from_text(state, project_id, None, &text).await?
+        }
     };
     let outcome = append_message_command_with(
         state,

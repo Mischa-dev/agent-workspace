@@ -2156,7 +2156,13 @@ pub(crate) async fn resolve_message_content(
     project_id: Uuid,
     content: MessageContent,
 ) -> Result<ResolvedContent, AppError> {
-    resolve_message_content_with(transaction, crate::spaces::space_of(project_id), content, false).await
+    resolve_message_content_with(
+        transaction,
+        crate::spaces::space_of(project_id),
+        content,
+        false,
+    )
+    .await
 }
 
 /// `resolve_message_content`, allowing blank text when `allow_blank` (a
@@ -2682,8 +2688,7 @@ async fn conversation_timeline(
     .await?;
     crate::forwarding::attach_forwards(&state.pool, &mut entries, principal.actor_id).await?;
     // Task chips name their task only for a reader who sees tasks here.
-    let sees_tasks =
-        sees_tasks_in(&state.pool, principal.actor_id, conversation.place()).await?;
+    let sees_tasks = sees_tasks_in(&state.pool, principal.actor_id, conversation.place()).await?;
     if !sees_tasks {
         hide_entry_work_item_details(&mut entries);
     }
@@ -2774,7 +2779,7 @@ async fn mark_conversation_seen(
         r#"
         SELECT highest_seen_sequence, version
         FROM conversation_read_states
-        WHERE project_id = $1 AND conversation_id = $2 AND actor_id = $3
+        WHERE project_id IS NOT DISTINCT FROM $1 AND conversation_id = $2 AND actor_id = $3
         FOR UPDATE
         "#,
     )
@@ -2916,7 +2921,7 @@ pub(crate) async fn mark_unread_from(
         r#"
         SELECT highest_seen_sequence, version
         FROM conversation_read_states
-        WHERE project_id = $1 AND conversation_id = $2 AND actor_id = $3
+        WHERE project_id IS NOT DISTINCT FROM $1 AND conversation_id = $2 AND actor_id = $3
         FOR UPDATE
         "#,
     )
@@ -3227,6 +3232,7 @@ pub(crate) async fn set_conversation_archived(
         RETURNING
             id,
             project_id,
+            workspace_id,
             kind,
             parent_channel_id,
             origin_message_id,
@@ -3414,13 +3420,9 @@ async fn project_conversation_sidebar(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<SidebarQuery>,
 ) -> Result<Json<SidebarResponse>, AppError> {
-    let access = authorized_project(&state, &principal, project_id, Action::ProjectView).await?;
-    if access.project_archived {
-        return Err(AppError::NotFound("project"));
-    }
-    // C2.1: the space that holds DMs and groups has no channels, and its
-    // threads belong to their DM or group: being in it shows nobody theirs.
-    if is_direct_project(&state.pool, project_id).await? {
+    // C2.1: the direct scope that holds DMs and groups has no channels, and
+    // its threads belong to their DM or group: it shows nobody theirs.
+    if crate::spaces::kind::holds_messages(project_id) {
         return Ok(Json(SidebarResponse {
             project_id,
             channels: Vec::new(),
@@ -3428,6 +3430,10 @@ async fn project_conversation_sidebar(
                 create_channel: false,
             },
         }));
+    }
+    let access = authorized_project(&state, &principal, project_id, Action::ProjectView).await?;
+    if access.project_archived {
+        return Err(AppError::NotFound("project"));
     }
     let include_archived = query.include_archived.unwrap_or(false);
     let channels = sqlx::query_as::<_, SidebarChannelRow>(
@@ -3698,20 +3704,6 @@ fn thread_attention(row: &SidebarThreadRow) -> ThreadAttention {
             label: "Seen",
         },
     }
-}
-
-/// Whether a project is the hidden one that holds a workspace's DMs and
-/// groups (until K4 moves them to the direct scope).
-async fn is_direct_project(pool: &sqlx::PgPool, project_id: Uuid) -> Result<bool, AppError> {
-    let kind = crate::db::scoped_one(pool, async |connection| {
-        sqlx::query_scalar::<_, String>("SELECT kind FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_optional(&mut *connection)
-            .await
-    })
-    .await?;
-    // The hidden one is the only stored kind that isn't a space.
-    Ok(kind.is_some_and(|kind| crate::spaces::SpaceKind::from_stored(&kind).is_none()))
 }
 
 async fn authorized_project(

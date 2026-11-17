@@ -1107,12 +1107,15 @@ async fn thread_summary(
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let Some(project_id) = crate::db::scoped_one(&state.pool, async |connection| {
+        // A DM or group is in no space, so it has no summary here.
         sqlx::query_scalar::<_, Uuid>(
-        "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
-    )
-    .bind(conversation_id)
-    .bind(principal.actor_id)
-    .fetch_optional(connection).await
+            "SELECT project_id FROM conversations \
+         WHERE id = $1 AND project_id IS NOT NULL AND conversation_visible_to(id, $2)",
+        )
+        .bind(conversation_id)
+        .bind(principal.actor_id)
+        .fetch_optional(connection)
+        .await
     })
     .await?
     else {

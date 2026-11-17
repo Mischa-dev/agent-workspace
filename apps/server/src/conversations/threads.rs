@@ -252,7 +252,7 @@ pub(crate) async fn create(
                    CASE WHEN removed_at IS NULL THEN plain_text ELSE '' END,
                    author_actor_id
             FROM messages
-            WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+            WHERE id = $1 AND conversation_id = $2 AND project_id IS NOT DISTINCT FROM $3
             "#,
         )
         .bind(origin_id)
@@ -465,7 +465,7 @@ async fn audit(
     )
     .bind(Uuid::now_v7())
     .bind(creator.actor_id)
-    .bind(project_id)
+    .bind(crate::spaces::space_of(project_id))
     .bind(creator.session_id)
     .bind(creator.authentication_class)
     .bind(thread_id)

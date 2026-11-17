@@ -528,9 +528,8 @@ async fn group_member_cap_holds_for_adds() {
     let Some(setup) = setup("mcp_groups_cap").await else {
         return;
     };
-    let space = direct_space(&setup).await;
     let mut people = Vec::new();
-    // People who never sign in: a member of the Messages space is enough.
+    // People who never sign in: a member of the workspace is enough.
     for index in 0..20 {
         let actor = Uuid::now_v7();
         sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
@@ -548,17 +547,17 @@ async fn group_member_cap_holds_for_adds() {
         .expect("organization membership");
         sqlx::query(
             r#"
-            INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
-            VALUES ($1, $2, $3, 'member', $4, $4)
+            INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle)
+            VALUES ($1, $2, $3, $3)
+            ON CONFLICT (organization_id, actor_id) DO NOTHING
             "#,
         )
-        .bind(Uuid::now_v7())
-        .bind(space.parse::<Uuid>().expect("space"))
+        .bind(setup.organization_id)
         .bind(actor)
         .bind(format!("p{index}"))
         .execute(&setup.pool)
         .await
-        .expect("space membership");
+        .expect("workspace profile");
         people.push(actor);
     }
     // The owner plus 18 people: 19 members.

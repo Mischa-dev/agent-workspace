@@ -283,8 +283,8 @@ async fn direct_overview(
     .into_iter()
     .map(ActorView::from)
     .collect();
-    let standing = crate::roles::standing(&mut transaction, organization_id, principal.actor_id)
-        .await?;
+    let standing =
+        crate::roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
     let capabilities = DirectCapabilities {
         start_conversation: may_start_any(&mut transaction, principal.actor_id).await?,
         manage_agents: standing.may(Action::ExternalAgentManage.permission()),

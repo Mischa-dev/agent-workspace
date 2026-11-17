@@ -689,14 +689,16 @@ impl From<ConversationLevelRow> for ConversationLevelView {
 
 /// Conversations `$1` can see, with their own level when they set one.
 const LEVEL_SQL: &str = r#"
-    SELECT conversation.id AS conversation_id, conversation.project_id, conversation.kind,
+    SELECT conversation.id AS conversation_id,
+           COALESCE(conversation.project_id, direct_scope_id()) AS project_id, conversation.kind,
            conversation.name, level.level,
            conversation_notification_level($1, conversation.id) AS effective
     FROM conversations conversation
-    JOIN projects project ON project.id = conversation.project_id
+    LEFT JOIN projects project ON project.id = conversation.project_id
     LEFT JOIN conversation_notification_levels level
       ON level.conversation_id = conversation.id AND level.actor_id = $1
-    WHERE actor_can_access_project($1, NULL, conversation.project_id)
+    WHERE (conversation.project_id IS NULL
+           OR actor_can_access_project($1, NULL, conversation.project_id))
       AND conversation_visible_to(conversation.id, $1)
 "#;
 
@@ -736,7 +738,7 @@ pub async fn set_conversation_level(
             )
             .bind(actor_id)
             .bind(conversation_id)
-            .bind(current.project_id)
+            .bind(crate::spaces::space_of(current.project_id))
             .bind(level.as_str())
             .execute(crate::db::scoped(pool))
             .await?;

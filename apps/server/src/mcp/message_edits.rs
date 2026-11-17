@@ -166,11 +166,13 @@ fn message_url(state: &AppState, conversation: &ConversationAccessRow, message_i
         (_, "dm" | "group") => format!("/messages/{}", conversation.id),
         ("thread", _) => format!(
             "/projects/{}/threads/{}",
-            conversation.place(), conversation.id
+            conversation.place(),
+            conversation.id
         ),
         _ => format!(
             "/projects/{}/channels/{}",
-            conversation.place(), conversation.id
+            conversation.place(),
+            conversation.id
         ),
     };
     public_url(state, &format!("{path}#message-{message_id}"))
@@ -263,9 +265,21 @@ pub(super) async fn message_edit(
             "Use letters, numbers, dashes or dots, up to 128 characters.",
         );
     };
+    // A DM's handles are its members' (no space holds them).
+    let conversation = sqlx::query_scalar::<_, Uuid>(
+        "SELECT conversation_id FROM messages \
+         -- visibility: only to name the conversation's members; the edit checks access\n \
+         WHERE id = $1",
+    )
+    .bind(message_id)
+    .fetch_optional(crate::db::scoped(&state.pool))
+    .await
+    .ok()
+    .flatten();
     let content = match message_content(
         state,
         principal,
+        conversation,
         arguments.text.as_deref(),
         arguments.content,
         "message_edit",
