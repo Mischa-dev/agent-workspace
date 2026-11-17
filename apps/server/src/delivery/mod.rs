@@ -104,6 +104,7 @@ pub async fn poll(
                 recipient: delivery.account_id,
                 workspaces: connections::reach(connection, &delivery).await?,
                 space: caller.confined_space,
+                limits: caller.limits.clone(),
             };
             let subscriptions = connections::subscriptions(connection, &delivery).await?;
             let batch = read::read_batch(connection, &subscriptions, &scope, after, limit).await?;

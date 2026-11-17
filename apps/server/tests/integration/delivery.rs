@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::support::{
     app::send,
-    callers::{Agent, Call, Caller},
+    callers::{Call, Caller},
     world::{Workspace, WorldBuilder},
 };
 
@@ -60,7 +60,7 @@ async fn channel(world: &Workspace, name: &str) -> String {
 }
 
 /// The agent's events after `cursor` (or where it last read).
-async fn read(world: &Workspace, agent: &Agent, cursor: Option<&Value>) -> Value {
+async fn read(world: &Workspace, agent: &impl Caller, cursor: Option<&Value>) -> Value {
     agent_workspace_server::events::catch_up(world.pool())
         .await
         .expect("sequence events");
@@ -263,6 +263,7 @@ async fn a_narrowed_role_hears_no_task_and_a_secret_is_shown_once() {
         .project("WORK")
         .agent("rook", "member")
         .agent("mara", "member")
+        .connected_app("laptop")
         .custom_role(
             "No tasks",
             &["projects.view", "channels.post", "directory.view"],
@@ -332,6 +333,67 @@ async fn a_narrowed_role_hears_no_task_and_a_secret_is_shown_once() {
     assert!(
         of_type(&mara_heard, "task.created").is_empty(),
         "a role without tasks.view hears no task: {mara_heard}"
+    );
+
+    // An app acting for the owner hears only what its delegation limit lets
+    // it read: with tasks kept from it, no task event reaches it.
+    let laptop = &world.apps["laptop"];
+    let (_, listed) = laptop
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "connection_list",
+                arguments: json!({}),
+            },
+        )
+        .await;
+    let (_, widened) = laptop
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "connection_update",
+                arguments: json!({
+                    "connectionId": listed["value"]["connections"][0]["id"],
+                    "subscriptions": [{ "kinds": ["*"], "minReason": "visible" }],
+                }),
+            },
+        )
+        .await;
+    assert_eq!(widened["outcome"], "ok", "{widened}");
+    let laptop_start = read(&world, laptop, None).await["nextCursor"].clone();
+    let limit = |limit: Option<Vec<&'static str>>| {
+        sqlx::query(
+            "UPDATE organization_memberships SET agent_limit = $1 WHERE organization_id = $2 AND actor_id = $3",
+        )
+        .bind(limit)
+        .bind(world.organization)
+        .bind(laptop.person)
+        .execute(world.pool())
+    };
+    limit(Some(vec!["projects.view", "channels.post"]))
+        .await
+        .expect("keep tasks from the owner's apps");
+    let (_, rook_made) = rook
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "task_create",
+                arguments: json!({ "projectId": "WORK", "title": "Rook's task",
+                                   "clientRequestId": "rook-task" }),
+            },
+        )
+        .await;
+    assert_eq!(rook_made["outcome"], "ok", "{rook_made}");
+    let limited = read(&world, laptop, Some(&laptop_start)).await;
+    assert!(
+        of_type(&limited, "task.created").is_empty(),
+        "an app kept from tasks hears no task: {limited}"
+    );
+    limit(None).await.expect("lift the limit");
+    let lifted = read(&world, laptop, Some(&laptop_start)).await;
+    assert!(
+        !of_type(&lifted, "task.created").is_empty(),
+        "without the limit the same read hears it: {lifted}"
     );
 
     // A webhook's secret is shown once: a retry of the same call answers

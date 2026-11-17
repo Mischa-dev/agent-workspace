@@ -245,6 +245,8 @@ async fn queue(state: &AppState, connection_id: Uuid) -> Result<Option<Queued>, 
         recipient: delivery.account_id,
         workspaces: connections::reach(&mut transaction, &delivery).await?,
         space: None,
+        // The connection's own account, not an app acting for it.
+        limits: None,
     };
     let subscriptions = connections::subscriptions(&mut transaction, &delivery).await?;
     let batch = read::read_batch(

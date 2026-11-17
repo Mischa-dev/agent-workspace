@@ -14,6 +14,7 @@ use super::{
 use crate::{
     error::AppError,
     events::{LOGGED_EVENT_COLUMNS, LoggedEvent},
+    policy::{AgentLimits, Permission},
 };
 
 /// The most log rows one read looks at; a read that finds nothing for the
@@ -29,6 +30,9 @@ pub struct Scope {
     pub workspaces: Vec<Uuid>,
     /// An older credential confined to one space.
     pub space: Option<Uuid>,
+    /// The delegation limit of an app reading for a person: an event is
+    /// heard only where the app may read what it is about.
+    pub limits: Option<AgentLimits>,
 }
 
 /// One event for the connection, and why.
@@ -137,7 +141,12 @@ pub async fn read_batch(
     };
     for (index, row) in rows.into_iter().enumerate() {
         batch.next = row.event.position;
-        if let Some(reason) = accept(&row, subscriptions) {
+        if let Some(reason) = accept(&row, subscriptions)
+            && scope
+                .limits
+                .as_ref()
+                .is_none_or(|limits| within_limits(limits, &row.event))
+        {
             batch.delivered.push(Delivered {
                 event: row.event,
                 reason,
@@ -152,6 +161,28 @@ pub async fn read_batch(
     // moves past it.
     batch.has_more = scanned == SCAN as usize;
     Ok(batch)
+}
+
+/// Whether an app held to `limits` may read what `event` is about: the
+/// permission to see its space (and, for a task or a pull request, to see
+/// those), in the space where the app's person holds it or else their
+/// workspace, as a policy check under the same limit would find it.
+fn within_limits(limits: &AgentLimits, event: &LoggedEvent) -> bool {
+    let allowed = event
+        .space_id
+        .and_then(|space| limits.projects.get(&space))
+        .or_else(|| limits.organizations.get(&event.workspace_id))
+        .copied()
+        .unwrap_or(crate::policy::PermissionSet::EMPTY);
+    let family = catalogue::get(&event.event_type).map(|entry| entry.family);
+    let needed: &[Permission] = match family {
+        Some("task") => &[Permission::ProjectsView, Permission::TasksView],
+        Some("pull_request") => &[Permission::ProjectsView, Permission::CodeView],
+        _ => &[Permission::ProjectsView],
+    };
+    needed
+        .iter()
+        .all(|permission| allowed.contains(*permission))
 }
 
 /// Whether any subscription wants the row, and why.
