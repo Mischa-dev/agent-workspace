@@ -1,4 +1,12 @@
-use std::time::Duration;
+//! Change notices: the typed events every write path stages in the event
+//! log (K3) for open browsers, notifications and webhooks. Each payload
+//! names what changed by id (AGENTS.md rule 10); `enqueue` stages it in
+//! the change's own transaction with `events::emit`, so a rollback leaves
+//! nothing and a commit is heard by every reader of the log.
+//!
+//! The name is historical: these used to wait in an `outbox_events` table
+//! for a publisher. The log replaced both; the payloads stay the web's
+//! protocol-1 frame (`OutboxEnvelope`) until the web reads catalogue events.
 
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
@@ -7,15 +15,8 @@ use uuid::Uuid;
 use crate::{domain::RunState, error::AppError};
 
 pub const OUTBOX_SCHEMA_VERSION: i32 = 1;
-pub const DEFAULT_MAX_OUTBOX_ATTEMPTS: i32 = 10;
-pub const MAX_OUTBOX_PAYLOAD_BYTES: usize = 65_536;
-pub const MAX_OUTBOX_WORKER_ID_CHARACTERS: usize = 128;
-pub const MAX_OUTBOX_BATCH_SIZE: i64 = 100;
-pub const MAX_OUTBOX_LEASE_SECONDS: i32 = 300;
-pub const MAX_OUTBOX_ERROR_SUMMARY_CHARACTERS: usize = 2_000;
-
-const RETRY_BASE_SECONDS: u64 = 1;
-const RETRY_MAX_SECONDS: u64 = 300;
+/// A notice's payload is an event payload, so the log's bound applies.
+pub const MAX_OUTBOX_PAYLOAD_BYTES: usize = crate::events::MAX_PAYLOAD_BYTES;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,23 +60,6 @@ impl OutboxResourceKind {
             Self::Sheet => "sheet",
         }
     }
-
-    fn parse(value: &str) -> Result<Self, OutboxEventError> {
-        match value {
-            "project" => Ok(Self::Project),
-            "conversation" => Ok(Self::Conversation),
-            "message" => Ok(Self::Message),
-            "read_state" => Ok(Self::ReadState),
-            "agent_run" => Ok(Self::AgentRun),
-            "work_item" => Ok(Self::WorkItem),
-            "notification" => Ok(Self::Notification),
-            "whiteboard" => Ok(Self::Whiteboard),
-            "page" => Ok(Self::Page),
-            "collection" => Ok(Self::Collection),
-            "sheet" => Ok(Self::Sheet),
-            _ => Err(OutboxEventError::MalformedMetadata),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -116,7 +100,7 @@ pub struct MessageCreatedPayload {
 }
 
 /// A message was edited or removed. IDs and the revision only: never put
-/// message text in an outbox payload, because it is stored in outbox_events
+/// message text in a notice payload, because it is stored in the event log
 /// and a removed message's text must vanish everywhere.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -685,7 +669,6 @@ pub struct NewOutboxEvent {
     project_id: Uuid,
     payload: OutboxEventPayload,
     payload_json: serde_json::Value,
-    max_attempts: i32,
 }
 
 impl NewOutboxEvent {
@@ -699,16 +682,7 @@ impl NewOutboxEvent {
             project_id,
             payload,
             payload_json,
-            max_attempts: DEFAULT_MAX_OUTBOX_ATTEMPTS,
         })
-    }
-
-    pub fn with_max_attempts(mut self, max_attempts: i32) -> Result<Self, OutboxEventError> {
-        if !(1..=100).contains(&max_attempts) {
-            return Err(OutboxEventError::MalformedMetadata);
-        }
-        self.max_attempts = max_attempts;
-        Ok(self)
     }
 
     pub fn event_id(&self) -> Uuid {
@@ -766,115 +740,6 @@ impl OutboxEnvelope {
     }
 }
 
-#[derive(Clone, FromRow)]
-pub struct ClaimedOutboxEvent {
-    event_id: Uuid,
-    event_cursor: i64,
-    schema_version: i32,
-    project_id: Uuid,
-    conversation_id: Option<Uuid>,
-    resource_kind: String,
-    resource_id: Uuid,
-    event_type: String,
-    payload: serde_json::Value,
-    attempt_count: i32,
-    max_attempts: i32,
-    occurred_at: String,
-}
-
-impl ClaimedOutboxEvent {
-    pub fn event_id(&self) -> Uuid {
-        self.event_id
-    }
-
-    pub fn event_cursor(&self) -> i64 {
-        self.event_cursor
-    }
-
-    pub fn project_id(&self) -> Uuid {
-        self.project_id
-    }
-
-    /// The stored payload, as written.
-    pub fn payload_json(&self) -> &serde_json::Value {
-        &self.payload
-    }
-
-    pub fn attempt_count(&self) -> i32 {
-        self.attempt_count
-    }
-
-    pub fn max_attempts(&self) -> i32 {
-        self.max_attempts
-    }
-
-    pub fn decode(&self) -> Result<OutboxEventPayload, OutboxEventError> {
-        if self.schema_version != OUTBOX_SCHEMA_VERSION
-            || self.event_cursor < 1
-            || self.project_id.is_nil()
-            || self.resource_id.is_nil()
-            || self.attempt_count < 1
-            || self.max_attempts < self.attempt_count
-        {
-            return Err(OutboxEventError::MalformedMetadata);
-        }
-        let resource_kind = OutboxResourceKind::parse(&self.resource_kind)?;
-        let payload = OutboxEventPayload::from_json(&self.event_type, self.payload.clone())?;
-        if self.conversation_id != payload.conversation_id()
-            || resource_kind != payload.resource_kind()
-            || self.resource_id != payload.resource_id()
-        {
-            return Err(OutboxEventError::MetadataMismatch);
-        }
-        Ok(payload)
-    }
-
-    pub fn envelope(&self) -> Result<OutboxEnvelope, OutboxEventError> {
-        let decoded = self.decode()?;
-        let conversation_id = decoded.conversation_id();
-        let recipient_actor_id = decoded.recipient_actor_id();
-        let payload = decoded.to_json()?;
-        Ok(OutboxEnvelope {
-            event_id: self.event_id,
-            event_cursor: self.event_cursor,
-            version: self.schema_version,
-            project_id: self.project_id,
-            conversation_id,
-            recipient_actor_id,
-            event_type: self.event_type.clone(),
-            occurred_at: self.occurred_at.clone(),
-            payload,
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OutboxFailureKind {
-    MalformedEvent,
-    Serialization,
-    PublicationUnavailable,
-    /// Notifications or webhook and automation routing failed; not
-    /// permanent, so the event is retried with backoff.
-    SideEffectsUnavailable,
-}
-
-impl OutboxFailureKind {
-    pub fn operator_summary(self) -> &'static str {
-        match self {
-            Self::MalformedEvent => "outbox event is malformed",
-            Self::Serialization => "outbox event serialization failed",
-            Self::PublicationUnavailable => "realtime publication was unavailable",
-            Self::SideEffectsUnavailable => {
-                "notifications or webhook and automation routing were unavailable"
-            }
-        }
-    }
-
-    pub fn is_permanent(self) -> bool {
-        matches!(self, Self::MalformedEvent | Self::Serialization)
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum OutboxEventError {
     #[error("outbox event metadata is malformed")]
@@ -895,40 +760,19 @@ pub trait OutboxPublisher {
     fn publish(&self, envelope: &OutboxEnvelope) -> Result<(), Self::Error>;
 }
 
+/// Stages the notice in the log, in the change's transaction.
 pub async fn enqueue(
     transaction: &mut Transaction<'_, Postgres>,
     event: &NewOutboxEvent,
 ) -> Result<Uuid, AppError> {
-    sqlx::query(
-        r#"
-        INSERT INTO outbox_events (
-            event_id, schema_version, project_id, conversation_id,
-            resource_kind, resource_id, event_type, payload, max_attempts
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        "#,
-    )
-    .bind(event.event_id)
-    .bind(OUTBOX_SCHEMA_VERSION)
-    .bind(event.project_id)
-    .bind(event.payload.conversation_id())
-    .bind(event.payload.resource_kind().as_str())
-    .bind(event.payload.resource_id())
-    .bind(event.payload.event_type())
-    .bind(&event.payload_json)
-    .bind(event.max_attempts)
-    .execute(&mut **transaction)
-    .await?;
-    // K3.2: the same event, with the same id, in the event log.
-    crate::events::legacy::mirror(
+    crate::events::notice::stage(
         transaction,
         event.event_id,
         event.project_id,
         &event.payload,
         &event.payload_json,
     )
-    .await?;
-    Ok(event.event_id)
+    .await
 }
 
 pub async fn enqueue_typed(
@@ -1094,166 +938,6 @@ pub async fn enqueue_agent_run_updated(
     .await
 }
 
-pub async fn claim_ready(
-    transaction: &mut Transaction<'_, Postgres>,
-    worker_id: &str,
-    batch_size: i64,
-    lease_seconds: i32,
-) -> Result<Vec<ClaimedOutboxEvent>, AppError> {
-    validate_worker_options(worker_id, batch_size, lease_seconds)?;
-
-    // A worker may die after claiming its final permitted attempt. Once that
-    // lease expires there is no legal next claim, so finalize the row here
-    // instead of leaving it permanently unpublished and non-terminal.
-    sqlx::query(
-        r#"
-        UPDATE outbox_events
-        SET failed_at = now(),
-            lease_owner = NULL,
-            lease_expires_at = NULL,
-            last_error_summary = 'outbox publication lease expired after final attempt',
-            updated_at = now()
-        WHERE published_at IS NULL
-          AND failed_at IS NULL
-          AND attempt_count >= max_attempts
-          AND lease_expires_at <= now()
-        "#,
-    )
-    .execute(&mut **transaction)
-    .await?;
-
-    let mut claimed = sqlx::query_as::<_, ClaimedOutboxEvent>(
-        r#"
-        WITH ready AS MATERIALIZED (
-            SELECT event_id
-            FROM outbox_events
-            WHERE published_at IS NULL
-              AND failed_at IS NULL
-              AND available_at <= now()
-              AND attempt_count < max_attempts
-              AND (lease_expires_at IS NULL OR lease_expires_at <= now())
-            ORDER BY event_cursor
-            FOR UPDATE SKIP LOCKED
-            LIMIT $1
-        )
-        UPDATE outbox_events event
-        SET lease_owner = $2,
-            lease_expires_at = now() + make_interval(secs => $3::double precision),
-            attempt_count = event.attempt_count + 1,
-            updated_at = now()
-        FROM ready
-        WHERE event.event_id = ready.event_id
-        RETURNING event.event_id,
-                  event.event_cursor,
-                  event.schema_version,
-                  event.project_id,
-                  event.conversation_id,
-                  event.resource_kind,
-                  event.resource_id,
-                  event.event_type,
-                  event.payload,
-                  event.attempt_count,
-                  event.max_attempts,
-                  to_char(
-                      event.created_at AT TIME ZONE 'UTC',
-                      'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-                  ) AS occurred_at
-        "#,
-    )
-    .bind(batch_size)
-    .bind(worker_id)
-    .bind(lease_seconds)
-    .fetch_all(&mut **transaction)
-    .await?;
-    claimed.sort_by_key(|event| event.event_cursor);
-    Ok(claimed)
-}
-
-pub async fn mark_published(
-    transaction: &mut Transaction<'_, Postgres>,
-    event_id: Uuid,
-    worker_id: &str,
-) -> Result<(), AppError> {
-    validate_worker_options(worker_id, 1, 1)?;
-    let updated = sqlx::query(
-        r#"
-        UPDATE outbox_events
-        SET published_at = now(),
-            lease_owner = NULL,
-            lease_expires_at = NULL,
-            last_error_summary = NULL,
-            updated_at = now()
-        WHERE event_id = $1
-          AND lease_owner = $2
-          AND published_at IS NULL
-          AND failed_at IS NULL
-        "#,
-    )
-    .bind(event_id)
-    .bind(worker_id)
-    .execute(&mut **transaction)
-    .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::Conflict("outbox_event", "claim lost"));
-    }
-    Ok(())
-}
-
-pub async fn record_failure(
-    transaction: &mut Transaction<'_, Postgres>,
-    claim: &ClaimedOutboxEvent,
-    worker_id: &str,
-    failure: OutboxFailureKind,
-) -> Result<(), AppError> {
-    validate_worker_options(worker_id, 1, 1)?;
-    let retry_seconds = i32::try_from(retry_delay(claim.attempt_count).as_secs())
-        .map_err(|_| AppError::Internal("calculate outbox retry"))?;
-    let permanent = failure.is_permanent();
-    let updated = sqlx::query(
-        r#"
-        UPDATE outbox_events
-        SET last_error_summary = $3,
-            failed_at = CASE
-                WHEN $5 OR attempt_count >= max_attempts THEN now()
-                ELSE failed_at
-            END,
-            available_at = CASE
-                WHEN $5 OR attempt_count >= max_attempts THEN available_at
-                ELSE now() + make_interval(secs => $4::double precision)
-            END,
-            lease_owner = NULL,
-            lease_expires_at = NULL,
-            updated_at = now()
-        WHERE event_id = $1
-          AND lease_owner = $2
-          AND published_at IS NULL
-          AND failed_at IS NULL
-        "#,
-    )
-    .bind(claim.event_id)
-    .bind(worker_id)
-    .bind(failure.operator_summary())
-    .bind(retry_seconds)
-    .bind(permanent)
-    .execute(&mut **transaction)
-    .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::Conflict("outbox_event", "claim lost"));
-    }
-    Ok(())
-}
-
-pub fn retry_delay(attempt_count: i32) -> Duration {
-    let exponent = u32::try_from(attempt_count.saturating_sub(1))
-        .unwrap_or(0)
-        .min(31);
-    Duration::from_secs(
-        RETRY_BASE_SECONDS
-            .saturating_mul(1_u64 << exponent)
-            .min(RETRY_MAX_SECONDS),
-    )
-}
-
 fn validate_payload_size(value: &serde_json::Value) -> Result<(), OutboxEventError> {
     if !value.is_object() {
         return Err(OutboxEventError::MalformedPayload);
@@ -1267,71 +951,74 @@ fn validate_payload_size(value: &serde_json::Value) -> Result<(), OutboxEventErr
     Ok(())
 }
 
-fn validate_worker_options(
-    worker_id: &str,
-    batch_size: i64,
-    lease_seconds: i32,
-) -> Result<(), AppError> {
-    let worker_id_is_valid = !worker_id.is_empty()
-        && worker_id.chars().count() <= MAX_OUTBOX_WORKER_ID_CHARACTERS
-        && worker_id.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
-        });
-    if !worker_id_is_valid
-        || !(1..=MAX_OUTBOX_BATCH_SIZE).contains(&batch_size)
-        || !(1..=MAX_OUTBOX_LEASE_SECONDS).contains(&lease_seconds)
-    {
-        return Err(AppError::Internal("invalid outbox worker options"));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::domain::RunState;
 
     use super::{
-        AgentRunUpdatedPayload, ClaimedOutboxEvent, ConversationCreatedPayload,
-        ConversationMemberRemovedPayload, MAX_OUTBOX_ERROR_SUMMARY_CHARACTERS,
+        AgentRunUpdatedPayload, ConversationCreatedPayload, ConversationMemberRemovedPayload,
         MessageCreatedPayload, MessageReactionsUpdatedPayload, MessageUpdatedPayload,
-        OUTBOX_SCHEMA_VERSION, OutboxConversationKind, OutboxEventError, OutboxEventPayload,
-        OutboxFailureKind, OutboxResourceKind, ProjectMembershipUpdatedPayload,
-        ReadStateUpdatedPayload, WorkItemPlacement, WorkItemUpdatedPayload, retry_delay,
+        OUTBOX_SCHEMA_VERSION, OutboxConversationKind, OutboxEnvelope, OutboxEventError,
+        OutboxEventPayload, OutboxResourceKind, ProjectMembershipUpdatedPayload,
+        ReadStateUpdatedPayload, WorkItemPlacement, WorkItemUpdatedPayload,
     };
-    use std::time::Duration;
+    use crate::events::LoggedEvent;
     use uuid::Uuid;
 
     fn id(value: u128) -> Uuid {
         Uuid::from_u128(value)
     }
 
-    fn message_claim() -> ClaimedOutboxEvent {
-        ClaimedOutboxEvent {
-            event_id: Uuid::now_v7(),
-            event_cursor: 42,
-            schema_version: OUTBOX_SCHEMA_VERSION,
-            project_id: id(1),
+    /// A logged notice, as the tail reads it.
+    fn logged(event_type: &str, payload: serde_json::Value) -> LoggedEvent {
+        LoggedEvent {
+            position: 42,
+            id: Uuid::now_v7(),
+            workspace_id: id(9),
+            space_id: Some(id(1)),
+            thing_id: None,
+            thing_kind: None,
+            access_thing_id: None,
+            thing_version: None,
+            event_type: "message.created".to_owned(),
+            class: "fact".to_owned(),
+            changes: Vec::new(),
+            audience: "conversation".to_owned(),
             conversation_id: Some(id(2)),
-            resource_kind: OutboxResourceKind::Message.as_str().to_owned(),
-            resource_id: id(3),
-            event_type: "conversation.message.created".to_owned(),
-            payload: serde_json::json!({
+            conversation_restricted: Some(false),
+            audience_account_id: None,
+            actor_account_id: None,
+            via_credential_id: None,
+            requested_by_account_id: None,
+            run_id: None,
+            request_id: None,
+            legacy_type: Some(event_type.to_owned()),
+            payload,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    fn message_notice() -> LoggedEvent {
+        logged(
+            "conversation.message.created",
+            serde_json::json!({
                 "conversationId": id(2),
                 "messageId": id(3),
                 "sequence": 7,
                 "authorActorId": id(4),
             }),
-            attempt_count: 1,
-            max_attempts: 10,
-            occurred_at: "2026-07-31T15:00:00.000000Z".to_owned(),
-        }
+        )
     }
 
     #[test]
     fn typed_message_event_becomes_the_versioned_realtime_envelope() {
-        let claim = message_claim();
+        let notice = message_notice();
         assert_eq!(
-            claim.decode().expect("typed payload"),
+            OutboxEventPayload::from_json(
+                notice.legacy_type.as_deref().unwrap_or_default(),
+                notice.payload.clone()
+            )
+            .expect("typed payload"),
             OutboxEventPayload::MessageCreated(MessageCreatedPayload {
                 conversation_id: id(2),
                 message_id: id(3),
@@ -1340,11 +1027,11 @@ mod tests {
             })
         );
 
-        let envelope = claim.envelope().expect("realtime envelope");
+        let envelope = OutboxEnvelope::from_logged(&notice).expect("realtime envelope");
         let json = serde_json::to_value(envelope).expect("envelope JSON");
-        assert_eq!(json["event_id"], claim.event_id().to_string());
+        assert_eq!(json["event_id"], notice.id.to_string());
         assert_eq!(json["event_cursor"], 42);
-        assert_eq!(json["version"], 1);
+        assert_eq!(json["version"], OUTBOX_SCHEMA_VERSION);
         assert_eq!(json["conversationId"], id(2).to_string());
         assert_eq!(json["type"], "conversation.message.created");
         assert_eq!(json["payload"]["messageId"], id(3).to_string());
@@ -1352,19 +1039,18 @@ mod tests {
     }
 
     #[test]
-    fn validated_read_state_claim_targets_only_its_actor() {
-        let mut claim = message_claim();
-        claim.resource_kind = OutboxResourceKind::ReadState.as_str().to_owned();
-        claim.resource_id = id(4);
-        claim.event_type = "conversation.read_state.updated".to_owned();
-        claim.payload = serde_json::json!({
-            "conversationId": id(2),
-            "actorId": id(4),
-            "highestSeenSequence": 9,
-            "version": 2,
-        });
+    fn validated_read_state_notice_targets_only_its_actor() {
+        let notice = logged(
+            "conversation.read_state.updated",
+            serde_json::json!({
+                "conversationId": id(2),
+                "actorId": id(4),
+                "highestSeenSequence": 9,
+                "version": 2,
+            }),
+        );
 
-        let envelope = claim.envelope().expect("validated read-state envelope");
+        let envelope = OutboxEnvelope::from_logged(&notice).expect("validated read-state envelope");
         assert_eq!(envelope.conversation_id, Some(id(2)));
         assert_eq!(envelope.recipient_actor_id, Some(id(4)));
         let wire = serde_json::to_value(envelope).expect("read-state wire envelope");
@@ -1442,44 +1128,30 @@ mod tests {
     }
 
     #[test]
-    fn malformed_poison_events_are_isolated_at_decode_time() {
-        let mut unknown = message_claim();
-        unknown.event_type = "conversation.future.changed".to_owned();
-        assert_eq!(unknown.decode(), Err(OutboxEventError::UnknownEventType));
+    fn malformed_notices_have_no_frame() {
+        let mut unknown = message_notice();
+        unknown.legacy_type = Some("conversation.future.changed".to_owned());
+        assert_eq!(
+            OutboxEventPayload::from_json("conversation.future.changed", unknown.payload.clone()),
+            Err(OutboxEventError::UnknownEventType)
+        );
+        assert!(OutboxEnvelope::from_logged(&unknown).is_none());
 
-        let mut extra_field = message_claim();
+        let mut extra_field = message_notice();
         extra_field.payload["secret"] = serde_json::json!("must not pass through");
         assert_eq!(
-            extra_field.decode(),
+            OutboxEventPayload::from_json(
+                "conversation.message.created",
+                extra_field.payload.clone()
+            ),
             Err(OutboxEventError::MalformedPayload)
         );
+        assert!(OutboxEnvelope::from_logged(&extra_field).is_none());
 
-        let mut mismatched = message_claim();
-        mismatched.resource_id = id(9);
-        assert_eq!(mismatched.decode(), Err(OutboxEventError::MetadataMismatch));
-    }
-
-    #[test]
-    fn retry_backoff_is_bounded_and_error_summaries_are_redacted_categories() {
-        assert_eq!(retry_delay(1), Duration::from_secs(1));
-        assert_eq!(retry_delay(2), Duration::from_secs(2));
-        assert_eq!(retry_delay(9), Duration::from_secs(256));
-        assert_eq!(retry_delay(10), Duration::from_secs(300));
-        assert_eq!(retry_delay(i32::MAX), Duration::from_secs(300));
-
-        for failure in [
-            OutboxFailureKind::MalformedEvent,
-            OutboxFailureKind::Serialization,
-            OutboxFailureKind::PublicationUnavailable,
-        ] {
-            let summary = failure.operator_summary();
-            assert!(summary.chars().count() <= MAX_OUTBOX_ERROR_SUMMARY_CHARACTERS);
-            assert!(!summary.contains("payload"));
-            assert!(!summary.contains("token"));
-        }
-        assert!(OutboxFailureKind::MalformedEvent.is_permanent());
-        assert!(OutboxFailureKind::Serialization.is_permanent());
-        assert!(!OutboxFailureKind::PublicationUnavailable.is_permanent());
+        // A catalogue event that never was a notice has no protocol-1 frame.
+        let mut catalogue_only = message_notice();
+        catalogue_only.legacy_type = None;
+        assert!(OutboxEnvelope::from_logged(&catalogue_only).is_none());
     }
 
     #[test]

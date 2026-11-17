@@ -685,7 +685,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let parity_cookie = login(&application).await;
     let parity_csrf = csrf_from_cookie(&parity_cookie);
     let parity_effects_before = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -722,7 +725,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     )
     .expect("browser parity Work Item UUID");
     let after_browser = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -758,7 +764,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     )
     .expect("MCP parity Work Item UUID");
     let after_mcp = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -820,7 +829,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         json!(2)
     );
     let after_browser_update = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -848,7 +860,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     assert_eq!(mcp_updated["outcome"], "applied");
     assert_eq!(mcp_updated["version"], 2);
     let after_mcp_update = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -890,9 +905,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         mcp_audits, 10,
         "exact replay and conflicts create no success audit"
     );
-    let viewer_denial_effects_before = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM outbox_events)",
-    )
+    let viewer_denial_effects_before = sqlx::query_as::<_, (i64, i64)>(&format!(
+        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM {n} outbox)",
+        n = crate::support::NOTICES
+    ))
     .fetch_one(&pool)
     .await
     .expect("count effects before Viewer denial");
@@ -956,9 +972,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         "denied Viewer writes produce no success audit"
     );
     assert_eq!(
-        sqlx::query_as::<_, (i64, i64)>(
-            "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM outbox_events)",
-        )
+        sqlx::query_as::<_, (i64, i64)>(&format!(
+            "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM {n} outbox)",
+            n = crate::support::NOTICES
+        ),)
         .fetch_one(&pool)
         .await
         .expect("count effects after Viewer denial"),

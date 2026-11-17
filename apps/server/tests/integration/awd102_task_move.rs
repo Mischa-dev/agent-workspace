@@ -31,7 +31,10 @@ async fn target_rows(setup: &Setup, project: &str) -> String {
         "SELECT row_to_json(activity)::text FROM work_item_activity activity WHERE project_id = $1::uuid",
         "SELECT row_to_json(comment)::text FROM work_item_comments comment WHERE project_id = $1::uuid",
         "SELECT row_to_json(audit)::text FROM audit_events audit WHERE project_id = $1::uuid",
-        "SELECT row_to_json(event)::text FROM outbox_events event WHERE event.payload::text LIKE '%' || $1 || '%'",
+        &format!(
+            "SELECT row_to_json(event)::text FROM {n} event WHERE event.payload::text LIKE '%' || $1 || '%'",
+            n = crate::support::NOTICES
+        ),
         "SELECT row_to_json(note)::text FROM notifications note WHERE note::text LIKE '%' || $1 || '%'",
         "SELECT row_to_json(receipt)::text FROM work_item_move_receipts receipt",
         "SELECT row_to_json(item)::text FROM task_rows item WHERE project_id = $1::uuid",
@@ -60,7 +63,8 @@ async fn footprint(setup: &Setup) -> Vec<i64> {
         "work_item_key_aliases",
         "work_item_move_receipts",
         "audit_events",
-        "outbox_events",
+        "events",
+        "event_staging",
         "notifications",
         "work_item_claims",
     ] {

@@ -210,10 +210,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
-                "outbox_events",
-                "runtime state of this server (queues, leases, retries)",
-            ),
-            (
                 "secrets",
                 "secret values never leave the server; their names go to needs/secrets.jsonl (H1.9)",
             ),

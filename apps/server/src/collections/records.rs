@@ -512,15 +512,55 @@ fn change_entry(field: &str, name: &str, before: Value, after: Value) -> Value {
     json!({ "field": field, "name": name, "before": kept(before), "after": kept(after) })
 }
 
+/// The record's history entry and its fact in the event log (K3.7): the
+/// record created or changed, with the names of the fields that changed,
+/// for webhooks, automations and activity.
+#[allow(clippy::too_many_arguments)]
 async fn insert_history(
     connection: &mut PgConnection,
     project_id: Uuid,
+    collection_id: Uuid,
     record_id: Uuid,
     actor_id: Uuid,
     action: &str,
     changes: Vec<Value>,
     version: i64,
 ) -> Result<(), AppError> {
+    let created = action == "created";
+    let mut changed = if created {
+        Vec::new()
+    } else {
+        changes
+            .iter()
+            .filter_map(|change| change["name"].as_str())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    if matches!(action, "archived" | "restored") {
+        changed.push(action.to_owned());
+    }
+    changed.sort();
+    changed.dedup();
+    changed.truncate(64);
+    let changed = changed.iter().map(String::as_str).collect::<Vec<_>>();
+    crate::events::emit_on(
+        &mut *connection,
+        crate::events::NewEvent::thing(
+            if created {
+                &crate::events::catalog::RECORD_CREATED
+            } else {
+                &crate::events::catalog::RECORD_UPDATED
+            },
+            project_id,
+            "record",
+            record_id,
+        )
+        .version(version)
+        .changes(&changed)
+        .actor(actor_id)
+        .payload(json!({ "collectionId": collection_id })),
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO collection_record_history (
@@ -870,6 +910,7 @@ pub async fn write(
             insert_history(
                 connection,
                 project_id,
+                collection.id,
                 record.id,
                 writer.actor_id,
                 "created",
@@ -1015,6 +1056,7 @@ pub async fn write(
         insert_history(
             connection,
             project_id,
+            collection.id,
             current.id,
             writer.actor_id,
             action,

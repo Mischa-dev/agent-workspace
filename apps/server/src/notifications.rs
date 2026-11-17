@@ -1,9 +1,9 @@
 //! Notifications for people (roadmap N1) and the inbox they fill (N2).
 //!
-//! Notifications are written by the outbox publisher: once an event has been
-//! broadcast, `fan_out` runs in the same transaction that marks it published,
-//! so they need no job queue and a failed write retries with the event. Each
-//! source occurrence (one @mention, one assignment, one failed run) carries a
+//! Notifications are written by the `notifications` consumer of the event
+//! log (K3.9): `fan_out` runs in the transaction that advances its cursor,
+//! so they need no job queue and a failed batch retries with its events.
+//! Each source occurrence (one @mention, one assignment, one failed run) carries a
 //! dedupe key and is applied once per recipient, which makes redelivery safe.
 //! Repeats in the same group (more mentions in one channel, a run moving from
 //! waiting to finished) collapse into the one open row for that group, which
@@ -398,9 +398,45 @@ pub async fn deliver(
     Ok(true)
 }
 
-/// Turns one published outbox event into notifications. Called by the
-/// outbox publisher inside the transaction that marks the event published.
-/// Returns how many people were notified.
+/// The `notifications` consumer: every change notice in the log, turned
+/// into notifications in the transaction that moves its cursor.
+pub struct Notifier;
+
+/// The notifier's cursor.
+pub const NOTIFIER: &str = "notifications";
+
+#[async_trait::async_trait]
+impl crate::events::Consumer for Notifier {
+    fn name(&self) -> &'static str {
+        NOTIFIER
+    }
+
+    /// From the log's start, so nothing written before its first round is
+    /// missed; deliveries dedupe on their keys.
+    fn starts_at_head(&self) -> bool {
+        false
+    }
+
+    async fn handle(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        batch: &[crate::events::LoggedEvent],
+    ) -> Result<(), crate::events::ConsumerError> {
+        for event in batch {
+            let (Some(notice), Some(project_id)) = (&event.legacy_type, event.space_id) else {
+                continue;
+            };
+            let Ok(payload) = OutboxEventPayload::from_json(notice, event.payload.clone()) else {
+                continue;
+            };
+            fan_out(transaction, event.id, project_id, &payload).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Turns one change notice into notifications, in the notifier's
+/// transaction. Returns how many people were notified.
 pub async fn fan_out(
     transaction: &mut Transaction<'_, Postgres>,
     event_id: Uuid,
@@ -895,23 +931,23 @@ async fn work_item_changes(
             SELECT comment.id AS comment_id, comment.author_actor_id,
                    mention.actor_id AS recipient_actor_id, false AS reply,
                    comment.project_id
-            FROM outbox_events event
+            FROM events event
             JOIN work_item_comments comment
-              ON comment.project_id = event.project_id
+              ON comment.project_id = event.space_id
              AND comment.work_item_id = $3
              -- A new comment, or an edit (it can add mentions; people already
              -- told about this comment aren't told again).
              AND (comment.created_at = event.created_at OR comment.edited_at = event.created_at)
              AND comment.removed_at IS NULL
             JOIN work_item_comment_mentions mention ON mention.comment_id = comment.id
-            WHERE event.event_id = $1 AND event.project_id = $2
+            WHERE event.id = $1 AND event.space_id = $2
             UNION ALL
             -- A new reply tells whoever wrote the comment it answers.
             SELECT comment.id, comment.author_actor_id, quoted.author_actor_id, true,
                    comment.project_id
-            FROM outbox_events event
+            FROM events event
             JOIN work_item_comments comment
-              ON comment.project_id = event.project_id
+              ON comment.project_id = event.space_id
              AND comment.work_item_id = $3
              AND comment.created_at = event.created_at
              AND comment.removed_at IS NULL
@@ -919,7 +955,7 @@ async fn work_item_changes(
               ON quoted.project_id = comment.project_id
              AND quoted.work_item_id = comment.work_item_id
              AND quoted.id = comment.reply_to_comment_id
-            WHERE event.event_id = $1 AND event.project_id = $2
+            WHERE event.id = $1 AND event.space_id = $2
         ) told
         WHERE recipient_actor_id <> author_actor_id
           AND actor_can_access_project(recipient_actor_id, NULL, project_id)
@@ -954,14 +990,14 @@ async fn work_item_changes(
         r#"
         SELECT activity.id AS activity_id, activity.actor_id,
                item.assignee_actor_id
-        FROM outbox_events event
+        FROM events event
         JOIN work_item_activity activity
-          ON activity.project_id = event.project_id
+          ON activity.project_id = event.space_id
          AND activity.work_item_id = $3
          AND activity.created_at = event.created_at
         JOIN task_rows item
           ON item.project_id = activity.project_id AND item.id = activity.work_item_id
-        WHERE event.event_id = $1 AND event.project_id = $2
+        WHERE event.id = $1 AND event.space_id = $2
           AND (
               activity.kind = 'work_item_created'
               OR (activity.kind = 'work_item_updated'
@@ -1001,22 +1037,22 @@ async fn work_item_changes(
             SELECT activity.id AS change_id, activity.actor_id, NULL::uuid AS comment_id,
                    replace(activity.kind, 'work_item_', '') AS change,
                    activity.project_id, activity.work_item_id
-            FROM outbox_events event
+            FROM events event
             JOIN work_item_activity activity
-              ON activity.project_id = event.project_id
+              ON activity.project_id = event.space_id
              AND activity.work_item_id = $3
              AND activity.created_at = event.created_at
-            WHERE event.event_id = $1 AND event.project_id = $2
+            WHERE event.id = $1 AND event.space_id = $2
             UNION ALL
             SELECT comment.id, comment.author_actor_id, comment.id, 'commented',
                    comment.project_id, comment.work_item_id
-            FROM outbox_events event
+            FROM events event
             JOIN work_item_comments comment
-              ON comment.project_id = event.project_id
+              ON comment.project_id = event.space_id
              AND comment.work_item_id = $3
              AND comment.created_at = event.created_at
              AND comment.removed_at IS NULL
-            WHERE event.event_id = $1 AND event.project_id = $2
+            WHERE event.id = $1 AND event.space_id = $2
         )
         SELECT change.change_id, change.actor_id, change.comment_id, change.change,
                watcher.actor_id AS recipient_actor_id

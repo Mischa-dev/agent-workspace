@@ -424,6 +424,30 @@ async fn run_rounds<C: Consumer>(
     }
 }
 
+/// Gives what is staged its positions, then runs the server's own
+/// consumers (the router and the notifier) until each has caught up or is
+/// held by another runner. For tests and tools that need the log's effects
+/// now rather than at the next poll; returns how many events were handled.
+pub async fn catch_up(pool: &PgPool) -> Result<usize, AppError> {
+    crate::tenancy::system("events.log", async {
+        let mut router = Runner::new(super::Router);
+        let mut notifier = Runner::new(crate::notifications::Notifier);
+        let mut handled = 0;
+        for _ in 0..50 {
+            super::sequencer::step(pool).await?;
+            let routed = router.round(pool).await?;
+            let notified = notifier.round(pool).await?;
+            let done = routed.handled + routed.parked + notified.handled + notified.parked;
+            handled += done;
+            if done == 0 {
+                break;
+            }
+        }
+        Ok(handled)
+    })
+    .await
+}
+
 fn backoff(failures: u32) -> Duration {
     Duration::from_millis(250 * 2_u64.pow(failures.min(6)))
 }
