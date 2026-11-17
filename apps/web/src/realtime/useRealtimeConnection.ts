@@ -334,6 +334,13 @@ export function useRealtimeConnection(): RealtimeContextValue {
             return
           }
           if (modulesChanged(queryClient, envelope)) return
+          if (envelope.type === 'custom_emoji.changed') {
+            // A workspace's own emoji changed: its pickers read the list
+            // again (`customEmojiKeys.list`, spelled out to keep that code out of this chunk).
+            const workspaceId = typeof envelope.payload?.workspaceId === 'string' ? envelope.payload.workspaceId : null
+            void queryClient.invalidateQueries({ queryKey: workspaceId ? ['custom-emoji', workspaceId] : ['custom-emoji'] })
+            return
+          }
           if (envelope.type === 'account.status.changed') {
             // Someone's status changed: the names that show it read it again.
             // The key is `statusKeys.all`, spelled out so status code stays out of this chunk.

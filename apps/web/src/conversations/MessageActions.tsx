@@ -13,6 +13,7 @@ import { MessageReactions, QuickReactions, ReactionPicker } from './Reactions'
 import { applyReaction, type ReactionChoice } from './reactions'
 import { MessageKeys } from './MessageKeys'
 import { useMessageLater } from './useMessageLater'
+import { useProject } from '../projects/hooks'
 import type {
   ConversationActor,
   ConversationCapabilities,
@@ -110,6 +111,8 @@ export function useMessageActions({
   // never replaces a newer one.
   const reactionRequests = useRef(new Map<string, number>())
   const later = useMessageLater({ conversationId, projectId, taskProject })
+  // Reactions offer the emoji of the message's own workspace.
+  const workspaceId = useProject(projectId).data?.organizationId || null
   const canPost = Boolean(capabilities?.sendMessage)
   const memory = useMessageMemory({ conversationId, direct, enabled: canPost, projectId })
 
@@ -216,6 +219,7 @@ export function useMessageActions({
         onToggle={canReact(message) ? (reaction) => react(message, reaction, !reaction.byViewer) : undefined}
         reactions={message.reactions}
         viewerId={viewerId}
+        workspaceId={workspaceId}
       />
     )
   }
@@ -252,7 +256,7 @@ export function useMessageActions({
         {canReact(message) ? (
           <>
             <QuickReactions onPick={(choice, reacted) => react(message, choice, reacted)} reactions={message.reactions ?? []} />
-            <ReactionPicker onPick={(choice, reacted) => react(message, choice, reacted)} reactions={message.reactions ?? []} />
+            <ReactionPicker onPick={(choice, reacted) => react(message, choice, reacted)} reactions={message.reactions ?? []} workspaceId={workspaceId} />
           </>
         ) : null}
         {canReply(message) ? <IconButton icon={Reply} label="Reply" onClick={() => onReply?.(message)} size="sm" /> : null}

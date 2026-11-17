@@ -73,6 +73,16 @@ async fn any_emoji_and_the_workspaces_own() {
     .await;
     assert_eq!(added["outcome"], "ok", "{added}");
     let parrot = added["value"]["id"].as_str().expect("id").to_owned();
+    // Open pickers hear of it, in the workspace's spaces.
+    let announced = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM outbox_events WHERE event_type = 'custom_emoji.changed' \
+         AND payload->>'emojiId' = $1",
+    )
+    .bind(&parrot)
+    .fetch_one(world.pool())
+    .await
+    .expect("events");
+    assert!(announced >= 1, "the new emoji is announced");
     for (name, image) in [
         ("eyes", PNG_BASE64),
         ("svg", "PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+"),
