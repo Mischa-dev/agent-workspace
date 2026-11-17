@@ -1,9 +1,10 @@
 # The master plan
 
-Where Agent Workspace is going and the order it is built in. The source of truth is the
-"Master plan: ..." pages in the app's AWD project (start with "Master plan: start here");
-this folder mirrors them next to the code. Change the page and this mirror in the same
-step; if they differ, the page wins. Read in this order:
+**Reference only since 2026-11-16.** The plan is the one page "Build plan" in the app's
+AWD project, with a task per lane; see `AGENTS.md`. This folder is the detailed thinking
+behind it: look things up here for background, and overrule it where the code says
+otherwise. Nobody has to read it first, keep it current or mirror it. `END-STATE.md` is
+still what the product is becoming. What is here:
 
 1. `END-STATE.md`: the finished product, its principles and its words.
 2. `LEAD-RULINGS.md`: decisions that settle disagreements. A ruling beats plan text.
@@ -11,11 +12,9 @@ step; if they differ, the page wins. Read in this order:
    what each build contains (section 4).
 4. `plans/<id>-*.md`: the fourteen detailed plans, one section per slice.
 
-`slices.json` is the one list of slices, builds, needs and milestones. `tools/plan.py`
-checks it against the plans (`python3 docs/plans/master/tools/plan.py`) and, with
-`--write`, regenerates `SLICES.md` and the generated parts of `BUILD-ORDER.md`. Never edit
-those parts by hand. Every change to a build after it was first written gets a dated line
-in `PLAN-CHANGES.md`.
+`slices.json` lists the slices and builds the plans were first cut into; the lane tasks'
+feature lists came from it, and the ids in them are lookup keys into these plans. It and
+`tools/plan.py` are frozen: CI no longer runs the checker.
 
 Some documents mention research notes and cross-plan reviews (`R1` to `R3`, `review/`,
 `PLAN-BRIEF.md`, `HANDBACKS.md`). They were working papers for writing these plans and
