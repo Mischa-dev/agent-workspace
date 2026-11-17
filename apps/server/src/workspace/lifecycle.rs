@@ -358,6 +358,53 @@ async fn closed_for_route(
     ))
 }
 
+/// The other id-routed v1 families the module gate leaves alone
+/// (`modules::gate::ID_EXEMPT`) that write in one workspace, and how each
+/// finds its space. Bug reports and forms by token are checked by their
+/// handlers; saved-for-later items are a person's own, across workspaces.
+const OTHER_ID_FAMILIES: &[(&str, &str)] = &[
+    (
+        "/api/v1/files/{",
+        "SELECT project_id FROM files \
+         -- visibility: the space only, to refuse a write; the handler checks access\n \
+         WHERE id = $1",
+    ),
+    (
+        "/api/v1/bug-report-links/{",
+        "SELECT project_id FROM bug_report_links \
+         -- visibility: the space only, to refuse a write; the handler checks access\n \
+         WHERE id = $1",
+    ),
+    (
+        "/api/v1/project-invitations/{",
+        "SELECT project_id FROM project_invitations \
+         -- visibility: the space only, to refuse a write; the handler checks access\n \
+         WHERE id = $1",
+    ),
+    (
+        "/api/v1/questions/{",
+        "SELECT project_id FROM person_questions \
+         -- visibility: the space only, to refuse a write; the handler checks access\n \
+         WHERE id = $1",
+    ),
+    (
+        "/api/v1/reply-requests/{",
+        "SELECT project_id FROM reply_requests \
+         -- visibility: the space only, to refuse a write; the handler checks access\n \
+         WHERE id = $1",
+    ),
+    (
+        "/api/v1/webhooks/{",
+        "SELECT COALESCE(webhook.project_id, ( \
+             SELECT space.id FROM projects space \
+             WHERE space.organization_id = webhook.organization_id \
+             ORDER BY (space.kind = 'workspace') DESC, space.created_at LIMIT 1)) \
+         FROM webhook_subscriptions webhook \
+         -- visibility: the space only, to refuse a write; the handler checks access\n \
+         WHERE webhook.id = $1",
+    ),
+];
+
 /// The space of a conversation (channel, thread), message, scheduled
 /// message or run a v1 route names by id.
 async fn conversation_scope(
@@ -400,6 +447,11 @@ async fn conversation_scope(
              -- visibility: the space only, to refuse a write; the handler checks access\n \
              WHERE message.id = $1",
         )
+    } else if let Some((rest, lookup)) = OTHER_ID_FAMILIES
+        .iter()
+        .find_map(|(prefix, lookup)| template.strip_prefix(prefix).map(|rest| (rest, *lookup)))
+    {
+        (rest, lookup)
     } else {
         return Ok(None);
     };
@@ -699,25 +751,22 @@ async fn delete_in_scope(
         None => {
             // Already deleted: a previous attempt committed the rows and
             // then failed to remove the bytes. Remove them now.
-            let deleted = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM deleted_workspaces WHERE id = $1)",
+            let repositories = sqlx::query_scalar::<_, Vec<Uuid>>(
+                "SELECT repository_ids FROM deleted_workspaces WHERE id = $1",
             )
             .bind(workspace)
-            .fetch_one(&mut *connection)
+            .fetch_optional(&mut *connection)
             .await?;
             drop(transaction);
-            if deleted {
-                crate::files::store::FileStore::from_config(&state.config)
-                    .delete_workspace(workspace)
-                    .await?;
+            if let Some(repositories) = repositories {
+                remove_bytes(state, workspace, &repositories).await?;
             }
             return Ok(None);
         }
     }
     // Repository mirrors and worktrees live on disk by repository id, which
-    // the rows below are the only record of: remove them first, so a retry
-    // after a failure here still finds the ids. Nobody can use them now;
-    // the workspace is past its date and its row is locked.
+    // the rows below are the only record of: the ids are kept with the
+    // deleted workspace, and the bytes go once the deletion commits.
     let repositories = sqlx::query_scalar::<_, Uuid>(
         "SELECT repository.id FROM repositories repository \
          JOIN projects project ON project.id = repository.project_id \
@@ -726,9 +775,6 @@ async fn delete_in_scope(
     .bind(workspace)
     .fetch_all(&mut *connection)
     .await?;
-    for repository in repositories {
-        crate::git_runtime::remove_repository_data(&state.config.data_root, repository).await?;
-    }
     sqlx::query("SELECT set_config('aw.workspace_delete', $1, true)")
         .bind(workspace.to_string())
         .execute(&mut *connection)
@@ -749,20 +795,20 @@ async fn delete_in_scope(
     .await?;
     let rows = delete_rows(connection, workspace).await?;
     sqlx::query(
-        "INSERT INTO deleted_workspaces (id, requested_by_actor_id) VALUES ($1, $2) \
-         ON CONFLICT (id) DO NOTHING",
+        "INSERT INTO deleted_workspaces (id, requested_by_actor_id, repository_ids) \
+         VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
     )
     .bind(workspace)
     .bind(requested_by)
+    .bind(&repositories)
     .execute(&mut *connection)
     .await?;
     transaction.commit().await?;
     // The bytes go only once the rows are gone for good, so a kept
-    // workspace never loses a file. If this fails, the job's next attempt
-    // finds the workspace in `deleted_workspaces` and tries again.
-    crate::files::store::FileStore::from_config(&state.config)
-        .delete_workspace(workspace)
-        .await?;
+    // workspace never loses a file or a commit. If this fails, the job's
+    // next attempt finds the workspace in `deleted_workspaces` and tries
+    // again.
+    remove_bytes(state, workspace, &repositories).await?;
     tracing::info!(
         target: "agent_workspace::lifecycle",
         workspace_id = %workspace,
@@ -774,6 +820,22 @@ async fn delete_in_scope(
         rows,
         retired_accounts,
     }))
+}
+
+/// Remove what a deleted workspace kept on disk: its repositories'
+/// mirrors and worktrees, and its file folder. Missing pieces are fine, so
+/// a retry finishes a removal that failed part way.
+async fn remove_bytes(
+    state: &AppState,
+    workspace: Uuid,
+    repositories: &[Uuid],
+) -> Result<(), AppError> {
+    for repository in repositories {
+        crate::git_runtime::remove_repository_data(&state.config.data_root, *repository).await?;
+    }
+    crate::files::store::FileStore::from_config(&state.config)
+        .delete_workspace(workspace)
+        .await
 }
 
 /// Retire the agent and app accounts the workspace owns: disabled, with no

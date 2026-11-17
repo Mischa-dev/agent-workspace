@@ -210,6 +210,25 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     )
     .await;
     assert_eq!(status, StatusCode::LOCKED, "{body}");
+    // So is removing a file named by id, and the file stays.
+    let (status, body) = send(
+        &t.app,
+        a.browser.request(
+            "DELETE",
+            &format!("/api/v1/files/{}", a.task_file),
+            Some(&Uuid::now_v7().to_string()),
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::LOCKED, "{body}");
+    let removed =
+        sqlx::query_scalar::<_, bool>("SELECT removed_at IS NOT NULL FROM files WHERE id = $1")
+            .bind(a.task_file)
+            .fetch_one(&t.pool)
+            .await
+            .expect("file");
+    assert!(!removed);
     // Suspending stopped A's run that was waiting on an approval, and
     // cancelled the approval; B's run is untouched.
     let run_state = |run: Uuid| {
@@ -403,6 +422,17 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // Each workspace's repository has a mirror and a worktree on disk.
+    let repository_dirs = |repository: Uuid| {
+        ["repositories", "worktrees"]
+            .map(|area| t.data_root.join(area).join(repository.to_string()))
+    };
+    for directory in repository_dirs(a.repository)
+        .into_iter()
+        .chain(repository_dirs(b.repository))
+    {
+        std::fs::create_dir_all(directory.join("content")).expect("repository data");
+    }
     let deleted = lifecycle::delete_now(&t.state, a.organization, true)
         .await
         .expect("delete")
@@ -465,6 +495,13 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     let files = t.data_root.join("files");
     assert!(!files.join(a.organization.simple().to_string()).exists());
     assert!(files.join(b.organization.simple().to_string()).exists());
+    // A's repository data is gone with it; B's stays.
+    assert!(
+        repository_dirs(a.repository)
+            .iter()
+            .all(|dir| !dir.exists())
+    );
+    assert!(repository_dirs(b.repository).iter().all(|dir| dir.exists()));
 
     // B's request is still there, no longer pointing at A's host.
     let via = sqlx::query_scalar::<_, Option<Uuid>>(
