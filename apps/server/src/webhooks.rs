@@ -1382,7 +1382,7 @@ async fn send_post(
         .map_err(|error| (None, error))?;
     let body = body.to_string();
     let timestamp = Utc::now().timestamp().to_string();
-    let signature = crate::replies::sign(secret, &timestamp, &body)
+    let signature = crate::delivery::sign::legacy(secret, &timestamp, &body)
         .ok_or((None, "could not sign the delivery"))?;
     let delivery = due.id.to_string();
     let standard = standard_signature(secret, &delivery, &timestamp, &body)

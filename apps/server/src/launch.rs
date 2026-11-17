@@ -23,10 +23,10 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    api::{RunActor, StartRunRequest},
     auth::{AuthenticatedActor, require_authenticated_write},
     environments::{self, EnvironmentRow, EnvironmentView},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    hosts::builtin::http::{RunActor, StartRunRequest},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     jobs::{self, JobRegistry, NewJob},
     memory,
@@ -2042,7 +2042,7 @@ async fn start_launch(
         options,
         ..Default::default()
     };
-    let started = crate::api::start_run_in(
+    let started = crate::hosts::builtin::http::start_run_in(
         state,
         &LaunchStarter {
             caller,

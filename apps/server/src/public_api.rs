@@ -329,8 +329,17 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
         let key = match outcome["const"].as_str() {
             Some("ok") => continue,
             Some("started") => "Started".to_owned(),
-            Some(refusal) => format!("Refusal{}", pascal(refusal)),
-            None if outcome["enum"].is_array() => "Refusal".to_owned(),
+            Some(outcome) => format!("Refusal{}", pascal(outcome)),
+            // The operation layer's own refusals, one branch listing them
+            // all: shared too, under the first name free or already
+            // holding the same branch.
+            None if outcome["enum"].is_array() => (1..)
+                .map(|index| match index {
+                    1 => "Refusal".to_owned(),
+                    index => format!("Refusal{index}"),
+                })
+                .find(|key| components.get(key).is_none_or(|shared| shared == branch))
+                .unwrap_or_default(),
             None => continue,
         };
         let shared = components

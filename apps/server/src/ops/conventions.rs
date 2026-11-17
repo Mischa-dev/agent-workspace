@@ -68,7 +68,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "remove",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",
-            // A secret is replaced by a new one (K2.18).
+            // A secret is replaced; the old one keeps working for a while.
             "rotate",
             // An environment is tried and the result recorded (K2.18).
             "check",

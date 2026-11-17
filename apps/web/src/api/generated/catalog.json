@@ -277,6 +277,84 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "connection_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Create connection"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "connection_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List connections"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_remove",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Remove connection"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_secret_rotate",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Rotate connection secret"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update connection"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "conversation.continued"
     ],
     "idempotent": true,
@@ -566,6 +644,34 @@
     "preview": false,
     "proposable": false,
     "title": "Update environment"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "event_kind_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Event kinds"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "event_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List events"
   },
   {
     "automation": true,
@@ -1922,6 +2028,52 @@
     "preview": false,
     "proposable": false,
     "title": "Report usage"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "schedule.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "schedule_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set a follow-up"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "schedule_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List follow-ups"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "schedule.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "schedule_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Change a follow-up"
   },
   {
     "automation": true,

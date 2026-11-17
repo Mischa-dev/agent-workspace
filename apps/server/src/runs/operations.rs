@@ -1058,7 +1058,8 @@ impl Operation for RunCancel {
                 via_grant_id: call.ctx.caller.via_grant_id,
                 audit: actor.audit,
             };
-            crate::api::interrupt_run_in(call.state, &caller, run_id, Ok(key)).await?;
+            crate::hosts::builtin::http::interrupt_run_in(call.state, &caller, run_id, Ok(key))
+                .await?;
             let run = store::get(&call.state.pool, run_id)
                 .await?
                 .ok_or(OpError::not_found(RUN))?;

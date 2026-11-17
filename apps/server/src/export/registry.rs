@@ -545,6 +545,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
         ],
         not_exported: &[
             (
+                "agent_schedules",
+                "runtime state of this server (queues, leases, retries)",
+            ),
+            (
                 "agent_sessions",
                 "runtime state of this server (queues, leases, retries)",
             ),
@@ -552,16 +556,11 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "agent_setup_links",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
-            ("agent_webhook_deliveries", "a delivery log"),
+            ("deliveries", "a delivery log"),
             (
                 "external_agent_connections",
                 "a connection to an outside service, reconnected after import (needs/connections.jsonl)",
             ),
-            (
-                "external_agent_event_counters",
-                "runtime state of this server (queues, leases, retries)",
-            ),
-            ("external_agent_events", "a delivery log"),
             (
                 "harness_catalog_refreshes",
                 "runtime state of this server (queues, leases, retries)",
@@ -583,7 +582,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 references: &[
                     ("conversation_id", "conversations"),
                     ("message_id", "messages"),
-                    ("agent_run_event_id", "agent_run_events"),
+                    ("run_activity_id", "run_activities"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1610,11 +1609,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             KindDecl {
                 kind: "run_activities",
                 table: "run_activities",
-                references: &[
-                    ("run_id", "runs"),
-                    ("reported_by_account_id", "actors"),
-                    ("legacy_event_id", "agent_run_events"),
-                ],
+                references: &[("run_id", "runs"), ("reported_by_account_id", "actors")],
                 text_references: &[],
                 exclude: &[],
             },
@@ -1664,28 +1659,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("project_id", "projects"),
                     ("agent_run_id", "agent_runs"),
                     ("actor_id", "actors"),
-                    ("acknowledged_event_id", "agent_run_events"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "agent_run_events",
-                table: "agent_run_events",
-                references: &[
-                    ("agent_run_id", "agent_runs"),
-                    ("conversation_id", "conversations"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "agent_run_usage",
-                table: "agent_run_usage",
-                references: &[
-                    ("agent_run_id", "agent_runs"),
-                    ("project_id", "projects"),
-                    ("provider_account_id", "provider_accounts"),
+                    ("acknowledged_event_id", "run_activities"),
                 ],
                 text_references: &[],
                 exclude: &[],

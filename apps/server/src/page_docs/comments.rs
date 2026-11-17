@@ -473,16 +473,16 @@ pub async fn create(
         .bind(&handles)
         .fetch_all(&mut **transaction)
         .await?;
-        crate::external_events::enqueue_comment_mentioned(
+        crate::delivery::mentions::comment_mentioned(
             transaction,
-            crate::external_events::MentioningComment {
-                project_id: page.project_id,
+            crate::delivery::mentions::MentioningComment {
+                space_id: page.project_id,
                 thing_kind: "page",
                 thing_id: page_id,
                 comment_kind: "page_comment",
                 comment_id: id,
-                anchor: thread_id,
-                author_actor_id: writer.actor_id,
+                thread_id,
+                author_account_id: writer.actor_id,
             },
             &mentioned,
         )

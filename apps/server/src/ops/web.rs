@@ -144,7 +144,7 @@ fn refused(error: &OpError) -> Response {
 }
 
 /// Who is calling, and through which edge.
-async fn caller(
+pub(crate) async fn caller(
     state: &AppState,
     headers: &HeaderMap,
     writes: bool,

@@ -123,6 +123,9 @@ pub trait Operation: Send + Sync + 'static {
     /// May arrive as a proposal (C1) when access says "suggest only".
     const PROPOSABLE: bool = false;
     const IDEMPOTENCY: Idempotency;
+    /// Fields of the value shown once (a new secret): kept out of the stored
+    /// answer a retry replays, which says null for them instead.
+    const SHOWN_ONCE: &'static [&'static str] = &[];
     /// May run as a job (MCP Tasks extension, K2.21): an MCP call whose
     /// input `runs_long` is answered `started` and finished by a job.
     const LONG: bool = false;

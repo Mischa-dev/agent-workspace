@@ -514,6 +514,14 @@ async fn the_run_cap_counts_every_active_run_and_holds_a_lock() {
         let seed = &seed;
         async move {
             let id = Uuid::now_v7();
+            crate::support::builtin_run_record(
+                &pool,
+                id,
+                conversation,
+                seed.execution_worker_id,
+                state,
+            )
+            .await;
             sqlx::query(
                 r#"
                 INSERT INTO agent_runs (

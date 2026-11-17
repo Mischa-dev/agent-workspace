@@ -676,6 +676,102 @@
         },
         "type": "object"
       },
+      "ConnectionView": {
+        "description": "A connection, as its account and its managers see it.",
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "consecutiveFailures": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "disabledReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "forCredential": {
+            "description": "Made for an older project credential.",
+            "type": "boolean"
+          },
+          "homeWorkspaceId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isDefault": {
+            "description": "The default the account reads through when it names none.",
+            "type": "boolean"
+          },
+          "lastDeliveredAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastSeenAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "reachesAll": {
+            "description": "Reaches every workspace the account is in; else only its home.",
+            "type": "boolean"
+          },
+          "state": {
+            "description": "active, push_disabled (pushes stopped after failing; saving the\nwebhook again turns them back on) or removed.",
+            "type": "string"
+          },
+          "subscriptions": {
+            "items": {
+              "$ref": "#/components/schemas/Subscription"
+            },
+            "type": "array"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "webhookFormat": {
+            "description": "standard, typed_v1 or inbox_v1.",
+            "type": "string"
+          },
+          "webhookUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "accountId",
+          "name",
+          "reachesAll",
+          "homeWorkspaceId",
+          "isDefault",
+          "forCredential",
+          "webhookFormat",
+          "state",
+          "consecutiveFailures",
+          "subscriptions",
+          "version"
+        ],
+        "type": "object"
+      },
       "Content": {
         "additionalProperties": false,
         "description": "One part of a package.",
@@ -1423,6 +1519,34 @@
           "sceneSeq",
           "results",
           "changed"
+        ],
+        "type": "object"
+      },
+      "Entry": {
+        "description": "One deliverable event type.",
+        "properties": {
+          "addressed": {
+            "description": "Addressed to one account (heard whatever it subscribes to).",
+            "type": "boolean"
+          },
+          "family": {
+            "description": "What it is about: `reply`, `message`, `task`, `request`, `run`,\n`page`, `record`, `pull_request`, `schedule` or `connection`.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The log's name, such as `reply.requested`.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "What happened, in a few words.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "family",
+          "addressed",
+          "summary"
         ],
         "type": "object"
       },
@@ -5780,6 +5904,75 @@
         ],
         "type": "object"
       },
+      "ScheduleView": {
+        "description": "One follow-up, as its account sees it.",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "everyMinutes": {
+            "description": "Repeats this often; none: once.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastDueAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nextDueAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "description": "Your own words for it.",
+            "type": "string"
+          },
+          "state": {
+            "description": "active, done (a one-time follow-up that fired) or cancelled.",
+            "type": "string"
+          },
+          "thingId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thingKind": {
+            "description": "The kind of thing it is about, when it is about one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timesDue": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "note",
+          "state",
+          "timesDue",
+          "version",
+          "createdAt"
+        ],
+        "type": "object"
+      },
       "ScheduledLine": {
         "properties": {
           "conversationId": {
@@ -6110,6 +6303,138 @@
           "task"
         ],
         "type": "string"
+      },
+      "Subscription": {
+        "description": "What a subscription asks for.",
+        "properties": {
+          "conversationIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "echoes": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "includesDms": {
+            "type": "boolean"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "minReason": {
+            "type": "string"
+          },
+          "spaceIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "workspaceIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kinds",
+          "includesDms",
+          "echoes",
+          "minReason"
+        ],
+        "type": "object"
+      },
+      "SubscriptionInput": {
+        "additionalProperties": false,
+        "description": "What a subscription asks for.",
+        "properties": {
+          "conversationIds": {
+            "description": "Only events in these conversations.",
+            "items": {
+              "description": "an id, or a link to it",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "echoes": {
+            "description": "What you did yourself too (default false).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "includesDms": {
+            "description": "Direct messages and groups too (default true).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "kinds": {
+            "description": "Kinds (task.assigned), families (task.*) or * (default).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "minReason": {
+            "description": "The least a reason must be: addressed (only what names you),\nfollowing (default: also what you follow) or visible (everything you\ncan see).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spaceIds": {
+            "description": "Only events in these spaces.",
+            "items": {
+              "description": "an id, or a link to it",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "workspaceIds": {
+            "description": "Only these workspaces (ids). Left out: every one the connection reaches.",
+            "items": {
+              "description": "an id, or a link to it",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "TaskFieldValue": {
         "description": "One of a task's fields as task_open shows it.",
@@ -12173,6 +12498,1475 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/connection_create": {
+      "post": {
+        "description": "Create a connection to be told through: its name, the webhook events are pushed to and its format (standard by default), whether it reaches every workspace, and what it subscribes to. For your own account, or an agent or app you manage (account). A webhook gets a signing secret, shown once: a retry of the same call doesn't show it again (rotate it if it was lost).",
+        "operationId": "connection_create",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "What creating a connection takes.",
+                "properties": {
+                  "account": {
+                    "description": "An agent or app you manage; left out, your own account.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "reachesAll": {
+                    "description": "Every workspace the account is in (default), or only this one.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "subscriptions": {
+                    "description": "What to hear; left out, what concerns the account (following and\nabove).",
+                    "items": {
+                      "$ref": "#/components/schemas/SubscriptionInput"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "webhookFormat": {
+                    "description": "standard (default), or typed_v1 / inbox_v1 for older receivers.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "webhookUrl": {
+                    "description": "Where events are pushed (a public https address).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "ConnectionCreateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "connection": {
+                              "$ref": "#/components/schemas/ConnectionView"
+                            },
+                            "webhookSecret": {
+                              "description": "The webhook's new signing secret: shown once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "connection"
+                          ],
+                          "title": "ConnectionWritten",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "connection": {
+                              "$ref": "#/components/schemas/ConnectionView"
+                            },
+                            "webhookSecret": {
+                              "description": "The webhook's new signing secret: shown once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "connection"
+                          ],
+                          "title": "ConnectionWritten",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Create connection",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connection_list": {
+      "post": {
+        "description": "The connections an account is told through: each one's webhook, format, whether pushes are working, and what it subscribes to. Yours, or an agent's you manage (account).",
+        "operationId": "connection_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account": {
+                    "description": "Whose: an agent or app you manage. Left out: yours.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "ConnectionListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "connections": {
+                              "items": {
+                                "$ref": "#/components/schemas/ConnectionView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "connections"
+                          ],
+                          "title": "ConnectionListView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "connections": {
+                              "items": {
+                                "$ref": "#/components/schemas/ConnectionView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "connections"
+                          ],
+                          "title": "ConnectionListView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List connections",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connection_remove": {
+      "post": {
+        "description": "Remove a connection: nothing more is pushed to it and its cursor stops working. A default connection is made again the next time the account reads without naming one.",
+        "operationId": "connection_remove",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "connectionId": {
+                    "description": "an id, or a link to it",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "connectionId"
+                ],
+                "title": "ConnectionRef",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A connection, as its account and its managers see it.",
+                          "properties": {
+                            "accountId": {
+                              "type": "string"
+                            },
+                            "consecutiveFailures": {
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "disabledReason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "forCredential": {
+                              "description": "Made for an older project credential.",
+                              "type": "boolean"
+                            },
+                            "homeWorkspaceId": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "isDefault": {
+                              "description": "The default the account reads through when it names none.",
+                              "type": "boolean"
+                            },
+                            "lastDeliveredAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lastError": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lastSeenAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "reachesAll": {
+                              "description": "Reaches every workspace the account is in; else only its home.",
+                              "type": "boolean"
+                            },
+                            "state": {
+                              "description": "active, push_disabled (pushes stopped after failing; saving the\nwebhook again turns them back on) or removed.",
+                              "type": "string"
+                            },
+                            "subscriptions": {
+                              "items": {
+                                "$ref": "#/components/schemas/Subscription"
+                              },
+                              "type": "array"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "webhookFormat": {
+                              "description": "standard, typed_v1 or inbox_v1.",
+                              "type": "string"
+                            },
+                            "webhookUrl": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "accountId",
+                            "name",
+                            "reachesAll",
+                            "homeWorkspaceId",
+                            "isDefault",
+                            "forCredential",
+                            "webhookFormat",
+                            "state",
+                            "consecutiveFailures",
+                            "subscriptions",
+                            "version"
+                          ],
+                          "title": "ConnectionView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A connection, as its account and its managers see it.",
+                          "properties": {
+                            "accountId": {
+                              "type": "string"
+                            },
+                            "consecutiveFailures": {
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "disabledReason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "forCredential": {
+                              "description": "Made for an older project credential.",
+                              "type": "boolean"
+                            },
+                            "homeWorkspaceId": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "isDefault": {
+                              "description": "The default the account reads through when it names none.",
+                              "type": "boolean"
+                            },
+                            "lastDeliveredAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lastError": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lastSeenAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "reachesAll": {
+                              "description": "Reaches every workspace the account is in; else only its home.",
+                              "type": "boolean"
+                            },
+                            "state": {
+                              "description": "active, push_disabled (pushes stopped after failing; saving the\nwebhook again turns them back on) or removed.",
+                              "type": "string"
+                            },
+                            "subscriptions": {
+                              "items": {
+                                "$ref": "#/components/schemas/Subscription"
+                              },
+                              "type": "array"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "webhookFormat": {
+                              "description": "standard, typed_v1 or inbox_v1.",
+                              "type": "string"
+                            },
+                            "webhookUrl": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "accountId",
+                            "name",
+                            "reachesAll",
+                            "homeWorkspaceId",
+                            "isDefault",
+                            "forCredential",
+                            "webhookFormat",
+                            "state",
+                            "consecutiveFailures",
+                            "subscriptions",
+                            "version"
+                          ],
+                          "title": "ConnectionView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Remove connection",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connection_secret_rotate": {
+      "post": {
+        "description": "Give a connection's webhook a new signing secret, shown once. For a day both secrets sign every push (two signatures in webhook-signature), so the receiver can switch without missing one.",
+        "operationId": "connection_secret_rotate",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "connectionId": {
+                    "description": "an id, or a link to it",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "connectionId"
+                ],
+                "title": "ConnectionRef",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "connection": {
+                              "$ref": "#/components/schemas/ConnectionView"
+                            },
+                            "webhookSecret": {
+                              "description": "The webhook's new signing secret: shown once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "connection"
+                          ],
+                          "title": "ConnectionWritten",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "connection": {
+                              "$ref": "#/components/schemas/ConnectionView"
+                            },
+                            "webhookSecret": {
+                              "description": "The webhook's new signing secret: shown once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "connection"
+                          ],
+                          "title": "ConnectionWritten",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Rotate connection secret",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connection_update": {
+      "post": {
+        "description": "Change a connection: its name, the webhook events are pushed to (\"\" stops pushes) and its format, whether it reaches every workspace, and what it subscribes to (the list replaces the old one). Yours, or one of an agent or app you manage. A new webhook address gets a signing secret, shown once; saving a webhook whose pushes stopped turns them back on.",
+        "operationId": "connection_update",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "What changing a connection takes.",
+                "properties": {
+                  "connectionId": {
+                    "description": "an id, or a link to it",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "reachesAll": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "subscriptions": {
+                    "description": "Replaces the connection's subscriptions.",
+                    "items": {
+                      "$ref": "#/components/schemas/SubscriptionInput"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "webhookFormat": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "webhookUrl": {
+                    "description": "A new address, or \"\" to stop pushes.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "connectionId"
+                ],
+                "title": "ConnectionUpdateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "connection": {
+                              "$ref": "#/components/schemas/ConnectionView"
+                            },
+                            "webhookSecret": {
+                              "description": "The webhook's new signing secret: shown once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "connection"
+                          ],
+                          "title": "ConnectionWritten",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "connection": {
+                              "$ref": "#/components/schemas/ConnectionView"
+                            },
+                            "webhookSecret": {
+                              "description": "The webhook's new signing secret: shown once.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "connection"
+                          ],
+                          "title": "ConnectionWritten",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Update connection",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
     "/api/v2/w/{workspace}/ops/conversation_continue": {
       "post": {
         "description": "When the agents in a group (or a thread in one) have used their turns, let them take more, like the Continue button: they get 6 more messages, and the other agents are asked to answer the latest agent message. Pass a clientRequestId so a retry doesn't grant another round. Needs \"Post messages\" where it acts.",
@@ -17698,6 +19492,523 @@
           "runs"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/event_kind_list": {
+      "post": {
+        "description": "Every kind of event event_list and connections can deliver: its family, whether it is addressed to one account (always heard), and what it means. Subscriptions name kinds, families (task.*) or *.",
+        "operationId": "event_kind_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "EventKindListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "events": {
+                              "items": {
+                                "$ref": "#/components/schemas/Entry"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "events"
+                          ],
+                          "title": "EventKindListView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "events": {
+                              "items": {
+                                "$ref": "#/components/schemas/Entry"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "events"
+                          ],
+                          "title": "EventKindListView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Event kinds",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/event_list": {
+      "post": {
+        "description": "What happened that concerns you, oldest first, across every workspace you are in: reply requests, mentions, tasks assigned to you, requests you may answer or raised, follow-ups due, and what you follow. Each event says why you hear it (reason) and carries ids only: open what it names to read it. Pass nextCursor back as cursor to read on; waitSeconds waits for the next event. event_kind_list lists the kinds.",
+        "operationId": "event_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "connectionId": {
+                    "description": "Read through this connection of yours instead of your default.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "cursor": {
+                    "description": "Where the last read stopped (its nextCursor). Left out: where this\nconnection last read.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "limit": {
+                    "description": "How many events at most (default and limit 100).",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "waitSeconds": {
+                    "description": "Seconds to wait for the first event when none is waiting (at most 30).",
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "EventListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One read for a caller.",
+                          "properties": {
+                            "connectionId": {
+                              "description": "The connection read through.",
+                              "type": "string"
+                            },
+                            "events": {
+                              "description": "The events, oldest first, each in the envelope every transport uses.",
+                              "items": {
+                                "additionalProperties": true,
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "hasMore": {
+                              "description": "More are waiting: read again now.",
+                              "type": "boolean"
+                            },
+                            "nextCursor": {
+                              "description": "Pass it back as `cursor` to read on from here.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "events",
+                            "nextCursor",
+                            "hasMore",
+                            "connectionId"
+                          ],
+                          "title": "Page",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One read for a caller.",
+                          "properties": {
+                            "connectionId": {
+                              "description": "The connection read through.",
+                              "type": "string"
+                            },
+                            "events": {
+                              "description": "The events, oldest first, each in the envelope every transport uses.",
+                              "items": {
+                                "additionalProperties": true,
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "hasMore": {
+                              "description": "More are waiting: read again now.",
+                              "type": "boolean"
+                            },
+                            "nextCursor": {
+                              "description": "Pass it back as `cursor` to read on from here.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "events",
+                            "nextCursor",
+                            "hasMore",
+                            "connectionId"
+                          ],
+                          "title": "Page",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List events",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "query"
       }
     },
     "/api/v2/w/{workspace}/ops/field_create": {
@@ -45400,6 +47711,1014 @@
           "runs"
         ],
         "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/schedule_create": {
+      "post": {
+        "description": "Ask to be told again later: at a time (at), in some minutes (inMinutes), or every so many minutes (everyMinutes), optionally about one thing you can see (about). When it is due you hear schedule.due, with its id and the thing's, through event_list or your connection. For something a person should be reminded of, use later_save.",
+        "operationId": "schedule_create",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "about": {
+                    "description": "A thing you can see that it is about: a task, a conversation, a page.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "at": {
+                    "description": "When it is first due (RFC 3339, such as 2026-11-18T09:00:00Z).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "everyMinutes": {
+                    "description": "Repeat this often (5 to 525600 minutes). Left out: once.",
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "inMinutes": {
+                    "description": "Or: in this many minutes.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "note": {
+                    "description": "Your own words for why (one line, at most 500 characters). Only you\nsee it; schedule.due carries ids, so read it with schedule_list.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "ScheduleCreateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One follow-up, as its account sees it.",
+                          "properties": {
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "everyMinutes": {
+                              "description": "Repeats this often; none: once.",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "lastDueAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "nextDueAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "note": {
+                              "description": "Your own words for it.",
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "active, done (a one-time follow-up that fired) or cancelled.",
+                              "type": "string"
+                            },
+                            "thingId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "thingKind": {
+                              "description": "The kind of thing it is about, when it is about one.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "timesDue": {
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "note",
+                            "state",
+                            "timesDue",
+                            "version",
+                            "createdAt"
+                          ],
+                          "title": "ScheduleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One follow-up, as its account sees it.",
+                          "properties": {
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "everyMinutes": {
+                              "description": "Repeats this often; none: once.",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "lastDueAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "nextDueAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "note": {
+                              "description": "Your own words for it.",
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "active, done (a one-time follow-up that fired) or cancelled.",
+                              "type": "string"
+                            },
+                            "thingId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "thingKind": {
+                              "description": "The kind of thing it is about, when it is about one.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "timesDue": {
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "note",
+                            "state",
+                            "timesDue",
+                            "version",
+                            "createdAt"
+                          ],
+                          "title": "ScheduleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Set a follow-up",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/schedule_list": {
+      "post": {
+        "description": "The follow-ups you set in this workspace with schedule_create, soonest first: what each is about, when it is next due and how often it repeats.",
+        "operationId": "schedule_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "includeFinished": {
+                    "description": "Include done and cancelled ones (the latest 200).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "ScheduleListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "schedules": {
+                              "items": {
+                                "$ref": "#/components/schemas/ScheduleView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "schedules"
+                          ],
+                          "title": "ScheduleListView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "schedules": {
+                              "items": {
+                                "$ref": "#/components/schemas/ScheduleView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "schedules"
+                          ],
+                          "title": "ScheduleListView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List follow-ups",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/schedule_update": {
+      "post": {
+        "description": "Change one of your follow-ups: its note, when it is next due (at or inMinutes), how often it repeats (everyMinutes, 0 for once), or cancel it (cancel: true).",
+        "operationId": "schedule_update",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "at": {
+                    "description": "Move when it is next due (RFC 3339).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "cancel": {
+                    "description": "true cancels it: it won't be due again.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "everyMinutes": {
+                    "description": "Repeat this often; 0 makes it once.",
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "inMinutes": {
+                    "description": "Or: in this many minutes.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "scheduleId": {
+                    "description": "an id, or a link to it",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "scheduleId"
+                ],
+                "title": "ScheduleUpdateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One follow-up, as its account sees it.",
+                          "properties": {
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "everyMinutes": {
+                              "description": "Repeats this often; none: once.",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "lastDueAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "nextDueAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "note": {
+                              "description": "Your own words for it.",
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "active, done (a one-time follow-up that fired) or cancelled.",
+                              "type": "string"
+                            },
+                            "thingId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "thingKind": {
+                              "description": "The kind of thing it is about, when it is about one.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "timesDue": {
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "note",
+                            "state",
+                            "timesDue",
+                            "version",
+                            "createdAt"
+                          ],
+                          "title": "ScheduleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One follow-up, as its account sees it.",
+                          "properties": {
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "everyMinutes": {
+                              "description": "Repeats this often; none: once.",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "lastDueAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "nextDueAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "note": {
+                              "description": "Your own words for it.",
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "active, done (a one-time follow-up that fired) or cancelled.",
+                              "type": "string"
+                            },
+                            "thingId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "thingKind": {
+                              "description": "The kind of thing it is about, when it is about one.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "timesDue": {
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "note",
+                            "state",
+                            "timesDue",
+                            "version",
+                            "createdAt"
+                          ],
+                          "title": "ScheduleView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Change a follow-up",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
       }
     },
     "/api/v2/w/{workspace}/ops/scheduled_message_update": {

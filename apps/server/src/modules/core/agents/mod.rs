@@ -15,6 +15,9 @@ impl CoreModule for Module {
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::external_agents::router);
         module.operations(crate::external_agents::ops::register_ops);
+        module.routes(crate::delivery::http::router);
+        module.operations(crate::delivery::ops::register_ops);
+    module.operations(crate::schedules::ops::register_ops);
         module.routes(crate::agent_profiles::router);
         module.routes(crate::agent_sessions::router);
         module.routes(crate::hosts::routes::router);

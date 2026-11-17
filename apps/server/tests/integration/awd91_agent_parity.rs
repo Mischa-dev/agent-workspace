@@ -1411,16 +1411,8 @@ async fn people_retry_an_agents_reply_and_agents_empty_the_whiteboard_trash() {
     )
     .await;
 
-    // Asking again is a person's call, as on the web.
-    let refused = tool(
-        &f.app,
-        &f.token,
-        &f.session,
-        "reply_retry",
-        json!({"requestId": request}),
-    )
-    .await;
-    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    // Asking again follows the role (replies.steer), whoever asks; here the
+    // person, through their app.
     let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
     let session = initialize(&f.app, &app).await.expect("owner MCP");
     let retried = tool(

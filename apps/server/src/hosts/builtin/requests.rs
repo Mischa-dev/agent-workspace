@@ -6,7 +6,7 @@
 //! once ([`claim_delivery`]). No table of its own and no polling of one.
 
 use serde_json::{Value, json};
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{domain::RunState, error::AppError, outbox, requests::RequestRow};
@@ -58,7 +58,17 @@ pub async fn raise(
     let options = options
         .iter()
         .take(8)
-        .map(|(id, label)| {
+        .enumerate()
+        .map(|(index, (id, label))| {
+            // A harness may name an option by its whole label; a request's
+            // option ids are short, so a long one gets a number. The driver
+            // answers a question with the label, so nothing is lost.
+            let id = if id.trim().is_empty() || id.chars().count() > 40 {
+                format!("option-{}", index + 1)
+            } else {
+                id.clone()
+            };
+            let label = label.chars().take(200).collect::<String>();
             let mut option = json!({"id": id, "label": label});
             if ask == Ask::Approval && matches!(id.as_str(), "approve" | "deny") {
                 option["style"] = Value::String(id.clone());
@@ -99,29 +109,10 @@ pub async fn settled(
     if !matches!(row.status.as_str(), "answered" | "expired") {
         return Ok(());
     }
-    #[derive(FromRow)]
-    struct Place {
-        state: String,
-        conversation_id: Uuid,
-        project_id: Uuid,
-    }
-    let Some(place) = sqlx::query_as::<_, Place>(
-        r#"
-        SELECT run.state, run.conversation_id, conversation.project_id
-        -- visibility: the run's own thread, to write its steps
-        FROM agent_runs run
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        WHERE run.id = $1
-        FOR UPDATE OF run
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    else {
+    let Some(place) = crate::runs::builtin::lock_place(transaction, run_id).await? else {
         return Ok(());
     };
-    let state = place.state.parse::<RunState>()?;
+    let state = place.state;
     if state.is_terminal() {
         return Ok(());
     }
@@ -133,7 +124,7 @@ pub async fn settled(
         (false, true) => "approved",
         (false, false) => "denied",
     };
-    let event = crate::api::insert_significant_event(
+    let event = crate::runs::steps::record_new(
         transaction,
         run_id,
         if question {
@@ -154,7 +145,7 @@ pub async fn settled(
         }),
     )
     .await?;
-    crate::api::insert_event_entry(transaction, place.conversation_id, event).await?;
+    crate::runs::steps::show_in_thread(transaction, place.conversation_id, event).await?;
     if goes_on {
         if state == RunState::Blocked {
             crate::domain::resume_answered_run(transaction, run_id).await?;
@@ -171,9 +162,9 @@ pub async fn settled(
             }),
         )
         .await?;
-        crate::api::retain_run_workspace(transaction, run_id).await?;
+        crate::hosts::builtin::http::retain_run_workspace(transaction, run_id).await?;
         crate::provider::idle_provider_session_for_terminal_run(transaction, run_id).await?;
-        let interrupted = crate::api::insert_significant_event(
+        let interrupted = crate::runs::steps::record_new(
             transaction,
             run_id,
             "run_interrupted",
@@ -185,9 +176,9 @@ pub async fn settled(
             json!({}),
         )
         .await?;
-        crate::api::insert_event_entry(transaction, place.conversation_id, interrupted).await?;
+        crate::runs::steps::show_in_thread(transaction, place.conversation_id, interrupted).await?;
     }
-    outbox::enqueue_agent_run_updated(transaction, place.project_id, place.conversation_id, run_id)
+    outbox::enqueue_agent_run_updated(transaction, place.space_id, place.conversation_id, run_id)
         .await?;
     Ok(())
 }
@@ -240,13 +231,9 @@ pub async fn outcome(pool: &PgPool, request_id: Uuid) -> Result<Outcome, AppErro
         .await?
         .ok_or(AppError::NotFound("request"))?;
     let interrupted = match row.run_id {
-        Some(run_id) => {
-            sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
-                .bind(run_id)
-                .fetch_optional(&mut *transaction)
-                .await?
-                .is_none_or(|state| state == RunState::Interrupted.to_string())
-        }
+        Some(run_id) => crate::runs::builtin::state_of(&mut *transaction, run_id)
+            .await?
+            .is_none_or(|state| state == RunState::Interrupted),
         None => true,
     };
     transaction.commit().await?;

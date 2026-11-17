@@ -191,11 +191,14 @@ async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, 
     .await?;
     let value = serde_json::to_value(&resolved)
         .map_err(|_| AppError::Internal("serialize run settings"))?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("UPDATE agent_runs SET config = $2 WHERE id = $1 AND config = '{}'::jsonb")
         .bind(run_id)
-        .bind(value)
-        .execute(crate::db::scoped(&state.pool))
+        .bind(&value)
+        .execute(&mut *transaction)
         .await?;
+    crate::runs::builtin::settings_chosen(&mut *transaction, run_id, &value).await?;
+    transaction.commit().await?;
     run_config(state, run_id).await
 }
 
@@ -852,7 +855,10 @@ async fn drive_turn(
                     | HarnessEvent::Ignored => {}
                 }
             }
-            () = sleep(Duration::from_millis(500)) => {
+            // Stop arrives as a wake on the control channel from whichever
+            // server took it (`hosts::builtin::transition`); the check every
+            // second is the safety net for a lost wake or no listener.
+            () = stop_wake(&state) => {
                 if stopping() {
                     provider.shutdown().await;
                     return Ok(());
@@ -888,6 +894,22 @@ async fn drive_turn(
                 return Ok(());
             }
         }
+    }
+}
+
+/// Wait until a stopped run should be looked at: a wake on the control
+/// channel, or a second at most.
+async fn stop_wake(state: &AppState) {
+    let cluster = state.supervisors.cluster();
+    let woken = async {
+        match &cluster {
+            Some(cluster) => cluster.released().await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        () = sleep(Duration::from_secs(1)) => {}
+        () = woken => {}
     }
 }
 
@@ -940,7 +962,7 @@ async fn handle_provider_request(
     if raised.created {
         crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Blocked, None)
             .await?;
-        let event_id = insert_event(
+        let event_id = crate::runs::steps::record(
             &mut transaction,
             run_id,
             &format!("provider:{kind}:requested:{provider_request_id}"),
@@ -954,7 +976,7 @@ async fn handle_provider_request(
         )
         .await?
         .ok_or(AppError::Internal("new approval event was not inserted"))?;
-        insert_entry(&mut transaction, conversation_id, event_id).await?;
+        crate::runs::steps::show_in_thread(&mut transaction, conversation_id, event_id).await?;
         outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
             .await?;
     }
@@ -1156,7 +1178,7 @@ async fn complete_run(
     .execute(&mut *transaction)
     .await?;
     idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
-    let event_id = insert_event(
+    let event_id = crate::runs::steps::record(
         &mut transaction,
         run_id,
         "provider:run:completed",
@@ -1166,10 +1188,10 @@ async fn complete_run(
     )
     .await?;
     if let Some(event_id) = event_id {
-        insert_entry(&mut transaction, conversation_id, event_id).await?;
+        crate::runs::steps::show_in_thread(&mut transaction, conversation_id, event_id).await?;
     }
     if let Some(recovery) = recovery {
-        let recovery_event = insert_event(
+        let recovery_event = crate::runs::steps::record(
             &mut transaction,
             run_id,
             "startup-recovery:completed",
@@ -1186,7 +1208,8 @@ async fn complete_run(
         )
         .await?;
         if let Some(recovery_event) = recovery_event {
-            insert_entry(&mut transaction, conversation_id, recovery_event).await?;
+            crate::runs::steps::show_in_thread(&mut transaction, conversation_id, recovery_event)
+                .await?;
         }
     }
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
@@ -1268,7 +1291,7 @@ async fn persist_event(
     event: SignificantProviderEvent<'_>,
 ) -> Result<(), AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    if let Some(event_id) = insert_event(
+    if let Some(event_id) = crate::runs::steps::record(
         &mut transaction,
         run_id,
         event.key,
@@ -1279,65 +1302,12 @@ async fn persist_event(
     .await?
     {
         if event.in_thread {
-            insert_entry(&mut transaction, conversation_id, event_id).await?;
+            crate::runs::steps::show_in_thread(&mut transaction, conversation_id, event_id).await?;
         }
         outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
             .await?;
     }
     transaction.commit().await?;
-    Ok(())
-}
-
-async fn insert_event(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    run_id: Uuid,
-    event_key: &str,
-    kind: &str,
-    summary: &str,
-    payload: Value,
-) -> Result<Option<Uuid>, AppError> {
-    let event_id = Uuid::now_v7();
-    let inserted = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO agent_run_events (
-            id, agent_run_id, event_key, kind, summary, payload
-        )
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (agent_run_id, event_key) DO NOTHING
-        RETURNING id
-        "#,
-    )
-    .bind(event_id)
-    .bind(run_id)
-    .bind(event_key)
-    .bind(kind)
-    .bind(summary)
-    .bind(payload)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    Ok(inserted)
-}
-
-async fn insert_entry(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    conversation_id: Uuid,
-    event_id: Uuid,
-) -> Result<(), AppError> {
-    let sequence = allocate_conversation_sequence(transaction, conversation_id).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (
-            id, conversation_id, sequence, kind, agent_run_event_id
-        )
-        VALUES ($1, $2, $3, 'worker_event', $4)
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(conversation_id)
-    .bind(sequence)
-    .bind(event_id)
-    .execute(&mut **transaction)
-    .await?;
     Ok(())
 }
 
@@ -1414,7 +1384,7 @@ async fn fail_run(
     .execute(&mut *transaction)
     .await?;
     idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
-    let event_id = insert_event(
+    let event_id = crate::runs::steps::record(
         &mut transaction,
         run_id,
         "provider:run:failed",
@@ -1424,7 +1394,7 @@ async fn fail_run(
     )
     .await?;
     if let Some(event_id) = event_id {
-        insert_entry(&mut transaction, conversation_id, event_id).await?;
+        crate::runs::steps::show_in_thread(&mut transaction, conversation_id, event_id).await?;
     }
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;

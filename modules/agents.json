@@ -22,7 +22,17 @@
     "host_agent_bind": "change",
     "host_agent_unbind": "change",
     "host_unlink": "change",
-    "external_event_poll": "query"
+    "external_event_poll": "query",
+    "event_list": "query",
+    "event_kind_list": "query",
+    "connection_list": "query",
+    "connection_create": "create",
+    "connection_update": "change",
+    "connection_secret_rotate": "change",
+    "connection_remove": "change",
+    "schedule_list": "query",
+    "schedule_create": "create",
+    "schedule_update": "change"
   },
   "routes": [
     "/api/v1/agents/*",
@@ -30,9 +40,10 @@
     "/api/v1/projects/{project_id}/agent-profiles*",
     "/api/v1/conversations/{conversation_id}/agent-sessions",
     "/api/v1/hosts*",
-    "/api/v1/host/*"
+    "/api/v1/host/*",
+    "/api/v1/events*"
   ],
-  "events": { "emits": ["account.managers_changed"], "listens": ["message.created", "task.updated", "run.finished"] },
+  "events": { "emits": ["account.managers_changed", "reply.requested", "reply.followup", "reply.cancelled", "schedule.due", "connection.push_disabled", "connection.changed", "schedule.changed"], "listens": ["message.created", "task.updated", "run.finished"] },
   "notifications": ["connection_problem", "agent_unresponsive", "budget_warning"],
   "search": [],
   "automations": { "triggers": [], "actions": [] },
@@ -51,6 +62,6 @@
     "slash": ["tag"],
     "setup": ["agent"]
   },
-  "settings": [],
+  "settings": ["replies.*"],
   "nouns": []
 }

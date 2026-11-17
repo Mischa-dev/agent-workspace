@@ -415,14 +415,6 @@ pub(crate) async fn conversation_members(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "conversation_members"))
 }
 
-fn not_a_group(row: &ConversationAccessRow) -> &'static str {
-    if row.effective_kind() == "dm" {
-        "Only groups have turns. In a DM the agent answers every message you send."
-    } else {
-        "Only groups have turns. In a channel or thread, @mention an agent to ask it."
-    }
-}
-
 pub(crate) async fn conversation_continue(
     state: &AppState,
     principal: &McpPrincipal,
@@ -430,11 +422,6 @@ pub(crate) async fn conversation_continue(
 ) -> ToolResult<ContinueValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(
-            "Only a person can let the agents continue, so agents can't keep a conversation going on their own. Ask someone in the group.",
-        );
     }
     let Some(conversation_id) = parse_id(&arguments.conversation_id) else {
         return ToolResult::invalid("conversationId", "Pass a conversation ID or link.");
@@ -454,12 +441,9 @@ pub(crate) async fn conversation_continue(
         }
     };
     let result = async {
-        let Some(row) = visible_conversation(state, principal, conversation_id).await? else {
+        let Some(_) = visible_conversation(state, principal, conversation_id).await? else {
             return Ok(ToolResult::not_found("That conversation"));
         };
-        if row.effective_kind() != "group" {
-            return Ok(ToolResult::invalid("conversationId", not_a_group(&row)));
-        }
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         mark_via(&mut transaction, principal).await?;
         let reservation = match &key {
@@ -496,13 +480,9 @@ pub(crate) async fn conversation_continue(
         .await
         {
             Ok(outcome) => outcome,
-            Err(AppError::Conflict("conversation", _)) => {
-                return Ok(ToolResult::invalid("conversationId", not_a_group(&row)));
-            }
-            Err(AppError::NotFound(_)) => return Ok(ToolResult::not_found("That conversation")),
-            Err(AppError::Forbidden) => {
+            Err(AppError::NotFound(_)) => {
                 return Ok(ToolResult::denied(
-                    "You can read this conversation but can't post in it, so you can't let the agents continue.",
+                    "Letting replies continue here needs the replies.steer permission.",
                 ));
             }
             Err(error) => return Err(error),
