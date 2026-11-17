@@ -198,12 +198,29 @@ pub(crate) async fn create(
 /// anything else about the run: every write to it (a claim, a step, a state)
 /// locks this row first and its `runs` record second, through the mirror,
 /// so taking them the other way round deadlocks.
+///
+/// It also shares its thread and space here, as the run's scope trigger does
+/// on every state change. Taken later, after a write has read someone's
+/// membership (telling them of a request, say), that order is membership
+/// then space, the reverse of a task write's (space then membership), and
+/// the two deadlock.
 pub async fn lock(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
 ) -> Result<Option<RunState>, AppError> {
-    sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
-        .bind(run_id)
+    sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT run.state
+        FROM agent_runs run
+        -- visibility: the run's own thread, locked for its write, never read out
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        JOIN projects space ON space.id = conversation.project_id
+        WHERE run.id = $1
+        FOR UPDATE OF run
+        FOR SHARE OF conversation, space
+        "#,
+    )
+    .bind(run_id)
         .fetch_optional(&mut **transaction)
         .await?
         .map(|state| state.parse::<RunState>())
