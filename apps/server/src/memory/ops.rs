@@ -229,8 +229,12 @@ impl Operation for PageTemplateList {
         input: PageTemplateListInput,
     ) -> Result<PageTemplateListOutput, OpError> {
         let viewer = call.account_id();
+        let reach = crate::drafts::Reach {
+            connection_id: call.ctx.caller.connection_id,
+            confined_space: call.ctx.caller.confined_space,
+        };
         let templates =
-            super::templates::list(call.tx().await?, viewer, input.space_id.id()).await?;
+            super::templates::list(call.tx().await?, viewer, reach, input.space_id.id()).await?;
         Ok(PageTemplateListOutput { templates })
     }
 }

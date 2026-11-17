@@ -74,7 +74,7 @@ export function useDraftSync(draftKey: string | undefined, draft: SyncedDraft, s
     // Nothing kept and nothing to keep: no call.
     if (serialized === sent.current || (sent.current === null && !toSave)) return
     typedAt.current = Date.now()
-    const timer = window.setTimeout(() => {
+    const save = () => {
       sent.current = serialized
       const savedAt = new Date(typedAt.current).toISOString()
       queue.current = queue.current
@@ -86,7 +86,14 @@ export function useDraftSync(draftKey: string | undefined, draft: SyncedDraft, s
           // Tried again on the next change.
           if (sent.current === serialized) sent.current = synced.current
         })
-    }, SAVE_AFTER_MS)
+    }
+    // A sent or erased message clears its draft at once, so leaving the
+    // conversation straight after can't strand it; text waits for a pause.
+    if (!toSave) {
+      save()
+      return
+    }
+    const timer = window.setTimeout(save, SAVE_AFTER_MS)
     return () => window.clearTimeout(timer)
   }, [draftKey, text, mentions, workItems])
 }

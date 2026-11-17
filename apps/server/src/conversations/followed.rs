@@ -83,6 +83,7 @@ pub async fn followed(
     connection: &mut sqlx::PgConnection,
     workspace_id: Uuid,
     viewer: Uuid,
+    reach: crate::drafts::Reach,
     open_only: bool,
     limit: i64,
 ) -> Result<Vec<FollowedThreadView>, AppError> {
@@ -118,6 +119,8 @@ pub async fn followed(
           AND space.organization_id = $1
           AND space.archived_at IS NULL
           AND conversation_visible_to(thread.id, $2)
+          AND actor_can_access_project($2, $5, thread.project_id)
+          AND ($6::uuid IS NULL OR thread.project_id = $6)
           AND (NOT $3 OR (thread.thread_outcome IS NULL
                           AND lower(thread.thread_status) NOT IN ('decided', 'done', 'dropped')))
         ORDER BY last_activity_at DESC, thread.id DESC
@@ -128,6 +131,8 @@ pub async fn followed(
     .bind(viewer)
     .bind(open_only)
     .bind(limit)
+    .bind(reach.connection_id)
+    .bind(reach.confined_space)
     .fetch_all(&mut *connection)
     .await?)
 }
@@ -153,9 +158,13 @@ impl Operation for ThreadFollowedList {
     ) -> Result<ThreadFollowedListOutput, OpError> {
         let limit = input.limit.unwrap_or(MAX_LISTED).clamp(1, MAX_LISTED);
         let (workspace, viewer) = (call.ctx.workspace_id, call.account_id());
+        let reach = crate::drafts::Reach {
+            connection_id: call.ctx.caller.connection_id,
+            confined_space: call.ctx.caller.confined_space,
+        };
         let connection = &mut **call.tx().await?;
         Ok(ThreadFollowedListOutput {
-            threads: followed(connection, workspace, viewer, input.open_only, limit).await?,
+            threads: followed(connection, workspace, viewer, reach, input.open_only, limit).await?,
         })
     }
 }
