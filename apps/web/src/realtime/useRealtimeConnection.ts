@@ -369,6 +369,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
             envelope.type === 'page.updated' ||
             envelope.type === 'page.discussion.updated' ||
             envelope.type === 'collection.updated' ||
+            envelope.type === 'dashboard.updated' ||
             envelope.type === 'sheet.updated'
           ) {
             // An open board or page fetches what changed itself, and lists

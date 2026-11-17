@@ -33,20 +33,24 @@ import {
   type CollectionView,
   type ViewConfig,
 } from './api'
-import { activeConfig, boardFields, dateFields, sameConfig, withColumnHidden } from './collectionModel'
+import { activeConfig, boardFields, dateFields, groupClauses, groupableFields, sameConfig, withColumnHidden } from './collectionModel'
 import { CollectionDetailsDialog, ViewNameDialog } from './CollectionDialogs'
 import { CollectionToolbar } from './CollectionToolbar'
 import type { ColumnActions } from './ColumnMenus'
 import { RecordCards } from './RecordCards'
 import { RecordPanel } from './RecordPanel'
 import { RecordTable } from './RecordTable'
+import { FilterGroupDialog } from './FilterGroupDialog'
 import { useRecordEdits } from './useRecordEdits'
 
 // Forms are managed now and then, so their dialog loads when it opens.
-// The board, gallery and calendar pieces load when a view first uses them.
+// The board, list, gallery, calendar, timeline and chart pieces load when a view first uses them.
 const CollectionBoardView = lazy(() => import('./CollectionBoardView').then((module) => ({ default: module.CollectionBoardView })))
 const CollectionCalendarView = lazy(() => import('./CollectionCalendarView').then((module) => ({ default: module.CollectionCalendarView })))
 const CollectionGalleryView = lazy(() => import('./CollectionGalleryView').then((module) => ({ default: module.CollectionGalleryView })))
+const CollectionListView = lazy(() => import('./CollectionListView').then((module) => ({ default: module.CollectionListView })))
+const CollectionChartView = lazy(() => import('./CollectionChartView').then((module) => ({ default: module.CollectionChartView })))
+const CollectionTimelineView = lazy(() => import('./CollectionTimelineView').then((module) => ({ default: module.CollectionTimelineView })))
 const FormsDialog = lazy(() => import('./FormsDialog').then((module) => ({ default: module.FormsDialog })))
 
 const NO_CONFIG: ViewConfig = { filters: [], sort: [], groupBy: null, columns: [], titleWidth: null, dateField: null }
@@ -104,6 +108,8 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const [dialog, setDialog] = useState<Dialogs | null>(null)
   const collections = useCollections(projectId)
   const [filtering, setFiltering] = useState<Filtering | null>(null)
+  // The filter group being built (null: a new one) or changed (its index).
+  const [grouping, setGrouping] = useState<number | null | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const [deleteProblem, setDeleteProblem] = useState<string | null>(null)
   const recordId = params.get('record')
@@ -168,15 +174,19 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   // The built-in Tasks collection (AWD-110) reads the project's tasks, and
   // the records of a collection that acts like a task are tasks too: a
   // record opens its task, and an edit here is a task change. Tasks' name
-  // and fields are the project's, changed in the task settings.
+  // and settings stay; its fields change here like any collection's (T1.11).
   const tasks = collection.data.collection.builtin === 'tasks'
   const taskLike = tasks || collection.data.collection.actsLikeTask === true
   // A link to such a record (an embed, an old link) opens its task.
   if (taskLike && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
-  const body = tasks ? { ...collection.data, canBuild: false } : collection.data
-  const canSaveViews = collection.data.canBuild && !(Boolean(project.archivedAt) || body.collection.archived)
-  const views = [...body.views].sort((left, right) => left.position - right.position)
+  const body = { ...collection.data, canBuild: collection.data.canChangeFields }
+  // Shared views first, then the person's own.
+  const views = [...body.views].sort((left, right) => Number(right.shared) - Number(left.shared) || left.position - right.position)
   const view = views.find((entry) => entry.id === params.get('view')) ?? views[0] ?? null
+  const writable = !(Boolean(project.archivedAt) || body.collection.archived)
+  // Anyone keeps views of their own; shared ones are the builders'.
+  const canAddViews = writable
+  const canSaveViews = writable && (collection.data.canBuild || view?.shared === false)
   // What the view and its unsaved changes say, without what names an archived field.
   const viewConfig = view ? activeConfig(view.config, body.fields) : NO_CONFIG
   const unsaved = view ? drafts[view.id] : undefined
@@ -222,12 +232,12 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     if (!view || !draft) return
     setSaving(true)
     try {
-      keepView(await updateView(projectId, collectionId, view, { config: draft }))
+      keepView(await updateView(view, { config: draft }))
       dropDraft(view.id, unsaved)
       void client.invalidateQueries({ queryKey: collectionKeys.one(projectId, collectionId) })
       showToast({ tone: 'success', title: `${view.name} saved` })
     } catch (error) {
-      const conflict = isApiError(error) && error.code === 'version_conflict'
+      const conflict = isApiError(error) && (error.code === 'conflict' || error.code === 'version_conflict')
       showToast({
         tone: 'danger',
         title: `${view.name} wasn’t saved`,
@@ -294,8 +304,9 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   }
 
   const collectionMenu: MenuEntry[] = [
-    ...(body.canEditRecords && !taskLike ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
-    ...(canBuild
+    ...(body.canEditRecords ? [{ label: 'Forms…', icon: 'list' as const, onSelect: () => setDialog({ kind: 'forms' }) }] : []),
+    ...(canBuild && tasks ? [{ label: 'Add a field…', icon: 'plus' as const, onSelect: () => setDialog({ kind: 'field', field: null }) }] : []),
+    ...(canBuild && !tasks
       ? ([
           { label: 'Edit details…', icon: 'pencil', onSelect: () => setDialog({ kind: 'details' }) },
           { label: 'Add a field…', icon: 'plus', onSelect: () => setDialog({ kind: 'field', field: null }) },
@@ -304,7 +315,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
         ] satisfies MenuEntry[])
       : []),
   ]
-  const viewMenu: MenuEntry[] = view
+  const viewMenu: MenuEntry[] = view && canSaveViews
     ? [
         { label: 'Rename view…', icon: 'pencil', onSelect: () => setDialog({ kind: 'rename-view', view }) },
         ...(views.length > 1 ? [{ label: 'Delete view…', icon: 'trash' as const, danger: true, onSelect: () => setDialog({ kind: 'delete-view', view }) }] : []),
@@ -348,7 +359,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
         {body.collection.archived ? (
           <Banner className="aw-page__banner" icon="archive" tone="warning">
             This collection is archived, so its records can’t change.{' '}
-            {body.canBuild && !project.archivedAt ? (
+            {collection.data.canBuild && !project.archivedAt ? (
               <Button onClick={() => void setCollectionArchived(false)} size="sm">
                 Restore
               </Button>
@@ -356,8 +367,8 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           </Banner>
         ) : null}
         <div className="aw-collection__views">
-          <PageTabs current={view?.id ?? ''} label="Views" tabs={views.map((entry) => ({ id: entry.id, label: entry.name, to: `?view=${encodeURIComponent(entry.id)}` }))} />
-          {canSaveViews ? (
+          <PageTabs current={view?.id ?? ''} label="Views" tabs={views.map((entry) => ({ id: entry.id, label: entry.shared ? entry.name : `${entry.name} (only you)`, to: `?view=${encodeURIComponent(entry.id)}` }))} />
+          {canAddViews ? (
             <>
               <IconButton icon="plus" label="New view" onClick={() => setDialog({ kind: 'new-view' })} size="sm" />
               {viewMenu.length ? <Menu items={viewMenu} label="View options" trigger={<IconButton icon="more" label="View options" size="sm" />} /> : null}
@@ -379,6 +390,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
             const field = body.fields.find((entry) => entry.id === config.filters[index]?.field)
             if (field) setFiltering({ field, index, anchor })
           }}
+          onEditGroup={setGrouping}
           onFilter={(field, anchor) => setFiltering({ field, index: null, anchor })}
           onReset={() => view && dropDraft(view.id)}
           onSave={() => void saveView()}
@@ -392,7 +404,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
             Showing archived records. Open one to restore it.
           </Banner>
         ) : null}
-        {layout === 'board' || layout === 'gallery' || layout === 'calendar' ? (
+        {layout !== 'table' ? (
           <Suspense fallback={<ListSkeleton label="Loading the view" rows={5} />}>
             {layout === 'board' ? (
               <CollectionBoardView
@@ -404,6 +416,27 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
               />
             ) : layout === 'gallery' ? (
               <CollectionGalleryView {...shared} params={recordsParams({ ...recordsQuery, groupBy: null })} recordHref={recordHref} />
+            ) : layout === 'list' ? (
+              <CollectionListView {...shared} recordHref={recordHref} />
+            ) : layout === 'timeline' ? (
+              <CollectionTimelineView
+                {...shared}
+                dateFields={dateFields(body.fields)}
+                onDateField={(fieldId) => setConfig({ ...config, dateField: fieldId })}
+                query={recordsQuery}
+                recordHref={recordHref}
+              />
+            ) : layout === 'chart' ? (
+              <CollectionChartView
+                body={body}
+                config={config}
+                filtered={filtered}
+                groupable={groupableFields(body.fields)}
+                onClearFilters={clearFilters}
+                onGroupBy={(fieldId) => setConfig({ ...config, groupBy: fieldId })}
+                projectId={projectId}
+                query={recordsQuery}
+              />
             ) : layout === 'calendar' ? (
               <CollectionCalendarView
                 {...shared}
@@ -420,6 +453,28 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           <RecordTable {...shared} actions={actions} />
         )}
       </div>
+      {grouping !== undefined ? (
+        <FilterGroupDialog
+          fields={body.fields}
+          group={grouping === null ? null : ((config.filterGroups ?? [])[grouping] ?? null)}
+          onApply={(group) => {
+            const groups = config.filterGroups ?? []
+            const next =
+              grouping === null
+                ? group
+                  ? [...groups, group]
+                  : groups
+                : group
+                  ? groups.map((entry, at) => (at === grouping ? group : entry))
+                  : groups.filter((_, at) => at !== grouping)
+            setConfig({ ...config, filterGroups: next })
+            setGrouping(undefined)
+          }}
+          onClose={() => setGrouping(undefined)}
+          others={[...config.filters, ...(config.filterGroups ?? []).filter((_, at) => at !== grouping).flatMap(groupClauses)]}
+          projectId={projectId}
+        />
+      ) : null}
       {filtering ? (
         <FieldFilterEditor
           anchor={filtering.anchor}
@@ -442,6 +497,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
       {dialog?.kind === 'field' ? (
         <FieldDialog
           field={dialog.field}
+          formulas={body.collection.actsLikeTask || body.collection.builtin ? undefined : { collectionId, fields: body.fields, titleName: body.collection.titleName }}
           linkable={(collections.data?.collections ?? []).filter((entry) => !entry.archived && !entry.builtin)}
           onClose={() => setDialog(null)}
           records="records"
@@ -455,7 +511,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           layout="table"
           onClose={() => setDialog(null)}
           onSubmit={async (name, type) => {
-            const created = await createView(projectId, collectionId, { name, type, config })
+            const created = await createView(collectionId, { name, type, config, shared: collection.data.canBuild })
             keepView(created)
             if (view) dropDraft(view.id)
             void navigate(`?view=${encodeURIComponent(created.id)}`)
@@ -468,7 +524,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
         <ViewNameDialog
           initial={dialog.view.name}
           onClose={() => setDialog(null)}
-          onSubmit={async (name) => keepView(await updateView(projectId, collectionId, dialog.view, { name }))}
+          onSubmit={async (name) => keepView(await updateView(dialog.view, { name }))}
           submitLabel="Rename"
           title="Rename view"
         />
@@ -484,7 +540,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           onConfirm={() => {
             const removed = dialog.view
             setDeleteProblem(null)
-            deleteView(projectId, collectionId, removed.id).then(
+            deleteView(removed.id).then(
               () => {
                 client.setQueryData<CollectionBody>(collectionKeys.one(projectId, collectionId), (current) =>
                   current ? { ...current, views: current.views.filter((entry) => entry.id !== removed.id) } : current,

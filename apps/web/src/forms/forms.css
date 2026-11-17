@@ -90,3 +90,12 @@
     padding: var(--space-6) var(--space-4);
   }
 }
+
+/* T1.29: a field people never see; only a script fills it in. */
+.aw-pform__trap {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}

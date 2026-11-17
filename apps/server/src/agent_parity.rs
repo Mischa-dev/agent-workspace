@@ -1280,21 +1280,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views",
-            Tool("collection_write"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            Tool("collection_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            Tool("collection_write"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/collections/{collection_id}/records",
             Tool("record_write"),
         ),
@@ -1392,26 +1377,6 @@ mod tests {
             Post,
             "/api/v1/conversations/{id}/ai/summary",
             Tool("ai_summarize"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/views",
-            Tool("view_write"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/views/{view_id}",
-            Tool("view_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/views/{view_id}",
-            Tool("view_write"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/views/{view_id}/pin",
-            Tool("view_write"),
         ),
         (
             Post,

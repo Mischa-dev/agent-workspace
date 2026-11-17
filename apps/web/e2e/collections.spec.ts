@@ -81,9 +81,14 @@ async function layoutViews(context: BrowserContext, page: Page, projectId: strin
       ids[view.type] = found.id
       continue
     }
-    const made = await request.post(`${base}/views`, { headers: headers(`collection-view-${view.type}`), data: view })
-    expect(made.ok(), await made.text()).toBe(true)
-    ids[view.type] = ((await made.json()) as { id: string }).id
+    // Views are made through their operation (T1.6), shared with the project.
+    const made = await request.post('/api/v2/ops/view_create', {
+      headers: headers(`collection-view-${view.type}`),
+      data: { ...view, collection: collectionId, shared: true },
+    })
+    const answer = (await made.json()) as { outcome: string; value?: { id: string } }
+    expect(answer.outcome, JSON.stringify(answer)).toBe('ok')
+    ids[view.type] = answer.value?.id ?? ''
   }
   return ids as { board: string; gallery: string; calendar: string }
 }

@@ -4,13 +4,22 @@ import { useNavigate } from 'react-router-dom'
 
 import { useProjectExperience } from '../experience/layout'
 import { Button, ConfirmDialog, Dialog, Menu, describeError, showToast, Switch, TextField, type MenuEntry } from '../ui'
-import { createView, deleteView, listViews, pinView, updateView, viewKeys, type SavedView, type ViewDraft } from '../views/api'
+import {
+  createTaskView,
+  deleteTaskView,
+  listProjectTaskViews,
+  pinTaskView,
+  taskViewHref,
+  updateTaskView,
+  viewKeys,
+  type TaskView,
+} from '../views/api'
 import { COLUMN_PARTS, viewName, viewShown } from '../views/layoutViews'
 import { useFields } from '../fields/api'
 import { fieldKey } from '../fields/fieldModel'
 import { VIEW_FIELDS, readListState, writeListState, type ListState } from './listModel'
 import type { UpdateListState } from './useListState'
-import { draftFrom } from './viewDraft'
+import { draftConfig, draftFrom, type ViewDraft } from '../views/taskViewDraft'
 
 const FIELD_LABELS: Record<string, string> = {
   priority: 'Priority',
@@ -27,8 +36,12 @@ function readQuery(query: Record<string, string>) {
   return [...read.entries()].sort().join('&')
 }
 
-function sameQuery(view: SavedView, draft: Omit<ViewDraft, 'name' | 'shared'>) {
-  return readQuery(view.query) === readQuery(draft.query) && view.layout === draft.layout && (view.fields ?? []).join(',') === (draft.fields ?? []).join(',')
+/** Whether the list still shows what the view does. A view the list can't spell is the same until a filter is added. */
+function sameQuery(view: TaskView, draft: ViewDraft) {
+  const layout = view.type === 'board' ? 'board' : 'list'
+  if (layout !== draft.layout) return false
+  if (!view.listParams) return Object.keys(draft.query).every((key) => key === 'viewId')
+  return readQuery(view.listParams) === readQuery(draft.query)
 }
 
 /**
@@ -50,11 +63,11 @@ export default function ViewsMenu({
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listViews(projectId) })
+  const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listProjectTaskViews(projectId) })
   const experience = useProjectExperience(projectId)
   const projectFields = useFields({ projectId })
   const [saving, setSaving] = useState<'new' | 'rename' | null>(null)
-  const [deleting, setDeleting] = useState<SavedView | null>(null)
+  const [deleting, setDeleting] = useState<TaskView | null>(null)
   const current = views.data?.views.find((view) => view.id === state.savedView) ?? null
   const draft = draftFrom(state, actorId, projectFields.data?.fields ?? [])
   const changed = current ? !sameQuery(current, draft) : false
@@ -62,7 +75,7 @@ export default function ViewsMenu({
   const failed = (title: string) => (reason: unknown) => showToast({ tone: 'danger', title, description: describeError(reason).message })
 
   const save = useMutation({
-    mutationFn: (view: SavedView) => updateView(projectId, view, draft, crypto.randomUUID()),
+    mutationFn: async (view: TaskView) => updateTaskView(view, { config: (await draftConfig(projectId, draft)).config }, crypto.randomUUID()),
     onSuccess: (view) => {
       void refresh()
       showToast({ tone: 'success', title: `Saved “${view.name}”` })
@@ -70,15 +83,15 @@ export default function ViewsMenu({
     onError: failed('The view didn’t save'),
   })
   const pin = useMutation({
-    mutationFn: (view: SavedView) => pinView(projectId, view.id, !view.pinned, crypto.randomUUID()),
-    onSuccess: (view) => {
+    mutationFn: (view: TaskView) => pinTaskView(view.id, !view.pinned, crypto.randomUUID()),
+    onSuccess: (_result, view) => {
       void refresh()
-      showToast({ title: view.pinned ? `“${view.name}” is in the sidebar` : `“${view.name}” left the sidebar` })
+      showToast({ title: view.pinned ? `“${view.name}” left the sidebar` : `“${view.name}” is in the sidebar` })
     },
     onError: failed('The sidebar didn’t change'),
   })
   const remove = useMutation({
-    mutationFn: (view: SavedView) => deleteView(projectId, view, crypto.randomUUID()),
+    mutationFn: (view: TaskView) => deleteTaskView(view, crypto.randomUUID()),
     onSuccess: (_result, view) => {
       setDeleting(null)
       void refresh()
@@ -94,7 +107,7 @@ export default function ViewsMenu({
     items.push({
       label: view.shared || view.builtin ? viewName(view, experience) : `${view.name} (only you)`,
       checked: view.id === state.savedView,
-      onSelect: () => navigate(view.href),
+      onSelect: () => navigate(taskViewHref(projectId, view)),
     })
   }
   if (!readOnly) {
@@ -109,14 +122,14 @@ export default function ViewsMenu({
           : { label: 'Loading fields to save this view…', disabled: true, onSelect: () => undefined },
       )
     } else {
-      if (current?.canEdit && changed) items.push({ label: `Save changes to “${current.name}”`, icon: 'check', onSelect: () => save.mutate(current) })
+      if (current && !current.builtin && changed) items.push({ label: `Save changes to “${current.name}”`, icon: 'check', onSelect: () => save.mutate(current) })
       items.push({ label: 'Save as new view…', icon: 'plus', onSelect: () => setSaving('new') })
     }
   }
   if (current) {
     items.push({ label: current.pinned ? 'Unpin from sidebar' : 'Pin to sidebar', icon: 'star', onSelect: () => pin.mutate(current) })
-    if (current.canEdit && !readOnly) items.push({ label: 'Rename…', icon: 'pencil', onSelect: () => setSaving('rename') })
-    if (current.canDelete && !readOnly) items.push({ label: 'Delete view…', icon: 'trash', danger: true, onSelect: () => setDeleting(current) })
+    if (!current.builtin && !readOnly) items.push({ label: 'Rename…', icon: 'pencil', onSelect: () => setSaving('rename') })
+    if (!current.builtin && !readOnly) items.push({ label: 'Delete view…', icon: 'trash', danger: true, onSelect: () => setDeleting(current) })
   }
   if (state.view === 'list') {
     items.push({ heading: 'Columns' })
@@ -167,13 +180,12 @@ export default function ViewsMenu({
       />
       {saving ? (
         <SaveViewDialog
-          canShare={Boolean(views.data?.canShare)}
           draft={draft}
           onClose={() => setSaving(null)}
           onSaved={(view) => {
             setSaving(null)
             void refresh()
-            navigate(view.href, { replace: true })
+            navigate(taskViewHref(projectId, view), { replace: true })
           }}
           projectId={projectId}
           renaming={saving === 'rename' ? current : null}
@@ -198,21 +210,19 @@ export default function ViewsMenu({
 }
 
 function SaveViewDialog({
-  canShare,
   draft,
   onClose,
   onSaved,
   projectId,
   renaming,
 }: {
-  canShare: boolean
-  draft: Omit<ViewDraft, 'name' | 'shared'>
+  draft: ViewDraft
   onClose: () => void
-  onSaved: (view: SavedView) => void
+  onSaved: (view: TaskView) => void
   projectId: string
-  renaming: SavedView | null
+  renaming: TaskView | null
 }) {
-  const idempotencyKey = useRef(crypto.randomUUID())
+  const requestId = useRef(crypto.randomUUID())
   const [name, setName] = useState(renaming?.name ?? '')
   const [shared, setShared] = useState(renaming?.shared ?? false)
   const [pinned, setPinned] = useState(renaming?.pinned ?? true)
@@ -225,13 +235,21 @@ function SaveViewDialog({
     setBusy(true)
     setError(null)
     try {
-      let view = renaming
-        ? await updateView(projectId, renaming, { name: name.trim(), shared }, idempotencyKey.current)
-        : await createView(projectId, { ...draft, name: name.trim(), shared }, idempotencyKey.current)
-      if (view.pinned !== pinned) view = await pinView(projectId, view.id, pinned, crypto.randomUUID())
+      let view: TaskView
+      if (renaming) {
+        view = await updateTaskView(renaming, { name: name.trim(), shared }, requestId.current)
+      } else {
+        const { config, collectionId } = await draftConfig(projectId, draft)
+        if (!collectionId) throw new Error('Add a task first: views are kept with the project’s tasks.')
+        view = await createTaskView(collectionId, { name: name.trim(), shared, layout: draft.layout, config }, requestId.current)
+      }
+      if (view.pinned !== pinned) {
+        await pinTaskView(view.id, pinned, crypto.randomUUID())
+        view = { ...view, pinned }
+      }
       onSaved(view)
     } catch (reason) {
-      idempotencyKey.current = crypto.randomUUID()
+      requestId.current = crypto.randomUUID()
       setError(describeError(reason).message)
     } finally {
       setBusy(false)
@@ -240,7 +258,7 @@ function SaveViewDialog({
 
   return (
     <Dialog
-      description={renaming ? undefined : 'Saves the filters, sort, grouping, layout and columns you have now.'}
+      description={renaming ? undefined : 'Saves the filters, sort, grouping and layout you have now.'}
       footer={
         <>
           <Button onClick={onClose} variant="secondary">
@@ -266,8 +284,8 @@ function SaveViewDialog({
         placeholder="e.g. Release blockers"
         value={name}
       />
-      {canShare && !renaming?.builtin ? (
-        <Switch checked={shared} description="Everyone in the project sees it. Otherwise it’s yours alone." label="Share with the project" onChange={setShared} />
+      {!renaming?.builtin && !renaming?.shared ? (
+        <Switch checked={shared} description="Everyone who can see the project’s tasks sees it. Otherwise it’s yours alone." label="Share with the project" onChange={setShared} />
       ) : null}
       <Switch checked={pinned} description="One click from the project’s sidebar." label="Pin to sidebar" onChange={setPinned} />
     </Dialog>

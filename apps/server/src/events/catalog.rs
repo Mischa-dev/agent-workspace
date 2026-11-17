@@ -321,9 +321,9 @@ pub static LABEL_CHANGED: EventType = fact(
 );
 pub static VIEW_CHANGED: EventType = fact(
     "view.changed",
-    "tasks",
+    "collections",
     Some("view"),
-    "A saved view was added, changed or removed",
+    "A view of a collection was added, changed or removed",
 );
 pub static FIELD_CHANGED: EventType = fact(
     "field.changed",
@@ -396,6 +396,15 @@ pub static SHEET_UPDATED: EventType = fact(
 )
 .legacy(&["sheet.updated"])
 .automatable();
+
+// --- dashboards ------------------------------------------------------------
+pub static DASHBOARD_UPDATED: EventType = fact(
+    "dashboard.updated",
+    "dashboards",
+    Some("dashboard"),
+    "A shared dashboard's name or tiles changed, or it was removed",
+)
+.legacy(&["dashboard.updated"]);
 
 // --- whiteboards -----------------------------------------------------------
 pub static WHITEBOARD_SCENE_CHANGED: EventType = signal(
@@ -626,6 +635,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &DECISION_RECORDED,
         &DECISION_UPDATED,
         &SHEET_UPDATED,
+        &DASHBOARD_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_UPDATED,
         &WHITEBOARD_VERSION_RESTORED,

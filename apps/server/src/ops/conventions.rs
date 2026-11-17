@@ -59,6 +59,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "set",
             "cancel",
             "retry",
+            "press",
             "remove",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",

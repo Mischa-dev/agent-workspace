@@ -39,7 +39,7 @@ function expectNamed(kind: SlotKind, values: string[]) {
 describe('every entry point names its module', () => {
   it('loads every core manifest', () => {
     expect(Object.keys(MODULE_SLOTS).sort()).toEqual(
-      ['agents', 'automations', 'channels', 'code', 'collections', 'inbox', 'messages', 'pages', 'projects', 'runs', 'sheets', 'suggestions', 'tasks', 'whiteboards', 'workspace'],
+      ['agents', 'automations', 'channels', 'code', 'collections', 'dashboards', 'inbox', 'messages', 'pages', 'projects', 'runs', 'sheets', 'suggestions', 'tasks', 'whiteboards', 'workspace'],
     )
   })
 

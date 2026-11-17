@@ -47,6 +47,12 @@ pub fn generate(registry: &Registry) -> Result<Vec<Generated>, String> {
             path: "docs/api/v2.openapi.json",
             content: pretty(&openapi::document(registry)?),
         },
+        // Not an operation's, but generated the same way: the field types
+        // the web app's field registry must cover (T1.13a).
+        Generated {
+            path: "apps/web/src/fields/fieldTypes.generated.json",
+            content: pretty(&crate::fields::web_type_list()),
+        },
     ])
 }
 

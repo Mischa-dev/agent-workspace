@@ -60,6 +60,36 @@
     "title": "List usage by agent"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "button_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "See a button"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "record.button_pressed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "button_press",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Press a button"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -262,6 +292,82 @@
     "title": "Retire custom emoji"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_create",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Make a dashboard"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_delete",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a dashboard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_get",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Read a dashboard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_list",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List dashboards"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "dashboards",
+    "name": "dashboard_update",
+    "permission": "dashboards.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a dashboard"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -318,6 +424,20 @@
     "preview": false,
     "proposable": false,
     "title": "List events"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "formula_preview",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Preview a formula"
   },
   {
     "automation": false,
@@ -1369,6 +1489,103 @@
     "preview": false,
     "proposable": false,
     "title": "List followed threads"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed",
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "view_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Make a view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_default_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Choose a default view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed",
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a view"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "view_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List views"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_pin",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Pin a view"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.changed",
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "view_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Change a view"
   },
   {
     "automation": true,
