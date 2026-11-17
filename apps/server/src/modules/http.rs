@@ -21,6 +21,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     settings,
+    spaces::SpaceKind,
 };
 
 pub fn router() -> Router<AppState> {
@@ -156,7 +157,7 @@ async fn view(
             .collect(),
         presets: manifest::presets(),
         preset: matching_preset(&switches),
-        can_manage: principal.actor_kind == "human" && matches!(role.as_str(), "owner" | "admin"),
+        can_manage: matches!(role.as_str(), "owner" | "admin"),
     })
 }
 
@@ -286,8 +287,9 @@ pub(crate) async fn change_modules_in(
 }
 
 /// Narrow one space's modules. The space must be one of the workspace's
-/// own (not the hidden one direct messages live in), and a module the
-/// workspace has off stays off: a space only ever narrows.
+/// spaces of any kind (not the hidden project direct messages live in,
+/// which is no space), and a module the workspace has off stays off: a
+/// space only ever narrows.
 async fn change_space_switches(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     actor_id: Uuid,
@@ -295,18 +297,17 @@ async fn change_space_switches(
     space_id: Uuid,
     wanted: &BTreeMap<String, bool>,
 ) -> Result<Option<serde_json::Value>, AppError> {
-    let found = sqlx::query_scalar::<_, bool>(
-        "SELECT kind NOT IN ('direct', 'workspace') FROM projects \
-         WHERE id = $1 AND organization_id = $2",
+    let found = sqlx::query_scalar::<_, String>(
+        "SELECT kind FROM projects WHERE id = $1 AND organization_id = $2",
     )
     .bind(space_id)
     .bind(organization_id)
     .fetch_optional(&mut **transaction)
     .await?;
-    match found {
+    match found.as_deref().map(SpaceKind::from_stored) {
         None => return Err(AppError::NotFound("space")),
-        Some(false) => return Err(AppError::Validation("space")),
-        Some(true) => {}
+        Some(None) => return Err(AppError::Validation("space")),
+        Some(Some(_)) => {}
     }
     let workspace = state::switches(transaction, organization_id).await?;
     if wanted
@@ -434,7 +435,7 @@ async fn open(
         task_projects: &task_projects,
         modules,
         workspaces: &workspaces,
-        workspace_boards: true,
+        addresses: crate::addresses::Addresses::of(state),
     };
     let thing = things::get(&mut connection, &viewer, kind, id)
         .await?

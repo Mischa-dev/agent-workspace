@@ -80,6 +80,8 @@ export type InstallView = { id: string; installedAt: string; name: string; objec
 
 export type InstalledObject = { action: string; id: string; key: string; kind: string }
 
+export type InviteLinkView = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
+
 export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
 
 export type LinkArgument = { targetId: string; targetKind: string }
@@ -160,6 +162,10 @@ export type ViewWrite = { columns?: ColumnWrite[] | null; dateField?: string | n
 
 export type WhiteboardLine = { createdAt: string; createdBy?: string | null; deleted: boolean; elementCount: number; id: string; linkCount: number; organizationId: string; organizationName: string; projectId?: string | null; projectName?: string | null; sceneSeq: number; sceneUpdatedAt: string; title: string; updatedAt: string; updatedBy?: string | null; updatedByKind?: string | null; url: string; version: number }
 
+export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
+
+export type AgentCreateOutput = { accountId: string; connectionId: string; credential?: string | null; credentialExpiresAt?: string | null; spaceId: string }
+
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
@@ -215,6 +221,18 @@ export type HostListOutput = { hosts: HostView[] }
 export type HostUnlinkInput = { hostId: string }
 
 export type HostUnlinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
+
+export type InviteLinkCreateInput = { expiresInDays?: number | null; maxUses?: number | null; roleId?: string | null; space?: string | null }
+
+export type InviteLinkCreateOutput = { link: InviteLinkView; token?: string | null; url?: string | null }
+
+export type InviteLinkListInput = { includeInactive?: boolean }
+
+export type InviteLinkListOutput = { links: InviteLinkView[] }
+
+export type InviteLinkRevokeInput = { link: string }
+
+export type InviteLinkRevokeOutput = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
 
 export type MessageDeleteInput = { messageId: string }
 
@@ -299,6 +317,10 @@ export type PackagePreviewOutput = { digest: string; items: PlanItem[]; leaves: 
 export type PackageRemoveInput = { installId: string; parts: RemoveParts }
 
 export type PackageRemoveOutput = { id: string; installedAt: string; name: string; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
+
+export type PersonCreateInput = { displayName: string; handle: string; roleId?: string | null }
+
+export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken?: string | null }
 
 export type RequestCancelInput = { requestId: string }
 
@@ -421,6 +443,7 @@ export type WorkspaceDeleteCancelInput = Record<string, never>
 export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
 
 export type Operations = {
+  agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
@@ -435,6 +458,9 @@ export type Operations = {
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
+  invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
+  invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
+  invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }
   message_delete: { input: MessageDeleteInput; output: MessageDeleteOutput }
   message_forward: { input: MessageForwardInput; output: MessageForwardOutput }
   message_history: { input: MessageHistoryInput; output: MessageHistoryOutput }
@@ -456,6 +482,7 @@ export type Operations = {
   package_list: { input: PackageListInput; output: PackageListOutput }
   package_preview: { input: PackagePreviewInput; output: PackagePreviewOutput }
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
+  person_create: { input: PersonCreateInput; output: PersonCreateOutput }
   request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
   request_create: { input: RequestCreateInput; output: RequestCreateOutput }
   request_get: { input: RequestGetInput; output: RequestGetOutput }

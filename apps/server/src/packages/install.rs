@@ -215,11 +215,12 @@ async fn landing(
             // visibility: the installer's own starter space, by key and name.
             sqlx::query_scalar::<_, Uuid>(
                 "SELECT id FROM projects WHERE organization_id = $1 AND project_key = upper($2) \
-                 AND name = $3 AND archived_at IS NULL AND kind = 'standard' LIMIT 1",
+                 AND name = $3 AND archived_at IS NULL AND kind = $4 LIMIT 1",
             )
             .bind(workspace_id)
             .bind(space.key.trim())
             .bind(space.name.trim())
+            .bind(crate::spaces::SpaceKind::Project.stored())
             .fetch_optional(&mut *connection)
             .await?
         }

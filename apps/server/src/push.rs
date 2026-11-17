@@ -584,12 +584,15 @@ async fn recipient_devices(pool: &PgPool, actor_id: Uuid) -> Result<Vec<DeviceRo
 
 async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError> {
     // Read as the recipient: anything they can no longer see sends nothing.
-    let Some(notification) =
-        notifications::get_many(&state.pool, job.recipient, &[job.notification_id])
-            .await?
-            .into_iter()
-            .next()
-    else {
+    let Some(notification) = notifications::get_many(
+        &state.pool,
+        crate::addresses::Addresses::of(state),
+        job.recipient,
+        &[job.notification_id],
+    )
+    .await?
+    .into_iter()
+    .next() else {
         return Ok(());
     };
     if notification.read {

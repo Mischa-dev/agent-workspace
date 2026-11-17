@@ -140,6 +140,7 @@ pub(super) async fn unread_lines(
 ) -> Result<Vec<NotificationLine>, AppError> {
     let page = notifications::list(
         &state.pool,
+        crate::addresses::Addresses::of(state),
         principal.actor_id,
         &ListFilter {
             view: View::Unread,
@@ -188,6 +189,7 @@ pub(super) async fn notification_list(
         };
         let page = notifications::list(
             &state.pool,
+            crate::addresses::Addresses::of(state),
             principal.actor_id,
             &ListFilter {
                 view,

@@ -1118,3 +1118,192 @@ async fn agents_put_images_on_boards_they_can_edit() {
         assert_eq!(result["outcome"], "invalid_request", "{refused}: {result}");
     }
 }
+
+/// K4.10: the workspace's own space is a plain space. A board across the
+/// workspace lives there and is shown as the whole workspace's; its events
+/// ride on that space and reach every workspace member, people in no project
+/// included, and nobody else; a project board moved to the whole workspace
+/// lands there; and a channel there works in a workspace with no project.
+#[tokio::test]
+async fn workspace_boards_and_channels_live_in_the_workspace_space() {
+    let Some(setup) = setup("k4_10_workspace_space").await else {
+        return;
+    };
+    let owner = &setup.browser;
+    let owner_id = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT actor_id FROM users WHERE login_name = 'owner'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owner");
+    // A board across the workspace, before any project exists.
+    let (status, workspace) = request(
+        &setup,
+        owner,
+        "POST",
+        "/api/v1/whiteboards",
+        json!({"title": "Whole team", "organizationId": setup.organization_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{workspace}");
+    let open = workspace["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    assert_eq!(
+        workspace["whiteboard"]["projectId"],
+        Value::Null,
+        "{workspace}"
+    );
+    let space = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM spaces WHERE workspace_id = $1 AND kind = 'workspace'",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the workspace space");
+    let stored = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT project_id FROM whiteboards WHERE id = $1::uuid",
+    )
+    .bind(&open)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("stored board");
+    assert_eq!(stored, space, "the board lives in the workspace space");
+    // Mara is in the workspace and in a project of her own, not one the
+    // board or the channel is in.
+    let elsewhere_project = create_project(&setup, "OTH", "Other").await;
+    let (mara_id, mara) = add_person(&setup, &[&elsewhere_project], "mara").await;
+    // A channel there works end to end (ruling R22).
+    let (status, channel) = send(
+        &setup.app,
+        owner.request(
+            "POST",
+            &format!("/api/v1/projects/{space}/channels"),
+            Some("workspace-channel"),
+            json!({"name": "everyone"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{channel}");
+    let channel = channel["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .to_owned();
+    let (status, posted) = send(
+        &setup.app,
+        mara.request(
+            "POST",
+            &format!("/api/v1/channels/{channel}/messages"),
+            Some("mara-hello"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "hello all"}]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{posted}");
+    let (status, timeline) = request(
+        &setup,
+        owner,
+        "GET",
+        &format!("/api/v1/conversations/{channel}/timeline"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{timeline}");
+    assert!(timeline.to_string().contains("hello all"), "{timeline}");
+
+    // Mara draws on it; the change rides on the workspace space.
+    write(&setup, &mara, &open, vec![rectangle("hers", 1, 7, 0.0)]).await;
+    let carriers = sqlx::query_scalar::<_, uuid::Uuid>(&format!(
+        "SELECT DISTINCT project_id FROM {} notice \
+         WHERE event_type = 'whiteboard.updated' AND payload->>'whiteboardId' = $1",
+        crate::support::NOTICES
+    ))
+    .bind(&open)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("events");
+    assert_eq!(carriers, vec![space]);
+
+    // Realtime delivers board events by whether the board is visible.
+    let stranger = uuid::Uuid::now_v7();
+    let elsewhere = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Elsewhere', $2)")
+        .bind(elsewhere)
+        .bind(format!(
+            "elsewhere-{}",
+            &elsewhere.simple().to_string()[20..]
+        ))
+        .execute(&setup.pool)
+        .await
+        .expect("another workspace");
+    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
+        .bind(stranger)
+        .execute(&setup.pool)
+        .await
+        .expect("stranger");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(elsewhere)
+    .bind(stranger)
+    .execute(&setup.pool)
+    .await
+    .expect("stranger's membership");
+    let board = open.parse::<uuid::Uuid>().expect("board id");
+    let sees = |actor: uuid::Uuid| {
+        let pool = setup.pool.clone();
+        async move {
+            agent_workspace_server::whiteboards::visible_to(&pool, board, actor)
+                .await
+                .expect("visible_to")
+        }
+    };
+    assert!(sees(owner_id).await);
+    assert!(sees(mara_id).await);
+    assert!(!sees(stranger).await);
+    sqlx::query("UPDATE organization_memberships SET enabled = false WHERE actor_id = $1")
+        .bind(mara_id)
+        .execute(&setup.pool)
+        .await
+        .expect("mara leaves");
+    assert!(
+        !sees(mara_id).await,
+        "leaving the workspace stops the events"
+    );
+
+    // A project board moved to the whole workspace lands in its space.
+    let work = create_project(&setup, "WORK", "Work").await;
+    let private = create_board(
+        &setup,
+        owner,
+        json!({"title": "Sync design", "projectId": work}),
+    )
+    .await;
+    let (status, moved) = request(
+        &setup,
+        owner,
+        "PATCH",
+        &format!("/api/v1/whiteboards/{private}"),
+        json!({"projectId": null}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    let stored = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT project_id FROM whiteboards WHERE id = $1::uuid",
+    )
+    .bind(&private)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("moved board");
+    assert_eq!(stored, space);
+    let (_, detail) = request(
+        &setup,
+        owner,
+        "GET",
+        &format!("/api/v1/whiteboards/{private}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(detail["whiteboard"]["projectId"], Value::Null, "{detail}");
+}

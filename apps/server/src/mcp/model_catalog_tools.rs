@@ -11,12 +11,10 @@ use super::{
     McpPrincipal,
     common::{ToolResult, insert_audit, mark_via, parse_id, project_role},
 };
-use crate::{
-    AppState, error::AppError, execution, policy::ActorKind, provider::manifest::ModelOverrides,
-    settings,
-};
+use crate::{AppState, error::AppError, execution, provider::manifest::ModelOverrides, settings};
 
-const MANAGERS_ONLY: &str = "Only the workspace's owners and admins who manage its settings change its model lists, as people, on the web or through an app connected as themselves.";
+const MANAGERS_ONLY: &str =
+    "Changing the model lists takes a role that manages the workspace's settings.";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -129,9 +127,6 @@ pub(super) async fn model_catalog_write(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(MANAGERS_ONLY);
-    }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
     }
@@ -153,14 +148,14 @@ pub(super) async fn model_catalog_write(
         settings::authorize_personal_as(
             &state.pool,
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             organization_id,
         )
         .await?;
         settings::authorize_workspace_manage_as(
             &state.pool,
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             organization_id,
         )
         .await?;

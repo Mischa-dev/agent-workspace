@@ -320,12 +320,16 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
     };
     // Read the notification as its recipient: one they can no longer see
     // can't be acted on.
-    let notification =
-        notifications::get_many(&state.pool, actor.actor_id, &[token.notification_id])
-            .await?
-            .into_iter()
-            .next()
-            .ok_or(AppError::NotFound("notification_action"))?;
+    let notification = notifications::get_many(
+        &state.pool,
+        crate::addresses::Addresses::of(state),
+        actor.actor_id,
+        &[token.notification_id],
+    )
+    .await?
+    .into_iter()
+    .next()
+    .ok_or(AppError::NotFound("notification_action"))?;
     // Approval notifications are grouped per run, so the row may now show
     // the run's next approval: a button only answers the one it was shown
     // with.

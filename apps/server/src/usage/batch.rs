@@ -389,6 +389,7 @@ pub(crate) async fn suggest_in(
             Reader {
                 actor_id: viewer,
                 connection_id: None,
+                addresses: crate::addresses::Addresses::of(state),
             },
             place.project_id,
             &RankFilter {
