@@ -21,7 +21,8 @@ use super::{
 };
 use crate::ops::{
     Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted, access_shim,
-    error::ConflictReason, refs::IdRef,
+    error::{ConflictReason, DenyReason},
+    refs::IdRef,
 };
 
 pub fn register_ops(registry: &mut Registry) {
@@ -372,6 +373,24 @@ pub(super) async fn install_planned(
         space_id: None,
     };
     let workspace_target = Target::Workspace(Some(workspace));
+    // A connection held to one space installs only into that space, and only
+    // what stays there: its workspace role came with the account.
+    if ctx.caller.confined_space.is_some()
+        && (ctx.space_id.is_none()
+            || plan
+                .items
+                .iter()
+                .filter(live)
+                .any(|line| line.kind == "role" || line.needs_admin))
+    {
+        return Err(OpError::Denied {
+            reason: DenyReason::Delegation,
+            message: "This connection is held to one space, so it can only install what stays \
+                      in that space. Reconnect it for your whole account to change the \
+                      workspace."
+                .into(),
+        });
+    }
     if plan
         .items
         .iter()
@@ -418,6 +437,7 @@ pub(super) async fn install_planned(
         template: origin.template.clone(),
         source: origin.source,
         source_ref: origin.source_ref.clone(),
+        confined: ctx.caller.confined_space,
     };
     let installed = apply::install(tx, &who, package, &origin.document, &place, &plan)
         .await
@@ -493,9 +513,10 @@ impl Operation for PackageList {
             (None, _) => None,
         };
         let workspace = call.ctx.workspace_id;
+        let reader = call.account_id();
         let tx = call.tx().await?;
         Ok(PackageListOutput {
-            installs: install::list(tx, workspace, space).await?,
+            installs: install::list(tx, workspace, space, reader).await?,
         })
     }
 }
@@ -587,8 +608,21 @@ impl Operation for PackageRemove {
                          WHERE id = ANY($1) AND archived_at IS NULL"
                     }
                     "page" | "skill" => {
-                        "UPDATE project_pages SET archived_at = now() \
-                         WHERE id = ANY($1) AND archived_at IS NULL"
+                        // Open pages hear of it, as from any page change.
+                        let changed = sqlx::query_as::<_, (Uuid, Uuid, i64)>(
+                            "UPDATE project_pages SET archived_at = now(), version = version + 1 \
+                             WHERE id = ANY($1) AND archived_at IS NULL \
+                             RETURNING id, project_id, version",
+                        )
+                        .bind(ids)
+                        .fetch_all(&mut **tx)
+                        .await
+                        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
+                        archived += changed.len();
+                        for (page, space, version) in changed {
+                            crate::page_docs::store::page_updated(tx, space, page, version).await?;
+                        }
+                        continue;
                     }
                     "form" => {
                         "UPDATE bug_report_links SET state = 'disabled' \

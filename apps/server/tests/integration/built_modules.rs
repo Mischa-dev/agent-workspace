@@ -456,6 +456,18 @@ async fn a_part_from_another_workspace_never_joins() {
     .execute(&pool)
     .await
     .expect("vee's part");
+    sqlx::query(
+        "INSERT INTO module_nav (id, module_id, workspace_id, label, target) \
+         VALUES ($1, $2, $3, 'Secret room', jsonb_build_object('kind', 'collection', \
+                 'collection', $4::text))",
+    )
+    .bind(Uuid::now_v7())
+    .bind(Uuid::parse_str(wide["value"]["id"].as_str().expect("id")).expect("uuid"))
+    .bind(world.organization)
+    .bind(hidden)
+    .execute(&pool)
+    .await
+    .expect("vee's nav entry");
     let opened = tool(
         &world,
         "builder",
@@ -470,6 +482,7 @@ async fn a_part_from_another_workspace_never_joins() {
         "{opened}"
     );
     assert!(!opened.to_string().contains("Hidden"), "{opened}");
+    assert_eq!(opened["value"]["nav"], json!([]), "{opened}");
     let listed = tool(&world, "builder", "module_list", json!({})).await;
     let wide_listed = listed["value"]["built"]
         .as_array()
@@ -495,5 +508,9 @@ async fn a_part_from_another_workspace_never_joins() {
     )
     .await;
     assert_eq!(opened["value"]["parts"][0]["name"], "Hidden", "{opened}");
+    assert_eq!(
+        opened["value"]["nav"][0]["label"], "Secret room",
+        "{opened}"
+    );
     world.finish().await;
 }

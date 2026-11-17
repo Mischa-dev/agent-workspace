@@ -1015,6 +1015,127 @@ async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
         .await
         .expect("target tasks");
     assert_eq!(count, 0);
+
+    // Nor does it change the workspace through a package: not a role, and
+    // not a package that lands outside its project.
+    let package = json!({
+        "format": "agent-workspace-package/1",
+        "id": "escape",
+        "version": "1.0.0",
+        "name": "Escape",
+        "target": "workspace",
+        "contents": [{"kind": "role", "key": "boss", "body": {
+            "name": "Boss", "baseRole": "admin", "permissions": ["tasks.view"]}}],
+    });
+    let preview = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "package_preview",
+        json!({"package": package}),
+    )
+    .await;
+    let installed = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "package_install",
+        json!({"package": package, "planHash": preview["value"]["planHash"],
+               "clientRequestId": "escape-1"}),
+    )
+    .await;
+    assert_eq!(installed["outcome"], "permission_denied", "{installed}");
+    let roles: i64 = sqlx::query_scalar("SELECT count(*) FROM workspace_roles WHERE name = 'Boss'")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("roles");
+    assert_eq!(roles, 0);
+
+    // Nor reaches into the other space through a workspace-wide module: the
+    // owner is in TARGET, but this connection isn't.
+    let elsewhere = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO collections (id, project_id, name, description, title_name, position, \
+         created_by_actor_id) VALUES ($1, $2::uuid, 'Target list', '', 'Name', 0, $3)",
+    )
+    .bind(elsewhere)
+    .bind(&target)
+    .bind(actor)
+    .execute(&setup.pool)
+    .await
+    .expect("collection in TARGET");
+    let wide = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "module_create",
+        json!({"key": "wide", "name": "Wide", "clientRequestId": "wide-1"}),
+    )
+    .await;
+    assert_eq!(wide["outcome"], "permission_denied", "{wide}");
+    let module = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "module_create",
+        json!({"key": "reach", "name": "Reach", "spaceId": source,
+               "clientRequestId": "reach-1"}),
+    )
+    .await;
+    assert_eq!(module["outcome"], "ok", "{module}");
+    let linked = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "module_part_link",
+        json!({"moduleId": module["value"]["id"],
+                   "part": {"kind": "collection", "id": elsewhere.to_string()}}),
+    )
+    .await;
+    assert_eq!(linked["outcome"], "not_found", "{linked}");
+    let parts: i64 = sqlx::query_scalar("SELECT count(*) FROM module_parts WHERE object_id = $1")
+        .bind(elsewhere)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("parts");
+    assert_eq!(parts, 0);
+
+    // Nor switches, changes or archives a workspace-wide module, which
+    // reaches every space.
+    let full = connect_app(&setup.app, &setup.browser, "Owner app", "full").await;
+    let owner_session = initialize(&setup.app, &full).await.expect("session");
+    let shared = tool(
+        &setup.app,
+        &full,
+        &owner_session,
+        "module_create",
+        json!({"key": "shared", "name": "Shared", "clientRequestId": "shared-1"}),
+    )
+    .await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    let shared_id = shared["value"]["id"].clone();
+    for (name, arguments) in [
+        ("module_set", json!({"moduleId": shared_id, "on": false})),
+        (
+            "module_update",
+            json!({"moduleId": shared_id, "name": "Mine",
+                   "expectedRevision": shared["value"]["revision"]}),
+        ),
+        (
+            "module_archive",
+            json!({"moduleId": shared_id, "parts": "archive"}),
+        ),
+    ] {
+        let result = tool(&setup.app, &issued.token, &session, name, arguments).await;
+        assert_eq!(result["outcome"], "permission_denied", "{name}: {result}");
+    }
+    let untouched: (String, bool) =
+        sqlx::query_as("SELECT name, archived_at IS NULL FROM modules WHERE id = $1::text::uuid")
+            .bind(shared_id.as_str().expect("id"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("module");
+    assert_eq!(untouched, ("Shared".to_owned(), true));
 }
 
 #[tokio::test]

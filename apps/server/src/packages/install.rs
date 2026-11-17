@@ -614,19 +614,25 @@ pub const INSTALL_SELECT: &str = r#"
     JOIN packages package ON package.id = install.package_id
 "#;
 
-/// The installs in a workspace (in one space, when named), newest first.
+/// The installs in a workspace (in one space, when named) the reader can
+/// see, newest first: one in a space only to the space's current members.
 pub async fn list(
     connection: &mut PgConnection,
     workspace_id: Uuid,
     space_id: Option<Uuid>,
+    reader: Uuid,
 ) -> Result<Vec<InstallView>, AppError> {
     Ok(sqlx::query_as::<_, InstallView>(&format!(
         "{INSTALL_SELECT} WHERE install.workspace_id = $1 \
          AND ($2::uuid IS NULL OR install.space_id = $2) \
+         AND (install.space_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
+              WHERE membership.project_id = install.space_id AND membership.actor_id = $3 \
+              AND membership.enabled)) \
          ORDER BY install.created_at DESC, install.id DESC LIMIT 200"
     ))
     .bind(workspace_id)
     .bind(space_id)
+    .bind(reader)
     .fetch_all(&mut *connection)
     .await?)
 }

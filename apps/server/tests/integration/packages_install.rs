@@ -181,6 +181,18 @@ async fn a_package_installs_once_and_exports_back() {
     .await
     .expect("collection");
     assert!(archived);
+    // Open pages hear that the skill page went.
+    let page_heard = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM outbox_events event JOIN project_pages page \
+             ON page.id::text = event.payload->>'pageId' \
+         WHERE event.event_type = 'page.updated' AND page.title = 'Triage' \
+           AND page.archived_at IS NOT NULL \
+           AND (event.payload->>'version')::bigint = page.version",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("page events");
+    assert_eq!(page_heard, 1);
     world.finish().await;
 }
 
@@ -422,7 +434,7 @@ async fn a_preview_never_reveals_a_channel_the_caller_cannot_see() {
 }
 
 #[tokio::test]
-async fn an_agent_template_in_a_space_shows_only_to_its_members() {
+async fn a_space_install_and_template_show_only_to_its_members() {
     let Some(world) = WorldBuilder::default()
         .project("WORK")
         .connected_app("desk")
@@ -444,6 +456,30 @@ async fn an_agent_template_in_a_space_shows_only_to_its_members() {
     .execute(&pool)
     .await
     .expect("space template");
+    let package_row = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO packages (id, workspace_id, package_key, version, name, document, digest, source) \
+         SELECT $1, organization_id, 'closed_kit', '1.0.0', 'Closed kit', '{}'::jsonb, 'd', 'upload' \
+         FROM projects WHERE id = $2::uuid",
+    )
+    .bind(package_row)
+    .bind(&space)
+    .execute(&pool)
+    .await
+    .expect("package");
+    sqlx::query(
+        "INSERT INTO package_installs (id, workspace_id, space_id, package_id, state, plan, \
+             plan_hash, summary, installed_by_actor_id) \
+         SELECT $1, organization_id, id, $3, 'installed', '{}'::jsonb, 'h', \
+                ARRAY['Made #private-room'], (SELECT actor_id FROM users LIMIT 1) \
+         FROM projects WHERE id = $2::uuid",
+    )
+    .bind(Uuid::now_v7())
+    .bind(&space)
+    .bind(package_row)
+    .execute(&pool)
+    .await
+    .expect("space install");
     let set_membership = |enabled: bool| {
         let pool = pool.clone();
         let space = space.clone();
@@ -461,6 +497,8 @@ async fn an_agent_template_in_a_space_shows_only_to_its_members() {
     let hidden = tool(&world, "desk", "agent_template_list", json!({})).await;
     assert_eq!(hidden["outcome"], "ok", "{hidden}");
     assert_eq!(hidden["value"]["templates"], json!([]), "{hidden}");
+    let installs = tool(&world, "desk", "package_list", json!({})).await;
+    assert_eq!(installs["value"]["installs"], json!([]), "{installs}");
     // A preview naming its key doesn't learn its id or reuse it.
     let package = json!({
         "format": "agent-workspace-package/1",
@@ -485,6 +523,11 @@ async fn an_agent_template_in_a_space_shows_only_to_its_members() {
         "{preview}"
     );
     set_membership(true).await;
+    let installs = tool(&world, "desk", "package_list", json!({})).await;
+    assert_eq!(
+        installs["value"]["installs"][0]["packageId"], "closed_kit",
+        "{installs}"
+    );
     let shown = tool(&world, "desk", "agent_template_list", json!({})).await;
     assert_eq!(
         shown["value"]["templates"][0]["key"], "closed_helper",

@@ -17,7 +17,9 @@ use crate::{
     collections::{self, CreateOutcome, NewCollection, definition},
     ops::{
         Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
-        access_shim, error::ConflictReason, refs::IdRef,
+        access_shim,
+        error::{ConflictReason, DenyReason},
+        refs::IdRef,
     },
 };
 
@@ -82,17 +84,34 @@ async fn view(call: &mut OpCall<'_>, module_id: Uuid) -> Result<ModuleView, OpEr
         archived: row.archived_at.is_some(),
         archived_parts: row.archived_parts.clone(),
         parts: super::parts(connection, row.id, reader).await?,
-        nav: super::nav(connection, row.id).await?,
+        nav: super::nav(connection, row.id, reader).await?,
     })
 }
 
 /// The module the call acts on, locked, in the located workspace.
 async fn locked(call: &mut OpCall<'_>, module_id: Uuid) -> Result<ModuleRow, OpError> {
     let workspace = call.ctx.workspace_id;
+    let confined = call.ctx.caller.confined_space;
     let tx = call.tx().await?;
-    super::lock(tx, workspace, module_id)
+    let module = super::lock(tx, workspace, module_id)
         .await?
-        .ok_or(OpError::not_found(MODULE))
+        .ok_or(OpError::not_found(MODULE))?;
+    held_to(confined, module.space_id)?;
+    Ok(module)
+}
+
+/// A connection held to one space changes only that space's modules: a
+/// workspace-wide module's switch, parts and archive reach every space.
+fn held_to(confined: Option<Uuid>, module_space: Option<Uuid>) -> Result<(), OpError> {
+    match confined {
+        Some(held) if module_space != Some(held) => Err(OpError::Denied {
+            reason: DenyReason::Delegation,
+            message: "This connection is held to one space, so it can only change that space's \
+                      modules. Reconnect it for your whole account to change workspace modules."
+                .into(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 fn live(module: &ModuleRow) -> Result<(), OpError> {
@@ -320,6 +339,8 @@ impl Operation for ModuleCreate {
             .await?;
         }
         let actor = call.account_id();
+        let confined = call.ctx.caller.confined_space;
+        held_to(confined, space)?;
         let workspace = call.ctx.workspace_id;
         let maker = crate::events::Caller::from(call.ctx);
         let state = call.state;
@@ -576,14 +597,14 @@ impl Operation for ModuleCreate {
             .await?
             .ok_or(OpError::Unavailable)?;
         for (kind, id) in &made {
-            super::link_part(tx, &module, kind, *id, actor).await?;
+            super::link_part(tx, &module, kind, *id, actor, confined).await?;
         }
         for (index, part) in input.parts.iter().enumerate() {
             let kind = part_kind(&part.kind).map_err(|_| OpError::Invalid {
                 field: format!("parts[{index}].kind").into(),
                 message: "A part is a collection, form, automation or page.".into(),
             })?;
-            super::link_part(tx, &module, kind, part.id.id(), actor)
+            super::link_part(tx, &module, kind, part.id.id(), actor, confined)
                 .await
                 .map_err(|error| match error {
                     crate::error::AppError::NotFound(_) => OpError::Invalid {
@@ -797,8 +818,9 @@ impl Operation for ModulePartLink {
         let module = locked(call, input.module_id.id()).await?;
         live(&module)?;
         let actor = call.account_id();
+        let confined = call.ctx.caller.confined_space;
         let tx = call.tx().await?;
-        if super::link_part(tx, &module, kind, input.part.id.id(), actor).await? {
+        if super::link_part(tx, &module, kind, input.part.id.id(), actor, confined).await? {
             super::touch(tx, module.id).await?;
             // Joining a switched-off module hides it: its readers refetch.
             announce_part(tx, kind, input.part.id.id()).await?;

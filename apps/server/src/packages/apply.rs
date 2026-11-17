@@ -70,6 +70,9 @@ pub(crate) struct Installer<'a> {
     /// `packages.source`: builtin, directory, upload or legacy_template.
     pub source: &'static str,
     pub source_ref: Option<String>,
+    /// The one space the connection is held to, if it is: module parts
+    /// come only from there.
+    pub confined: Option<Uuid>,
 }
 
 /// Why an install stopped. Nothing it did is kept.
@@ -658,8 +661,15 @@ pub(crate) async fn install(
                         )
                         .into());
                     };
-                    crate::modules::built::link_part(tx, &module, part_kind, object.id, actor)
-                        .await?;
+                    crate::modules::built::link_part(
+                        tx,
+                        &module,
+                        part_kind,
+                        object.id,
+                        actor,
+                        who.confined,
+                    )
+                    .await?;
                 }
                 for entry in body["nav"].as_array().cloned().unwrap_or_default() {
                     let label = entry["label"].as_str().unwrap_or("").trim();

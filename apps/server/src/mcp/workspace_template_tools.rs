@@ -24,6 +24,7 @@ use crate::{
     },
 };
 
+const HELD_TO_ONE_SPACE: &str = "This connection is held to one space, so it can't use or save workspace templates. Reconnect it for your whole account.";
 const PEOPLE_USE_TEMPLATES: &str = "Agents can read templates and suggest one, but only a workspace owner or admin uses or saves them, in Settings > Workspace templates or through an app connected as themselves.";
 const MANAGERS_USE_TEMPLATES: &str = "Only people who manage the workspace's settings and roles use or save templates. Suggest one to a workspace owner or admin instead.";
 
@@ -125,6 +126,14 @@ pub(super) async fn workspace_template_apply(
     if principal.actor_kind != ActorKind::Human {
         return ToolResult::denied(PEOPLE_USE_TEMPLATES);
     }
+    // A template reaches the whole workspace; a connection held to one
+    // space can't.
+    if crate::access::Caller::of_principal(principal, None)
+        .confined_space
+        .is_some()
+    {
+        return ToolResult::denied(HELD_TO_ONE_SPACE);
+    }
     let result = async {
         let Some(organization_id) = workspace_of(state, principal, &arguments.project_id).await?
         else {
@@ -156,6 +165,7 @@ pub(super) async fn workspace_template_apply(
             template: None,
             source: "builtin",
             source_ref: None,
+            confined: None,
         };
         // M1.11: a template is used by installing it as a package.
         match crate::packages::apply::use_template(&mut transaction, installer, &template).await {
@@ -216,6 +226,14 @@ pub(super) async fn workspace_template_save(
     }
     if principal.actor_kind != ActorKind::Human {
         return ToolResult::denied(PEOPLE_USE_TEMPLATES);
+    }
+    // A template reaches the whole workspace; a connection held to one
+    // space can't.
+    if crate::access::Caller::of_principal(principal, None)
+        .confined_space
+        .is_some()
+    {
+        return ToolResult::denied(HELD_TO_ONE_SPACE);
     }
     let result = async {
         let Some(organization_id) = workspace_of(state, principal, &arguments.project_id).await?

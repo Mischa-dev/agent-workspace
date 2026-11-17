@@ -1678,6 +1678,8 @@ async fn apply_route(
         template: None,
         source: "builtin",
         source_ref: None,
+        // A browser session is the person's whole account.
+        confined: None,
     };
     // M1.11: a template is used by installing it as a package.
     match crate::packages::apply::use_template(&mut transaction, installer, &template).await {

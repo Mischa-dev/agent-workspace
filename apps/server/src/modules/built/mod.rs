@@ -244,14 +244,15 @@ pub async fn object_place(
 
 /// Makes an object a part of a module. The object must be in the module's
 /// workspace (and space, for a space's module), in a space `actor` is a
-/// member of, and in no other module. Returns false when it was already this
-/// module's.
+/// member of (and, for a connection held to one space, in that space), and
+/// in no other module. Returns false when it was already this module's.
 pub async fn link_part(
     connection: &mut PgConnection,
     module: &ModuleRow,
     part_kind: &'static str,
     object_id: Uuid,
     actor: Uuid,
+    confined: Option<Uuid>,
 ) -> Result<bool, AppError> {
     let Some((workspace_id, space_id)) = object_place(connection, part_kind, object_id).await?
     else {
@@ -273,7 +274,7 @@ pub async fn link_part(
     .bind(actor)
     .fetch_one(&mut *connection)
     .await?;
-    if !member {
+    if !member || confined.is_some_and(|confined| confined != space_id) {
         return Err(AppError::NotFound("part"));
     }
     let owner = sqlx::query_scalar::<_, Uuid>(
@@ -510,11 +511,35 @@ pub struct NavView {
     pub target: serde_json::Value,
 }
 
-pub async fn nav(connection: &mut PgConnection, module_id: Uuid) -> Result<Vec<NavView>, AppError> {
+/// A module's nav entries `reader` may follow: an entry whose collection,
+/// page or form is in a space they aren't in is left out.
+pub async fn nav(
+    connection: &mut PgConnection,
+    module_id: Uuid,
+    reader: Uuid,
+) -> Result<Vec<NavView>, AppError> {
     Ok(sqlx::query_as::<_, NavRow>(
-        "SELECT id, label, icon, target FROM module_nav WHERE module_id = $1 ORDER BY position, id",
+        r#"
+        SELECT nav.id, nav.label, nav.icon, nav.target FROM module_nav nav
+        WHERE nav.module_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM (
+                  SELECT project_id FROM collections
+                  WHERE id::text = nav.target->>'collection'
+                  UNION ALL
+                  SELECT project_id FROM project_pages WHERE id::text = nav.target->>'page'
+                  UNION ALL
+                  SELECT project_id FROM bug_report_links WHERE id::text = nav.target->>'form'
+              ) goes
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM project_memberships membership
+                  WHERE membership.project_id = goes.project_id
+                    AND membership.actor_id = $2 AND membership.enabled))
+        ORDER BY nav.position, nav.id
+        "#,
     )
     .bind(module_id)
+    .bind(reader)
     .fetch_all(&mut *connection)
     .await?
     .into_iter()
