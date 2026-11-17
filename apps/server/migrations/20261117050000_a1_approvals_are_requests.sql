@@ -46,6 +46,16 @@ UPDATE requests request
        ), '[]'::jsonb)
  WHERE legacy_source = 'agent_approval';
 
+-- A built-in run's ask is raised by the run's own account, as new ones
+-- are (`requests::open_for_run`), so the person who started the run may
+-- answer it like anyone else who may.
+UPDATE requests request
+   SET raised_by_account_id = run.account_id
+  FROM runs run
+ WHERE request.legacy_source = 'agent_approval'
+   AND request.run_id = run.id
+   AND request.raised_by_account_id IS DISTINCT FROM run.account_id;
+
 UPDATE requests SET legacy_source = NULL WHERE legacy_source IS NOT NULL;
 ALTER TABLE requests DROP COLUMN legacy_source;
 
