@@ -407,9 +407,6 @@ pub async fn websocket(
     if !origin_is_allowed(&state.config, &headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if state.realtime.draining.load(Ordering::SeqCst) {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
     let principal = match load_authenticated_actor(&state, &headers).await {
         Ok(Some(principal)) => principal,
         Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
@@ -417,6 +414,11 @@ pub async fn websocket(
     };
     let receiver = state.realtime.subscribe();
     let session_revocations = state.realtime.subscribe_session_revocations();
+    // Checked after subscribing: a drain that starts from here on reaches
+    // this socket's receiver, so no socket opens past it (K5.7).
+    if state.realtime.draining.load(Ordering::SeqCst) {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     upgrade
         .max_frame_size(MAX_REALTIME_CLIENT_FRAME_BYTES)
         .max_message_size(MAX_REALTIME_CLIENT_FRAME_BYTES)
