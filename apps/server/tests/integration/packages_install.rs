@@ -212,6 +212,17 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
             "admin",
             &["modules.manage", "collections.build", "tasks.view"],
         )
+        .custom_role_on(
+            "Steward",
+            "admin",
+            &[
+                "roles.manage",
+                "settings.manage",
+                "modules.manage",
+                "collections.build",
+                "tasks.view",
+            ],
+        )
         .build("m19_install_rules")
         .await
     else {
@@ -316,6 +327,33 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
             .await
             .expect("collections");
     assert_eq!(collections, 1);
+
+    // Holding roles.manage in the space isn't holding it in the workspace,
+    // whose roles a package changes.
+    let steward = Uuid::parse_str(&world.roles["Steward"]).expect("role");
+    sqlx::query("UPDATE project_memberships SET role_id = $1 WHERE actor_id = $2")
+        .bind(steward)
+        .bind(rook)
+        .execute(&pool)
+        .await
+        .expect("give rook Steward in the space");
+    let preview = tool(
+        &world,
+        "rook",
+        "package_preview",
+        json!({"package": bugs(true), "target": target}),
+    )
+    .await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
+    let refused = tool(
+        &world,
+        "rook",
+        "package_install",
+        json!({"package": bugs(true), "target": target,
+               "planHash": preview["value"]["planHash"], "clientRequestId": "bugs-steward"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     world.finish().await;
 }
 
@@ -411,6 +449,29 @@ async fn an_agent_template_in_a_space_shows_only_to_its_members() {
     let hidden = tool(&world, "desk", "agent_template_list", json!({})).await;
     assert_eq!(hidden["outcome"], "ok", "{hidden}");
     assert_eq!(hidden["value"]["templates"], json!([]), "{hidden}");
+    // A preview naming its key doesn't learn its id or reuse it.
+    let package = json!({
+        "format": "agent-workspace-package/1",
+        "id": "helpers",
+        "version": "1.0.0",
+        "name": "Helpers",
+        "target": "workspace",
+        "contents": [{"kind": "agent", "key": "closed_helper", "body": {
+            "name": "Closed helper", "purpose": "Helps", "instructions": "Help."}}],
+    });
+    let preview = tool(
+        &world,
+        "desk",
+        "package_preview",
+        json!({"package": package}),
+    )
+    .await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
+    assert_eq!(preview["value"]["items"][0]["action"], "skip", "{preview}");
+    assert!(
+        preview["value"]["items"][0]["existingId"].is_null(),
+        "{preview}"
+    );
     set_membership(true).await;
     let shown = tool(&world, "desk", "agent_template_list", json!({})).await;
     assert_eq!(

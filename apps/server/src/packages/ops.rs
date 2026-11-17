@@ -362,10 +362,14 @@ impl Operation for PackageInstall {
             });
         }
         let live = |line: &&install::PlanItem| line.action != "skip";
+        // Roles, module switches, the default layout and the other admin
+        // lines change the whole workspace, so they are asked of the
+        // workspace even when the package lands in a space.
         let located = crate::ops::Located {
             workspace_id: workspace,
-            space_id: ctx.space_id,
+            space_id: None,
         };
+        let workspace_target = Target::Workspace(Some(workspace));
         if plan
             .items
             .iter()
@@ -375,7 +379,7 @@ impl Operation for PackageInstall {
             access_shim::check(
                 tx,
                 &ctx.caller,
-                &ctx.target,
+                &workspace_target,
                 &located,
                 Some(Perm::RolesManage),
                 true,
@@ -392,7 +396,7 @@ impl Operation for PackageInstall {
             access_shim::check(
                 tx,
                 &ctx.caller,
-                &ctx.target,
+                &workspace_target,
                 &located,
                 Some(Perm::SettingsManage),
                 true,
