@@ -643,7 +643,9 @@ pub async fn request_deletion(
 /// transaction: it holds the workspace's row, and stopping a run writes to
 /// its thread, which a run start locks before it asks whether the
 /// workspace is open. Once this commits no run starts there, and the job
-/// stops the ones already going. A server job, as the deletion is.
+/// stops the ones already going. A server job, as the deletion is. Each
+/// closure queues its own: one still running from an earlier closure may
+/// have read the workspace open in between and stopped nothing.
 async fn stop_runs_after_commit(
     connection: &mut PgConnection,
     workspace: Uuid,
@@ -652,7 +654,6 @@ async fn stop_runs_after_commit(
         &mut *connection,
         NewJob::new(STOP_RUNS_JOB_KIND)
             .payload(StopRunsPayload { workspace })
-            .unique(format!("{STOP_RUNS_JOB_KIND}:{workspace}"))
             .max_attempts(20),
     )
     .await?;
