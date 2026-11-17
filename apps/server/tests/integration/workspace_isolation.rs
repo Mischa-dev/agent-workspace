@@ -2009,8 +2009,6 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "agent_profile_list",
     "agent_template_list",
     "ai_suggestions_list",
-    "approval_get",
-    "approval_list",
     "automation_list",
     "automation_runs",
     "briefing",
@@ -2679,21 +2677,6 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"pageId": b.page}),
                 json!({"projectId": b.project, "name": format!("launch-page-{}", b.marker)}),
-            ],
-            vec![],
-        ),
-        case(
-            "approval_list",
-            vec![json!({}), json!({"projectId": "WORK"})],
-            vec![json!({"projectId": b.project})],
-            vec![],
-        ),
-        case(
-            "approval_get",
-            vec![json!({"approvalId": a.approval.to_string()})],
-            vec![
-                json!({"approvalId": b.approval.to_string()}),
-                json!({"approvalId": b.approval.to_string(), "projectId": a.project}),
             ],
             vec![],
         ),

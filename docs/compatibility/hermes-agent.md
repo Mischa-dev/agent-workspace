@@ -60,8 +60,6 @@ mcp_servers:
     supports_parallel_tool_calls: false
     tools:
       include:
-        - approval_get
-        - approval_respond
         - conversation_list
         - conversation_read
         - external_event_poll
@@ -70,6 +68,8 @@ mcp_servers:
         - project_open
         - pull_request_get
         - repository_get
+        - request_get
+        - request_respond
         - run_request
         - task_comment
         - task_create

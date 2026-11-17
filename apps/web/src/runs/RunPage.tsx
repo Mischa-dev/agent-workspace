@@ -144,7 +144,7 @@ function RunBody({ run }: { run: RunDetail }) {
   const current = activeRun ? activeRun.id === run.id : latestRun?.id === run.id
   const later = (other: { createdAt: string }) => new Date(other.createdAt).getTime() > new Date(run.createdAt).getTime()
   const newer = activeRun && activeRun.id !== run.id ? activeRun : !activeRun && latestRun && latestRun.id !== run.id && later(latestRun) ? latestRun : null
-  const approval = timeline?.approvals.find((candidate) => candidate.status === 'pending' && candidate.agentRunId === run.id) ?? null
+  const approval = timeline?.requests.find((candidate) => candidate.status === 'open' && candidate.runId === run.id) ?? null
 
   // When the run moves on, the thread's view of it does too.
   const signature = `${run.state}:${run.updatedAt}`
@@ -252,7 +252,7 @@ function RunBody({ run }: { run: RunDetail }) {
         <ApprovalCard
           approval={approval}
           busyAction={actions.busyAction}
-          canRespond={approval.capabilities.respond}
+          canRespond={approval.mayAnswer}
           onRespond={actions.respond}
           run={[activeRun, latestRun].find((candidate) => candidate?.id === run.id) ?? activeRun}
         />

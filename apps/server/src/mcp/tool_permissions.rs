@@ -17,9 +17,8 @@
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
     CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesComment, PagesSuggest,
-    ProjectsCreate, ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch,
-    SettingsManage, SheetsEdit, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow,
-    WhiteboardsEdit,
+    ProjectsCreate, ProjectsManage, RolesManage, RunsInterrupt, RunsLaunch, SettingsManage,
+    SheetsEdit, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -132,7 +131,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("whiteboard_read", None),
     ("whiteboard_render", None),
     ("whiteboard_trash_empty", Some(WhiteboardsEdit)),
-    ("approval_list", None),
     ("task_depend", Some(TasksEdit)),
     ("view_list", Some(TasksView)),
     ("view_write", Some(TasksView)),
@@ -190,8 +188,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("pull_request_refresh", Some(CodePublish)),
     ("pull_request_merge", Some(CodeManage)),
     ("run_request", Some(RunsLaunch)),
-    ("approval_get", None),
-    ("approval_respond", Some(RunsApprove)),
     ("external_event_poll", None),
 ];
 

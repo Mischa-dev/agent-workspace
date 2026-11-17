@@ -1,5 +1,3 @@
-approval_get
-approval_respond
 conversation_list
 conversation_read
 external_event_poll
@@ -8,6 +6,8 @@ people_search
 project_open
 pull_request_get
 repository_get
+request_get
+request_respond
 run_request
 task_comment
 task_create

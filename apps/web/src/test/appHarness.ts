@@ -140,20 +140,24 @@ export const timeline = {
     updatedAt: '2026-07-31T04:01:00Z',
     capabilities: { interrupt: true },
   },
-  approvals: [
+  requests: [
     {
       id: 'approval-1',
-      agentRunId: 'run-1',
       kind: 'approval',
-      summary: 'Allow the isolated file change?',
+      status: 'open',
+      title: 'Allow the isolated file change?',
       options: [
-        { id: 'approve', label: 'Allow once' },
-        { id: 'deny', label: 'Deny' },
+        { id: 'approve', label: 'Allow once', style: 'approve' },
+        { id: 'deny', label: 'Deny', style: 'deny' },
       ],
-      status: 'pending',
-      response: null,
+      allowText: false,
+      raisedBy: 'worker-1',
+      runId: 'run-1',
+      addressedAccounts: [] as string[],
+      addressedRoles: ['owner'],
       createdAt: '2026-07-31T04:01:00Z',
-      capabilities: { respond: true },
+      version: 1,
+      mayAnswer: true,
     },
   ],
   capabilities: { workerInvoke: true },
@@ -233,8 +237,8 @@ export function installStandardApi(
       if (path.includes(`/conversations/${threadId}/timeline`)) {
         return jsonResponse(timeline)
       }
-      if (path.includes('/agent-approvals/approval-1/respond')) {
-        return jsonResponse({ ...timeline.approvals[0], status: 'resolved' })
+      if (path.includes('/api/v2/ops/request_respond')) {
+        return jsonResponse({ outcome: 'ok', value: { ...timeline.requests[0], status: 'answered' } })
       }
       // Home's sections, quiet by default.
       if (path === '/api/v1/home') {

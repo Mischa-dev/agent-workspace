@@ -435,9 +435,10 @@ async fn a_run_waiting_on_a_request_goes_on_when_it_is_answered_or_runs_out() {
         .execute(&setup.pool)
         .await
         .expect("age the request");
-    let settled = agent_workspace_server::requests::expire_due(&setup.pool)
-        .await
-        .expect("expire");
+    let settled =
+        agent_workspace_server::requests::expire_due(&crate::support::app::state_on(&setup.pool))
+            .await
+            .expect("expire");
     assert_eq!(settled, 1);
     let (status, answer) = sqlx::query_as::<_, (String, Option<Value>)>(
         "SELECT status, answer FROM requests WHERE id = $1",

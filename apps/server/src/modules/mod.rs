@@ -377,7 +377,6 @@ mod tests {
             kind::MENTION,
             kind::COMMENT_MENTION,
             kind::ASSIGNED,
-            kind::APPROVAL_REQUESTED,
             kind::REQUEST_RAISED,
             kind::REQUEST_ANSWERED,
             kind::RUN_WAITING,

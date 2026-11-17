@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 
 export type SponsoredExecutionRequest = {
   id: string
@@ -22,18 +23,7 @@ export function listSponsoredExecutionRequests(projectId: string) {
   )
 }
 
-export function respondToSponsoredExecution(
-  approvalId: string,
-  requestId: string,
-  version: number,
-  decision: 'approve' | 'deny',
-) {
-  return requestJson<unknown>(
-    `/api/v1/agent-approvals/${encodeURIComponent(approvalId)}/respond`,
-    {
-      method: 'POST',
-      json: { decision },
-      idempotencyKey: `sponsored-${requestId}-${version}-${decision}`,
-    },
-  )
+/** The sponsor answers an agent's run request: its approval is a request to them. */
+export function respondToSponsoredExecution(approvalId: string, decision: 'approve' | 'deny') {
+  return callOp('request_respond', { requestId: approvalId, optionId: decision })
 }

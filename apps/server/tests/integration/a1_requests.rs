@@ -1,7 +1,7 @@
-//! A1.7: the requests record. The silent failures: an approval or question
-//! from before the upgrade missing from `requests`, or copied with the
-//! wrong answer or addressee; and an answer given the old way reaching the
-//! old table but not the record (or the other way round).
+//! A1.7 and A1.14: the requests record. The silent failure: an approval or
+//! question from before the upgrade missing from `requests`, or brought
+//! over with the wrong answer, options or addressee, once the old tables
+//! are gone.
 
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -26,7 +26,6 @@ struct Copied {
     status: String,
     answer: Option<Value>,
     answered_by_account_id: Option<Uuid>,
-    legacy_source: Option<String>,
 }
 
 async fn copied(pool: &sqlx::PgPool, id: Uuid) -> Copied {
@@ -34,7 +33,7 @@ async fn copied(pool: &sqlx::PgPool, id: Uuid) -> Copied {
         r#"
         SELECT kind, raised_by_account_id, run_id, space_id, conversation_id, title, options,
                allow_text, answer_permission, addressed_account_ids, addressed_role_keys,
-               status, answer, answered_by_account_id, legacy_source
+               status, answer, answered_by_account_id
         FROM requests WHERE id = $1
         "#,
     )
@@ -147,12 +146,16 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
 
     let approval_copy = |status: &str, answer: Option<Value>, by: Option<Uuid>| Copied {
         kind: "approval".to_owned(),
-        raised_by_account_id: seed.human_actor_id,
+        // Raised by the run's own account, as new asks are.
+        raised_by_account_id: seed.worker_actor_id,
         run_id: Some(run),
         space_id: Some(seed.project_id),
         conversation_id: Some(seed.thread_id),
         title: "Run the migration?".to_owned(),
-        options: json!([{"id": "approve", "label": "Allow"}, {"id": "deny", "label": "Stop"}]),
+        options: json!([
+            {"id": "approve", "label": "Allow", "style": "approve"},
+            {"id": "deny", "label": "Stop", "style": "deny"}
+        ]),
         allow_text: false,
         answer_permission: "runs.approve".to_owned(),
         addressed_account_ids: Vec::new(),
@@ -160,7 +163,6 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
         status: status.to_owned(),
         answer,
         answered_by_account_id: by,
-        legacy_source: Some("agent_approval".to_owned()),
     };
     assert_eq!(
         copied(&pool, pending).await,
@@ -170,7 +172,7 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
         copied(&pool, resolved).await,
         approval_copy(
             "answered",
-            Some(json!({"decision": "approve"})),
+            Some(json!({"optionId": "approve"})),
             Some(seed.human_actor_id)
         )
     );
@@ -193,8 +195,6 @@ async fn old_approvals_and_questions_are_copied_with_their_ids() {
         status: status.to_owned(),
         answer,
         answered_by_account_id: by,
-        // A1.8: questions are requests of their own now.
-        legacy_source: None,
     };
     assert_eq!(
         copied(&pool, asked).await,

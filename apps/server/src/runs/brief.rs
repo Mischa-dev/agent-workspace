@@ -66,8 +66,8 @@ const SELECT: &str = r#"
            pr.pull_request_number AS pr_number, pr.html_url AS pr_url, pr.title AS pr_title,
            pr.state AS pr_state, pr.checks_state AS pr_checks, pr.review_state AS pr_review,
            CASE WHEN detail.id IS NOT NULL
-                THEN (SELECT count(*) FROM agent_approvals approval
-                      WHERE approval.agent_run_id = detail.id AND approval.status = 'pending')
+                THEN (SELECT count(*) FROM requests request
+                      WHERE request.run_id = detail.id AND request.status = 'open')
                 ELSE (SELECT count(*) FROM requests open_request
                       WHERE open_request.run_id = run.id AND open_request.status = 'open')
            END AS approvals_waiting,
@@ -222,7 +222,7 @@ fn builtin_stage(row: &BriefRow, detail: &str) -> Stage {
         }
         "blocked" if row.approvals_waiting > 0 => stage_of(
             "waiting_for_approval",
-            "The run is waiting on an approval; answer it in the thread (approval_list shows it).",
+            "The run is waiting on an approval; answer it in the thread (request_list shows it).",
             Some(60),
         ),
         "starting" | "working" | "blocked" | "recovering" => {

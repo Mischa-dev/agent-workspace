@@ -16,7 +16,7 @@ use uuid::Uuid;
 use super::{
     mcp_admin::Setup,
     mcp_code::{run, seeded, thread},
-    message_edits::{add_person, say},
+    message_edits::{add_person, say, set_role},
     notifications::drain,
 };
 
@@ -208,47 +208,12 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
             .await
             .unwrap_or_else(|error| panic!("run to {next}: {error}"));
     }
-    // One that needs a person: the token acts as Dana, a person.
-    let approval = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, eligible_role, human_required,
-            kind, summary, options, provider_request_id
-        ) VALUES ($1, $2, $3, 'member', true, 'approval', 'Run npm install?',
-                  '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-                  'w18-' || $1::text)
-        "#,
-    )
-    .bind(approval)
-    .bind(blocked)
-    .bind(seed.human_actor_id)
-    .execute(pool)
-    .await
-    .expect("approval");
-    // Like every approval writer, keep its request copy current (A1.7).
-    agent_workspace_server::requests::legacy::approval_written(pool, approval)
-        .await
-        .expect("approval request");
-    let notification = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO notifications (
-            id, project_id, recipient_actor_id, kind, subject_kind, subject_id,
-            conversation_id, agent_run_id, approval_id, group_key
-        ) VALUES ($1, $2, $3, 'approval_requested', 'agent_run', $4, $5, $4, $6, $7)
-        "#,
-    )
-    .bind(notification)
-    .bind(seed.project_id)
-    .bind(dana)
-    .bind(blocked)
-    .bind(asking)
-    .bind(approval)
-    .bind(format!("approval:{approval}"))
-    .execute(pool)
-    .await
-    .expect("notification");
+    // Approvals go to the space's owners; Dana is one, so the request
+    // puts a card in her inbox.
+    set_role(pool, &project, dana, "owner").await;
+    let approval =
+        super::support::requests::approval(pool, blocked, "w18-install", "Run npm install?").await;
+    let notification = card(pool, dana, approval).await;
 
     let (minted, payload) = mint(pool, seed.organization_id, dana, notification).await;
     let offered = payload["actions"]
@@ -262,16 +227,10 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
     let (status, body) = act(&setup, json!({"token": minted.token, "action": "approve"})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["outcome"], "approved", "{body}");
-    let (state, responder, response) = sqlx::query_as::<_, (String, Option<Uuid>, Option<Value>)>(
-        "SELECT status, responded_by_actor_id, response FROM agent_approvals WHERE id = $1",
-    )
-    .bind(approval)
-    .fetch_one(pool)
-    .await
-    .expect("approval");
-    assert_eq!(state, "resolved");
+    let (state, responder, answer) = answered(pool, approval).await;
+    assert_eq!(state, "answered");
     assert_eq!(responder, Some(dana));
-    assert_eq!(response, Some(json!({"decision": "approve"})));
+    assert_eq!(answer, Some(json!({"optionId": "approve"})));
     let run_state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
         .bind(blocked)
         .fetch_one(pool)
@@ -284,13 +243,8 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, body) = act(&setup, json!({"token": minted.token, "action": "deny"})).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    let still =
-        sqlx::query_scalar::<_, Value>("SELECT response FROM agent_approvals WHERE id = $1")
-            .bind(approval)
-            .fetch_one(pool)
-            .await
-            .expect("approval");
-    assert_eq!(still, json!({"decision": "approve"}));
+    let (_, _, still) = answered(pool, approval).await;
+    assert_eq!(still, Some(json!({"optionId": "approve"})));
 
     // An answered approval offers nothing more.
     let view = notifications::get_many(
@@ -306,29 +260,11 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
     .expect("visible");
     assert!(push::actions::offered(&view).is_empty());
 
-    // The run's next approval reuses the notification row; the old push's
+    // Should the card come to show the run's next approval, the old push's
     // buttons must not answer it.
-    let next = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, eligible_role, human_required,
-            kind, summary, options, provider_request_id
-        ) VALUES ($1, $2, $3, 'member', true, 'approval', 'Force-push main?',
-                  '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-                  'w18-' || $1::text)
-        "#,
-    )
-    .bind(next)
-    .bind(blocked)
-    .bind(seed.human_actor_id)
-    .execute(pool)
-    .await
-    .expect("next approval");
-    agent_workspace_server::requests::legacy::approval_written(pool, next)
-        .await
-        .expect("next approval request");
-    sqlx::query("UPDATE notifications SET approval_id = $2 WHERE id = $1")
+    let next =
+        super::support::requests::approval(pool, blocked, "w18-force", "Force-push main?").await;
+    sqlx::query("UPDATE notifications SET subject_id = $2 WHERE id = $1")
         .bind(notification)
         .bind(next)
         .execute(pool)
@@ -336,11 +272,29 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
         .expect("regroup");
     let (status, body) = act(&setup, json!({"token": minted.token, "action": "approve"})).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
-    let next_state =
-        sqlx::query_scalar::<_, String>("SELECT status FROM agent_approvals WHERE id = $1")
-            .bind(next)
-            .fetch_one(pool)
-            .await
-            .expect("next approval");
-    assert_eq!(next_state, "pending");
+    let (next_state, _, _) = answered(pool, next).await;
+    assert_eq!(next_state, "open");
+}
+
+/// The inbox card a request put in front of `recipient`.
+async fn card(pool: &PgPool, recipient: Uuid, request: Uuid) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM notifications WHERE recipient_actor_id = $1 AND subject_kind = 'request' AND subject_id = $2",
+    )
+    .bind(recipient)
+    .bind(request)
+    .fetch_one(pool)
+    .await
+    .expect("the request's card")
+}
+
+/// A request's status, who answered and the answer.
+async fn answered(pool: &PgPool, request: Uuid) -> (String, Option<Uuid>, Option<Value>) {
+    sqlx::query_as::<_, (String, Option<Uuid>, Option<Value>)>(
+        "SELECT status, answered_by_account_id, answer FROM requests WHERE id = $1",
+    )
+    .bind(request)
+    .fetch_one(pool)
+    .await
+    .expect("request")
 }

@@ -501,7 +501,6 @@ pub async fn evaluate(
             work_item_id: None,
             comment_id: None,
             agent_run_id: None,
-            approval_id: None,
             pull_request_id: None,
             detail,
             group_key: format!(

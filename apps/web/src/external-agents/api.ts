@@ -5,7 +5,6 @@ export type ExternalAgentScope =
   | 'read'
   | 'write'
   | 'events'
-  | 'approval_respond'
   | 'worker_request'
 
 export type ExternalAgentConnection = {

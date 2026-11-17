@@ -52,7 +52,7 @@ pub(crate) async fn fenced_tx(
 /// What the built-in host's holder does as it takes the lease (K5.3), at
 /// startup or when it takes over from a holder that died: recover the runs
 /// that were running, each transition fenced by the lease, then the
-/// worktrees and approvals.
+/// worktrees and what finished runs still asked for.
 pub async fn reconcile_owned(
     state: &AppState,
     cluster: &Cluster,
@@ -64,10 +64,10 @@ pub async fn reconcile_owned(
         tracing::warn!(recovered, "reconciled non-terminal Agent Runs");
     }
     let inspected_worktrees = reconcile_worktrees(state, fence).await?;
-    let canceled_approvals = cancel_approvals(state, fence).await?;
+    let withdrawn_requests = withdraw_requests(state, fence).await?;
     tracing::info!(
         inspected_worktrees,
-        canceled_approvals,
+        withdrawn_requests,
         "built-in host reconciliation completed"
     );
     Ok(())
@@ -215,7 +215,6 @@ async fn reconcile(state: &AppState, fence: HostFence<'_>) -> Result<u64, AppErr
         )
         .await?;
         retain_workspace(&mut transaction, run.id).await?;
-        cancel_pending_approvals(&mut transaction, run.id).await?;
         insert_recovery_event(
             &mut transaction,
             run,
@@ -329,27 +328,30 @@ async fn record_inspection(
     Ok(())
 }
 
-pub async fn cancel_terminal_run_approvals(state: &AppState) -> Result<u64, AppError> {
-    cancel_approvals(state, None).await
+/// What finished runs still asked for is withdrawn (their finish withdraws
+/// it; this catches any a crash left open).
+pub async fn withdraw_finished_run_requests(state: &AppState) -> Result<u64, AppError> {
+    withdraw_requests(state, None).await
 }
 
-async fn cancel_approvals(state: &AppState, fence: HostFence<'_>) -> Result<u64, AppError> {
+async fn withdraw_requests(state: &AppState, fence: HostFence<'_>) -> Result<u64, AppError> {
     let mut transaction = fenced_tx(&state.pool, fence).await?;
-    let result = sqlx::query(
+    let runs = sqlx::query_scalar::<_, Uuid>(
         r#"
-        UPDATE agent_approvals aa
-        SET status = 'canceled'
-        FROM agent_runs ar
-        WHERE ar.id = aa.agent_run_id
-          AND aa.status = 'pending'
-          AND ar.state IN ('completed', 'failed', 'canceled', 'interrupted')
+        SELECT DISTINCT request.run_id
+        FROM requests request
+        JOIN agent_runs run ON run.id = request.run_id
+        WHERE request.status = 'open' AND run.finished_at IS NOT NULL
+        ORDER BY request.run_id
         "#,
     )
-    .execute(&mut *transaction)
+    .fetch_all(&mut *transaction)
     .await?;
-    crate::requests::legacy::settled_approvals_written(&mut *transaction).await?;
+    for run_id in &runs {
+        crate::requests::withdraw_for_run(&mut transaction, *run_id).await?;
+    }
     transaction.commit().await?;
-    Ok(result.rows_affected())
+    Ok(runs.len() as u64)
 }
 
 fn inspect_worktree(path: &Path) -> (&'static str, bool) {
@@ -404,24 +406,6 @@ async fn retain_workspace(
     .bind(run_id)
     .execute(&mut **transaction)
     .await?;
-    Ok(())
-}
-
-async fn cancel_pending_approvals(
-    transaction: &mut Transaction<'_, Postgres>,
-    run_id: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        UPDATE agent_approvals
-        SET status = 'canceled'
-        WHERE agent_run_id = $1 AND status = 'pending'
-        "#,
-    )
-    .bind(run_id)
-    .execute(&mut **transaction)
-    .await?;
-    crate::requests::legacy::run_approvals_written(&mut **transaction, run_id).await?;
     Ok(())
 }
 

@@ -145,7 +145,7 @@ describe('service worker push', () => {
 
   const approval = {
     id: 'n2',
-    kind: 'approval_requested',
+    kind: 'request_raised',
     title: 'A run in #general needs your approval',
     body: 'Run npm install',
     url: '/projects/p1/threads/t1',

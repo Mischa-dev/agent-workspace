@@ -57,7 +57,7 @@ describe('SponsoredExecutionSettings', () => {
         if (init?.method === 'POST') {
           writes.push(init)
           resolved = true
-          return response({ id: approvalId, status: 'resolved' })
+          return response({ outcome: 'ok', value: { id: approvalId, status: 'answered' } })
         }
         return response({
           requests: resolved
@@ -99,12 +99,10 @@ describe('SponsoredExecutionSettings', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve and queue' }))
     await waitFor(() => expect(writes).toHaveLength(1))
-    expect(JSON.parse(String(writes[0].body))).toEqual({ decision: 'approve' })
+    expect(JSON.parse(String(writes[0].body))).toEqual({ requestId: approvalId, optionId: 'approve' })
     const headers = new Headers(writes[0].headers)
     expect(headers.get('x-csrf-token')).toBe('csrf-sponsored')
-    expect(headers.get('idempotency-key')).toBe(
-      `sponsored-${requestId}-1-approve`,
-    )
+    expect(headers.get('idempotency-key')).toBeTruthy()
     expect(
       await screen.findByText('No run requests are waiting for you'),
     ).toBeVisible()
