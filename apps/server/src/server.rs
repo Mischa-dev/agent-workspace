@@ -49,7 +49,7 @@ impl Server {
         let state = AppState {
             config: Arc::clone(&config),
             pool: pool.clone(),
-            rate_limits: RateLimiters::default(),
+            rate_limits: RateLimiters::for_config(&config),
             realtime: RealtimeHub::new(256),
             supervisors,
         };

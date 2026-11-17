@@ -425,5 +425,37 @@
     "preview": false,
     "proposable": false,
     "title": "Report usage"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.lifecycle.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_delete",
+    "permission": "workspace.delete",
+    "preview": false,
+    "proposable": false,
+    "title": "Delete workspace"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.lifecycle.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_delete_cancel",
+    "permission": "workspace.delete",
+    "preview": false,
+    "proposable": false,
+    "title": "Keep workspace"
   }
 ]

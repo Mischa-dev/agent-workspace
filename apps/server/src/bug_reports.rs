@@ -864,6 +864,8 @@ fn priority(value: Option<&str>) -> Option<String> {
 struct ReportLink {
     id: Uuid,
     project_id: Uuid,
+    /// The link's workspace, whose public-submission budget it spends.
+    organization_id: Uuid,
     owner_actor_id: Uuid,
     name: String,
     state: String,
@@ -925,7 +927,10 @@ async fn receive(
     }
     let link = sqlx::query_as::<_, ReportLink>(
         r#"
-        SELECT link.id, link.project_id, link.owner_actor_id, link.name, link.state,
+        SELECT link.id, link.project_id,
+               (SELECT project.organization_id FROM projects project
+                WHERE project.id = link.project_id) AS organization_id,
+               link.owner_actor_id, link.name, link.state,
                (SELECT item_type.name FROM work_item_types item_type
                 WHERE item_type.project_id = link.project_id AND item_type.enabled
                   AND lower(item_type.name) = 'bug'
@@ -949,6 +954,12 @@ async fn receive(
             },
         ));
     }
+    // H1.1: every link of one workspace shares its budget, so one
+    // workspace's flood doesn't need a server-wide ceiling.
+    state
+        .rate_limits
+        .check_workspace_public_submission(link.organization_id)
+        .await?;
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());

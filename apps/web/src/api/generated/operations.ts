@@ -42,6 +42,8 @@ export type HostOwnerChoice = "person" | "workspace"
 
 export type HostView = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
+export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
+
 export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
 
 export type OwnerView = { id: string; kind: string; name: string }
@@ -190,6 +192,14 @@ export type RunUsageReportInput = { cachedInputTokens?: number | null; cost?: nu
 
 export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId?: string | null }
 
+export type WorkspaceDeleteInput = { confirm: string }
+
+export type WorkspaceDeleteOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
+
+export type WorkspaceDeleteCancelInput = Record<string, never>
+
+export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
+
 export type Operations = {
   activity_list: { input: ActivityListInput; output: ActivityListOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
@@ -219,6 +229,8 @@ export type Operations = {
   run_result_report: { input: RunResultReportInput; output: RunResultReportOutput }
   run_update: { input: RunUpdateInput; output: RunUpdateOutput }
   run_usage_report: { input: RunUsageReportInput; output: RunUsageReportOutput }
+  workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
+  workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
 }
 
 export type OpName = keyof Operations

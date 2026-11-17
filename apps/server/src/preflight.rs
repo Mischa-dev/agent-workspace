@@ -119,11 +119,16 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
     };
     report.push(
         Level::Ok,
-        match mail_workspaces {
-            0 => "email isn't set up (no password reset emails or email notifications); an owner \
-                  sets it in Settings > Workspace > Email"
+        match (&config.server_mail, mail_workspaces) {
+            (Some(mail), count) => format!(
+                "account email goes out through the server's own transport ({}:{}); {count} \
+                 workspace(s) send their own notification email",
+                mail.smtp.host, mail.smtp.port
+            ),
+            (None, 0) => "email isn't set up (no password reset emails or email notifications); \
+                  set AGENT_WORKSPACE_MAIL_URL, or an owner sets it in Settings > Workspace > Email"
                 .to_owned(),
-            count => format!("{count} workspace(s) send email"),
+            (None, count) => format!("{count} workspace(s) send email"),
         },
     );
     let (level, line) = crate::server_status::backup_line(&config.data_root);
