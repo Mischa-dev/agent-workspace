@@ -40,7 +40,7 @@ pub(super) struct MessageReactArguments {
 /// One emoji on a message.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ReactionSummary {
+pub struct ReactionSummary {
     /// The emoji, such as ✅.
     pub emoji: String,
     /// Its name, such as check. message_react takes either.
@@ -55,7 +55,7 @@ pub(super) struct ReactionSummary {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MessageReactionValue {
+pub struct MessageReactionValue {
     pub conversation_id: String,
     pub message_id: String,
     pub emoji: String,

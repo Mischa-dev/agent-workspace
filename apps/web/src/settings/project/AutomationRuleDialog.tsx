@@ -16,6 +16,9 @@ import {
   type TriggerKind,
 } from '../../automations/api'
 import { useCollections } from '../../collections/api'
+import { listPages, memoryKeys } from '../../memory/api'
+import { useSheets } from '../../sheets/api'
+import { listWhiteboards, whiteboardKeys } from '../../whiteboards/api'
 import { getProjectConversationSidebar } from '../../conversations/api'
 import { listEnvironments } from '../../launch/api'
 import { launchKeys } from '../../launch/hooks'
@@ -48,6 +51,9 @@ const TRIGGERS: { kind: TriggerKind; label: string }[] = [
   { kind: 'message_posted', label: 'Someone posts a message' },
   { kind: 'record_created', label: 'A record is added to a collection' },
   { kind: 'record_changed', label: 'A record in a collection changes' },
+  { kind: 'page_changed', label: 'A page changes' },
+  { kind: 'sheet_changed', label: 'A sheet changes' },
+  { kind: 'whiteboard_changed', label: 'A whiteboard changes' },
   { kind: 'schedule', label: 'On a schedule' },
   {
     kind: 'capacity_window',
@@ -62,8 +68,13 @@ const ACTIONS: { kind: RuleActionKind; label: string }[] = [
   { kind: 'post_message', label: 'Post a message' },
 ]
 
-/** Record rules (AWD-110) aren't about tasks: no saved view, and only actions that don't change tasks. */
-const isRecordTrigger = (trigger: Trigger) => trigger.kind === 'record_created' || trigger.kind === 'record_changed'
+/** Record rules (AWD-110) and page, sheet and board rules aren't about tasks: no saved view, and only actions that don't change tasks. */
+const isRecordTrigger = (trigger: Trigger) =>
+  trigger.kind === 'record_created' ||
+  trigger.kind === 'record_changed' ||
+  trigger.kind === 'page_changed' ||
+  trigger.kind === 'sheet_changed' ||
+  trigger.kind === 'whiteboard_changed'
 const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message']
 
 function defaultTrigger(kind: TriggerKind): Trigger {
@@ -71,6 +82,12 @@ function defaultTrigger(kind: TriggerKind): Trigger {
     case 'record_created':
     case 'record_changed':
       return { kind, collectionId: null }
+    case 'page_changed':
+      return { kind, pageId: null }
+    case 'sheet_changed':
+      return { kind, sheetId: null }
+    case 'whiteboard_changed':
+      return { kind, whiteboardId: null }
     case 'run_finished':
       return { kind, outcomes: ['failed'] }
     case 'message_posted':
@@ -148,6 +165,23 @@ export function RuleDialog({
   const channelList = channels.data?.channels.filter((channel) => !channel.archivedAt) ?? []
   const records = isRecordTrigger(trigger)
   const collections = useCollections(records ? projectId : '')
+  const pages = useQuery({
+    queryKey: memoryKeys.pages(projectId),
+    queryFn: () => listPages(projectId),
+    enabled: trigger.kind === 'page_changed',
+  })
+  const sheets = useSheets(trigger.kind === 'sheet_changed' ? projectId : '')
+  const boards = useQuery({
+    queryKey: whiteboardKeys.list({ projectId }),
+    queryFn: () => listWhiteboards({ projectId }),
+    enabled: trigger.kind === 'whiteboard_changed',
+  })
+  const documents: DocumentChoice[] =
+    trigger.kind === 'page_changed'
+      ? (pages.data?.pages ?? []).map((page) => ({ id: page.id, name: page.title }))
+      : trigger.kind === 'sheet_changed'
+        ? (sheets.data?.sheets ?? []).filter((sheet) => !sheet.archived).map((sheet) => ({ id: sheet.id, name: sheet.name }))
+        : (boards.data?.whiteboards ?? []).map((board) => ({ id: board.id, name: board.title }))
 
   const save = useMutation({
     mutationFn: async () => {
@@ -223,7 +257,13 @@ export function RuleDialog({
               </option>
             ))}
           </SelectField>
-          <TriggerFields channels={channelList} collections={collections.data?.collections ?? []} onChange={setTrigger} trigger={trigger} />
+          <TriggerFields
+            channels={channelList}
+            collections={collections.data?.collections ?? []}
+            documents={documents}
+            onChange={setTrigger}
+            trigger={trigger}
+          />
         </fieldset>
         {records ? null : (
           <SelectField
@@ -302,19 +342,52 @@ export function RuleDialog({
 }
 
 type ChannelChoice = { id: string; name: string }
+type DocumentChoice = { id: string; name: string }
 
 function TriggerFields({
   channels,
   collections,
+  documents,
   onChange,
   trigger,
 }: {
   channels: ChannelChoice[]
   collections: { id: string; name: string }[]
+  documents: DocumentChoice[]
   onChange: (trigger: Trigger) => void
   trigger: Trigger
 }) {
   switch (trigger.kind) {
+    case 'page_changed':
+    case 'sheet_changed':
+    case 'whiteboard_changed': {
+      const { any, chosen, choose } =
+        trigger.kind === 'page_changed'
+          ? { any: 'Any page', chosen: trigger.pageId, choose: (id: string | null) => onChange({ ...trigger, pageId: id }) }
+          : trigger.kind === 'sheet_changed'
+            ? { any: 'Any sheet', chosen: trigger.sheetId, choose: (id: string | null) => onChange({ ...trigger, sheetId: id }) }
+            : {
+                any: 'Any whiteboard',
+                chosen: trigger.whiteboardId,
+                choose: (id: string | null) => onChange({ ...trigger, whiteboardId: id }),
+              }
+      return (
+        <SelectField
+          hint="It fires once for each version kept, not for every keystroke."
+          id="rule-trigger-document"
+          label="Which"
+          onChange={(event) => choose(event.target.value || null)}
+          value={chosen ?? ''}
+        >
+          <option value="">{any}</option>
+          {documents.map((document) => (
+            <option key={document.id} value={document.id}>
+              {document.name}
+            </option>
+          ))}
+        </SelectField>
+      )
+    }
     case 'record_created':
     case 'record_changed':
       return (

@@ -90,6 +90,8 @@ mod launch_tools;
 mod layout_preset_tools;
 mod memory_tools;
 mod message_edits;
+pub(crate) mod messaging;
+pub(crate) use common::string_or_number;
 mod model_catalog_tools;
 mod module_tools;
 mod notifications;
@@ -111,12 +113,14 @@ mod talk;
 mod task_batch;
 mod workspace_template_tools;
 pub(crate) use task_batch::{ImportTask, create_for_import};
+pub(crate) mod task_commands;
 mod task_drafts;
 mod task_move;
 mod tasks;
 mod tool_permissions;
 mod usage_tools;
 mod views_data;
+pub(crate) mod whiteboard_commands;
 mod whiteboard_tools;
 mod workflow;
 mod writes;
@@ -823,44 +827,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Send a message to a channel, thread, DM or group. Write plain text; @handles of people in the project become mentions and notify them. To answer one message there, pass replyToMessageId: it shows quoted above yours. Pass a clientRequestId so a retry never sends twice.",
-        annotations(
-            title = "Send message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_send(
-        &self,
-        Parameters(arguments): Parameters<talk::MessageSendArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<talk::SentMessage>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(talk::message_send(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Forward a message you can see into another channel, thread, DM or group you can post in. It shows there quoted, with who wrote it and where, and a link back that works for whoever can see the original. Add an optional plain-text comment. Pass a clientRequestId so a retry never sends twice.",
-        annotations(
-            title = "Forward message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_forward(
-        &self,
-        Parameters(arguments): Parameters<talk::MessageForwardArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<talk::SentMessage>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(talk::message_forward(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Upload a file (text or base64, up to 4 MiB) to a conversation, then send it by passing the returned fileId in message_send's or reply_send's attachmentIds; or keep it on a task (taskId), such as a run's output, report or screenshot.",
         annotations(
             title = "Upload file",
@@ -932,82 +898,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Edit your own message. The old text is kept as a revision that everyone in the conversation can see, and the message shows (edited). People and agents you newly @mention are notified; mentions you take out aren't un-notified. To take down a secret, use message_delete instead: editing keeps the old text in the history.",
-        annotations(
-            title = "Edit message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_edit(
-        &self,
-        Parameters(arguments): Parameters<message_edits::MessageEditArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<message_edits::EditedMessage>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(message_edits::message_edit(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Remove a message for everyone, leaving \"message removed\" in its place. Its text and every earlier version are deleted, it is unpinned, and agents' pending reply requests about it are cancelled. You can remove your own messages; project owners and admins (people, not agents) can remove anyone's, for example a leaked token. This can't be undone. Rotate any secret it held.",
-        annotations(
-            title = "Remove message",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_delete(
-        &self,
-        Parameters(arguments): Parameters<message_edits::MessageDeleteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<message_edits::RemovedMessage>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(message_edits::message_delete(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Hide the link previews under a message, for everyone, as the remove button on a preview does: the one for url, or all of them. Your own messages, or anyone's if you own or administer the project. The message and its links stay.",
-        annotations(
-            title = "Hide link previews",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_preview_hide(
-        &self,
-        Parameters(arguments): Parameters<message_edits::MessagePreviewHideArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<message_edits::HiddenPreviews>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(message_edits::message_preview_hide(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Every version of a message, oldest first: who wrote each one, when, and through which app. Versions of a removed message show as redacted.",
-        annotations(
-            title = "Message history",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_history(
-        &self,
-        Parameters(arguments): Parameters<message_edits::MessageHistoryArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<message_edits::MessageHistoryValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(message_edits::message_history(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Add or remove people and agents in a group (pass the group, or a thread in it). Whoever you add can read everything said in the group so far. Remove your own @handle to leave. People can add and remove anyone; agents can only leave. DMs never change; channels are open to everyone in the project.",
         annotations(
             title = "Change group members",
@@ -1043,25 +933,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<groups::ContinueValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(groups::conversation_continue(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Mark a conversation read, up to its newest message or a given sequence, so it stops showing as unread in your briefing. To come back to something later, pass unread: true: the conversation is unread again from fromMessageId (default: its newest message) onward. Marking unread never marks anything read.",
-        annotations(
-            title = "Mark read",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn mark_read(
-        &self,
-        Parameters(arguments): Parameters<talk::MarkReadArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<talk::ReadMark>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(talk::mark_read(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -1157,44 +1028,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<later_tools::LaterUpdateValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(later_tools::later_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Schedule a message to send later (sendAt, RFC 3339, up to a year ahead), as you. When it sends, it's checked as if you sent it then: you must still be able to post there, and its mentions and reply rules apply then. Change or cancel it with scheduled_message_update; list them with later_list view scheduled.",
-        annotations(
-            title = "Schedule message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn message_schedule(
-        &self,
-        Parameters(arguments): Parameters<later_tools::MessageScheduleArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<later_tools::ScheduledValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(later_tools::message_schedule(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Change one of your scheduled messages: new text or sendAt, sendNow: true to send it now, or cancel: true not to send it. A failed one is scheduled again by giving it a new sendAt.",
-        annotations(
-            title = "Update scheduled message",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn scheduled_message_update(
-        &self,
-        Parameters(arguments): Parameters<later_tools::ScheduledUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<later_tools::ScheduledUpdateValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(later_tools::scheduled_message_update(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -1316,25 +1149,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<channels::PinValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(channels::pin_set(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "React to a message with an emoji, or take your reaction away (reacted: false). Use 👀 when you start on something and ✅ when it's done, instead of posting a message that only acknowledges. Emoji: 👍 👎 ❤️ 😄 🎉 😕 🚀 👀 ✅ ❌ 🙏 🤔, or their names, such as eyes or check. Doing it twice changes nothing. Reactions notify nobody and don't answer reply requests.",
-        annotations(
-            title = "React to message",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn message_react(
-        &self,
-        Parameters(arguments): Parameters<reactions::MessageReactArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<reactions::MessageReactionValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(reactions::message_react(&self.state, principal, arguments).await)
     }
 
     // -- Replies (agents) ----------------------------------------------------
@@ -1553,44 +1367,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a task in a project, or a subtask (parentId). Optional: status and type by name, labels, acceptanceCriteria (a list), assignee (me or @handle), and its place in its column (position: top, bottom, or a number; or beforeTaskId/afterTaskId). Returns its key and link. Pass clientRequestId so a retry never creates it twice.",
-        annotations(
-            title = "Create task",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_create(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskCreateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(tasks::task_create(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Change a task: title, description, priority, assignee, type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), or archive it (archived: true; false restores; pass it on its own). Pass the version you last read as expectedVersion; on a conflict, open it again and retry.",
-        annotations(
-            title = "Update task",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_update(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(tasks::task_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Create up to 100 tasks in one project at once, all or nothing, such as a plan turned into tasks. Each takes a title and optionally a description, priority, status and type (by name), assignee, labels and acceptanceCriteria. Make subtasks with parentRef (the ref of an earlier task in the list) or parentId (an existing task such as AWD-12). Send preview: true first to check everything and see the keys they'd get, without creating anything. clientRequestId is required: a retry within 24 hours returns the first result instead of creating twice. createMissingLabels: true creates labels the project doesn't have yet. If anything is wrong, nothing is created and each problem is listed. Keep one call under about 1 MB; split bigger plans into several calls.",
         annotations(
             title = "Create tasks",
@@ -1632,126 +1408,6 @@ impl McpServer {
             task_batch::BatchResult::denied("Sign in again: this connection isn't authorized.")
         );
         Json(task_batch::task_update_many(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Change a task's acceptance criteria in one call: add (optionally at a position), edit, check, uncheck, remove, or move. Name a criterion by its ID or by its position in the version you read. Operations apply in order, and either all apply or none do. Pass the task's version as expectedVersion and a clientRequestId so a retry is safe.",
-        annotations(
-            title = "Task acceptance criteria",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_criteria(
-        &self,
-        Parameters(arguments): Parameters<criteria::TaskCriteriaArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<criteria::CriteriaValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(criteria::task_criteria(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Comment on a task: progress, a handoff, or what's left. Keep it useful; skip status-only noise. To answer one comment, pass replyToCommentId: it shows quoted above yours and its author is told.",
-        annotations(
-            title = "Comment on task",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_comment(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<writes::PostUpdateArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(writes::post_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Edit your own comment on a task. Earlier versions stay in the comment's history for everyone who can see the task, and it shows (edited). To take down a secret, use task_comment_delete instead: editing keeps the old text in the history.",
-        annotations(
-            title = "Edit task comment",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_comment_edit(
-        &self,
-        Parameters(arguments): Parameters<comment_tools::TaskCommentEditArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<comment_tools::EditedComment>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(comment_tools::task_comment_edit(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Delete a comment on a task for everyone, leaving \"comment deleted\" in the task's history. Its text and every earlier version are deleted, with its files. You can delete your own comments; project owners and admins (people, not agents) can delete anyone's. This can't be undone. Rotate any secret it held.",
-        annotations(
-            title = "Delete task comment",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_comment_delete(
-        &self,
-        Parameters(arguments): Parameters<comment_tools::TaskCommentDeleteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<comment_tools::DeletedComment>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(comment_tools::task_comment_delete(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Mark a task blocked, with the reason someone needs to act on.",
-        annotations(
-            title = "Mark task blocked",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_mark_blocked(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<writes::MarkBlockedArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(writes::mark_blocked(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Clear a task's blocker and move it to review.",
-        annotations(
-            title = "Mark task ready for review",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_mark_ready_for_review(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<writes::MarkReadyForReviewArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(writes::mark_ready_for_review(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -2353,63 +2009,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a whiteboard, for the whole workspace or (with projectId) one project, optionally linked to a task, project or page and drawn on straight away with operations.",
-        annotations(
-            title = "Create whiteboard",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_create(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardCreateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_create(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Draw on a whiteboard with operations: add shapes, text and images, connect them with arrows, update, move, delete, align, distribute, lay out, group and order. All or nothing; people with the board open see it at once. Pass expectedSceneSeq from whiteboard_read so you don't overwrite someone's change.",
-        annotations(
-            title = "Edit whiteboard",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_edit(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardEditArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<crate::whiteboards::edit::EditOutcome>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_edit(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Rename a whiteboard, change who sees it (a project, or the whole workspace), move it to or from the trash, or restore a saved revision of its drawing.",
-        annotations(
-            title = "Update whiteboard",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_update(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Empty the whiteboard trash, as the web's Empty trash does: every trashed board you may change goes for good, with its drawing, images and links. Narrow it to one project or workspace. This can't be undone. Up to 200 go per call.",
         annotations(
             title = "Empty whiteboard trash",
@@ -2426,44 +2025,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardTrashEmptyValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(whiteboard_tools::whiteboard_trash_empty(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Copy a whiteboard's drawing and images into a new board beside it. Links stay with the original.",
-        annotations(
-            title = "Duplicate whiteboard",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_duplicate(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardDuplicateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_duplicate(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Link a whiteboard to a task, project or page (it shows there), or take the link off. One board can be linked to many things; unlinking never deletes it.",
-        annotations(
-            title = "Link whiteboard",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn whiteboard_link(
-        &self,
-        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardLinkArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardLinkValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(whiteboard_tools::whiteboard_link(&self.state, principal, arguments).await)
     }
 
     // -- Code, runs and approvals --------------------------------------------
@@ -4117,47 +3678,32 @@ async fn run_tool(
 /// own by `authenticate_mcp`. So any well-formed session ID is resumed as a
 /// fresh session on the legacy protocol, where every version behaves alike.
 ///
-/// A session the client ended with `DELETE` stays ended: rmcp calls `delete`
-/// only then (never on idle expiry), and the ID is remembered so later
-/// requests get the unknown-session 404 the spec asks for. The memory is
-/// bounded and lasts until the next restart.
-#[derive(Default)]
+/// A session the client ended with `DELETE` stays ended on every server
+/// (K5.7): rmcp calls `delete` only then (never on idle expiry), and a digest
+/// of the ID goes into `mcp_ended_sessions`, so later requests get the
+/// unknown-session 404 the spec asks for (`authenticate_mcp` checks it, on
+/// servers that still hold the session too). Retention clears it after 30
+/// days.
 struct ResumeAnySession {
-    deleted: std::sync::Mutex<DeletedSessions>,
+    pool: sqlx::PgPool,
 }
 
 const MAX_SESSION_ID_LEN: usize = 128;
-/// How many deleted session IDs are remembered; the oldest go first.
-const MAX_DELETED_SESSIONS: usize = 4096;
 
-#[derive(Default)]
-struct DeletedSessions {
-    ids: std::collections::HashSet<String>,
-    order: std::collections::VecDeque<String>,
+fn session_digest(session_id: &str) -> Vec<u8> {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(session_id.as_bytes()).to_vec()
 }
 
-impl DeletedSessions {
-    fn insert(&mut self, session_id: &str) {
-        if !self.ids.insert(session_id.to_owned()) {
-            return;
-        }
-        self.order.push_back(session_id.to_owned());
-        while self.order.len() > MAX_DELETED_SESSIONS {
-            if let Some(oldest) = self.order.pop_front() {
-                self.ids.remove(&oldest);
-            }
-        }
-    }
-}
-
-impl ResumeAnySession {
-    fn was_deleted(&self, session_id: &str) -> bool {
-        self.deleted
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .ids
-            .contains(session_id)
-    }
+/// Whether a client ended this session; checked on every request that
+/// names one, before the session manager sees it.
+async fn session_ended(pool: &sqlx::PgPool, session_id: &str) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM mcp_ended_sessions WHERE session_digest = $1)",
+    )
+    .bind(session_digest(session_id))
+    .fetch_one(crate::db::scoped(pool))
+    .await?)
 }
 
 fn resumable_session_id(session_id: &str) -> bool {
@@ -4170,7 +3716,8 @@ fn resumable_session_id(session_id: &str) -> bool {
 #[async_trait::async_trait]
 impl SessionStore for ResumeAnySession {
     async fn load(&self, session_id: &str) -> Result<Option<SessionState>, SessionStoreError> {
-        if !resumable_session_id(session_id) || self.was_deleted(session_id) {
+        // An ended session never gets here: `authenticate_mcp` answers 404.
+        if !resumable_session_id(session_id) {
             return Ok(None);
         }
         Ok(Some(SessionState::new(
@@ -4192,10 +3739,14 @@ impl SessionStore for ResumeAnySession {
 
     async fn delete(&self, session_id: &str) -> Result<(), SessionStoreError> {
         if resumable_session_id(session_id) {
-            self.deleted
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(session_id);
+            sqlx::query(
+                "INSERT INTO mcp_ended_sessions (session_digest) VALUES ($1) \
+                 ON CONFLICT (session_digest) DO NOTHING",
+            )
+            .bind(session_digest(session_id))
+            .execute(crate::db::scoped(&self.pool))
+            .await
+            .map_err(|error| Box::new(error) as SessionStoreError)?;
         }
         Ok(())
     }
@@ -4236,7 +3787,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         .with_json_response(true)
         .with_max_request_body_bytes(MAX_MCP_BODY_BYTES)
         .with_cancellation_token(CancellationToken::new());
-    config.session_store = Some(std::sync::Arc::new(ResumeAnySession::default()));
+    config.session_store = Some(std::sync::Arc::new(ResumeAnySession {
+        pool: state.pool.clone(),
+    }));
     let service: StreamableHttpService<McpServer, LocalSessionManager> =
         StreamableHttpService::new(move || Ok(handler.clone()), Default::default(), config);
 
@@ -4423,6 +3976,17 @@ async fn authenticate_mcp(
                         let error = crate::ops::dispatch::Answer::error(&error);
                         return (error.status, axum::Json(error.body)).into_response();
                     }
+                }
+            }
+            // A session its client ended stays ended on every server (K5.7),
+            // even one that still holds it in memory.
+            if let Some(session) =
+                request_session(request.headers()).filter(|session| resumable_session_id(session))
+            {
+                match session_ended(&state.pool, session).await {
+                    Ok(true) => return StatusCode::NOT_FOUND.into_response(),
+                    Ok(false) => {}
+                    Err(error) => return error.into_response(),
                 }
             }
             if request.method() == http::Method::POST {
@@ -5717,7 +5281,7 @@ async fn repository_by_name(
 }
 
 /// Splits a task key such as "AWD-12" into its project key and number.
-pub(super) fn split_task_key(value: &str) -> Option<(&str, i64)> {
+pub(crate) fn split_task_key(value: &str) -> Option<(&str, i64)> {
     let (project_key, number) = value.trim().rsplit_once('-')?;
     if !is_project_key(project_key) || !number.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -6177,12 +5741,10 @@ async fn identifier_project(
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 
-    use rmcp::transport::streamable_http_server::session::store::SessionStore;
-
     use super::{
-        HandshakeAnswer, HandshakeOutcome, HandshakeStep, MAX_DELETED_SESSIONS,
-        MAX_LOGGED_ERROR_CHARACTERS, ResumeAnySession, SERVER_INSTRUCTIONS, SLOW_HANDSHAKE_MS,
-        StatusCode, common, exact_bearer_token, generate_token,
+        HandshakeAnswer, HandshakeOutcome, HandshakeStep, MAX_LOGGED_ERROR_CHARACTERS,
+        SERVER_INSTRUCTIONS, SLOW_HANDSHAKE_MS, StatusCode, common, exact_bearer_token,
+        generate_token,
     };
 
     /// Whether `value` fits `schema`'s shape: required keys present, no key
@@ -6379,29 +5941,6 @@ mod tests {
         assert!(
             needless.is_empty(),
             "these take a clientRequestId now; take them off CREATES_WITHOUT_RETRY_ID: {needless:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn deleted_sessions_stay_deleted_within_a_bounded_memory() {
-        let store = ResumeAnySession::default();
-        assert!(store.load("live-session").await.expect("load").is_some());
-        store.delete("ended-session").await.expect("delete");
-        assert!(store.load("ended-session").await.expect("load").is_none());
-        assert!(store.load("live-session").await.expect("load").is_some());
-
-        for index in 0..MAX_DELETED_SESSIONS {
-            store
-                .delete(&format!("later-{index}"))
-                .await
-                .expect("delete");
-        }
-        let deleted = store.deleted.lock().expect("deleted sessions");
-        assert_eq!(deleted.ids.len(), MAX_DELETED_SESSIONS);
-        assert_eq!(deleted.order.len(), MAX_DELETED_SESSIONS);
-        assert!(
-            !deleted.ids.contains("ended-session"),
-            "the oldest goes first"
         );
     }
 

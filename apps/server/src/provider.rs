@@ -436,6 +436,7 @@ fn spawn_drive(
 /// followed again instead of being interrupted. Returns whether it was.
 pub(crate) async fn follow_recovered_run(
     state: &AppState,
+    fence: crate::recovery::HostFence<'_>,
     run_id: Uuid,
     worktree: PathBuf,
 ) -> Result<bool, AppError> {
@@ -484,7 +485,8 @@ pub(crate) async fn follow_recovered_run(
     {
         return Ok(false);
     }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    // Following took a while: take the run back only while the host is ours.
+    let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
@@ -678,6 +680,7 @@ async fn mark_account_failure(state: &AppState, account_id: Uuid, category: &'st
 
 pub(crate) async fn complete_recovered_run(
     state: &AppState,
+    fence: crate::recovery::HostFence<'_>,
     run_id: Uuid,
     message: &str,
     previous_state: &str,
@@ -696,11 +699,14 @@ pub(crate) async fn complete_recovered_run(
     .bind(run_id)
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
     crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
+    if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {
+        return Err(AppError::LeaseLost);
+    }
     complete_run(
         state,
         project_id,

@@ -197,7 +197,7 @@ async fn a_pull_request_from_a_private_thread_stays_private() {
         json!({"projectId": "REPO", "title": "Offline mode"}),
     )
     .await;
-    assert!(created["workItemId"].is_string(), "{created}");
+    assert!(created["value"]["workItemId"].is_string(), "{created}");
     for pull_request in [private.to_string(), private_url.clone()] {
         let refused = mara_call(
             "task_link",
@@ -307,7 +307,7 @@ async fn a_moved_task_does_not_name_private_links_in_the_target_project() {
         json!({"projectId": "SRC", "title": "Offline mode"}),
     )
     .await;
-    assert!(created["workItemId"].is_string(), "{created}");
+    assert!(created["value"]["workItemId"].is_string(), "{created}");
     for link in [
         json!({"taskId": "SRC-1", "conversationId": threads[0].1}),
         json!({"taskId": "SRC-1", "conversationId": threads[1].1}),
@@ -386,7 +386,7 @@ async fn the_resource_a_call_acts_on_picks_its_project() {
         json!({"projectId": "ALPHA", "title": "Offline mode"}),
     )
     .await;
-    assert!(created["workItemId"].is_string(), "{created}");
+    assert!(created["value"]["workItemId"].is_string(), "{created}");
 
     // owner/name resolves where it's unique.
     let only = call("repository_get", json!({"repositoryId": "acme/beta-only"})).await;
@@ -677,7 +677,10 @@ async fn the_web_task_detail_hides_a_pull_request_from_a_private_thread() {
         json!({"projectId": "REPO", "title": "Offline mode"}),
     )
     .await;
-    let task_id = created["workItemId"].as_str().expect("task").to_owned();
+    let task_id = created["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     for link in [
         json!({"taskId": "REPO-1", "pullRequestId": open.to_string()}),
         json!({"taskId": "REPO-1", "pullRequestId": private.to_string()}),

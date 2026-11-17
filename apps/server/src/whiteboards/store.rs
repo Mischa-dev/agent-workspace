@@ -56,6 +56,49 @@ pub async fn notify(
     Ok(())
 }
 
+/// The board's own fact when an edit kept a new revision (K3.5): once per
+/// edit session, which rules and webhooks hear. A workspace board's fact
+/// belongs to the workspace and is heard by whoever may see the board.
+pub async fn updated(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    whiteboard_id: Uuid,
+    revision: i32,
+) -> Result<(), AppError> {
+    use crate::events::{Audience, NewEvent, catalog};
+    let (organization_id, project_id) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "SELECT organization_id, project_id FROM whiteboards WHERE id = $1",
+    )
+    .bind(whiteboard_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let event = match project_id {
+        Some(project_id) => NewEvent::thing(
+            &catalog::WHITEBOARD_UPDATED,
+            project_id,
+            "whiteboard",
+            whiteboard_id,
+        ),
+        None => NewEvent {
+            space_id: None,
+            ..NewEvent::thing(
+                &catalog::WHITEBOARD_UPDATED,
+                Uuid::nil(),
+                "whiteboard",
+                whiteboard_id,
+            )
+            .workspace(organization_id)
+            .audience(Audience::Thing)
+        },
+    };
+    crate::events::emit(
+        transaction,
+        event.version(i64::from(revision)).actor(caller.actor_id),
+    )
+    .await?;
+    Ok(())
+}
+
 /// What a write did.
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]

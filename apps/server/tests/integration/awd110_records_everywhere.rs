@@ -46,9 +46,12 @@ async fn records_are_searched_and_opened_like_any_other_thing() {
         json!({"projectId": "WORK", "title": "Fix the bridge checkpoint", "clientRequestId": "task"}),
     )
     .await;
-    assert_eq!(task["outcome"], "applied", "{task}");
-    let task_id = task["workItemId"].as_str().expect("task").to_owned();
-    let task_key = task["key"].as_str().expect("key").to_owned();
+    assert_eq!(task["outcome"], "ok", "{task}");
+    let task_id = task["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
+    let task_key = task["value"]["key"].as_str().expect("key").to_owned();
 
     let created = call(
         "collection_write",

@@ -9,7 +9,10 @@ use super::{Idempotency, OpKind, OpMeta};
 /// The verbs each kind may use: `<thing>_<verb>`.
 pub const VERBS: &[(OpKind, &[&str])] = &[
     (OpKind::Describe, &["get", "open", "show"]),
-    (OpKind::Query, &["list", "search", "history", "export"]),
+    (
+        OpKind::Query,
+        &["list", "search", "history", "export", "preview"],
+    ),
     (
         OpKind::Create,
         &[
@@ -24,6 +27,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "duplicate",
             "forward",
             "report",
+            "install",
         ],
     ),
     (
@@ -45,6 +49,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "bind",
             "unbind",
             "react",
+            "hide",
             "pin",
             "mark_read",
             "mark_not_started",
@@ -54,6 +59,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "set",
             "cancel",
             "retry",
+            "remove",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",
         ],

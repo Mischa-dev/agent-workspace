@@ -153,7 +153,7 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
         Err(_) => report.push(Level::Warn, "couldn't measure the app data folder"),
     }
 
-    let known: Vec<(i64, Vec<u8>, String)> = sqlx::migrate!()
+    let known: Vec<(i64, Vec<u8>, String)> = migrator()
         .iter()
         .filter(|migration| !migration.migration_type.is_down_migration())
         .map(|migration| {
@@ -276,6 +276,22 @@ pub fn compare_migrations(
         }
     }
     plan
+}
+
+/// The migrations this release carries.
+fn migrator() -> sqlx::migrate::Migrator {
+    sqlx::migrate!()
+}
+
+/// The newest migration this release carries: the schema version it
+/// expects (readiness, K5.7).
+pub fn expected_schema_version() -> i64 {
+    migrator()
+        .iter()
+        .filter(|migration| !migration.migration_type.is_down_migration())
+        .map(|migration| migration.version)
+        .max()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
