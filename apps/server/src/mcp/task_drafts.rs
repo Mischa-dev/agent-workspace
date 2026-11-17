@@ -663,9 +663,7 @@ pub(super) async fn prepare(
         };
         let milestone_id = match draft.milestone.as_deref() {
             Some(value) => {
-                match super::planning::milestone_change(&mut **transaction, project_id, value)
-                    .await?
-                {
+                match super::planning::milestone_change(transaction, project_id, value).await? {
                     Some(found) => found,
                     None => {
                         problems.push(problem(

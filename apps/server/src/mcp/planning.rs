@@ -537,7 +537,7 @@ pub(crate) async fn task_depend_many(
                 &mut transaction,
                 principal,
                 project_id,
-                &[entry.task_id.clone()],
+                std::slice::from_ref(&entry.task_id),
             )
             .await?;
             let task_id = match found.ok().and_then(|ids| ids.first().copied()) {
