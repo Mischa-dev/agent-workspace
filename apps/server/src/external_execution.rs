@@ -838,7 +838,7 @@ async fn launch_sponsored_run(
     external_request_id: Uuid,
 ) -> Result<Uuid, AppError> {
     // H1.24: no run starts in a suspended or deleting workspace.
-    crate::workspace::lifecycle::ensure_open_for_space(
+    crate::workspace::lifecycle::hold_open_for_space(
         &mut *transaction,
         context.project_id(),
         "run_start",

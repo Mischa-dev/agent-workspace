@@ -203,11 +203,23 @@ pub async fn ensure_open(
     workspace: Uuid,
     call: &str,
 ) -> Result<(), AppError> {
-    let lifecycle =
-        sqlx::query_scalar::<_, String>("SELECT lifecycle FROM organizations WHERE id = $1")
-            .bind(workspace)
-            .fetch_optional(&mut *connection)
-            .await?;
+    check_open(connection, workspace, call, false).await
+}
+
+async fn check_open(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    call: &str,
+    hold: bool,
+) -> Result<(), AppError> {
+    let lifecycle = sqlx::query_scalar::<_, String>(if hold {
+        "SELECT lifecycle FROM organizations WHERE id = $1 FOR SHARE"
+    } else {
+        "SELECT lifecycle FROM organizations WHERE id = $1"
+    })
+    .bind(workspace)
+    .fetch_optional(&mut *connection)
+    .await?;
     match lifecycle.as_deref() {
         Some("suspended") => Err(AppError::WorkspaceSuspended),
         Some("deleting") if !ALLOWED_WHILE_DELETING.contains(&call) => {
@@ -230,6 +242,26 @@ pub async fn ensure_open_for_space(
             .await?;
     if let Some(workspace) = workspace {
         ensure_open(connection, workspace, call).await?;
+    }
+    Ok(workspace)
+}
+
+/// Like [`ensure_open_for_space`], and holds the workspace open until the
+/// caller's transaction ends: a suspension or deletion request waits for
+/// it, so a write that passed here commits before the workspace closes.
+/// For writes that set work going (a run, an approval).
+pub async fn hold_open_for_space(
+    connection: &mut PgConnection,
+    space: Uuid,
+    call: &str,
+) -> Result<Option<Uuid>, AppError> {
+    let workspace =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(space)
+            .fetch_optional(&mut *connection)
+            .await?;
+    if let Some(workspace) = workspace {
+        check_open(connection, workspace, call, true).await?;
     }
     Ok(workspace)
 }

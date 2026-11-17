@@ -232,16 +232,6 @@ pub(crate) async fn start_run_in(
     if conversation.conversation_archived {
         return Err(AppError::NotFound("conversation"));
     }
-    // H1.24: no run starts in a suspended or deleting workspace.
-    crate::db::scoped_one(&state.pool, async |connection| {
-        crate::workspace::lifecycle::ensure_open_for_space(
-            connection,
-            conversation.project_id,
-            "run_start",
-        )
-        .await
-    })
-    .await?;
     if conversation.kind != "thread" {
         return Err(AppError::Invalid("agent runs require a Thread"));
     }
@@ -256,6 +246,14 @@ pub(crate) async fn start_run_in(
         conversation_id,
         conversation.project_id,
         Action::WorkerInvoke,
+    )
+    .await?;
+    // H1.24: no run starts in a suspended or deleting workspace, and a
+    // suspension waits for this one to commit.
+    crate::workspace::lifecycle::hold_open_for_space(
+        &mut transaction,
+        conversation.project_id,
+        "run_start",
     )
     .await?;
     let reservation = match idempotency::reserve(
@@ -549,16 +547,6 @@ pub(crate) async fn retry_run_in(
     if conversation.conversation_archived {
         return Err(AppError::NotFound("conversation"));
     }
-    // H1.24: no run starts in a suspended or deleting workspace.
-    crate::db::scoped_one(&state.pool, async |connection| {
-        crate::workspace::lifecycle::ensure_open_for_space(
-            connection,
-            conversation.project_id,
-            "run_start",
-        )
-        .await
-    })
-    .await?;
 
     let idempotency_key = idempotency_key?;
     let request_hash = RequestHash::for_value(&EmptyCommand {})?;
@@ -570,6 +558,14 @@ pub(crate) async fn retry_run_in(
         conversation_id,
         conversation.project_id,
         Action::WorkerInvoke,
+    )
+    .await?;
+    // H1.24: no run starts in a suspended or deleting workspace, and a
+    // suspension waits for this one to commit.
+    crate::workspace::lifecycle::hold_open_for_space(
+        &mut transaction,
+        conversation.project_id,
+        "run_start",
     )
     .await?;
     let reservation = match idempotency::reserve(
@@ -1233,7 +1229,7 @@ pub(crate) async fn answer_approval(
     )?;
     // A suspended or closing workspace answers nothing: an approval would
     // set its run going again.
-    crate::workspace::lifecycle::ensure_open_for_space(
+    crate::workspace::lifecycle::hold_open_for_space(
         &mut transaction,
         context.project_id,
         "approval_respond",
