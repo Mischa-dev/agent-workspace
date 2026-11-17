@@ -17,7 +17,9 @@ use crate::{
     collections::{self, CreateOutcome, NewCollection, definition},
     ops::{
         Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
-        access_shim, error::ConflictReason, refs::IdRef,
+        access_shim,
+        error::{ConflictReason, DenyReason},
+        refs::IdRef,
     },
 };
 
@@ -89,10 +91,27 @@ async fn view(call: &mut OpCall<'_>, module_id: Uuid) -> Result<ModuleView, OpEr
 /// The module the call acts on, locked, in the located workspace.
 async fn locked(call: &mut OpCall<'_>, module_id: Uuid) -> Result<ModuleRow, OpError> {
     let workspace = call.ctx.workspace_id;
+    let confined = call.ctx.caller.confined_space;
     let tx = call.tx().await?;
-    super::lock(tx, workspace, module_id)
+    let module = super::lock(tx, workspace, module_id)
         .await?
-        .ok_or(OpError::not_found(MODULE))
+        .ok_or(OpError::not_found(MODULE))?;
+    held_to(confined, module.space_id)?;
+    Ok(module)
+}
+
+/// A connection held to one space changes only that space's modules: a
+/// workspace-wide module's switch, parts and archive reach every space.
+fn held_to(confined: Option<Uuid>, module_space: Option<Uuid>) -> Result<(), OpError> {
+    match confined {
+        Some(held) if module_space != Some(held) => Err(OpError::Denied {
+            reason: DenyReason::Delegation,
+            message: "This connection is held to one space, so it can only change that space's \
+                      modules. Reconnect it for your whole account to change workspace modules."
+                .into(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 fn live(module: &ModuleRow) -> Result<(), OpError> {
@@ -321,6 +340,7 @@ impl Operation for ModuleCreate {
         }
         let actor = call.account_id();
         let confined = call.ctx.caller.confined_space;
+        held_to(confined, space)?;
         let workspace = call.ctx.workspace_id;
         let maker = crate::events::Caller::from(call.ctx);
         let state = call.state;
