@@ -187,6 +187,7 @@ pub fn sorts(value: &str) -> Option<Vec<SortRule>> {
 /// query and are left to the caller.
 pub fn from_params(params: &BTreeMap<String, String>) -> Result<TaskQuery, Problem> {
     let mut all = Vec::<Filter>::new();
+    let mut overdue = false;
     let mut query = TaskQuery::default();
     for (key, value) in params {
         let value = value.trim();
@@ -234,11 +235,7 @@ pub fn from_params(params: &BTreeMap<String, String>) -> Result<TaskQuery, Probl
             }
             "includeDone" => {
                 if !flag("includeDone", value)? {
-                    all.push(clause(
-                        tasks::STATUS,
-                        FieldOp::CategoryIsNot,
-                        vec!["completed".to_owned(), "canceled".to_owned()],
-                    ));
+                    all.push(finished_excluded());
                 }
             }
             "priority" => {
@@ -400,6 +397,7 @@ pub fn from_params(params: &BTreeMap<String, String>) -> Result<TaskQuery, Probl
                         FieldOp::Within,
                         vec!["overdue".to_owned()],
                     ));
+                    overdue = true;
                 }
             }
             "archived" => {
@@ -474,8 +472,25 @@ pub fn from_params(params: &BTreeMap<String, String>) -> Result<TaskQuery, Probl
             }
         }
     }
+    // A finished task is never overdue, as in task_list: "overdue" brings
+    // "not done" with it (once, if includeDone=false said so already).
+    if overdue {
+        let unfinished = finished_excluded();
+        if !all.contains(&unfinished) {
+            all.push(unfinished);
+        }
+    }
     query.config.filters = Filter::And(all);
     Ok(query)
+}
+
+/// Leaves out completed and canceled tasks (`includeDone=false`).
+fn finished_excluded() -> Filter {
+    clause(
+        tasks::STATUS,
+        FieldOp::CategoryIsNot,
+        vec!["completed".to_owned(), "canceled".to_owned()],
+    )
 }
 
 /// The `groupBy` or `columnsBy` value that names a field: the other way
@@ -727,6 +742,12 @@ pub fn to_params(config: &ViewConfig) -> Option<BTreeMap<String, String>> {
     if params.values().any(String::is_empty) {
         return None;
     }
+    // "overdue" says "not done" already.
+    if params.get("overdue").is_some_and(|on| on == "true")
+        && params.get("includeDone").is_some_and(|on| on == "false")
+    {
+        params.remove("includeDone");
+    }
     if !custom.is_empty() {
         params.insert(
             "fieldFilters".to_owned(),
@@ -912,6 +933,25 @@ mod tests {
         assert!(text.contains("categoryIsNot"), "{text}");
         assert_eq!(query.config.sort[0].field, tasks::DUE_DATE.to_string());
         assert_eq!(query.archived, Archived::default());
+    }
+
+    #[test]
+    fn overdue_leaves_out_finished_tasks() {
+        for pairs in [
+            &[("overdue", "true")][..],
+            &[("overdue", "true"), ("includeDone", "false")],
+        ] {
+            let query = from_params(&params(pairs)).expect("reads");
+            let Filter::And(parts) = &query.config.filters else {
+                panic!("{:?}", query.config.filters);
+            };
+            assert_eq!(parts.len(), 2, "{pairs:?}: {parts:?}");
+            assert!(parts.contains(&super::finished_excluded()), "{parts:?}");
+            assert_eq!(
+                super::to_params(&query.config),
+                Some(params(&[("overdue", "true")]))
+            );
+        }
     }
 
     #[test]

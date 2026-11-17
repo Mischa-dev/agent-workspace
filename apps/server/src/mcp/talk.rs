@@ -1374,12 +1374,7 @@ async fn thread_lists(
     let threads =
         crate::conversations::thread_summaries(&state.pool, parent_id, viewer, None, false, 100)
             .await?;
-    let settled = |status: &str| {
-        matches!(
-            status.to_ascii_lowercase().as_str(),
-            "done" | "dropped" | "decided"
-        )
-    };
+    let settled = crate::conversations::is_settled_thread_status;
     let item = |thread: &crate::conversations::ThreadSummaryView| ThreadItem {
         id: thread.id.to_string(),
         name: thread.name.clone(),

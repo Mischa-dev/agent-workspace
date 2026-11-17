@@ -1312,6 +1312,14 @@ pub(crate) const THREAD_STATUS_SUGGESTIONS: [&str; 6] = [
     "Dropped",
     "Blocked",
 ];
+/// Statuses that close a thread: it leaves Open lists and briefings. A
+/// discussion's "Resolved" counts with the board's own.
+pub(crate) const SETTLED_THREAD_STATUSES: [&str; 4] = ["decided", "done", "dropped", "resolved"];
+
+pub(crate) fn is_settled_thread_status(status: &str) -> bool {
+    SETTLED_THREAD_STATUSES.contains(&status.to_ascii_lowercase().as_str())
+}
+
 const MAX_THREAD_STATUS_CHARACTERS: usize = 40;
 const MAX_THREAD_OUTCOME_CHARACTERS: usize = 1000;
 
@@ -1755,6 +1763,13 @@ pub(crate) async fn append_message_command_with(
         require_conversation_kind(&conversation, expected_kind)?;
     }
     require_active_conversation(&conversation)?;
+    // An archived thing's comments take no new messages, from any edge.
+    crate::discussion::ensure_subject_takes_messages(
+        &mut transaction,
+        conversation.id,
+        actor.actor_id,
+    )
+    .await?;
     // H1.24: a suspended or deleting workspace takes no new messages, from
     // any edge.
     crate::workspace::lifecycle::ensure_open_for_space(
