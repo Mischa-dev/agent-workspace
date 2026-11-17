@@ -52,6 +52,16 @@ async fn statuses_show_where_they_belong_and_clear_themselves() {
     .await;
     assert_eq!(line["outcome"], "ok", "{line}");
     assert_eq!(line["value"]["accountId"], rook.actor.to_string(), "{line}");
+    // Other tabs and agents hear of each change, in the spaces it shows in.
+    let announced = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM outbox_events \
+         WHERE event_type = 'account.status.changed' AND resource_id = ANY($1)",
+    )
+    .bind(vec![owner, rook.actor])
+    .fetch_one(pool)
+    .await
+    .expect("events");
+    assert!(announced >= 2, "status changes announced: {announced}");
 
     // The agent doesn't manage the owner: it can't set or clear theirs.
     for (name, arguments) in [

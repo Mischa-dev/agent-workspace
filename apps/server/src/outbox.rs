@@ -233,6 +233,18 @@ pub struct AccountManagersChangedPayload {
     pub managing: bool,
 }
 
+/// Someone's status changed (C2.15): delivered to each space they're in
+/// where it shows, whose screens refetch it. Ids only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountStatusChangedPayload {
+    pub account_id: Uuid,
+    /// The workspace of a status shown only there; None for one shown
+    /// everywhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<Uuid>,
+}
+
 /// Someone's notifications changed (one was added or came back unread). The
 /// recipient's ID only: delivered to them alone, and browsers refetch the
 /// inbox over HTTP.
@@ -332,6 +344,7 @@ pub enum OutboxEventPayload {
     ProjectMembershipUpdated(ProjectMembershipUpdatedPayload),
     NotificationsUpdated(NotificationsUpdatedPayload),
     AccountManagersChanged(AccountManagersChangedPayload),
+    AccountStatusChanged(AccountStatusChangedPayload),
     WhiteboardUpdated(WhiteboardUpdatedPayload),
     PageUpdated(PageUpdatedPayload),
     PageDiscussionUpdated(PageDiscussionUpdatedPayload),
@@ -358,6 +371,7 @@ impl OutboxEventPayload {
             Self::ProjectMembershipUpdated(_) => "project.membership.updated",
             Self::NotificationsUpdated(_) => "notifications.updated",
             Self::AccountManagersChanged(_) => "account.managers.changed",
+            Self::AccountStatusChanged(_) => "account.status.changed",
             Self::WhiteboardUpdated(_) => "whiteboard.updated",
             Self::PageUpdated(_) => "page.updated",
             Self::PageDiscussionUpdated(_) => "page.discussion.updated",
@@ -387,6 +401,7 @@ impl OutboxEventPayload {
             | Self::ProjectMembershipUpdated(_)
             | Self::NotificationsUpdated(_)
             | Self::AccountManagersChanged(_)
+            | Self::AccountStatusChanged(_)
             | Self::WhiteboardUpdated(_)
             | Self::PageUpdated(_)
             | Self::PageDiscussionUpdated(_)
@@ -424,7 +439,9 @@ impl OutboxEventPayload {
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
             Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
-            Self::AccountManagersChanged(_) => OutboxResourceKind::Account,
+            Self::AccountManagersChanged(_) | Self::AccountStatusChanged(_) => {
+                OutboxResourceKind::Account
+            }
             Self::WhiteboardUpdated(_) => OutboxResourceKind::Whiteboard,
             Self::PageUpdated(_) => OutboxResourceKind::Page,
             Self::PageDiscussionUpdated(_) => OutboxResourceKind::Page,
@@ -454,6 +471,7 @@ impl OutboxEventPayload {
             // Keyed by recipient, like read state.
             Self::NotificationsUpdated(payload) => payload.actor_id,
             Self::AccountManagersChanged(payload) => payload.account_id,
+            Self::AccountStatusChanged(payload) => payload.account_id,
             Self::WhiteboardUpdated(payload) => payload.whiteboard_id,
             Self::PageUpdated(payload) => payload.page_id,
             Self::PageDiscussionUpdated(payload) => payload.page_id,
@@ -568,6 +586,7 @@ impl OutboxEventPayload {
             Self::ProjectMembershipUpdated(payload) => serde_json::to_value(payload),
             Self::NotificationsUpdated(payload) => serde_json::to_value(payload),
             Self::AccountManagersChanged(payload) => serde_json::to_value(payload),
+            Self::AccountStatusChanged(payload) => serde_json::to_value(payload),
             Self::WhiteboardUpdated(payload) => serde_json::to_value(payload),
             Self::PageUpdated(payload) => serde_json::to_value(payload),
             Self::PageDiscussionUpdated(payload) => serde_json::to_value(payload),
@@ -626,6 +645,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "account.managers.changed" => Self::AccountManagersChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "account.status.changed" => Self::AccountStatusChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "whiteboard.updated" => Self::WhiteboardUpdated(

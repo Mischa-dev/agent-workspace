@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 import { opQuery } from '../api/ops'
 import { useAuthenticatedSession } from '../auth/session'
 import { ThreadStatusChip } from '../conversations/threadBoard'
+import { useHomeWorkspaceId } from '../experience/layout'
 import { projectLocationHref } from '../projects/locations'
 import { AppShell } from '../shell/AppShell'
 import { EmptyState, ErrorState, ListSkeleton, PageHeader, Row, RowList, SegmentedControl, countLabel, formatFullDate, formatRelative } from '../ui'
@@ -23,7 +24,12 @@ const SHOW: { value: Show; label: string }[] = [
 export function ThreadsPage() {
   const session = useAuthenticatedSession()
   const [show, setShow] = useState<Show>('open')
-  const threads = useQuery(opQuery('thread_followed_list', show === 'open' ? { openOnly: true } : {}))
+  // Someone in several workspaces names the one they're in.
+  const workspaceId = useHomeWorkspaceId() ?? undefined
+  const threads = useQuery({
+    ...opQuery('thread_followed_list', show === 'open' ? { openOnly: true } : {}, { workspaceId }),
+    enabled: Boolean(workspaceId),
+  })
   return (
     <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page">

@@ -202,6 +202,42 @@ pub async fn clear(
     Ok(removed > 0)
 }
 
+/// Tells the spaces of `workspace_id` that `account_id` belongs to that its
+/// status changed (`account.status.changed`), in the change's transaction.
+/// Other workspaces' screens read it again when they next load it.
+pub async fn announce(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    workspace_id: Uuid,
+    workspace_only: bool,
+) -> Result<(), AppError> {
+    let spaces = sqlx::query_scalar::<_, Uuid>(
+        "SELECT project.id FROM project_memberships membership \
+         JOIN projects project ON project.id = membership.project_id \
+         WHERE membership.actor_id = $1 AND project.organization_id = $2 \
+           AND project.archived_at IS NULL \
+         ORDER BY project.created_at, project.id LIMIT 200",
+    )
+    .bind(account_id)
+    .bind(workspace_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for space in spaces {
+        crate::outbox::enqueue_typed(
+            transaction,
+            space,
+            crate::outbox::OutboxEventPayload::AccountStatusChanged(
+                crate::outbox::AccountStatusChangedPayload {
+                    account_id,
+                    workspace_id: workspace_only.then_some(workspace_id),
+                },
+            ),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// The statuses shown in `workspace_id` for `accounts`: each account's own
 /// one and its line for this workspace, for accounts that are members of it
 /// (anyone else's status is none of this workspace's business). Expired

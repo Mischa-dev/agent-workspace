@@ -2097,6 +2097,15 @@ fn view(row: NotificationRow) -> NotificationView {
             row.message_preview.clone(),
         ),
         kind::CONVERSATION_MESSAGE => (format!("{who} in {place}"), row.message_preview.clone()),
+        kind::THREAD_REPLY => (
+            format!("{who} replied in {place}"),
+            row.message_preview.clone(),
+        ),
+        kind::DIRECT_MESSAGE => (format!("{who} messaged you"), row.message_preview.clone()),
+        kind::KEYWORD => (
+            format!("{who} used one of your words in {place}"),
+            row.message_preview.clone(),
+        ),
         kind::THING_COMMENT => (format!("{who} commented"), row.message_preview.clone()),
         kind::REMINDER => {
             let note = row
@@ -2237,6 +2246,9 @@ fn view(row: NotificationRow) -> NotificationView {
                     row.kind.as_str(),
                     kind::MENTION
                         | kind::CONVERSATION_MESSAGE
+                        | kind::THREAD_REPLY
+                        | kind::DIRECT_MESSAGE
+                        | kind::KEYWORD
                         | kind::REMINDER
                         | kind::THING_COMMENT
                 ) && row.message_preview.is_some() =>
@@ -2315,7 +2327,11 @@ fn view(row: NotificationRow) -> NotificationView {
     let reply_conversation_id = row.conversation_id.filter(|_| {
         matches!(
             row.kind.as_str(),
-            kind::MENTION | kind::CONVERSATION_MESSAGE
+            kind::MENTION
+                | kind::CONVERSATION_MESSAGE
+                | kind::THREAD_REPLY
+                | kind::DIRECT_MESSAGE
+                | kind::KEYWORD
         ) && row.message_id.is_some()
     });
     let saved_item_id = (row.kind == kind::REMINDER)
