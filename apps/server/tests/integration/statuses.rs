@@ -134,7 +134,25 @@ async fn statuses_show_where_they_belong_and_clear_themselves() {
         .expect("shown here");
     assert!(here.is_empty(), "{here:?}");
     drop(connection);
+    let announced_before = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM outbox_events WHERE event_type = 'account.status.changed' \
+         AND payload->>'accountId' = $1",
+    )
+    .bind(owner.to_string())
+    .fetch_one(pool)
+    .await
+    .expect("events");
     assert!(statuses::clear_due(pool, 500).await.expect("clear due") >= 1);
+    // Screens that show it hear it went, as they do for an explicit clear.
+    let announced_after = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM outbox_events WHERE event_type = 'account.status.changed' \
+         AND payload->>'accountId' = $1",
+    )
+    .bind(owner.to_string())
+    .fetch_one(pool)
+    .await
+    .expect("events");
+    assert!(announced_after > announced_before, "the clear is announced");
     let left =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM account_statuses WHERE account_id = $1")
             .bind(owner)
