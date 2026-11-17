@@ -347,7 +347,9 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     })
 }
 
-async fn second_workspace_owner(pool: &PgPool) -> Uuid {
+/// A second workspace with its own owner, who signs in as
+/// [`second_owner_login`].
+pub(crate) async fn second_workspace_owner(pool: &PgPool) -> Uuid {
     let organization = Uuid::now_v7();
     let actor = Uuid::now_v7();
     let user = Uuid::now_v7();
@@ -392,6 +394,10 @@ async fn second_workspace_owner(pool: &PgPool) -> Uuid {
         .await
         .expect("B owner password");
     organization
+}
+
+pub(crate) fn second_owner_login() -> String {
+    format!("owner-{MARKER}")
 }
 
 pub(crate) async fn login_as(app: &axum::Router, login_name: &str) -> Browser {

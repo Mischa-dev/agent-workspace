@@ -29,6 +29,13 @@ pub enum MutationAction {
     /// secret over its timestamp, delivery id and body. It starts the
     /// rules on that hook, which act as their makers.
     IncomingHookSignature,
+    /// Frames published to this server's live side (K5.19), signed with
+    /// the server's own live key; they reach only the audiences the
+    /// database side named, and no session or workspace sends them.
+    LivePublishSignature,
+    /// The tick (K5.18): an outside timer with the operator's token runs
+    /// one round of the server's own due work.
+    OperatorWorkToken,
     /// Browser error reports: counted and logged, never stored.
     ClientTelemetry,
     /// A button on a person's own push notification, carrying a short-lived
@@ -1238,6 +1245,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/incoming-hooks/{hook_id}",
         IncomingHookSignature
+    ),
+    boundary_route!(
+        "realtime/contract/live",
+        Post,
+        "/live/v1/publish",
+        LivePublishSignature
+    ),
+    boundary_route!(
+        "server/tick",
+        Post,
+        "/internal/work/tick",
+        OperatorWorkToken
     ),
     policy_route!(
         "invitations",

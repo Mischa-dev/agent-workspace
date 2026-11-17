@@ -155,10 +155,18 @@ pub struct RealtimeHub {
     origin: Uuid,
     /// Set when this instance drains: no new sockets.
     draining: Arc<AtomicBool>,
+    /// The live contract's connections here (K5.19).
+    contract: super::contract::LiveRouter,
 }
 
 impl RealtimeHub {
     pub fn new(capacity: usize) -> Self {
+        Self::with_contract(capacity, false)
+    }
+
+    /// A hub whose contract connections hear an outside publisher
+    /// (`AGENT_WORKSPACE_LIVE_URL`) rather than this instance's own feeds.
+    pub fn with_contract(capacity: usize, external: bool) -> Self {
         let (sender, _) = broadcast::channel(capacity);
         let (session_revocations, _) = broadcast::channel(capacity);
         Self {
@@ -166,7 +174,13 @@ impl RealtimeHub {
             session_revocations,
             origin: Uuid::now_v7(),
             draining: Arc::new(AtomicBool::new(false)),
+            contract: super::contract::LiveRouter::new(capacity.max(1_024), external),
         }
+    }
+
+    /// The live contract's connections on this instance.
+    pub fn contract(&self) -> &super::contract::LiveRouter {
+        &self.contract
     }
 
     pub fn origin(&self) -> Uuid {
@@ -176,6 +190,8 @@ impl RealtimeHub {
     /// A logged event, from this instance's tail, to its sockets as protocol
     /// 1's frame. Events that were never outbox events have no frame yet.
     pub fn deliver_logged(&self, event: &crate::events::LoggedEvent) {
+        self.contract
+            .publish_local(super::contract::publish::of_logged(event));
         if let Some(account) = access_changed(event) {
             let _ = self.sender.send(RealtimeDelivery::AccessChanged(account));
             return;
@@ -212,6 +228,7 @@ impl RealtimeHub {
     /// so its browser reconnects to another instance, and no new one opens.
     pub fn drain(&self) {
         self.draining.store(true, Ordering::SeqCst);
+        self.contract.drain();
         let _ = self
             .sender
             .send(RealtimeDelivery::Restart(SERVER_DRAINING_CLOSE_REASON));
@@ -299,7 +316,7 @@ fn envelope_route(envelope: &OutboxEnvelope) -> Route {
     }
 }
 
-fn checked_delivery(
+pub(super) fn checked_delivery(
     envelope: &OutboxEnvelope,
     route: Route,
 ) -> Result<RealtimeDelivery, RealtimePublishError> {
@@ -1033,6 +1050,12 @@ pub(super) fn access_changed(event: &crate::events::LoggedEvent) -> Option<Uuid>
         .flatten()
 }
 
+/// The frame a contract connection gets for a durable delivery: protocol
+/// 2's `event`.
+pub(super) fn contract_frame(event: &RealtimeDelivery) -> Result<String, RealtimePublishError> {
+    frame(event, 2)
+}
+
 /// The frame a delivery is sent as in the connection's protocol.
 fn frame(event: &RealtimeDelivery, protocol: u8) -> Result<String, RealtimePublishError> {
     let json = event.to_wire_json()?;
@@ -1069,7 +1092,7 @@ async fn wait_for_hello(socket: &mut WebSocket) -> Option<i64> {
 }
 
 /// One step of a resume.
-enum Replay {
+pub(super) enum Replay {
     /// Frames this connection may hear, from the log, through `through`.
     Batch {
         frames: Vec<String>,
@@ -1084,7 +1107,7 @@ enum Replay {
 /// by its set as live events are (access changes in the batch recompute
 /// it, in order). Each batch reads in a transaction of its own, closed
 /// before any frame is sent.
-async fn replay(
+pub(super) async fn replay(
     state: &AppState,
     principal: &AuthenticatedActor,
     subscription: &mut SubscriptionSet,

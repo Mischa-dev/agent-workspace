@@ -429,21 +429,51 @@ async fn run_rounds<C: Consumer>(
 /// held by another runner. For tests and tools that need the log's effects
 /// now rather than at the next poll; returns how many events were handled.
 pub async fn catch_up(pool: &PgPool) -> Result<usize, AppError> {
+    let round = log_round(pool, None).await?;
+    Ok(round.handled)
+}
+
+/// What a round of the log did (K5.18).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LogRound {
+    pub handled: usize,
+    /// The round stopped at its deadline before the consumers caught up.
+    pub more: bool,
+}
+
+/// The sequencer and the server's own consumers, round after round, until
+/// they catch up or `deadline` passes, then a sweep of their parked
+/// events: the log's share of a tick.
+pub async fn log_round(
+    pool: &PgPool,
+    deadline: Option<std::time::Instant>,
+) -> Result<LogRound, AppError> {
     crate::tenancy::system("events.log", async {
         let mut router = Runner::new(super::Router);
         let mut notifier = Runner::new(crate::notifications::Notifier);
-        let mut handled = 0;
+        let mut round = LogRound {
+            more: true,
+            ..LogRound::default()
+        };
         for _ in 0..50 {
+            if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                break;
+            }
             super::sequencer::step(pool).await?;
             let routed = router.round(pool).await?;
             let notified = notifier.round(pool).await?;
             let done = routed.handled + routed.parked + notified.handled + notified.parked;
-            handled += done;
+            round.handled += done;
             if done == 0 {
+                round.more = false;
                 break;
             }
         }
-        Ok(handled)
+        if deadline.is_some() {
+            router.sweep(pool).await?;
+            notifier.sweep(pool).await?;
+        }
+        Ok(round)
     })
     .await
 }

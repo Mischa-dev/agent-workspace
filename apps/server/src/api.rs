@@ -50,6 +50,21 @@ pub fn router() -> Router<AppState> {
             post(respond_to_approval),
         )
         .route("/api/v1/realtime", get(crate::realtime::websocket))
+        // The live contract (K5.19): tickets and resume on `api`, the
+        // connection and publishes on `live`.
+        .route(
+            "/api/v2/live/ticket",
+            get(crate::realtime::contract::http::ticket),
+        )
+        .route(
+            "/api/v2/live/resume",
+            get(crate::realtime::contract::http::resume),
+        )
+        .route(
+            "/api/v2/live/key",
+            get(crate::realtime::contract::http::key),
+        )
+        .merge(crate::realtime::contract::live::router())
 }
 
 #[derive(Serialize)]

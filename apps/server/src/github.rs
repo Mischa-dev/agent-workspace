@@ -2410,7 +2410,7 @@ async fn refresh_pull_request(
     Ok((StatusCode::ACCEPTED, Json(view)).into_response())
 }
 
-async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
+pub(crate) async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
     loop {
         // Each job keeps renewing its lease while it works: a publish alone
         // can take minutes (a token, two ref reads and a push), far past one

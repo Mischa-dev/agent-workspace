@@ -43,6 +43,11 @@ pub enum EphemeralFrame {
         space: Uuid,
         conversation: Option<Uuid>,
         payload: serde_json::Value,
+        /// The conversation's root and whether it is restricted, so the
+        /// live contract can route it with no lookup (K5.19); None from
+        /// older instances, or when it couldn't be read.
+        #[serde(default)]
+        route: Option<(Uuid, bool)>,
     },
     /// A signed-out session: its sockets close.
     SessionRevoked { session: Uuid },
@@ -96,6 +101,7 @@ struct Envelope {
 /// failed send is logged, never returned: the frame is only a shortcut.
 pub async fn publish(state: &AppState, frame: EphemeralFrame) {
     route(&state.realtime, &frame);
+    super::contract::publish::send_ephemeral(state, &frame).await;
     for payload in packed(Some(state.realtime.origin()), split(frame)) {
         let sent = crate::db::scoped_one(&state.pool, async |connection| {
             sqlx::query("SELECT pg_notify(realtime_channel('ephemeral'), $1)")
@@ -135,15 +141,64 @@ pub async fn revoke_session(state: &AppState, session: Uuid) {
 
 /// Streams agent text to the conversation's sockets on every instance.
 pub async fn stream_delta(state: &AppState, event: RealtimeEvent) {
+    let route = match delta_route(state, &event).await {
+        Ok(route) => route,
+        Err(error) => {
+            tracing::warn!(
+                error_category = error.log_category(),
+                "streamed text's conversation not read; live contract connections miss it"
+            );
+            None
+        }
+    };
     publish(
         state,
         EphemeralFrame::StreamDelta {
             space: event.project_id,
             conversation: event.conversation_id,
             payload: event.payload,
+            route,
         },
     )
     .await;
+}
+
+/// A streamed reply's conversation root and restriction, as the agent
+/// running it sees the conversation.
+async fn delta_route(
+    state: &AppState,
+    event: &RealtimeEvent,
+) -> Result<Option<(Uuid, bool)>, AppError> {
+    let (Some(conversation), Some(run)) = (
+        event.conversation_id,
+        event
+            .payload
+            .get("agent_run_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|run| Uuid::parse_str(run).ok()),
+    ) else {
+        return Ok(None);
+    };
+    let Some(place) =
+        crate::runs::store::builtin_turn_place(crate::db::scoped(&state.pool), run).await?
+    else {
+        return Ok(None);
+    };
+    Ok(sqlx::query_as::<_, (Uuid, bool)>(
+        r#"
+        SELECT COALESCE(conversation.parent_channel_id, conversation.id),
+               COALESCE(parent.visibility, conversation.visibility) <> 'project'
+        FROM conversations conversation
+        LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
+        WHERE conversation.id = $1 AND conversation.project_id = $2
+          AND conversation_visible_to(conversation.id, $3)
+        "#,
+    )
+    .bind(conversation)
+    .bind(event.project_id)
+    .bind(place.worker_actor_id)
+    .fetch_optional(crate::db::scoped(&state.pool))
+    .await?)
 }
 
 /// A notification from the bus (the wake listener calls this). Frames this
@@ -162,11 +217,14 @@ pub fn receive(hub: &RealtimeHub, payload: &str) {
 }
 
 fn route(hub: &RealtimeHub, frame: &EphemeralFrame) {
+    hub.contract()
+        .publish_local(super::contract::publish::of_ephemeral(frame));
     match frame {
         EphemeralFrame::StreamDelta {
             space,
             conversation,
             payload,
+            ..
         } => hub.publish(RealtimeEvent {
             event_id: Uuid::now_v7(),
             kind: "message.delta",
@@ -195,6 +253,7 @@ fn split(frame: EphemeralFrame) -> Vec<EphemeralFrame> {
         space,
         conversation,
         payload,
+        route,
     } = &frame
     else {
         return vec![frame];
@@ -219,6 +278,7 @@ fn split(frame: EphemeralFrame) -> Vec<EphemeralFrame> {
             space: *space,
             conversation: *conversation,
             payload,
+            route: *route,
         });
         rest = tail;
     }
@@ -271,6 +331,7 @@ mod tests {
             space: Uuid::now_v7(),
             conversation: Some(Uuid::now_v7()),
             payload: json!({"message_id": Uuid::now_v7(), "agent_run_id": Uuid::now_v7(), "delta": text}),
+            route: None,
         }
     }
 

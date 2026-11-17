@@ -51,6 +51,11 @@ impl Instance {
         self.running.as_ref().expect("running").subscribe_tail()
     }
 
+    /// Where it listens, as `http://host:port`.
+    pub(crate) fn base(&self) -> &str {
+        &self.base
+    }
+
     /// This instance's leases and heartbeat.
     pub(crate) fn cluster(&self) -> &agent_workspace_server::cluster::Cluster {
         self.running.as_ref().expect("running").cluster()

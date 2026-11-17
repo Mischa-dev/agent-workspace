@@ -222,6 +222,18 @@ pub struct AppConfig {
     /// Where an instance without `api` answers health checks:
     /// `AGENT_WORKSPACE_HEALTH_ADDR`, default the application address.
     pub health_addr: Option<SocketAddr>,
+    /// Whether a `work` instance runs its queue work by itself
+    /// (`AGENT_WORKSPACE_WORK_LOOP`, default on), or only when an outside
+    /// timer calls `POST /internal/work/tick` (K5.18).
+    pub work_loop: bool,
+    /// An owner-only file holding the bearer token the tick requires
+    /// (`AGENT_WORKSPACE_WORK_TICK_SECRET_PATH`); without it there is no
+    /// tick.
+    pub work_tick_secret_path: Option<PathBuf>,
+    /// An outside live service implementing the live contract (K5.19),
+    /// where `work` publishes the log (`AGENT_WORKSPACE_LIVE_URL`); unset,
+    /// the live role is this server's own.
+    pub live_url: Option<url::Url>,
 }
 
 /// A set of defaults sized for one kind of server (H1.12). A profile only
@@ -704,19 +716,26 @@ impl AppConfig {
                 key: format!("{PREFIX}ROLES"),
                 reason,
             })?;
-        let builtin_host = match optional(values, "BUILTIN_HOST", "on")
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "on" | "true" => true,
-            "off" | "false" => false,
-            _ => {
-                return Err(ConfigError::Invalid {
-                    key: format!("{PREFIX}BUILTIN_HOST"),
-                    reason: "expected on or off".into(),
-                });
-            }
+        let builtin_host = on_off(values, "BUILTIN_HOST")?;
+        let work_loop = on_off(values, "WORK_LOOP")?;
+        let work_tick_secret_path =
+            optional_secret_path(values, "WORK_TICK_SECRET_PATH", &data_root, &web_root, 4096)?;
+        let live_url = match optional(values, "LIVE_URL", "").trim() {
+            "" => None,
+            value => Some(
+                url::Url::parse(value)
+                    .ok()
+                    .filter(|url| {
+                        matches!(url.scheme(), "http" | "https")
+                            && url.host_str().is_some()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                    })
+                    .ok_or_else(|| ConfigError::Invalid {
+                        key: format!("{PREFIX}LIVE_URL"),
+                        reason: "expected an http or https address without credentials".into(),
+                    })?,
+            ),
         };
         let drain_seconds = parse::<u64>(values, "DRAIN_SECONDS", "5")?;
         if drain_seconds > 120 {
@@ -791,7 +810,26 @@ impl AppConfig {
             builtin_host,
             drain: Duration::from_secs(drain_seconds),
             health_addr,
+            work_loop,
+            work_tick_secret_path,
+            live_url,
         })
+    }
+}
+
+/// A switch that is on unless set to `off` (or `false`).
+fn on_off(values: &BTreeMap<String, String>, key: &str) -> Result<bool, ConfigError> {
+    match optional(values, key, "on")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "on" | "true" => Ok(true),
+        "off" | "false" => Ok(false),
+        _ => Err(ConfigError::Invalid {
+            key: format!("{PREFIX}{key}"),
+            reason: "expected on or off".into(),
+        }),
     }
 }
 
@@ -1992,10 +2030,12 @@ mod tests {
         assert!(default.builtin_host);
         assert_eq!(default.drain, Duration::from_secs(5));
         assert_eq!(default.health_addr, None);
+        assert!(default.work_loop && default.work_tick_secret_path.is_none());
 
         values.insert("AGENT_WORKSPACE_ROLES".to_owned(), " work ".to_owned());
         values.insert("AGENT_WORKSPACE_BUILTIN_HOST".to_owned(), "off".to_owned());
         values.insert("AGENT_WORKSPACE_DRAIN_SECONDS".to_owned(), "0".to_owned());
+        values.insert("AGENT_WORKSPACE_WORK_LOOP".to_owned(), "OFF".to_owned());
         values.insert(
             "AGENT_WORKSPACE_HEALTH_ADDR".to_owned(),
             "127.0.0.1:3101".to_owned(),
@@ -2003,6 +2043,7 @@ mod tests {
         let work = AppConfig::from_values(&values).expect("work only");
         assert!(work.roles.work && !work.roles.api && !work.roles.live);
         assert!(!work.builtin_host);
+        assert!(!work.work_loop);
         assert_eq!(work.drain, Duration::ZERO);
         assert_eq!(
             work.health_addr,

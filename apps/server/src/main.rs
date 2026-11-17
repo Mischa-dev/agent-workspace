@@ -139,7 +139,15 @@ async fn main() -> anyhow::Result<()> {
         }
         Ok::<_, anyhow::Error>(())
     };
-    while_starting(&mut starting, migrate).await?;
+    // Serving, only `work` migrates: an `api` or `live` instance starts cold
+    // and answers "not ready" until the schema is its release's (K5.18).
+    // Every command migrates first; `migrate` does nothing else.
+    let serving = std::env::args().nth(1).is_none();
+    if !serving || config.roles.work {
+        while_starting(&mut starting, migrate).await?;
+    } else {
+        drop(migrate);
+    }
     if let Some(starting) = &starting {
         let _ = starting.step.send("starting");
     }
@@ -454,6 +462,7 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&issued)?);
             return Ok(());
         }
+        Some("migrate") => return Ok(()),
         Some(_) => bail!("unknown command"),
         None => {}
     }

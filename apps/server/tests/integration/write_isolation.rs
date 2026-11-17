@@ -357,6 +357,17 @@ const CAPABILITY: &str = "the secret token in the request is the permission; it 
 
 /// Mutating routes this suite deliberately doesn't call, and why.
 const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
+    (
+        "POST /internal/work/tick",
+        "runs the server's own due work across every workspace (K5.18), for an outside timer \
+         holding the operator's tick token; no session or workspace reaches it; covered in \
+         cluster::ticks_drive_work_with_the_loop_off",
+    ),
+    (
+        "POST /live/v1/publish",
+        "frames signed by the server's own live key (K5.19), routed by the audiences the \
+         database side named; no session reaches it; covered in live_contract",
+    ),
     ("PUT /api/v1/account/appearance", OWN_ACCOUNT),
     ("DELETE /api/v1/account/email", OWN_ACCOUNT),
     ("PUT /api/v1/account/email", OWN_ACCOUNT),

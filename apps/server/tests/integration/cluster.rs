@@ -2079,3 +2079,151 @@ async fn provider_sign_in_started_on_one_instance_completes_on_the_other() {
     ));
     cluster.finish().await;
 }
+
+/// K5.18: with the work loop off, a queued job, a consumer batch and a due
+/// scheduled message all wait for the tick, and one tick does them all.
+/// The tick answers only with its token.
+#[tokio::test]
+async fn ticks_drive_work_with_the_loop_off() {
+    use std::os::unix::fs::PermissionsExt;
+    let secrets = tempfile::tempdir().expect("secrets");
+    let token_path = secrets.path().join("tick-token");
+    std::fs::write(&token_path, "tick-token-for-tests\n").expect("token");
+    std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600))
+        .expect("owner only");
+    let token_path = token_path.to_string_lossy().into_owned();
+    let settings: &[(&str, &str)] = &[
+        ("AGENT_WORKSPACE_WORK_LOOP", "off"),
+        ("AGENT_WORKSPACE_WORK_TICK_SECRET_PATH", &token_path),
+    ];
+    let Some(cluster) = cluster_with("k5_18_tick", 1, settings).await else {
+        return;
+    };
+    let pool = cluster.pool.clone();
+    let a = cluster.instance(0);
+    let browser = a.login("owner").await;
+    let (project, channel) = work_channel(&cluster, &browser).await;
+
+    // The consumers' cursors start at the head, then fall behind.
+    events::catch_up(&pool).await.expect("catch up");
+    let send_at = (chrono::Utc::now() + chrono::Duration::seconds(2)).to_rfc3339();
+    let (status, scheduled) = a
+        .send(browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/scheduled-messages"),
+            Some("k5-18-scheduled"),
+            json!({
+                "content": {"version": 1, "nodes": [{"type": "text", "text": "Ticked"}]},
+                "sendAt": send_at,
+            }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
+    let scheduled: Uuid = scheduled["scheduledMessage"]["id"]
+        .as_str()
+        .or_else(|| scheduled["id"].as_str())
+        .expect("scheduled id")
+        .parse()
+        .expect("id");
+    let job = match agent_workspace_server::jobs::enqueue(
+        &pool,
+        agent_workspace_server::jobs::NewJob::new("jobs.prune_finished"),
+    )
+    .await
+    .expect("enqueue")
+    {
+        agent_workspace_server::jobs::Enqueued::Created(id) => id,
+        agent_workspace_server::jobs::Enqueued::Duplicate => panic!("no other job"),
+    };
+    let mut transaction = pool.begin().await.expect("begin");
+    stage(&mut transaction, project).await;
+    transaction.commit().await.expect("commit");
+
+    let job_state = async || {
+        sqlx::query_scalar::<_, String>("SELECT state FROM background_jobs WHERE id = $1")
+            .bind(job)
+            .fetch_one(&pool)
+            .await
+            .expect("job")
+    };
+    let sent = async || {
+        sqlx::query_scalar::<_, String>("SELECT status FROM scheduled_messages WHERE id = $1")
+            .bind(scheduled)
+            .fetch_one(&pool)
+            .await
+            .expect("scheduled")
+    };
+    // Positions still come (the live role sequences), so the browser's
+    // updates don't wait for a tick; the consumers do.
+    let behind = async || {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM event_consumers \
+             WHERE position < (SELECT next_position - 1 FROM event_position_counter)",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("consumers")
+    };
+    let started = Instant::now();
+    while sqlx::query_scalar::<_, i64>("SELECT count(*) FROM event_staging")
+        .fetch_one(&pool)
+        .await
+        .expect("staging")
+        > 0
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "never sequenced"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(job_state().await, "queued");
+    assert_eq!(sent().await, "scheduled");
+    assert_eq!(behind().await, 2, "both consumers wait");
+
+    let tick = |token: Option<&str>| {
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/internal/work/tick");
+        if let Some(token) = token {
+            request = request.header("authorization", format!("Bearer {token}"));
+        }
+        request.body(axum::body::Body::empty()).expect("tick")
+    };
+    for token in [None, Some("wrong"), Some("")] {
+        let (status, _) = a.send(tick(token)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{token:?}");
+    }
+    assert_eq!(job_state().await, "queued", "a refused tick does nothing");
+
+    let (status, ticked) = a.send(tick(Some("tick-token-for-tests"))).await;
+    assert_eq!(status, StatusCode::OK, "{ticked}");
+    assert!(ticked["jobs"].as_u64().expect("jobs") >= 2, "{ticked}");
+    assert!(ticked["events"].as_u64().expect("events") >= 1, "{ticked}");
+    assert_eq!(job_state().await, "succeeded");
+    assert_eq!(sent().await, "sent");
+    assert_eq!(behind().await, 0, "{ticked}");
+    cluster.finish().await;
+}
+
+/// K5.18: an `api` instance does nothing at start but connect, so it
+/// answers within a second of starting.
+#[tokio::test]
+async fn api_answers_within_a_second_of_starting() {
+    let Some(mut cluster) = cluster("k5_18_cold_api", 0).await else {
+        return;
+    };
+    let started = Instant::now();
+    let api = cluster.start(&[("AGENT_WORKSPACE_ROLES", "api")]).await;
+    let (status, ready) = api.ready().await;
+    let elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::OK, "{ready}");
+    assert!(elapsed < Duration::from_secs(1), "took {elapsed:?}");
+    let held = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM leases WHERE expires_at > now()")
+        .fetch_one(&cluster.pool)
+        .await
+        .expect("leases");
+    assert_eq!(held, 0, "an api instance took a lease at start");
+    cluster.finish().await;
+}

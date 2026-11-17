@@ -21,7 +21,9 @@ pub mod sequencer;
 pub mod upkeep;
 
 pub use catalog::{EventClass, EventType};
-pub use consumer::{Consumer, ConsumerError, EventFilter, catch_up, read, run_consumer};
+pub use consumer::{
+    Consumer, ConsumerError, EventFilter, LogRound, catch_up, log_round, read, run_consumer,
+};
 pub use route::*;
 
 use serde::Serialize;

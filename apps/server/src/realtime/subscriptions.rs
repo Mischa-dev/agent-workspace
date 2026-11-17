@@ -86,6 +86,13 @@ impl Route {
     }
 }
 
+impl Route {
+    /// Whether an event of this type may change who hears what.
+    pub(crate) fn changes_access(&self) -> bool {
+        ACCESS_TYPES.contains(&self.event_type.as_str())
+    }
+}
+
 fn account_named(payload: &serde_json::Value) -> Option<Uuid> {
     ["actorId", "accountId", "memberActorId"]
         .iter()

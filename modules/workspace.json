@@ -63,6 +63,8 @@
     "/api/v1",
     "/api/v1/{*path}",
     "/api/v2/*",
+    "/internal/work/tick",
+    "/live/v1/*",
     "/api/v1/account/*",
     "/api/v1/account-claims/*",
     "/api/v1/invite-links/*",

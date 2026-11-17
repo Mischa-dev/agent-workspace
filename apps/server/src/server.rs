@@ -10,6 +10,14 @@
 //! built-in host is switched off, the host (runs, recovery, repositories).
 //! An instance without `api` or `live` answers health checks only. Every
 //! instance beats its heartbeat and listens for wakes.
+//!
+//! With `AGENT_WORKSPACE_WORK_LOOP=off` a `work` instance runs its queue
+//! work only when ticked (K5.18, `tick.rs`); the log's sequencer then runs
+//! on the `live` instances, so live updates never wait for a tick. Only
+//! `work` instances migrate and do the startup work, so an `api` starts
+//! cold, with nothing but its pool.
+
+pub mod tick;
 
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
@@ -50,7 +58,7 @@ impl Server {
             config: Arc::clone(&config),
             pool: pool.clone(),
             rate_limits: RateLimiters::for_config(&config),
-            realtime: RealtimeHub::new(256),
+            realtime: RealtimeHub::with_contract(256, config.live_url.is_some()),
             supervisors,
         };
         state
@@ -163,6 +171,12 @@ impl Server {
         } = self;
         let roles = state.config.roles;
         let host = roles.work && state.config.builtin_host;
+        // Queue work loops here, or waits for the tick.
+        let looping = roles.work && state.config.work_loop;
+        let sequencing = looping || roles.live;
+        let ticks = roles
+            .work
+            .then(|| tick::router(state.clone(), Arc::clone(&jobs)));
         let address = listener.local_addr().ok();
         let (shutdown, receiver) = watch::channel(false);
         // The wake listener (K5.4) runs the sequencer, the tail and lease
@@ -183,6 +197,21 @@ impl Server {
             // No sockets here: the hub refuses them from the start.
             state.realtime.drain();
         }
+        // Contract connections here hear this instance's tail from its start
+        // (or, fed from outside, the publisher from its first frame).
+        if !state.realtime.contract().external() {
+            state.realtime.contract().begin(tail_start);
+        }
+        // With an outside live service, one `work` instance publishes the log
+        // there (K5.19).
+        let live_publisher = (roles.work && state.config.live_url.is_some()).then(|| {
+            crate::realtime::contract::publish::run(
+                state.clone(),
+                cluster.clone(),
+                Arc::clone(&wakes.events),
+                receiver.clone(),
+            )
+        });
         // This instance's sockets hear the log through the tail (K5.5).
         let feed =
             crate::realtime::tail::feed(state.realtime.clone(), tail.subscribe(), receiver.clone());
@@ -213,7 +242,7 @@ impl Server {
             let state = state.clone();
             let receiver = receiver.clone();
             async move {
-                if roles.work {
+                if looping {
                     github::run_jobs(state, receiver).await
                 } else {
                     wait_for_shutdown(receiver).await;
@@ -271,13 +300,18 @@ impl Server {
             async move {
                 let heartbeat = heartbeat_cluster.run_heartbeat(heartbeat_shutdown);
                 tokio::join!(
-                    only_if(roles.work, replies),
-                    only_if(roles.work, sequencer),
+                    only_if(looping, replies),
+                    only_if(sequencing, sequencer),
                     only_if(roles.live, tail),
                     only_if(roles.live, feed),
                     listener,
-                    only_if(roles.work, router),
-                    only_if(roles.work, notifier),
+                    only_if(looping, router),
+                    only_if(looping, notifier),
+                    async move {
+                        if let Some(publisher) = live_publisher {
+                            publisher.await;
+                        }
+                    },
                     heartbeat
                 );
             }
@@ -289,7 +323,7 @@ impl Server {
             let state = state.clone();
             let receiver = receiver.clone();
             async move {
-                if roles.work {
+                if looping {
                     let options = jobs::WorkerOptions {
                         concurrency: state.config.job_concurrency,
                         ..jobs::WorkerOptions::default()
@@ -312,6 +346,10 @@ impl Server {
                 live_router(http_state.clone())
             } else {
                 health_router(http_state.clone())
+            };
+            let application = match ticks {
+                Some(ticks) => application.merge(ticks),
+                None => application,
             }
             .layer(axum::Extension(http_process));
             let application = axum::serve(listener, application.into_make_service())
@@ -362,6 +400,7 @@ fn live_router(state: AppState) -> axum::Router {
             "/api/v1/realtime",
             axum::routing::get(crate::realtime::websocket),
         )
+        .merge(crate::realtime::contract::live::router())
         .with_state(state)
         .layer(axum::middleware::from_fn(crate::tenancy::scope_requests))
 }
