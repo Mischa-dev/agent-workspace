@@ -16,7 +16,10 @@ import {
   showToast,
 } from '../ui'
 import { useFieldMutations, useFields, type FieldScope, type OptionInput } from './api'
-import { CATEGORY_LABELS, FIELD_TYPES, STATUS_CATEGORIES, isSystemType, typeLabel, type FieldDefinition, type FieldType, type StatusCategory } from './fieldModel'
+import { CATEGORY_LABELS, FIELD_TYPES, STATUS_CATEGORIES, formulaShown, isSystemType, typeLabel, type FieldDefinition, type FieldType, type StatusCategory } from './fieldModel'
+import { ButtonEditor } from './ButtonEditor'
+import { buttonDraft, buttonInput } from './buttonDraft'
+import { FormulaEditor, type FormulaContext } from './FormulaEditor'
 
 /** Named colors the server takes, in the order labels offer them. */
 const COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'gray'] as const
@@ -151,12 +154,15 @@ type OptionDraft = OptionInput & { key: string }
  */
 export function FieldDialog({
   field,
+  formulas,
   onClose,
   onSaved,
   linkable = [],
   records = 'tasks',
   scope,
 }: {
+  /** Where formula and button fields can be made and edited (a collection's records); left out, neither is offered. */
+  formulas?: FormulaContext
   /** Collections a new link field can hold the records of (AWD-110). */
   linkable?: ReadonlyArray<{ id: string; name: string }>
   field: FieldDefinition | null
@@ -179,15 +185,29 @@ export function FieldDialog({
         .map((option) => ({ key: option.id, id: option.id, name: option.name, color: option.color, category: option.category ?? undefined })) ?? [],
   )
   const [problem, setProblem] = useState<string | null>(null)
+  const initialFormula = field?.formula && formulas ? formulaShown(field.formula.source, formulas.fields, formulas.titleName) : ''
+  const [formula, setFormula] = useState(initialFormula)
+  const isFormula = type === 'formula'
+  const isButton = type === 'button'
+  const [button, setButton] = useState(() => buttonDraft(field, formulas?.fields ?? []))
+  const [initialButton] = useState(() => JSON.stringify(button.steps.map(({ operation, arguments: input }) => [operation, input])))
   const status = type === 'status'
   // A new status field without options gets the server's three.
   const choices = type === 'single_choice' || type === 'multiple_choice' || (status && (Boolean(field) || options.length > 0))
   // Tasks have their own status and record columns; a collection can have any type.
-  const offered = FIELD_TYPES.filter((entry) => scope.path !== undefined || entry.tasks !== false)
+  const offered = FIELD_TYPES.filter((entry) => (scope.path !== undefined || entry.tasks !== false) && ((entry.type !== 'formula' && entry.type !== 'button') || formulas))
   const pending = create.isPending || update.isPending
   const submit = () => {
     setProblem(null)
     if (!name.trim()) return setProblem('Give the field a name.')
+    if (isFormula && formulas && !formula.trim()) return setProblem('Write the formula.')
+    const pressed = isButton && formulas ? buttonInput(button) : null
+    if (pressed && 'problem' in pressed) return setProblem(pressed.problem)
+    const buttonSettings = pressed && 'input' in pressed ? pressed.input : undefined
+    const buttonChanged =
+      Boolean(buttonSettings) &&
+      (button.label.trim() !== (field?.button?.label ?? '') ||
+        JSON.stringify(button.steps.map(({ operation, arguments: input }) => [operation, input])) !== initialButton)
     const optionInputs = choices
       ? options
           .filter((option) => option.name.trim())
@@ -209,6 +229,8 @@ export function FieldDialog({
           name: name.trim(),
           description: description.trim(),
           ...(optionInputs ? { options: optionInputs } : {}),
+          ...(isFormula && formulas && formula.trim() !== initialFormula.trim() ? { formula: formula.trim() } : {}),
+          ...(buttonSettings && buttonChanged ? { button: buttonSettings } : {}),
         },
         done,
       )
@@ -221,6 +243,8 @@ export function FieldDialog({
           description: description.trim(),
           ...(optionInputs ? { options: optionInputs } : {}),
           ...(type === 'link' ? { target } : {}),
+          ...(isFormula ? { formula: formula.trim() } : {}),
+          ...(buttonSettings ? { button: buttonSettings } : {}),
         },
         done,
       )
@@ -278,6 +302,8 @@ export function FieldDialog({
         onChange={(event) => setDescription(event.target.value)}
         value={description}
       />
+      {isFormula && formulas ? <FormulaEditor context={formulas} fieldId={field?.id} onChange={setFormula} value={formula} /> : null}
+      {isButton && formulas ? <ButtonEditor context={formulas} draft={button} onChange={setButton} /> : null}
       {!field && isSystemType(type) ? <p className="aw-pagesection__desc">Filled in from each {records === 'tasks' ? 'task' : 'record'} itself; nobody edits it.</p> : null}
       {!field && status && !options.length ? (
         <p className="aw-pagesection__desc">

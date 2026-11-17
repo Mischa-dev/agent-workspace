@@ -18,7 +18,7 @@ use sqlx::{Acquire, FromRow, PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use super::{
-    definition::{Direction, SortBy, ViewConfig},
+    definition::{Direction, Measure, MeasureOp, SortBy, ViewConfig},
     filter::Filter,
     source::RecordSource,
 };
@@ -100,6 +100,9 @@ pub struct Spec {
     pub reader: Uuid,
     /// The day `within` filters read from.
     pub today: NaiveDate,
+    /// What each group adds up beside its count (a chart's measure): an
+    /// aggregate and the number it reads. None counts records only.
+    pub measure: Option<(MeasureOp, String)>,
     /// The fields filters, sorts and groups name, for where each value is
     /// read (`FieldDefinition::accessor`).
     definitions: Vec<FieldDefinition>,
@@ -120,6 +123,7 @@ impl Default for Spec {
             in_group: None,
             reader: Uuid::nil(),
             today: fields::today(),
+            measure: None,
             definitions: Vec::new(),
             search_fields: SearchFields::default(),
         }
@@ -177,7 +181,30 @@ impl Spec {
             definitions: definitions.to_vec(),
             ..Self::default()
         }
-        .searching(Vec::new(), definitions)
+        .searching(
+            config
+                .search
+                .as_deref()
+                .and_then(search_words)
+                .unwrap_or_default(),
+            definitions,
+        )
+        .measuring(config.chart.map(|chart| chart.measure).unwrap_or_default())
+    }
+
+    /// Sets what each group adds up (T1.31): a count reads nothing; a sum,
+    /// average, least or most reads a number field (checked by
+    /// `views::check`; a field that isn't one counts instead).
+    pub fn measuring(mut self, measure: Measure) -> Self {
+        self.measure = match (measure.op, measure.field) {
+            (MeasureOp::Count, _) | (_, None) => None,
+            (op, Some(id)) => self
+                .definition(id)
+                .filter(|field| !field.archived)
+                .and_then(|field| fields::number_sql(field, "record.field_values"))
+                .map(|number| (op, number)),
+        };
+        self
     }
 
     /// Narrows what it finds by more clauses, such as a calendar's range.
@@ -185,11 +212,23 @@ impl Spec {
         self.filter = std::mem::take(&mut self.filter).and(clauses);
     }
 
+    /// Narrows to records that also meet `more`.
+    pub fn narrow_to(&mut self, more: Filter) {
+        self.filter = match std::mem::take(&mut self.filter) {
+            Filter::And(mut items) => {
+                items.push(more);
+                Filter::And(items)
+            }
+            other => Filter::And(vec![other, more]),
+        };
+    }
+
     fn definition(&self, id: Uuid) -> Option<&FieldDefinition> {
         self.definitions.iter().find(|field| field.id == id)
     }
 
-    /// Sets the words to search for, read against `definitions`.
+    /// Adds words to search for (to the view's own), read against
+    /// `definitions`. A record holds every word.
     pub fn searching(mut self, words: Vec<String>, definitions: &[FieldDefinition]) -> Self {
         let active = definitions.iter().filter(|field| !field.archived);
         let mut search = SearchFields::default();
@@ -217,7 +256,15 @@ impl Spec {
                 _ => {}
             }
         }
-        self.words = words;
+        for word in words {
+            if !self
+                .words
+                .iter()
+                .any(|kept| kept.to_lowercase() == word.to_lowercase())
+            {
+                self.words.push(word);
+            }
+        }
         self.search_fields = search;
         if self.definitions.is_empty() {
             self.definitions = definitions.to_vec();
@@ -387,6 +434,10 @@ impl Spec {
             let pattern = format!("%{escaped}%");
             builder.push(" AND (record.title ILIKE ");
             builder.push_bind(pattern.clone());
+            for text in source.searched_text() {
+                builder.push(format!(" OR {text} ILIKE "));
+                builder.push_bind(pattern.clone());
+            }
             if !self.search_fields.text.is_empty() {
                 builder.push(
                     " OR EXISTS (SELECT 1 FROM jsonb_each_text(record.field_values) \
@@ -448,14 +499,29 @@ impl Spec {
                 builder.push_bind(options);
                 builder.push("::text[])");
             }
-            if let Some(number) = word
-                .trim_start_matches('#')
+            // "42", "#42" or a key such as "AW-42" (the project's own key).
+            let digits = word.trim_start_matches('#');
+            let (key, digits) = match digits.rsplit_once('-') {
+                Some((key, number)) if !key.is_empty() => (Some(key), number),
+                _ => (None, digits),
+            };
+            if let Some(number) = digits
                 .parse::<i64>()
                 .ok()
-                .filter(|number| *number > 0)
+                .filter(|number| *number > 0 && digits.chars().all(|c| c.is_ascii_digit()))
             {
-                builder.push(" OR record.number = ");
+                builder.push(" OR (record.number = ");
                 builder.push_bind(number);
+                if let Some(key) = key {
+                    builder.push(
+                        " AND EXISTS (SELECT 1 FROM projects search_project \
+                         WHERE search_project.id = record.project_id \
+                           AND lower(search_project.project_key) = ",
+                    );
+                    builder.push_bind(key.to_lowercase());
+                    builder.push(")");
+                }
+                builder.push(")");
             }
             builder.push(")");
         }
@@ -523,6 +589,61 @@ pub fn date_range(
             values: vec![end.format("%Y-%m-%d").to_string()],
         },
     ])
+}
+
+/// The days of a timeline's range at most: a year and a bit.
+pub const MAX_SPAN_DAYS: i64 = 400;
+
+/// The filter for records whose bar, from `start` to `end` (both active
+/// date fields; no end date is a one-day bar), touches the days from
+/// `from` up to, not including, `to`: it starts before `to` and ends on or
+/// after `from`. A record without a start date has no bar.
+pub fn span_range(
+    definitions: &[FieldDefinition],
+    start: Uuid,
+    end: Uuid,
+    from: &str,
+    to: &str,
+) -> Result<Filter, String> {
+    for field in [start, end] {
+        let Some(definition) = definitions
+            .iter()
+            .find(|definition| definition.id == field && !definition.archived)
+        else {
+            return Err("The date field names a field this collection doesn't have.".to_owned());
+        };
+        if definition.field_type != FieldType::Date {
+            return Err(format!("\"{}\" isn't a date field.", definition.name));
+        }
+    }
+    if start == end {
+        return Err("A timeline's bars start and end on two different date fields.".to_owned());
+    }
+    let parse = |value: &str| NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d").ok();
+    let (Some(first), Some(last)) = (parse(from), parse(to)) else {
+        return Err("from and to are dates, YYYY-MM-DD.".to_owned());
+    };
+    let days = (last - first).num_days();
+    if !(1..=MAX_SPAN_DAYS).contains(&days) {
+        return Err(format!(
+            "A timeline's range runs forward, at most {MAX_SPAN_DAYS} days."
+        ));
+    }
+    let (first, last) = (
+        first.format("%Y-%m-%d").to_string(),
+        last.format("%Y-%m-%d").to_string(),
+    );
+    let clause = |field, op, values: Vec<String>| Filter::Clause(FieldClause { field, op, values });
+    Ok(Filter::And(vec![
+        clause(start, FieldOp::Lt, vec![last]),
+        Filter::Or(vec![
+            clause(end, FieldOp::Gte, vec![first.clone()]),
+            Filter::And(vec![
+                clause(end, FieldOp::Empty, Vec::new()),
+                clause(start, FieldOp::Gte, vec![first]),
+            ]),
+        ]),
+    ]))
 }
 
 fn by_key(by: SortBy) -> String {
@@ -781,6 +902,35 @@ pub async fn total(
     Ok(total)
 }
 
+/// The spec's measure over every record it finds, each once (a chart's
+/// single number); none when it only counts or no record has a value.
+pub async fn measure_total(
+    connection: &mut PgConnection,
+    source: &dyn RecordSource,
+    spec: &Spec,
+) -> Result<Option<f64>, AppError> {
+    let Some((op, number)) = &spec.measure else {
+        return Ok(None);
+    };
+    // Grouped by a many-valued field, a record is a row in each of its
+    // groups: it is read once.
+    let mut builder = QueryBuilder::<Postgres>::new(format!(
+        "SELECT ({op}(measured.value))::double precision FROM \
+         (SELECT DISTINCT ON (record.id) {number} AS value FROM {from}",
+        op = op.sql(),
+        from = spec.tables(source),
+    ));
+    spec.push_where(&mut builder, source);
+    builder.push(") measured");
+    let mut transaction = without_jit(connection).await?;
+    let value = builder
+        .build_query_scalar::<Option<f64>>()
+        .fetch_one(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(value)
+}
+
 /// A group with records under the filters, and how many.
 #[derive(Clone, Debug, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -790,6 +940,10 @@ pub struct GroupCount {
     pub count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// The spec's measure over the group's records (none when it only
+    /// counts, or no record has a value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
 }
 
 /// Every group with records under `spec`'s filters, in the list's order.
@@ -808,9 +962,13 @@ pub async fn group_counts(
         .map(|key| format!("min({})", key.expr))
         .collect::<Vec<_>>()
         .join(", ");
+    let value = match &spec.measure {
+        Some((op, number)) => format!("({}({number}))::double precision", op.sql()),
+        None => "NULL::double precision".to_owned(),
+    };
     let mut builder = QueryBuilder::<Postgres>::new(format!(
-        "SELECT {key} AS key, min({label}) AS label, count(*) AS count, min({color}) AS color \
-         FROM {from}",
+        "SELECT {key} AS key, min({label}) AS label, count(*) AS count, min({color}) AS color, \
+         {value} AS value FROM {from}",
         from = spec.tables(source),
         key = group.key,
         label = group.label,

@@ -28,19 +28,17 @@ use super::{
     definition::{self, FieldWrite, ViewWrite},
     query::{self, Archived, GroupCount, GroupRef, Spec},
     records::{self, ProblemKind, RecordInput, RecordRef, RecordView, Written},
-    views::{
-        self, ChangeViewOutcome, CreateViewOutcome, NewView, RemoveViewOutcome, SortRule,
-        ViewChange, ViewConfig, ViewSummary, ViewType,
-    },
+    views::{self, SortRule, ViewConfig, ViewSummary},
 };
+use crate::views::definition::{ChartConfig, Measure, MeasureOp};
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::parse_actor_kind,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     fields::{
-        self, ChangeFieldOutcome, CreateFieldOutcome, FieldChange, FieldDefinition, FieldType,
-        FieldView, NewField, OptionInput,
+        self, ChangeFieldOutcome, CreateFieldOutcome, FieldChange, FieldType, FieldView, NewField,
+        OptionInput,
     },
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, IdempotencyReservation, RequestHash, complete, reserve,
@@ -73,14 +71,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
             patch(update_field),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views",
-            axum::routing::post(create_view),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            patch(update_view).delete(delete_view),
         )
         .route(
             "/api/v1/projects/{project_id}/collections/{collection_id}/records",
@@ -144,6 +134,11 @@ async fn project_key(
 struct Reader {
     can_edit: bool,
     can_build: bool,
+    /// Tasks' fields follow the task field settings' rule (T1.11).
+    can_manage_task_fields: bool,
+    /// Reads tasks: a collection whose records are tasks opens only with
+    /// this.
+    can_view_tasks: bool,
     project_archived: bool,
 }
 
@@ -166,6 +161,8 @@ async fn reader(
     Ok(Reader {
         can_edit: allows(&actor, &membership, Action::CollectionRecordEdit)?,
         can_build: allows(&actor, &membership, Action::CollectionBuild)?,
+        can_manage_task_fields: allows(&actor, &membership, Action::WorkflowManage)?,
+        can_view_tasks: allows(&actor, &membership, Action::WorkItemView)?,
         project_archived: membership.project_archived_at.is_some(),
     })
 }
@@ -362,6 +359,9 @@ struct CollectionBody {
     archived_records: i64,
     can_edit_records: bool,
     can_build: bool,
+    /// Adds, changes and archives its fields: building, and for Tasks the
+    /// task field settings' rule too (T1.11).
+    can_change_fields: bool,
 }
 
 async fn collection_body(
@@ -370,10 +370,14 @@ async fn collection_body(
     collection: &Collection,
     can_edit: bool,
     can_build: bool,
+    can_manage_task_fields: bool,
+    reader: Uuid,
 ) -> Result<CollectionBody, AppError> {
     let definitions =
         super::field_definitions(&mut *connection, project_id, collection.id, true).await?;
-    let views = views::list(&mut *connection, project_id, collection.id).await?;
+    let view_fields = super::view_fields(&mut *connection, project_id, collection.id, true).await?;
+    // The shared views, then the reader's own.
+    let views = views::visible(&mut *connection, project_id, collection.id, reader).await?;
     // Each query binds exactly the parameters it names: an extra bind fails
     // on a reused prepared statement.
     let (records, archived_records) = sqlx::query_as::<_, (i64, i64)>(
@@ -388,12 +392,13 @@ async fn collection_body(
         fields: definitions.iter().map(FieldView::from).collect(),
         views: views
             .iter()
-            .map(|view| ViewSummary::of(view, &definitions))
+            .map(|view| ViewSummary::of(view, &view_fields))
             .collect(),
         archived_records,
-        // The Tasks collection's records are tasks, changed on task screens.
+        // Records of a collection that acts like a task change as tasks.
         can_edit_records: can_edit && !collection.archived,
         can_build,
+        can_change_fields: can_build && (!collection.is_tasks() || can_manage_task_fields),
     })
 }
 
@@ -416,6 +421,8 @@ async fn get_collection(
             &collection,
             reader.can_edit && writable,
             reader.can_build && writable,
+            reader.can_manage_task_fields,
+            principal.actor_id,
         )
         .await?,
     ))
@@ -580,7 +587,16 @@ async fn create_collection(
     outbox::enqueue_collection_updated(&mut write.transaction, project_id, collection.id, &[])
         .await?;
     let collection = write.collection(collection.id).await?;
-    let body = collection_body(&mut write.transaction, project_id, &collection, true, true).await?;
+    let body = collection_body(
+        &mut write.transaction,
+        project_id,
+        &collection,
+        true,
+        true,
+        true,
+        principal.actor_id,
+    )
+    .await?;
     write.finish(StatusCode::CREATED, &body).await
 }
 
@@ -751,7 +767,16 @@ async fn update_collection(
             ));
         }
     };
-    let body = collection_body(&mut write.transaction, project_id, &collection, true, true).await?;
+    let body = collection_body(
+        &mut write.transaction,
+        project_id,
+        &collection,
+        true,
+        true,
+        true,
+        principal.actor_id,
+    )
+    .await?;
     write.finish(StatusCode::OK, &body).await
 }
 
@@ -769,6 +794,10 @@ struct CreateFieldRequest {
     options: Option<Vec<OptionInput>>,
     target: Option<String>,
     position: Option<i32>,
+    /// A formula field's formula, fields by name: {Price} * {Quantity}.
+    formula: Option<String>,
+    /// A button field's label and steps.
+    button: Option<crate::fields::button::ButtonInput>,
 }
 
 fn field_name_message() -> String {
@@ -798,7 +827,7 @@ async fn create_field(
     let Some(field_type) = FieldType::parse(&request.field_type) else {
         return Ok(invalid(
             "type",
-            "Pick a type: text, number, date, single_choice, multiple_choice, person, url, checkbox or link.",
+            "Pick a type: text, number, date, single_choice, multiple_choice, person, url, checkbox, link, formula or button.",
         ));
     };
     let Some(description) = fields::normalize_description(&request.description) else {
@@ -857,6 +886,8 @@ async fn create_field(
             field_type,
             config,
             position: request.position,
+            formula: request.formula.clone(),
+            button: request.button.clone(),
         },
     )
     .await?
@@ -882,6 +913,7 @@ async fn create_field(
                 Value::Null,
             ));
         }
+        CreateFieldOutcome::InvalidSetting(at, message) => return Ok(invalid(at, message)),
     };
     record_audit_for(
         &mut write.transaction,
@@ -914,6 +946,10 @@ struct UpdateFieldRequest {
     options: Option<Vec<OptionInput>>,
     position: Option<i32>,
     archived: Option<bool>,
+    /// A formula field's new formula, fields by name.
+    formula: Option<String>,
+    /// A button field's new label and steps.
+    button: Option<crate::fields::button::ButtonInput>,
 }
 
 async fn update_field(
@@ -1004,6 +1040,8 @@ async fn update_field(
             config,
             position: request.position,
             archived: request.archived,
+            formula: request.formula.clone(),
+            button: request.button.clone(),
             expected_version: Some(request.expected_version),
         },
     )
@@ -1070,298 +1108,9 @@ async fn update_field(
                 Value::Null,
             ));
         }
+        ChangeFieldOutcome::InvalidSetting(at, message) => return Ok(invalid(at, message)),
     };
     write.finish(StatusCode::OK, &FieldView::from(&field)).await
-}
-
-// ---------------------------------------------------------------------------
-// Views
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateViewRequest {
-    name: String,
-    #[serde(rename = "type", default = "table")]
-    view_type: String,
-    #[serde(default)]
-    config: ViewConfig,
-    position: Option<i32>,
-}
-
-fn table() -> String {
-    ViewType::Table.as_str().to_owned()
-}
-
-/// Checks a view's settings against the collection's fields and project.
-async fn checked_config(
-    connection: &mut PgConnection,
-    project_id: Uuid,
-    config: &ViewConfig,
-    definitions: &[FieldDefinition],
-) -> Result<Option<Response>, AppError> {
-    if let Err(message) = views::check(config, definitions) {
-        return Ok(Some(invalid("config", message)));
-    }
-    if let Err(message) =
-        views::check_references(connection, project_id, config, definitions).await?
-    {
-        return Ok(Some(invalid("config", message)));
-    }
-    Ok(None)
-}
-
-fn view_name_message() -> String {
-    format!(
-        "Give the view a name of 1 to {} characters, on one line.",
-        super::MAX_NAME_CHARACTERS
-    )
-}
-
-async fn create_view(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, collection_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<CreateViewRequest>,
-) -> Result<Response, AppError> {
-    let Some(name) = super::normalize_name(&request.name) else {
-        return Ok(invalid("name", view_name_message()));
-    };
-    let Some(view_type) = views::parse_view_type(&request.view_type) else {
-        return Ok(invalid("type", views::VIEW_TYPE_MESSAGE));
-    };
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::CollectionBuild,
-            resource_bound_scope("collections", collection_id, "views_create")?,
-            &request,
-        )
-        .await
-    );
-    let collection = write.collection(collection_id).await?;
-    if collection.archived {
-        return Ok(archived_collection(&collection));
-    }
-    let definitions =
-        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
-    let config = match request.config.clone().for_type(view_type, &definitions) {
-        Ok(config) => config,
-        Err(message) => return Ok(invalid("config", message)),
-    };
-    if let Some(refused) =
-        checked_config(&mut write.transaction, project_id, &config, &definitions).await?
-    {
-        return Ok(refused);
-    }
-    let view = match views::create(
-        &mut write.transaction,
-        project_id,
-        collection_id,
-        principal.actor_id,
-        NewView {
-            name,
-            view_type,
-            config,
-            position: request.position,
-        },
-    )
-    .await?
-    {
-        CreateViewOutcome::Created(view) => view,
-        CreateViewOutcome::NameTaken(view) => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "view_name_taken",
-                format!("A view is already called \"{}\".", view.name),
-                json!({ "field": "name" }),
-            ));
-        }
-        CreateViewOutcome::Full => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "view_limit",
-                format!(
-                    "This collection has {} views already. Remove one first.",
-                    views::MAX_VIEWS
-                ),
-                Value::Null,
-            ));
-        }
-    };
-    record_audit_for(
-        &mut write.transaction,
-        &write.actor,
-        "collection",
-        "collection.view_created",
-        collection_id,
-        json!({ "view": view.id, "name": view.name }),
-    )
-    .await?;
-    super::touch(&mut write.transaction, project_id, collection_id).await?;
-    outbox::enqueue_collection_updated(&mut write.transaction, project_id, collection_id, &[])
-        .await?;
-    write
-        .finish(StatusCode::CREATED, &ViewSummary::of(&view, &definitions))
-        .await
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateViewRequest {
-    expected_version: i64,
-    name: Option<String>,
-    config: Option<ViewConfig>,
-    position: Option<i32>,
-}
-
-async fn update_view(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, collection_id, view_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<UpdateViewRequest>,
-) -> Result<Response, AppError> {
-    let name = match request.name.as_deref() {
-        Some(value) => match super::normalize_name(value) {
-            Some(name) => Some(name),
-            None => return Ok(invalid("name", view_name_message())),
-        },
-        None => None,
-    };
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::CollectionBuild,
-            resource_bound_scope("collection_views", view_id, "update")?,
-            &request,
-        )
-        .await
-    );
-    let collection = write.collection(collection_id).await?;
-    if collection.archived {
-        return Ok(archived_collection(&collection));
-    }
-    let definitions =
-        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
-    if let Some(config) = &request.config
-        && let Some(refused) =
-            checked_config(&mut write.transaction, project_id, config, &definitions).await?
-    {
-        return Ok(refused);
-    }
-    let view = match views::change(
-        &mut write.transaction,
-        project_id,
-        collection_id,
-        view_id,
-        ViewChange {
-            name,
-            config: request.config.clone(),
-            position: request.position,
-            expected_version: Some(request.expected_version),
-        },
-    )
-    .await?
-    {
-        ChangeViewOutcome::Changed { view, changed } => {
-            record_audit_for(
-                &mut write.transaction,
-                &write.actor,
-                "collection",
-                "collection.view_updated",
-                collection_id,
-                json!({ "view": view.id, "name": view.name, "changedFields": changed }),
-            )
-            .await?;
-            super::touch(&mut write.transaction, project_id, collection_id).await?;
-            outbox::enqueue_collection_updated(
-                &mut write.transaction,
-                project_id,
-                collection_id,
-                &[],
-            )
-            .await?;
-            view
-        }
-        ChangeViewOutcome::Unchanged(view) => view,
-        ChangeViewOutcome::NotFound => return Err(AppError::NotFound("view")),
-        ChangeViewOutcome::VersionConflict(view) => {
-            return Err(AppError::VersionConflict {
-                resource: "view",
-                current_version: view.version,
-            });
-        }
-        ChangeViewOutcome::NameTaken(other) => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "view_name_taken",
-                format!("Another view is already called \"{other}\"."),
-                json!({ "field": "name" }),
-            ));
-        }
-    };
-    write
-        .finish(StatusCode::OK, &ViewSummary::of(&view, &definitions))
-        .await
-}
-
-async fn delete_view(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, collection_id, view_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-) -> Result<Response, AppError> {
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::CollectionBuild,
-            resource_bound_scope("collection_views", view_id, "remove")?,
-            &(collection_id, view_id),
-        )
-        .await
-    );
-    let collection = write.collection(collection_id).await?;
-    if collection.archived {
-        return Ok(archived_collection(&collection));
-    }
-    let view =
-        match views::remove(&mut write.transaction, project_id, collection_id, view_id).await? {
-            RemoveViewOutcome::Removed(view) => view,
-            RemoveViewOutcome::NotFound => return Err(AppError::NotFound("view")),
-            RemoveViewOutcome::LastView => {
-                return Ok(refusal(
-                    StatusCode::CONFLICT,
-                    "last_view",
-                    "A collection keeps at least one view. Add another before removing this one.",
-                    Value::Null,
-                ));
-            }
-        };
-    record_audit_for(
-        &mut write.transaction,
-        &write.actor,
-        "collection",
-        "collection.view_removed",
-        collection_id,
-        json!({ "view": view.id, "name": view.name }),
-    )
-    .await?;
-    super::touch(&mut write.transaction, project_id, collection_id).await?;
-    outbox::enqueue_collection_updated(&mut write.transaction, project_id, collection_id, &[])
-        .await?;
-    write
-        .finish(StatusCode::OK, &json!({ "removed": view.id }))
-        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -1387,12 +1136,20 @@ struct RecordsQuery {
     /// from `from` up to (not including) `to`, both YYYY-MM-DD. A
     /// calendar's month.
     date_field: Option<Uuid>,
+    /// With `date_field`, `from` and `to`: a timeline's end date field, so
+    /// records whose bar touches the range are read.
+    end_field: Option<Uuid>,
     from: Option<String>,
     to: Option<String>,
     search: Option<String>,
     archived: Option<String>,
     cursor: Option<String>,
     limit: Option<i64>,
+    /// What each group adds up beside its count: "count", "sum",
+    /// "average", "min" or "max". Left out, the view's chart measure.
+    measure: Option<String>,
+    /// The number field a sum, average, min or max reads.
+    measure_field: Option<Uuid>,
 }
 
 /// One record in a page, with its group when grouped.
@@ -1412,6 +1169,9 @@ struct RecordPage {
     /// The people, tasks and pages the values name.
     references: Vec<ValueReference>,
     total: i64,
+    /// The measure over every record, when it isn't a count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<f64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     groups: Vec<GroupCount>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1426,20 +1186,28 @@ async fn list_records(
     ApiQuery(query): ApiQuery<RecordsQuery>,
 ) -> Result<Response, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    reader(&mut connection, &headers, &principal, project_id).await?;
+    let reader = reader(&mut connection, &headers, &principal, project_id).await?;
     let collection = super::get(&mut *connection, project_id, collection_id)
         .await?
+        .filter(|collection| reader.can_view_tasks || !collection.acts_like_task)
         .ok_or(AppError::NotFound("collection"))?;
     let definitions =
         super::field_definitions(&mut connection, project_id, collection_id, true).await?;
+    // What a view reads by: the fields, and a task's other built-ins.
+    let view_fields = super::view_fields(&mut connection, project_id, collection_id, true).await?;
     let mut config = match query.view {
-        Some(view_id) => views::list(&mut *connection, project_id, collection_id)
-            .await?
-            .into_iter()
-            .find(|view| view.id == view_id)
-            .ok_or(AppError::NotFound("view"))?
-            .config
-            .active(&definitions),
+        Some(view_id) => views::visible(
+            &mut connection,
+            project_id,
+            collection_id,
+            principal.actor_id,
+        )
+        .await?
+        .into_iter()
+        .find(|view| view.id == view_id)
+        .ok_or(AppError::NotFound("view"))?
+        .config
+        .active(&view_fields),
         None => ViewConfig::default(),
     };
     if let Some(filters) = query.filters.as_deref() {
@@ -1477,8 +1245,30 @@ async fn list_records(
     if query.group_bucket.is_some() {
         config.group_bucket = query.group_bucket;
     }
-    if let Err(message) = views::check(&config, &definitions) {
-        return Ok(invalid("filters", message));
+    if let Some(op) = query.measure.as_deref() {
+        let Some(op) = MeasureOp::parse(op) else {
+            return Ok(invalid(
+                "measure",
+                "measure is count, sum, average, min or max.",
+            ));
+        };
+        config.chart = Some(ChartConfig {
+            measure: Measure {
+                op,
+                field: query.measure_field,
+            },
+            ..config.chart.unwrap_or_default()
+        });
+    } else if query.measure_field.is_some() {
+        return Ok(invalid("measureField", "measureField goes with a measure."));
+    }
+    if let Err(message) = views::check(&config, &view_fields) {
+        let at = if query.measure.is_some() {
+            "measure"
+        } else {
+            "filters"
+        };
+        return Ok(invalid(at, message));
     }
     let Some(archived) = Archived::parse(query.archived.as_deref().unwrap_or("")) else {
         return Ok(invalid("archived", "archived is exclude, include or only."));
@@ -1494,7 +1284,7 @@ async fn list_records(
         ));
     };
     let mut spec =
-        Spec::from_config(&config, &definitions, principal.actor_id).searching(words, &definitions);
+        Spec::from_config(&config, &view_fields, principal.actor_id).searching(words, &view_fields);
     spec.archived = archived;
     let source = super::source(&collection);
     if let Some(group) = query.group {
@@ -1510,9 +1300,16 @@ async fn list_records(
         spec.in_group = Some(group);
     }
     match (query.date_field, query.from.as_deref(), query.to.as_deref()) {
-        (None, None, None) => {}
+        (None, None, None) if query.end_field.is_none() => {}
+        (Some(field), Some(from), Some(to)) if query.end_field.is_some() => {
+            let end = query.end_field.unwrap_or(field);
+            match query::span_range(&view_fields, field, end, from, to) {
+                Ok(filter) => spec.narrow_to(filter),
+                Err(message) => return Ok(invalid("endField", message)),
+            }
+        }
         (Some(field), Some(from), Some(to)) => {
-            match query::date_range(&definitions, field, from, to) {
+            match query::date_range(&view_fields, field, from, to) {
                 Ok(clauses) => spec.narrow(clauses),
                 Err(message) => return Ok(invalid("dateField", message)),
             }
@@ -1538,6 +1335,7 @@ async fn list_records(
     };
     let total = query::total(&mut connection, source.as_ref(), &spec).await?;
     let groups = query::group_counts(&mut connection, source.as_ref(), &spec).await?;
+    let value = query::measure_total(&mut connection, source.as_ref(), &spec).await?;
     let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
     let found = records::by_ids(
         &mut *connection,
@@ -1567,6 +1365,7 @@ async fn list_records(
             .collect(),
         references,
         total,
+        value,
         groups,
         next_cursor: page.next_cursor,
     })
@@ -1589,9 +1388,10 @@ async fn get_record(
     ApiPath((project_id, collection_id, record_id)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<RecordBody>, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    reader(&mut connection, &headers, &principal, project_id).await?;
+    let reader = reader(&mut connection, &headers, &principal, project_id).await?;
     let tasks = super::get(&mut *connection, project_id, collection_id)
         .await?
+        .filter(|collection| reader.can_view_tasks || !collection.acts_like_task)
         .ok_or(AppError::NotFound("collection"))?
         .acts_like_task;
     let record = records::find(

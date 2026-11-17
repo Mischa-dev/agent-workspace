@@ -157,6 +157,8 @@ pub(super) async fn create_field(
             field_type,
             config,
             position: request.position,
+            formula: None,
+            button: None,
         },
     )
     .await?;
@@ -178,6 +180,7 @@ pub(super) async fn create_field(
                 Value::Null,
             ));
         }
+        CreateFieldOutcome::InvalidSetting(at, message) => return Ok(invalid(at, message)),
     };
     record_audit_for(
         &mut write.transaction,
@@ -285,6 +288,8 @@ pub(super) async fn update_field(
             config,
             position: request.position,
             archived: request.archived,
+            formula: None,
+            button: None,
             expected_version: Some(request.expected_version),
         },
     )
@@ -339,6 +344,7 @@ pub(super) async fn update_field(
                 Value::Null,
             ));
         }
+        ChangeFieldOutcome::InvalidSetting(at, message) => return Ok(invalid(at, message)),
     };
     write.finish(StatusCode::OK, &FieldView::from(&field)).await
 }

@@ -18,6 +18,7 @@
 
 pub mod definition;
 pub mod filter;
+pub mod ops;
 pub mod query;
 pub mod source;
 

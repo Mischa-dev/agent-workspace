@@ -92,6 +92,14 @@ const PRIORITIES: [(&str, &str, Uuid, &str); 4] = [
     ),
 ];
 
+/// The Priority option a stored priority ("urgent") stands for.
+pub fn priority_option(stored: &str) -> Option<Uuid> {
+    PRIORITIES
+        .iter()
+        .find(|(name, _, _, _)| *name == stored)
+        .map(|(_, _, id, _)| *id)
+}
+
 /// The stored priority a Priority option stands for.
 pub fn priority_for_option(option: Uuid) -> Option<&'static str> {
     PRIORITIES
@@ -233,6 +241,8 @@ fn builtin(
             options,
             target: None,
             collection: None,
+            formula: None,
+            button: None,
         },
         position,
         archived: false,
@@ -438,7 +448,7 @@ pub fn source() -> String {
              '{LABELS}', (SELECT jsonb_agg(label.label_id::text ORDER BY label.label_id) \
                           FROM work_item_labels label \
                           WHERE label.project_id = core.project_id AND label.work_item_id = core.id) \
-           )) AS field_values, \
+           )) AS field_values, record.computed_values, \
            core.created_by_actor_id, core.created_by_actor_id AS updated_by_actor_id, \
            record.archived_at, core.version, record.created_at, core.updated_at \
          FROM collection_records record JOIN work_items core ON core.id = record.id)",
@@ -499,9 +509,108 @@ impl RecordSource for TasksSource {
         "core.updated_at"
     }
 
+    fn searched_text(&self) -> &'static [&'static str] {
+        &["core.description"]
+    }
+
     fn identity(&self) -> String {
         format!("tasks:{}:{}", self.project_id, self.collection_id)
     }
+}
+
+/// Tasks across several spaces at once, whatever collection each was made
+/// in (the task tools' lists): the built-in fields have the same IDs in
+/// every space, so one query reads them all. With `collection`, only tasks
+/// made in it (`work_items.collection_id`; `Some(None)` for plain tasks).
+#[derive(Clone, Debug)]
+pub struct TasksAcross {
+    pub projects: Vec<Uuid>,
+    pub collection: Option<Option<Uuid>>,
+}
+
+impl RecordSource for TasksAcross {
+    fn tables(&self) -> String {
+        TasksSource {
+            project_id: Uuid::nil(),
+            collection_id: Uuid::nil(),
+        }
+        .tables()
+    }
+
+    fn scope(&self, builder: &mut QueryBuilder<'_, Postgres>) {
+        builder.push(" WHERE record.project_id = ANY(");
+        builder.push_bind(self.projects.clone());
+        builder.push(") AND core.project_id = ANY(");
+        builder.push_bind(self.projects.clone());
+        builder.push(")");
+        if let Some(collection) = self.collection {
+            builder.push(" AND core.collection_id IS NOT DISTINCT FROM ");
+            builder.push_bind(collection);
+        }
+    }
+
+    fn group_sql(&self, field: &FieldDefinition) -> Option<GroupSql> {
+        group_sql(field.id)
+    }
+
+    /// The board's order, space by space (by name) when there are several.
+    fn extra_sort(&self, key: &str) -> Option<Vec<SortKey>> {
+        let mut keys = Vec::new();
+        if key == RANK && self.projects.len() > 1 {
+            keys.push(order(
+                "(SELECT space.name FROM projects space WHERE space.id = core.project_id)",
+                "text",
+            ));
+            keys.push(order("core.project_id", "uuid"));
+        }
+        keys.extend(
+            TasksSource {
+                project_id: Uuid::nil(),
+                collection_id: Uuid::nil(),
+            }
+            .extra_sort(key)?,
+        );
+        Some(keys)
+    }
+
+    fn updated_at(&self) -> &'static str {
+        "core.updated_at"
+    }
+
+    fn searched_text(&self) -> &'static [&'static str] {
+        &["core.description"]
+    }
+
+    fn identity(&self) -> String {
+        let mut projects = self.projects.clone();
+        projects.sort_unstable();
+        format!("tasks-across:{projects:?}:{:?}", self.collection)
+    }
+}
+
+/// The built-in fields of tasks in several spaces, as one list: each
+/// field once, its options (statuses, types, milestones) those of every
+/// space, so a filter naming any space's option reads as it does there.
+pub async fn across_fields(
+    connection: &mut PgConnection,
+    projects: &[Uuid],
+) -> Result<Vec<FieldDefinition>, AppError> {
+    let mut merged: Vec<FieldDefinition> = Vec::new();
+    for project in projects {
+        for field in system_fields(&mut *connection, *project).await? {
+            match merged.iter_mut().find(|known| known.id == field.id) {
+                Some(known) => {
+                    for option in field.config.options {
+                        if !known.config.options.iter().any(|seen| seen.id == option.id) {
+                            known.config.options.push(option);
+                        }
+                    }
+                }
+                None => merged.push(field),
+            }
+        }
+    }
+    Ok(merged)
 }
 
 /// The sort key only tasks have: their order on the board (status, then
@@ -658,17 +767,7 @@ pub async fn ensure(
     Ok(())
 }
 
-/// What to say when a write asks to change the Tasks collection's records,
-/// fields, or the collection itself.
+/// What to say when a write asks to change the Tasks collection itself.
 pub const READ_ONLY_MESSAGE: &str = "Tasks is the built-in collection of this project's tasks: \
-     its name and settings don't change. Change its records with the task tools (task_create, \
-     task_update), and its fields with collection_write.";
-
-/// What to say when `record_write` names a collection whose records are
-/// tasks.
-pub fn task_like_message(name: &str) -> String {
-    format!(
-        "{name}'s records act like tasks: add them with task_create (collection: \"{name}\") and \
-         change them with task_update, by key or ID."
-    )
-}
+     its name and settings don't change. Its records are the tasks (record_write or the task \
+     tools), and its fields change with collection_write.";

@@ -101,6 +101,8 @@ pub mod kind {
     pub const BUDGET_WARNING: &str = "budget_warning";
     /// A2's follows: a thing you follow changed.
     pub const THING_UPDATE: &str = "thing_update";
+    /// T1.29: a public form you made reached its daily limit and paused.
+    pub const FORM_PAUSED: &str = "form_paused";
 }
 
 /// Groups of kinds people filter the inbox by.
@@ -2197,6 +2199,18 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
                 (format!("Suggested edits to {page}"), None)
             }
         }
+        // Its words come from the limit it hit, not stored text (rule 10).
+        kind::FORM_PAUSED => (
+            "A form you made paused itself".to_owned(),
+            row.detail
+                .get("dailyLimit")
+                .and_then(serde_json::Value::as_i64)
+                .map(|limit| {
+                    format!(
+                        "It took {limit} answers today, its daily limit. Turn it on again to take more."
+                    )
+                }),
+        ),
         other => (
             row.detail
                 .get("title")

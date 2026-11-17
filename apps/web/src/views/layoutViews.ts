@@ -1,14 +1,14 @@
 import type { Experience } from '../experience/layout'
 import type { PartId } from '../experience/parts'
-import type { SavedView } from './api'
+import type { TaskView } from './api'
 
 /** Whether the project's layout shows a saved view: Ready for agents goes with runs. */
-export function viewShown(view: Pick<SavedView, 'builtin'>, experience: Experience): boolean {
+export function viewShown(view: Pick<TaskView, 'builtin'>, experience: Experience): boolean {
   return view.builtin !== 'ready_for_agents' || experience.shows('area.runs')
 }
 
 /** A view's name in the layout's words: My tasks is "My to-dos" in Personal life. */
-export function viewName(view: Pick<SavedView, 'builtin' | 'name'>, experience: Experience): string {
+export function viewName(view: Pick<TaskView, 'builtin' | 'name'>, experience: Experience): string {
   return view.builtin === 'my_tasks' ? `My ${experience.word('task', 'many')}` : view.name
 }
 

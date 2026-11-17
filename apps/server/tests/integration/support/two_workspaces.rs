@@ -93,7 +93,11 @@ pub(crate) struct World {
     /// values name `rook`, task WORK-1 and `page`.
     pub(crate) collection: Uuid,
     pub(crate) collection_field: Uuid,
+    /// A button field on it (T1.21) that records a decision.
+    pub(crate) collection_button: Uuid,
     pub(crate) collection_view: Uuid,
+    /// A shared dashboard (T1.32) with a tile over `collection_view`.
+    pub(crate) dashboard: Uuid,
     pub(crate) record: Uuid,
     /// A sheet (AWD-54) with a header, a value and a formula.
     pub(crate) sheet: Uuid,
@@ -706,6 +710,10 @@ async fn build_workspace(
                 {"name": format!("Build{m}"), "type": "link", "target": "task"},
                 {"name": format!("Spec{m}"), "type": "link", "target": "page"},
                 {"name": format!("Notes{m}"), "type": "text"},
+                {"name": format!("Ship{m}"), "type": "button", "button": {"steps": [{
+                    "operation": "decision_record",
+                    "arguments": {"spaceId": "{{space.id}}", "title": "Shipped {{record.title}}"},
+                }]}},
             ],
             "views": [{
                 "name": format!("Severe ones{m}"),
@@ -756,6 +764,13 @@ async fn build_workspace(
     .fetch_one(pool)
     .await
     .expect("collection field");
+    let collection_button = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM field_definitions WHERE collection_id = $1 AND field_type = 'button'",
+    )
+    .bind(collection)
+    .fetch_one(pool)
+    .await
+    .expect("collection button");
     let collection_view = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM collection_views WHERE collection_id = $1 ORDER BY position, id LIMIT 1",
     )
@@ -763,6 +778,17 @@ async fn build_workspace(
     .fetch_one(pool)
     .await
     .expect("collection view");
+    let dashboard = call(
+        "dashboard_create",
+        json!({
+            "spaceId": project,
+            "name": format!("Numbers{m}"),
+            "tiles": [{"view": collection_view.to_string()}, {"text": format!("Note{m}")}],
+            "clientRequestId": "dashboard-1",
+        }),
+    )
+    .await;
+    let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("dashboard id");
 
     // Sheets (AWD-54): a header row, a value and a formula over it.
     let sheet = call(
@@ -900,12 +926,20 @@ async fn build_workspace(
             value
         }
     };
-    post(
-        format!("/api/v1/projects/{project}/views"),
+    let tasks_collection = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM collections WHERE project_id = $1::uuid AND builtin = 'tasks'",
+    )
+    .bind(&project)
+    .fetch_one(pool)
+    .await
+    .expect("Tasks collection");
+    let view = post(
+        format!("/api/v2/w/{organization}/ops/view_create"),
         "view-1",
-        json!({"name": format!("Launch view{m}"), "query": {"q": format!("Launch{m}")}}),
+        json!({"collection": tasks_collection, "name": format!("Launch view{m}"), "type": "table"}),
     )
     .await;
+    assert_eq!(view["outcome"], "ok", "{label} view: {view}");
     let task_template = post(
         format!("/api/v1/projects/{project}/task-templates"),
         "template-1",
@@ -1758,7 +1792,9 @@ async fn build_workspace(
         project_whiteboard,
         collection,
         collection_field,
+        collection_button,
         collection_view,
+        dashboard,
         record,
         sheet,
         file,

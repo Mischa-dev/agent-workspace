@@ -81,13 +81,13 @@ export function FieldFilterEditor({
 }) {
   const [tooMany, setTooMany] = useState(false)
   // Linked tasks and pages filter by whether they're set; the rest by value too.
-  const ops = field.type === 'link' ? (['notEmpty', 'empty'] as FieldOp[]) : opsFor(field.type)
+  const ops = field.type === 'link' ? (['notEmpty', 'empty'] as FieldOp[]) : opsFor(field)
   const [op, setOp] = useState<FieldOp>(clause?.op ?? ops[0])
   const [values, setValues] = useState<string[]>(clause?.values ?? [])
   const people = useAssignableActors(projectId, '')
   const toggle = (value: string) => setValues(values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value])
   // A record's maker filters as a person, its times as dates, its ID as a number.
-  const like = behavesAs(field.type)
+  const like = behavesAs(field)
   const byCategory = op === 'categoryIs' || op === 'categoryIsNot'
   const choices = like === 'single_choice' || like === 'multiple_choice' || like === 'status'
   const needsValues = opTakesValues(op) && like !== 'checkbox'
@@ -169,7 +169,7 @@ export function FieldFilterEditor({
         <SelectField aria-label={`How ${field.name} matches`} compact onChange={(event) => changeOp(event.target.value as FieldOp)} value={op}>
           {ops.map((entry) => (
             <option key={entry} value={entry}>
-              {field.name} {opLabel(entry, field.type)}
+              {field.name} {opLabel(entry, field)}
             </option>
           ))}
         </SelectField>

@@ -56,7 +56,7 @@ use crate::{
         MembershipScope, PERMISSION_MODULES, PERMISSIONS, Permission, PermissionSet, ProjectScope,
         Resource, RoleGrant, Subject, authorize, current_agent_limit,
     },
-    work_items::views::BUILTIN_VIEWS,
+    views::definition::BUILTIN_VIEW_KEYS,
 };
 
 const MAX_CUSTOM_ROLES: i64 = 50;
@@ -883,7 +883,7 @@ async fn checked_defaults(
     if let Some(views) = defaults.pinned_views.as_mut() {
         if views
             .iter()
-            .any(|view| !BUILTIN_VIEWS.iter().any(|builtin| builtin.key == view))
+            .any(|view| !BUILTIN_VIEW_KEYS.contains(&view.as_str()))
         {
             return Err(AppError::Validation("role pinned view"));
         }
@@ -2416,7 +2416,7 @@ mod tests {
             }
             if let Some(views) = &point.defaults.pinned_views {
                 for view in views {
-                    assert!(BUILTIN_VIEWS.iter().any(|builtin| builtin.key == view));
+                    assert!(BUILTIN_VIEW_KEYS.contains(&view.as_str()));
                 }
             }
             for part in &point.defaults.home_hidden {

@@ -45,6 +45,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
+    collections::task_query::{self, TaskQuery},
     error::{ApiJson, ApiPath, AppError},
     events::{self, Caller, Event, Subject},
     idempotency::IdempotencyKey,
@@ -53,10 +54,8 @@ use crate::{
     mcp::{self, McpPrincipal},
     notifications::{self, NewNotification},
     policy::{Action as PolicyAction, ActorKind, AgentLimits, with_agent_limits},
-    work_items::{
-        templates::{Frequency, Schedule},
-        views,
-    },
+    views::filter::Filter,
+    work_items::templates::{Frequency, Schedule},
 };
 
 pub const FIRE_KIND: &str = "automations.fire";
@@ -345,7 +344,8 @@ fn next_run_after(trigger: &Trigger, after: DateTime<Utc>) -> Option<DateTime<Ut
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Conditions {
-    /// A saved view in the project: the maker's own or a shared one.
+    /// A view of the space's Tasks collection: the maker's own or a shared
+    /// one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub view_id: Option<Uuid>,
@@ -693,7 +693,9 @@ const RULE_SELECT: &str = r#"
            rule.last_fired_at, rule.fire_count, rule.version, rule.created_at, rule.updated_at
     FROM automation_rules rule
     LEFT JOIN users person ON person.actor_id = rule.owner_actor_id
-    LEFT JOIN saved_views view ON view.project_id = rule.project_id AND view.id = rule.view_id
+    LEFT JOIN collection_views view
+      ON view.project_id = rule.project_id AND view.id = rule.view_id
+     AND (view.owner_actor_id IS NULL OR view.owner_actor_id = rule.owner_actor_id)
 "#;
 
 /// AWD-75: a module a rule needs (Automations, its trigger's and its
@@ -767,7 +769,7 @@ impl RuleRow {
     fn conditions(&self) -> Conditions {
         Conditions {
             view_id: self.view_id,
-            filters: views::query_params(&self.conditions),
+            filters: params_of(&self.conditions),
         }
     }
 
@@ -918,26 +920,24 @@ async fn check_references(
 ) -> Result<(), AppError> {
     let pool = &state.pool;
     if let Some(view_id) = conditions.view_id {
-        let found = sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM saved_views
-                WHERE project_id = $1 AND id = $2
-                  AND (owner_actor_id IS NULL OR owner_actor_id = $3)
-            )
-            "#,
-        )
-        .bind(project_id)
-        .bind(view_id)
-        .bind(maker)
-        .fetch_one(crate::db::scoped(pool))
-        .await?;
-        if !found {
+        let mut connection = crate::db::scoped_tx(pool).await?;
+        if task_query::usable_view(&mut connection, project_id, view_id, maker)
+            .await?
+            .is_none()
+        {
             return Err(AppError::NotFound("view"));
         }
     }
     if !conditions.filters.is_empty() {
-        views::check_view_query(pool, project_id, maker, &conditions.filters).await?;
+        let query = task_query::from_params(&conditions.filters)
+            .map_err(|_| AppError::Validation("filters"))?;
+        let mut connection = crate::db::scoped_tx(pool).await?;
+        if task_query::check(&mut connection, project_id, &query)
+            .await?
+            .is_err()
+        {
+            return Err(AppError::Validation("filters"));
+        }
     }
     if let Trigger::RecordCreated {
         collection_id: Some(id),
@@ -1734,59 +1734,86 @@ async fn task_matches(
     rule: &RuleRow,
     work_item_id: Uuid,
 ) -> Result<Result<bool, &'static str>, AppError> {
-    let Some(params) = condition_params(pool, rule).await? else {
-        return Ok(Err(
-            "Turned off because the saved view its conditions use was deleted.",
-        ));
-    };
-    if params.is_empty() {
+    if rule.conditions().is_empty() {
         return Ok(Ok(true));
     }
-    match views::matching_tasks(
-        pool,
+    let query = match condition_query(pool, rule).await? {
+        Ok(query) => query,
+        Err(lost) => return Ok(Err(lost.reason())),
+    };
+    let mut connection = crate::db::scoped_tx(pool).await?;
+    let found = task_query::matching(
+        &mut connection,
         rule.project_id,
-        &params,
+        &query,
         rule.owner_actor_id,
         Some(&[work_item_id]),
         1,
     )
-    .await
-    {
-        Ok(found) => Ok(Ok(!found.is_empty())),
-        Err(AppError::Validation(_) | AppError::Invalid(_)) => Ok(Err(
-            "Turned off because its conditions can't be read any more.",
-        )),
-        Err(error) => Err(error),
+    .await?;
+    Ok(Ok(!found.is_empty()))
+}
+
+/// Why a rule's conditions can't be read any more.
+#[derive(Clone, Copy, Debug)]
+enum ConditionsLost {
+    /// Its view was deleted, or isn't the maker's to use.
+    ViewGone,
+    /// Its filters no longer read as a task query.
+    Unreadable,
+}
+
+impl ConditionsLost {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::ViewGone => "Turned off because the saved view its conditions use was deleted.",
+            Self::Unreadable => "Turned off because its conditions can't be read any more.",
+        }
     }
 }
 
-/// The view's query with the inline filters on top. None when the view is
-/// gone.
-async fn condition_params(
+/// A rule's stored inline filters, as list query parameters.
+fn params_of(value: &Value) -> BTreeMap<String, String> {
+    value
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The rule's conditions as one task query, as its maker reads them: its
+/// view's filters with the inline ones on top.
+async fn condition_query(
     pool: &PgPool,
     rule: &RuleRow,
-) -> Result<Option<BTreeMap<String, String>>, AppError> {
-    let mut params = BTreeMap::new();
+) -> Result<Result<TaskQuery, ConditionsLost>, AppError> {
+    let Ok(mut query) = task_query::from_params(&params_of(&rule.conditions)) else {
+        return Ok(Err(ConditionsLost::Unreadable));
+    };
     if let Some(view_id) = rule.view_id {
-        let Some(query) = sqlx::query_scalar::<_, Value>(
-            r#"
-            SELECT query FROM saved_views
-            WHERE project_id = $1 AND id = $2
-              AND (owner_actor_id IS NULL OR owner_actor_id = $3)
-            "#,
+        let mut connection = crate::db::scoped_tx(pool).await?;
+        let Some(view) = task_query::usable_view(
+            &mut connection,
+            rule.project_id,
+            view_id,
+            rule.owner_actor_id,
         )
-        .bind(rule.project_id)
-        .bind(view_id)
-        .bind(rule.owner_actor_id)
-        .fetch_optional(crate::db::scoped(pool))
         .await?
         else {
-            return Ok(None);
+            return Ok(Err(ConditionsLost::ViewGone));
         };
-        params = views::query_params(&query);
+        query.config.filters = Filter::And(vec![
+            view.config.filters,
+            std::mem::take(&mut query.config.filters),
+        ]);
     }
-    params.extend(views::query_params(&rule.conditions));
-    Ok(Some(params))
+    Ok(Ok(query))
 }
 
 /// Hands an event to the project's rules. Called by the events router.
@@ -2707,16 +2734,21 @@ async fn target_tasks(
     if !trigger.picks_tasks() {
         return Ok(Ok(context.work_item_id.into_iter().collect()));
     }
-    let Some(params) = condition_params(pool, rule).await? else {
-        return Ok(Err("Its saved view was deleted.".to_owned()));
-    };
-    if params.is_empty() {
+    if rule.conditions().is_empty() {
         return Ok(Ok(Vec::new()));
     }
-    Ok(Ok(views::matching_tasks(
-        pool,
+    let query = match condition_query(pool, rule).await? {
+        Ok(query) => query,
+        Err(ConditionsLost::ViewGone) => return Ok(Err("Its saved view was deleted.".to_owned())),
+        Err(ConditionsLost::Unreadable) => {
+            return Ok(Err("Its conditions can't be read any more.".to_owned()));
+        }
+    };
+    let mut connection = crate::db::scoped_tx(pool).await?;
+    Ok(Ok(task_query::matching(
+        &mut connection,
         rule.project_id,
-        &params,
+        &query,
         rule.owner_actor_id,
         None,
         limit,

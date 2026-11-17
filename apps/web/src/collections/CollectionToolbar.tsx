@@ -1,10 +1,10 @@
-import { ArrowUpDown, CalendarDays, Columns3, ListFilter, Rows3 } from 'lucide-react'
+import { ArrowUpDown, CalendarDays, ChartColumn, Columns3, ListFilter, Rows3 } from 'lucide-react'
 
 import { DATE_BUCKETS, behavesAs, clauseText, type FieldDefinition, type FieldReference } from '../fields/fieldModel'
 import { Button, Icon, Menu, TextField, type MenuEntry } from '../ui'
 import { useNamedActors } from '../work-items/hooks'
-import { hasFilter, type CollectionBody, type FilterGroup, type FilterItem, type SortRule, type ViewConfig, type ViewType } from './api'
-import { boardFields, columnOrder, dateFields, groupableFields, sortName, sortText, withColumnHidden } from './collectionModel'
+import { CHART_STYLES, MEASURE_OPS, hasFilter, type ChartConfig, type ChartStyle, type CollectionBody, type FilterGroup, type FilterItem, type SortRule, type ViewConfig, type ViewType } from './api'
+import { MEASURE_NAMES, boardFields, columnOrder, dateFields, groupableFields, numberFields, sortName, sortText, withColumnHidden } from './collectionModel'
 
 /** What sorts a view: the title column, the record's number, when it last changed, or a field. */
 function sortKeys(body: CollectionBody) {
@@ -34,6 +34,7 @@ export function CollectionToolbar({
   onArchived,
   onChange,
   onEditFilter,
+  onEditGroup,
   onFilter,
   onReset,
   onSave,
@@ -55,6 +56,8 @@ export function CollectionToolbar({
   onArchived: (archived: boolean) => void
   onChange: (config: ViewConfig) => void
   onEditFilter: (index: number, anchor: HTMLElement) => void
+  /** Opens a filter group to change it, or a new one (null). */
+  onEditGroup: (index: number | null) => void
   onFilter: (field: FieldDefinition, anchor: HTMLElement) => void
   onReset: () => void
   onSave: () => void
@@ -79,7 +82,12 @@ export function CollectionToolbar({
     if (document.activeElement instanceof HTMLElement) run(document.activeElement)
   }
   const filterItems: MenuEntry[] = active.length
-    ? [{ heading: 'Filter by' }, ...active.map((field) => ({ label: field.name, onSelect: anchorHere((anchor) => onFilter(field, anchor)) }))]
+    ? [
+        { heading: 'Filter by' },
+        ...active.map((field) => ({ label: field.name, onSelect: anchorHere((anchor) => onFilter(field, anchor)) })),
+        { separator: true as const },
+        { label: 'Add a group (this or that)…', icon: 'plus' as const, onSelect: () => onEditGroup(null) },
+      ]
     : [{ label: 'Add a field to filter by it', disabled: true, onSelect: () => undefined }]
   const sorted = config.sort[0] ?? null
   const sortItems: MenuEntry[] = [
@@ -98,7 +106,7 @@ export function CollectionToolbar({
         { heading: 'Group by' },
         ...groupable.map((field) => ({ label: field.name, checked: config.groupBy === field.id, onSelect: () => onChange({ ...config, groupBy: field.id }) })),
         // A date groups by day, week or month.
-        ...(groupedBy && behavesAs(groupedBy.type) === 'date'
+        ...(groupedBy && behavesAs(groupedBy) === 'date'
           ? [
               { separator: true as const },
               { heading: `${groupedBy.name} by` },
@@ -113,12 +121,54 @@ export function CollectionToolbar({
       ]
     : [{ label: 'Group by a choice, status, person, checkbox or date field', disabled: true, onSelect: () => undefined }]
   const dated = dateFields(body.fields)
-  const dateItems: MenuEntry[] = dated.length
-    ? [{ heading: 'Show records by' }, ...dated.map((field) => ({ label: field.name, checked: config.dateField === field.id, onSelect: () => onChange({ ...config, dateField: field.id }) }))]
-    : [{ label: 'Add a date field to show records by it', disabled: true, onSelect: () => undefined }]
+  const dateItems: MenuEntry[] = !dated.length
+    ? [{ label: 'Add a date field to show records by it', disabled: true, onSelect: () => undefined }]
+    : layout === 'timeline'
+      ? [
+          { heading: 'Bars start on' },
+          ...dated.map((field) => ({
+            label: field.name,
+            checked: config.dateField === field.id,
+            onSelect: () => onChange({ ...config, dateField: field.id, endField: config.endField === field.id ? null : config.endField }),
+          })),
+          { separator: true as const },
+          { heading: 'Bars end on' },
+          { label: 'The same day', checked: !config.endField, onSelect: () => onChange({ ...config, endField: null }) },
+          ...dated
+            .filter((field) => field.id !== config.dateField)
+            .map((field) => ({ label: field.name, checked: config.endField === field.id, onSelect: () => onChange({ ...config, endField: field.id }) })),
+        ]
+      : [{ heading: 'Show records by' }, ...dated.map((field) => ({ label: field.name, checked: config.dateField === field.id, onSelect: () => onChange({ ...config, dateField: field.id }) }))]
+  const chart: ChartConfig = config.chart ?? { style: 'bar', measure: { op: 'count' } }
+  const numbers = numberFields(body.fields)
+  const measured = numbers.find((field) => field.id === chart.measure.field)
+  const setChart = (next: Partial<ChartConfig>) => onChange({ ...config, chart: { ...chart, ...next } })
+  const chartItems: MenuEntry[] = [
+    { heading: 'Draw as' },
+    ...CHART_STYLES.map((style) => ({ label: STYLE_NAMES[style], checked: chart.style === style, onSelect: () => setChart({ style }) })),
+    { separator: true as const },
+    { heading: 'Each group shows' },
+    ...MEASURE_OPS.map((op) => ({
+      label: op === 'count' ? MEASURE_NAMES.count : `${MEASURE_NAMES[op]}${measured ? ` of ${measured.name}` : ''}`,
+      checked: op === 'count' ? !measured || chart.measure.op === 'count' : Boolean(measured) && chart.measure.op === op,
+      disabled: op !== 'count' && !numbers.length,
+      onSelect: () => setChart({ measure: op === 'count' ? { op } : { op, field: measured?.id ?? numbers[0]?.id ?? null } }),
+    })),
+    ...(numbers.length
+      ? [
+          { separator: true as const },
+          { heading: 'Adding up' },
+          ...numbers.map((field) => ({
+            label: field.name,
+            checked: measured?.id === field.id && chart.measure.op !== 'count',
+            onSelect: () => setChart({ measure: { op: chart.measure.op === 'count' ? 'sum' : chart.measure.op, field: field.id } }),
+          })),
+        ]
+      : [{ label: 'Add a number field to add one up', disabled: true, onSelect: () => undefined }]),
+  ]
   const fieldsWord = layout === 'table' ? 'Columns' : 'Fields'
   const fieldItems: MenuEntry[] = [
-    { heading: layout === 'table' ? 'Columns' : 'Fields on cards' },
+    { heading: layout === 'table' ? 'Columns' : layout === 'list' ? 'Fields on each line' : 'Fields on cards' },
     ...columnOrder(body.fields, config).map(({ field, hidden }) => ({
       label: field.name,
       checked: !hidden,
@@ -127,7 +177,7 @@ export function CollectionToolbar({
     })),
     ...(canBuild ? [{ separator: true as const }, { label: 'Add a field…', icon: 'plus' as const, onSelect: onAddField }] : []),
   ]
-  const groupField = layout === 'gallery' || layout === 'calendar' ? undefined : active.find((field) => field.id === config.groupBy)
+  const groupField = layout === 'gallery' || layout === 'calendar' || layout === 'timeline' ? undefined : active.find((field) => field.id === config.groupBy)
 
   return (
     <div className="aw-collection__toolbar">
@@ -144,8 +194,12 @@ export function CollectionToolbar({
           value={search}
         />
         <Menu items={filterItems} label="Filter" trigger={<Button icon={ListFilter} size="sm" variant="ghost">Filter</Button>} />
-        <Menu items={sortItems} label="Sort" trigger={<Button icon={ArrowUpDown} size="sm" variant="ghost">Sort</Button>} />
-        {layout === 'gallery' || layout === 'calendar' ? null : (
+        {layout === 'chart' ? (
+          <Menu items={chartItems} label="Chart" trigger={<Button icon={ChartColumn} size="sm" variant="ghost">Chart</Button>} />
+        ) : (
+          <Menu items={sortItems} label="Sort" trigger={<Button icon={ArrowUpDown} size="sm" variant="ghost">Sort</Button>} />
+        )}
+        {layout === 'gallery' || layout === 'calendar' || layout === 'timeline' ? null : (
           <Menu
             items={groupItems}
             label={layout === 'board' ? 'Columns by' : 'Group'}
@@ -156,10 +210,10 @@ export function CollectionToolbar({
             }
           />
         )}
-        {layout === 'calendar' ? (
+        {layout === 'calendar' || layout === 'timeline' ? (
           <Menu items={dateItems} label="Dates" trigger={<Button icon={CalendarDays} size="sm" variant="ghost">Dates</Button>} />
         ) : null}
-        {layout === 'calendar' ? null : (
+        {layout === 'calendar' || layout === 'timeline' || layout === 'chart' ? null : (
           <Menu items={fieldItems} label={fieldsWord} trigger={<Button icon={Columns3} size="sm" variant="ghost">{fieldsWord}</Button>} />
         )}
         <span className="aw-collection__spacer" />
@@ -199,9 +253,9 @@ export function CollectionToolbar({
             )
           })}
           {(config.filterGroups ?? []).map((group, index) => (
-            // A group ("this or that") is kept as saved: it can be removed here, not edited.
             <Chip
               key={`group-${index}`}
+              onEdit={() => onEditGroup(index)}
               onRemove={() => onChange({ ...config, filterGroups: (config.filterGroups ?? []).filter((_, at) => at !== index) })}
               text={groupText(group)}
             />
@@ -220,6 +274,8 @@ export function CollectionToolbar({
     </div>
   )
 }
+
+const STYLE_NAMES: Record<ChartStyle, string> = { bar: 'Bars', line: 'A line', donut: 'A donut', number: 'One number' }
 
 function Chip({ onEdit, onRemove, text, title }: { onEdit?: (anchor: HTMLElement) => void; onRemove: () => void; text: string; title?: string }) {
   return (

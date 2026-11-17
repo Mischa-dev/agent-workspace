@@ -63,6 +63,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "redeliver",
             // A harmless signed ping, to check an address answers.
             "test",
+            "press",
             "remove",
             // A link or credential stops working; the row stays (K4.26).
             "revoke",

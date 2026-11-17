@@ -385,6 +385,8 @@ export async function listWorkItems(
     items,
     nextCursor: nullableString(payload.nextCursor),
     total: typeof payload.total === 'number' ? payload.total : items.length,
+    collectionId: nullableString(payload.collectionId),
+    config: payload.config ?? {},
   }
 }
 
