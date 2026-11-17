@@ -871,9 +871,11 @@ pub async fn matching(
     let mut spec = Spec::from_config(&config, &definitions, reader).searching(words, &definitions);
     spec.archived = query.archived;
     spec.only = only.map(<[Uuid]>::to_vec);
-    let source = tasks::TasksSource {
-        project_id,
-        collection_id,
+    // Every task in the space, a task-like collection's too, as the list
+    // reads them.
+    let source = tasks::TasksAcross {
+        projects: vec![project_id],
+        collection: None,
     };
     let page = query::page(connection, &source, &spec, None, limit)
         .await?

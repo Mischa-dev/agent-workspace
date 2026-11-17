@@ -87,10 +87,12 @@ struct Listing {
 }
 
 impl Listing {
-    fn source(&self) -> Option<tasks::TasksSource> {
-        self.collection_id.map(|collection_id| tasks::TasksSource {
-            project_id: self.project_id,
-            collection_id,
+    /// Every task in the project, whatever collection it was made in (a
+    /// task-like collection's too); the Tasks collection's fields read them.
+    fn source(&self) -> Option<tasks::TasksAcross> {
+        self.collection_id.map(|_| tasks::TasksAcross {
+            projects: vec![self.project_id],
+            collection: None,
         })
     }
 

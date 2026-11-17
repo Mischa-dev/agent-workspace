@@ -171,6 +171,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
         })
         // My work lists tasks across projects, so it isn't under the project key.
         void queryClient.invalidateQueries({ queryKey: queryKeys.myWork })
+        // A dashboard tile over tasks counts it (an operation's answer, read
+        // through opQuery).
+        void queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'dashboard_get',
+        })
         // A task embedded in a page as a card, and "Referenced in" lists its
         // description or comments may have changed.
         void queryClient.invalidateQueries({
