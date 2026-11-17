@@ -126,6 +126,10 @@ export type Trigger =
   /** A collection's records (AWD-110): one collection, or any. */
   | { kind: 'record_created'; collectionId?: string | null }
   | { kind: 'record_changed'; collectionId?: string | null }
+  /** A page, sheet or board kept as a new version: one of them, or any in the project. */
+  | { kind: 'page_changed'; pageId?: string | null }
+  | { kind: 'sheet_changed'; sheetId?: string | null }
+  | { kind: 'whiteboard_changed'; whiteboardId?: string | null }
   | {
       kind: 'schedule'
       frequency: 'daily' | 'weekly' | 'monthly'

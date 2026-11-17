@@ -173,6 +173,26 @@ pub enum Trigger {
         #[schemars(with = "Option<String>")]
         collection_id: Option<Uuid>,
     },
+    /// A page is saved as a new version (K3.5), in the project or this one.
+    /// Takes no task conditions; its actions notify or post a message.
+    PageChanged {
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        page_id: Option<Uuid>,
+    },
+    /// A sheet's cells, tabs or name change, in the project or this one.
+    SheetChanged {
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        sheet_id: Option<Uuid>,
+    },
+    /// A whiteboard is saved as a new version (once per edit session), in
+    /// the project or this one.
+    WhiteboardChanged {
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        whiteboard_id: Option<Uuid>,
+    },
     /// One of the maker's provider accounts resets soon with capacity left
     /// (the capacity alert's "resets soon" rule). Launches use that account.
     CapacityWindow {
@@ -200,6 +220,9 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "message_posted",
     "record_created",
     "record_changed",
+    "page_changed",
+    "sheet_changed",
+    "whiteboard_changed",
     "schedule",
     "capacity_window",
 ];
@@ -223,17 +246,42 @@ impl Trigger {
             Self::MessagePosted { .. } => "message_posted",
             Self::RecordCreated { .. } => "record_created",
             Self::RecordChanged { .. } => "record_changed",
+            Self::PageChanged { .. } => "page_changed",
+            Self::SheetChanged { .. } => "sheet_changed",
+            Self::WhiteboardChanged { .. } => "whiteboard_changed",
             Self::Schedule { .. } => "schedule",
             Self::CapacityWindow { .. } => "capacity_window",
         }
     }
 
-    /// Fired by a collection's records, not tasks (AWD-110).
+    /// Fired by a collection's records (AWD-110) or a page, sheet or board
+    /// (K3.5), not tasks.
     fn about_records(&self) -> bool {
         matches!(
             self,
-            Self::RecordCreated { .. } | Self::RecordChanged { .. }
+            Self::RecordCreated { .. }
+                | Self::RecordChanged { .. }
+                | Self::PageChanged { .. }
+                | Self::SheetChanged { .. }
+                | Self::WhiteboardChanged { .. }
         )
+    }
+
+    /// The page, sheet or board a document trigger names: its kind, the
+    /// table it lives in, the column set when it's put away, and its id.
+    fn document(&self) -> Option<(&'static str, &'static str, &'static str, Uuid)> {
+        match self {
+            Self::PageChanged { page_id: Some(id) } => {
+                Some(("page", "project_pages", "archived_at", *id))
+            }
+            Self::SheetChanged { sheet_id: Some(id) } => {
+                Some(("sheet", "sheets", "archived_at", *id))
+            }
+            Self::WhiteboardChanged {
+                whiteboard_id: Some(id),
+            } => Some(("whiteboard", "whiteboards", "deleted_at", *id)),
+            _ => None,
+        }
     }
 
     /// Schedules and capacity windows aren't about one task: their
@@ -328,7 +376,9 @@ pub enum Recipients {
 /// What a rule does. Text may use {{task.key}}, {{task.title}},
 /// {{task.url}}, {{task.status}}, {{run.state}}, {{pr.number}},
 /// {{pr.title}}, {{pr.url}}, {{record.title}}, {{record.url}},
-/// {{collection.name}}, {{rule.name}} and {{event}}.
+/// {{collection.name}}, {{page.title}}, {{page.url}}, {{sheet.title}},
+/// {{sheet.url}}, {{whiteboard.title}}, {{whiteboard.url}}, {{rule.name}}
+/// and {{event}}.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(
     tag = "kind",
@@ -487,6 +537,15 @@ fn check_shape(
             if !conditions.is_empty() {
                 return Err(AppError::Invalid(
                     "a record rule has no task conditions: name its collection instead",
+                ));
+            }
+        }
+        Trigger::PageChanged { .. }
+        | Trigger::SheetChanged { .. }
+        | Trigger::WhiteboardChanged { .. } => {
+            if !conditions.is_empty() {
+                return Err(AppError::Invalid(
+                    "a page, sheet or board rule has no task conditions: name the one it watches instead",
                 ));
             }
         }
@@ -883,6 +942,21 @@ async fn check_references(
         .await?;
         if !found {
             return Err(AppError::NotFound("collection"));
+        }
+    }
+    if let Some((kind, table, put_away, id)) = trigger.document() {
+        // The named page, sheet or board is in this project and not
+        // archived or in the trash.
+        let found = sqlx::query_scalar::<_, bool>(&format!(
+            "SELECT EXISTS (SELECT 1 FROM {table} WHERE project_id = $1 AND id = $2 \
+             AND {put_away} IS NULL)"
+        ))
+        .bind(project_id)
+        .bind(id)
+        .fetch_one(crate::db::scoped(pool))
+        .await?;
+        if !found {
+            return Err(AppError::NotFound(kind));
         }
     }
     let mut conversations = Vec::new();
@@ -1439,6 +1513,9 @@ fn kinds_for(event_type: &str) -> &'static [&'static str] {
         "message.created" => &["message_posted"],
         "record.created" => &["record_created"],
         "record.updated" => &["record_changed"],
+        "page.updated" => &["page_changed"],
+        "sheet.updated" => &["sheet_changed"],
+        "whiteboard.updated" => &["whiteboard_changed"],
         _ => &[],
     }
 }
@@ -1575,6 +1652,15 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             }
             Trigger::RecordCreated { collection_id } | Trigger::RecordChanged { collection_id } => {
                 collection_id.is_none_or(|only| subject.collection_id == Some(only))
+            }
+            Trigger::PageChanged { page_id } => {
+                page_id.is_none_or(|only| subject.page_id == Some(only))
+            }
+            Trigger::SheetChanged { sheet_id } => {
+                sheet_id.is_none_or(|only| subject.sheet_id == Some(only))
+            }
+            Trigger::WhiteboardChanged { whiteboard_id } => {
+                whiteboard_id.is_none_or(|only| subject.whiteboard_id == Some(only))
             }
             Trigger::Schedule { .. } | Trigger::CapacityWindow { .. } => false,
         };
@@ -2235,6 +2321,9 @@ impl Context {
             // fires nothing, as webhooks don't deliver it.
             record_id: subject.record_id,
             collection_id: subject.collection_id,
+            page_id: subject.page_id,
+            sheet_id: subject.sheet_id,
+            whiteboard_id: subject.whiteboard_id,
             ..Subject::default()
         };
         if !crate::webhooks::visible_to(&state.pool, rule.owner_actor_id, rule.project_id, &about)
@@ -2318,6 +2407,19 @@ impl Context {
                     .unwrap_or_default()
                     .to_owned(),
             ));
+        }
+        if let Some((kind, document)) =
+            crate::webhooks::document_data(state, rule.owner_actor_id, rule.project_id, subject)
+                .await?
+        {
+            let (title, url) = match kind {
+                "page" => ("page.title", "page.url"),
+                "sheet" => ("sheet.title", "sheet.url"),
+                _ => ("whiteboard.title", "whiteboard.url"),
+            };
+            let text = |key: &str| document[key].as_str().unwrap_or_default().to_owned();
+            variables.push((title, text("title")));
+            variables.push((url, text("url")));
         }
         if let Some(run_state) = &subject.state
             && subject.agent_run_id.is_some()
