@@ -2738,19 +2738,26 @@ pub(super) async fn digest_ignoring(
     .fetch_all(pool)
     .await
     .expect("tables");
-    let mut rows = BTreeMap::new();
-    for table in tables {
-        let found = sqlx::query_scalar::<_, String>(&format!(
-            r#"SELECT listed.row_text FROM (SELECT (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value) listed WHERE listed.row_text ~ $1"#
-        ))
+    // One statement for every table: a round trip per table, per tool, made
+    // the read check most of the suite's time.
+    let query = tables
+        .iter()
+        .map(|table| {
+            format!(
+                r#"SELECT '{table}' AS table_name, listed.row_text FROM (SELECT (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value) listed WHERE listed.row_text ~ $1"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+    let found = sqlx::query_as::<_, (String, String)>(&query)
         .bind(pattern)
         .bind(ignored)
         .fetch_all(pool)
         .await
-        .unwrap_or_else(|error| panic!("digest {table}: {error}"));
-        if !found.is_empty() {
-            rows.insert(table, found.into_iter().collect::<BTreeSet<_>>());
-        }
+        .unwrap_or_else(|error| panic!("digest: {error}"));
+    let mut rows = BTreeMap::<String, BTreeSet<String>>::new();
+    for (table, row) in found {
+        rows.entry(table).or_default().insert(row);
     }
     rows
 }
