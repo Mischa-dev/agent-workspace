@@ -67,7 +67,7 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root.join("codex").to_string_lossy().into_owned(),
         ),
         (

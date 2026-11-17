@@ -923,13 +923,8 @@ pub async fn enqueue_agent_run_updated(
     conversation_id: Uuid,
     agent_run_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    let state = sqlx::query_scalar::<_, String>(
-        "SELECT state FROM agent_runs WHERE id = $1 AND conversation_id = $2",
-    )
-    .bind(agent_run_id)
-    .bind(conversation_id)
-    .fetch_one(&mut **transaction)
-    .await?;
+    let state =
+        crate::runs::reads::builtin_state_in(transaction, agent_run_id, conversation_id).await?;
     let state = state.parse::<RunState>()?;
     enqueue_typed(
         transaction,

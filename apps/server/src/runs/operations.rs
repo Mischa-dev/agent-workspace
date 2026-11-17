@@ -48,7 +48,10 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<RunUsageReport>()
         .add::<RunResultReport>()
         .add::<RunCancel>()
-        .add::<RunMarkNotStarted>();
+        .add::<RunMarkNotStarted>()
+        .add::<super::pages::RunDetailGet>()
+        .add::<super::pages::RunActivityList>()
+        .add::<super::pages::AgentUsageList>();
 }
 
 // ------------------------------------------------------------------ shared

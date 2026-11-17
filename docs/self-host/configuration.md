@@ -106,8 +106,8 @@ container image does not need them.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AGENT_WORKSPACE_CODEX_BINARY` | `codex` | The Codex command line. |
-| `AGENT_WORKSPACE_CODEX_HOME_ROOT` | `<data root>/codex/profiles` | Where harness account homes live; must be inside the data root. |
-| `AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT` | `1` | Harness processes at once (1 to 16). |
+| `AGENT_WORKSPACE_PROVIDER_HOME_ROOT` | `<data root>/codex/profiles` | Where harness account homes live; must be inside the data root. |
+| `AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT` | `1` | Harness processes at once (1 to 16). |
 | `AGENT_WORKSPACE_CODEX_MAX_LINE_BYTES` | `1048576` | The longest line read from a harness. |
 | `AGENT_WORKSPACE_CODEX_MAX_STDERR_BYTES` | `262144` | Error output kept from a harness. |
 | `AGENT_WORKSPACE_CODEX_MAX_BUFFERED_EVENTS` | `64` | Events buffered from a harness. |

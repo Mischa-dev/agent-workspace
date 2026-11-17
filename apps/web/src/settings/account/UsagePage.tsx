@@ -51,6 +51,7 @@ import {
   weekdays,
   windowTone,
 } from './usageModel'
+import { AgentUsageSection } from '../../runs/AgentUsage'
 import { UsageBatch } from './UsageBatch'
 import { UsageHistory } from './UsageHistory'
 import './usage.css'
@@ -75,7 +76,7 @@ const FAILURES: Record<string, ReactNode> = {
 /**
  * Account › Usage and alerts: every usage window with a live countdown (U1),
  * the batch to run before a reset (U4), history and waste (U5), alert rules
- * (U3) and banked resets (U6).
+ * (U3) and banked resets (U6); then each agent's usage in the workspace (A1.15).
  */
 export default function UsagePage() {
   const usage = useQuery({ queryKey: usageKeys.list, queryFn: listUsage, refetchInterval: 60_000 })
@@ -120,6 +121,7 @@ export default function UsagePage() {
           />
         ))
       )}
+      <AgentUsageSection />
     </>
   )
 }

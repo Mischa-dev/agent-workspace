@@ -15,6 +15,5 @@ impl CoreModule for Module {
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::notifications::router);
         module.routes(crate::later::router);
-        module.routes(crate::questions::router);
     }
 }

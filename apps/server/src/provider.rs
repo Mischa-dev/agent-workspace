@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    domain::{RunState, allocate_conversation_sequence, transition_run},
+    domain::{RunState, allocate_conversation_sequence},
     error::AppError,
     git_runtime::worktree_is_dirty,
     message_content::{MessageContentError, PlainTextMessageBuffer, ValidatedMessageContent},
@@ -379,7 +379,7 @@ pub async fn start_run(
             "provider turn binding is no longer available",
         ));
     }
-    transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
@@ -439,7 +439,7 @@ fn spawn_drive(
                 %run_id,
                 "agent turn failed"
             );
-            let _ = fail_run(
+            fail_run_reliably(
                 &background_state,
                 project_id,
                 run_id,
@@ -504,7 +504,7 @@ pub(crate) async fn follow_recovered_run(
         return Ok(false);
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
@@ -716,7 +716,7 @@ pub(crate) async fn complete_recovered_run(
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
@@ -966,7 +966,8 @@ async fn handle_provider_request(
                 approval_id,
             )
             .await?;
-            transition_run(&mut transaction, run_id, RunState::Blocked, None).await?;
+            crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Blocked, None)
+                .await?;
             let event_id = insert_event(
                 &mut transaction,
                 run_id,
@@ -1216,7 +1217,7 @@ async fn complete_run(
             .await?;
         }
     }
-    transition_run(&mut transaction, run_id, RunState::Completed, None).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Completed, None).await?;
     sqlx::query(
         r#"
         UPDATE repository_workspaces rw
@@ -1421,6 +1422,47 @@ async fn insert_entry(
     Ok(())
 }
 
+/// Attempts at failing a run whose turn failed before leaving it to
+/// recovery, and the wait before the first retry (doubled each time).
+const FAIL_RUN_ATTEMPTS: u32 = 4;
+const FAIL_RUN_FIRST_RETRY: Duration = Duration::from_millis(500);
+
+/// A turn that failed must not leave its run "working" because the database
+/// was briefly unreachable when it said so. Each failure is logged and
+/// retried; if every attempt fails, the run is left to the built-in host's
+/// reconciliation (K5.3), which interrupts it when the lease next changes
+/// hands. Nothing is dropped silently.
+async fn fail_run_reliably(
+    state: &AppState,
+    project_id: Uuid,
+    run_id: Uuid,
+    conversation_id: Uuid,
+    reason: &'static str,
+) {
+    let mut wait = FAIL_RUN_FIRST_RETRY;
+    for attempt in 1..=FAIL_RUN_ATTEMPTS {
+        match fail_run(state, project_id, run_id, conversation_id, reason).await {
+            Ok(()) => return,
+            Err(error) => {
+                tracing::error!(
+                    error_category = error.log_category(),
+                    %run_id,
+                    attempt,
+                    "could not record the failed turn"
+                );
+                if attempt < FAIL_RUN_ATTEMPTS {
+                    sleep(wait).await;
+                    wait *= 2;
+                }
+            }
+        }
+    }
+    tracing::error!(
+        %run_id,
+        "left the failed turn's run to the built-in host's reconciliation"
+    );
+}
+
 async fn fail_run(
     state: &AppState,
     project_id: Uuid,
@@ -1439,7 +1481,8 @@ async fn fail_run(
         return Ok(());
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    transition_run(&mut transaction, run_id, RunState::Failed, Some(reason)).await?;
+    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Failed, Some(reason))
+        .await?;
     sqlx::query(
         r#"
         UPDATE repository_workspaces rw

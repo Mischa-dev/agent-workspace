@@ -307,20 +307,15 @@ fn account_select(filter: &str) -> String {
                account.run_defaults, account.last_health_at::text AS last_health_at,
                account.last_failure_category, account.version,
                profile.id AS profile_id, profile.preferred,
-               (
-                   SELECT count(*) FROM agent_runs run
-                   JOIN execution_profiles run_profile
-                     ON run_profile.id = run.execution_profile_id
-                   WHERE run_profile.provider_account_id = account.id
-                     AND run.state IN ('starting', 'working', 'blocked', 'recovering')
-               ) AS active_runs
+               {active_runs} AS active_runs
         FROM provider_accounts account
         LEFT JOIN execution_profiles profile
           ON profile.provider_account_id = account.id AND profile.project_id = $1
         WHERE {filter}
         ORDER BY account.created_at, account.id
         LIMIT {MAX_ACCOUNTS_PER_OWNER}
-        "#
+        "#,
+        active_runs = crate::hosts::builtin::capacity::running_on_account("account.id"),
     )
 }
 
@@ -660,19 +655,8 @@ async fn delete_account(
         .bind(account_id)
         .execute(&mut *transaction)
         .await?;
-    let running = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM agent_runs run
-            JOIN execution_profiles profile ON profile.id = run.execution_profile_id
-            WHERE profile.provider_account_id = $1
-              AND run.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        )
-        "#,
-    )
-    .bind(account_id)
-    .fetch_one(&mut *transaction)
-    .await?;
+    let running =
+        crate::hosts::builtin::capacity::account_in_use(&mut *transaction, account_id).await?;
     if running {
         return Err(AppError::Conflict(
             "provider_account",

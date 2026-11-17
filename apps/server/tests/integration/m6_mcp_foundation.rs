@@ -59,7 +59,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             temporary.path().join("data").to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             temporary
                 .path()
                 .join("data/codex/profiles")

@@ -82,7 +82,7 @@ done
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             codex_home_root.to_string_lossy().into_owned(),
         ),
         (

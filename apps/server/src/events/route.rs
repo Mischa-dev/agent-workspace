@@ -268,18 +268,10 @@ async fn heard(
             else {
                 return Ok(Vec::new());
             };
-            let (requester, work_item_id) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
-                r#"
-                SELECT run.requesting_actor_id,
-                       (SELECT launch.work_item_id FROM launches launch
-                        WHERE launch.agent_run_id = run.id LIMIT 1)
-                FROM agent_runs run WHERE run.id = $1
-                "#,
-            )
-            .bind(thing)
-            .fetch_optional(&mut *connection)
-            .await?
-            .unwrap_or((Uuid::nil(), None));
+            let (requester, work_item_id) =
+                crate::runs::reads::requester_and_task(&mut *connection, thing)
+                    .await?
+                    .unwrap_or((Uuid::nil(), None));
             let actor = (!requester.is_nil()).then_some(requester);
             let state_name = state.to_string();
             let subject = Subject {

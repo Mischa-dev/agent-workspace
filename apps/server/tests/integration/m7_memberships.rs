@@ -466,7 +466,7 @@ fn test_config(database_url: &str, root: &std::path::Path) -> AppConfig {
             root.join("data").to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             root.join("data/codex/profiles")
                 .to_string_lossy()
                 .into_owned(),

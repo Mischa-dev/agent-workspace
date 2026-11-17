@@ -520,16 +520,7 @@ async fn render(state: &AppState) -> Result<String, AppError> {
     out.push_str("# TYPE aw_notification_queue_usage gauge\n");
     let _ = writeln!(out, "aw_notification_queue_usage {queue_usage:.6}");
 
-    let runs = sqlx::query_as::<_, (String, i64)>(
-        r#"
-        SELECT state, count(*) FROM agent_runs
-        WHERE state IN ('created','queued','starting','working','blocked','recovering')
-           OR updated_at > now() - interval '1 day'
-        GROUP BY state ORDER BY state
-        "#,
-    )
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?;
+    let runs = crate::runs::reads::builtin_state_counts(crate::db::scoped(&state.pool)).await?;
     out.push_str("# HELP aw_agent_runs Runs that are live or changed in the last day, by state.\n");
     out.push_str("# TYPE aw_agent_runs gauge\n");
     for (run_state, count) in runs {
