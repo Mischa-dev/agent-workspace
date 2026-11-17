@@ -2708,12 +2708,16 @@ pub(super) async fn digest_ignoring(
     digest_tables(pool, pattern, ignored, &tables).await
 }
 
-/// Every table in the schema (partitions and their parents included).
+/// Every table in the schema (partitions and their parents included),
+/// except the shared limit counters: every call into a workspace spends its
+/// budget (H1.1), so a counter row changes on reads too. They hold numbers,
+/// never records; `hosting_limits` checks whose budget a call spends.
 async fn base_tables(pool: &PgPool) -> Vec<String> {
     sqlx::query_scalar::<_, String>(
         r#"
         SELECT table_name::text FROM information_schema.tables
         WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
+          AND table_name <> 'rate_limit_counters'
         ORDER BY 1
         "#,
     )

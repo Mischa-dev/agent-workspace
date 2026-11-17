@@ -323,9 +323,12 @@ fn role_name(role: WorkspaceRole) -> &'static str {
     }
 }
 
+/// The workspace as `actor` sees it, holding `role`. Every handler that
+/// returns a workspace view goes through here, so its capabilities agree.
 async fn load_workspace(
     connection: &mut sqlx::PgConnection,
     organization_id: Uuid,
+    actor_id: Uuid,
     role: WorkspaceRole,
 ) -> Result<WorkspaceView, AppError> {
     let row = sqlx::query_as::<_, WorkspaceRow>(
@@ -359,6 +362,10 @@ async fn load_workspace(
     .fetch_optional(&mut *connection)
     .await?
     .ok_or(AppError::NotFound("workspace"))?;
+    let delete = crate::roles::standing(&mut *connection, organization_id, actor_id)
+        .await?
+        .permissions
+        .contains(crate::policy::Permission::WorkspaceDelete);
     Ok(WorkspaceView {
         id: row.id,
         name: row.name,
@@ -378,7 +385,7 @@ async fn load_workspace(
             transfer_ownership: role == WorkspaceRole::Owner,
             leave: role != WorkspaceRole::Owner || row.owner_count > 1,
             view_audit_log: role.manages(),
-            delete: false,
+            delete,
         },
     })
 }
@@ -390,12 +397,7 @@ async fn read_workspace(
 ) -> Result<Json<WorkspaceView>, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let role = caller_role(&mut connection, &principal, organization_id, false).await?;
-    let mut view = load_workspace(&mut connection, organization_id, role).await?;
-    view.capabilities.delete =
-        crate::roles::standing(&mut connection, organization_id, principal.actor_id)
-            .await?
-            .permissions
-            .contains(crate::policy::Permission::WorkspaceDelete);
+    let view = load_workspace(&mut connection, organization_id, principal.actor_id, role).await?;
     Ok(Json(view))
 }
 
@@ -451,7 +453,7 @@ async fn rename_workspace(
         )
         .await?;
     }
-    let view = load_workspace(&mut transaction, organization_id, role).await?;
+    let view = load_workspace(&mut transaction, organization_id, principal.actor_id, role).await?;
     transaction.commit().await?;
     Ok(Json(view))
 }
@@ -1031,7 +1033,13 @@ async fn transfer_ownership(
         serde_json::json!({ "previousRole": target.role }),
     )
     .await?;
-    let view = load_workspace(&mut transaction, organization_id, WorkspaceRole::Admin).await?;
+    let view = load_workspace(
+        &mut transaction,
+        organization_id,
+        principal.actor_id,
+        WorkspaceRole::Admin,
+    )
+    .await?;
     transaction.commit().await?;
     Ok(Json(view))
 }

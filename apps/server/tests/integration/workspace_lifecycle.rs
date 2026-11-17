@@ -109,6 +109,32 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     // Open: the agent works.
     let body = agent_task_list(&t, &a.agent_token).await;
     assert!(!refused_as_suspended(&body), "{body}");
+    // The owner may delete it, and a rename's answer says so too, since
+    // the settings page shows that answer in place of the one it read.
+    let (status, body) = send(
+        &t.app,
+        a.browser.request(
+            "GET",
+            &format!("/api/v1/organizations/{}", a.organization),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["capabilities"]["delete"], true, "{body}");
+    let (status, body) = send(
+        &t.app,
+        a.browser.request(
+            "PATCH",
+            &format!("/api/v1/organizations/{}", a.organization),
+            None,
+            json!({"name": "Renamed", "expectedVersion": body["version"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["capabilities"]["delete"], true, "{body}");
 
     // Suspended by the operator: A's agent is refused, B's isn't.
     let a_slug = slug_of(&t.pool, a.organization).await;
