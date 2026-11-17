@@ -92,6 +92,14 @@ const PRIORITIES: [(&str, &str, Uuid, &str); 4] = [
     ),
 ];
 
+/// The Priority option a stored priority ("urgent") stands for.
+pub fn priority_option(stored: &str) -> Option<Uuid> {
+    PRIORITIES
+        .iter()
+        .find(|(name, _, _, _)| *name == stored)
+        .map(|(_, _, id, _)| *id)
+}
+
 /// The stored priority a Priority option stands for.
 pub fn priority_for_option(option: Uuid) -> Option<&'static str> {
     PRIORITIES

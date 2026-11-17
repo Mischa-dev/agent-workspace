@@ -28,10 +28,7 @@ use super::{
     definition::{self, FieldWrite, ViewWrite},
     query::{self, Archived, GroupCount, GroupRef, Spec},
     records::{self, ProblemKind, RecordInput, RecordRef, RecordView, Written},
-    views::{
-        self, ChangeViewOutcome, CreateViewOutcome, NewView, RemoveViewOutcome, SortRule,
-        ViewChange, ViewConfig, ViewSummary, ViewType,
-    },
+    views::{self, SortRule, ViewConfig, ViewSummary},
 };
 use crate::{
     AppState,
@@ -39,7 +36,7 @@ use crate::{
     conversations::parse_actor_kind,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     fields::{
-        self, ChangeFieldOutcome, CreateFieldOutcome, FieldChange, FieldDefinition, FieldType,
+        self, ChangeFieldOutcome, CreateFieldOutcome, FieldChange, FieldType,
         FieldView, NewField, OptionInput,
     },
     idempotency::{
@@ -73,14 +70,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
             patch(update_field),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views",
-            axum::routing::post(create_view),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            patch(update_view).delete(delete_view),
         )
         .route(
             "/api/v1/projects/{project_id}/collections/{collection_id}/records",
@@ -1112,296 +1101,6 @@ async fn update_field(
 }
 
 // ---------------------------------------------------------------------------
-// Views
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateViewRequest {
-    name: String,
-    #[serde(rename = "type", default = "table")]
-    view_type: String,
-    #[serde(default)]
-    config: ViewConfig,
-    position: Option<i32>,
-}
-
-fn table() -> String {
-    ViewType::Table.as_str().to_owned()
-}
-
-/// Checks a view's settings against the collection's fields and project.
-async fn checked_config(
-    connection: &mut PgConnection,
-    project_id: Uuid,
-    config: &ViewConfig,
-    definitions: &[FieldDefinition],
-) -> Result<Option<Response>, AppError> {
-    if let Err(message) = views::check(config, definitions) {
-        return Ok(Some(invalid("config", message)));
-    }
-    if let Err(message) =
-        views::check_references(connection, project_id, config, definitions).await?
-    {
-        return Ok(Some(invalid("config", message)));
-    }
-    Ok(None)
-}
-
-fn view_name_message() -> String {
-    format!(
-        "Give the view a name of 1 to {} characters, on one line.",
-        super::MAX_NAME_CHARACTERS
-    )
-}
-
-async fn create_view(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, collection_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<CreateViewRequest>,
-) -> Result<Response, AppError> {
-    let Some(name) = super::normalize_name(&request.name) else {
-        return Ok(invalid("name", view_name_message()));
-    };
-    let Some(view_type) = views::parse_view_type(&request.view_type) else {
-        return Ok(invalid("type", views::VIEW_TYPE_MESSAGE));
-    };
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::CollectionBuild,
-            resource_bound_scope("collections", collection_id, "views_create")?,
-            &request,
-        )
-        .await
-    );
-    let collection = write.collection(collection_id).await?;
-    if collection.archived {
-        return Ok(archived_collection(&collection));
-    }
-    let definitions =
-        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
-    let config = match request.config.clone().for_type(view_type, &definitions) {
-        Ok(config) => config,
-        Err(message) => return Ok(invalid("config", message)),
-    };
-    if let Some(refused) =
-        checked_config(&mut write.transaction, project_id, &config, &definitions).await?
-    {
-        return Ok(refused);
-    }
-    let view = match views::create(
-        &mut write.transaction,
-        project_id,
-        collection_id,
-        principal.actor_id,
-        NewView {
-            name,
-            view_type,
-            config,
-            position: request.position,
-        },
-    )
-    .await?
-    {
-        CreateViewOutcome::Created(view) => view,
-        CreateViewOutcome::NameTaken(view) => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "view_name_taken",
-                format!("A view is already called \"{}\".", view.name),
-                json!({ "field": "name" }),
-            ));
-        }
-        CreateViewOutcome::Full => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "view_limit",
-                format!(
-                    "This collection has {} views already. Remove one first.",
-                    views::MAX_VIEWS
-                ),
-                Value::Null,
-            ));
-        }
-    };
-    record_audit_for(
-        &mut write.transaction,
-        &write.actor,
-        "collection",
-        "collection.view_created",
-        collection_id,
-        json!({ "view": view.id, "name": view.name }),
-    )
-    .await?;
-    super::touch(&mut write.transaction, project_id, collection_id).await?;
-    outbox::enqueue_collection_updated(&mut write.transaction, project_id, collection_id, &[])
-        .await?;
-    write
-        .finish(StatusCode::CREATED, &ViewSummary::of(&view, &definitions))
-        .await
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateViewRequest {
-    expected_version: i64,
-    name: Option<String>,
-    config: Option<ViewConfig>,
-    position: Option<i32>,
-}
-
-async fn update_view(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, collection_id, view_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<UpdateViewRequest>,
-) -> Result<Response, AppError> {
-    let name = match request.name.as_deref() {
-        Some(value) => match super::normalize_name(value) {
-            Some(name) => Some(name),
-            None => return Ok(invalid("name", view_name_message())),
-        },
-        None => None,
-    };
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::CollectionBuild,
-            resource_bound_scope("collection_views", view_id, "update")?,
-            &request,
-        )
-        .await
-    );
-    let collection = write.collection(collection_id).await?;
-    if collection.archived {
-        return Ok(archived_collection(&collection));
-    }
-    let definitions =
-        super::field_definitions(&mut write.transaction, project_id, collection_id, true).await?;
-    if let Some(config) = &request.config
-        && let Some(refused) =
-            checked_config(&mut write.transaction, project_id, config, &definitions).await?
-    {
-        return Ok(refused);
-    }
-    let view = match views::change(
-        &mut write.transaction,
-        project_id,
-        collection_id,
-        view_id,
-        ViewChange {
-            name,
-            config: request.config.clone(),
-            position: request.position,
-            expected_version: Some(request.expected_version),
-        },
-    )
-    .await?
-    {
-        ChangeViewOutcome::Changed { view, changed } => {
-            record_audit_for(
-                &mut write.transaction,
-                &write.actor,
-                "collection",
-                "collection.view_updated",
-                collection_id,
-                json!({ "view": view.id, "name": view.name, "changedFields": changed }),
-            )
-            .await?;
-            super::touch(&mut write.transaction, project_id, collection_id).await?;
-            outbox::enqueue_collection_updated(
-                &mut write.transaction,
-                project_id,
-                collection_id,
-                &[],
-            )
-            .await?;
-            view
-        }
-        ChangeViewOutcome::Unchanged(view) => view,
-        ChangeViewOutcome::NotFound => return Err(AppError::NotFound("view")),
-        ChangeViewOutcome::VersionConflict(view) => {
-            return Err(AppError::VersionConflict {
-                resource: "view",
-                current_version: view.version,
-            });
-        }
-        ChangeViewOutcome::NameTaken(other) => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "view_name_taken",
-                format!("Another view is already called \"{other}\"."),
-                json!({ "field": "name" }),
-            ));
-        }
-    };
-    write
-        .finish(StatusCode::OK, &ViewSummary::of(&view, &definitions))
-        .await
-}
-
-async fn delete_view(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, collection_id, view_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-) -> Result<Response, AppError> {
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::CollectionBuild,
-            resource_bound_scope("collection_views", view_id, "remove")?,
-            &(collection_id, view_id),
-        )
-        .await
-    );
-    let collection = write.collection(collection_id).await?;
-    if collection.archived {
-        return Ok(archived_collection(&collection));
-    }
-    let view =
-        match views::remove(&mut write.transaction, project_id, collection_id, view_id).await? {
-            RemoveViewOutcome::Removed(view) => view,
-            RemoveViewOutcome::NotFound => return Err(AppError::NotFound("view")),
-            RemoveViewOutcome::LastView => {
-                return Ok(refusal(
-                    StatusCode::CONFLICT,
-                    "last_view",
-                    "A collection keeps at least one view. Add another before removing this one.",
-                    Value::Null,
-                ));
-            }
-        };
-    record_audit_for(
-        &mut write.transaction,
-        &write.actor,
-        "collection",
-        "collection.view_removed",
-        collection_id,
-        json!({ "view": view.id, "name": view.name }),
-    )
-    .await?;
-    super::touch(&mut write.transaction, project_id, collection_id).await?;
-    outbox::enqueue_collection_updated(&mut write.transaction, project_id, collection_id, &[])
-        .await?;
-    write
-        .finish(StatusCode::OK, &json!({ "removed": view.id }))
-        .await
-}
-
-// ---------------------------------------------------------------------------
 // Records
 
 #[derive(Debug, Default, Deserialize)]
@@ -1470,7 +1169,7 @@ async fn list_records(
     let definitions =
         super::field_definitions(&mut connection, project_id, collection_id, true).await?;
     let mut config = match query.view {
-        Some(view_id) => views::list(&mut *connection, project_id, collection_id)
+        Some(view_id) => views::visible(&mut connection, project_id, collection_id, principal.actor_id)
             .await?
             .into_iter()
             .find(|view| view.id == view_id)

@@ -1121,7 +1121,7 @@ pub async fn apply(
                     ),
                 ));
             };
-            match views::remove(connection, project_id, collection.id, view.id).await? {
+            match views::remove(connection, project_id, collection.id, views::Scope::Shared, view.id).await? {
                 RemoveViewOutcome::Removed(view) => {
                     changes.push(format!("view \"{}\" removed", view.name));
                 }
@@ -1206,6 +1206,7 @@ pub async fn apply(
                     view_type,
                     config,
                     position: write.position,
+                    scope: views::Scope::Shared,
                 },
             )
             .await?
@@ -1248,12 +1249,14 @@ pub async fn apply(
             connection,
             project_id,
             collection.id,
+            views::Scope::Shared,
             view.id,
             ViewChange {
                 name: rename,
                 config: (Some(&config) != current.as_ref()).then_some(config),
                 position: write.position,
                 expected_version: None,
+                share: false,
             },
         )
         .await?
@@ -1266,7 +1269,9 @@ pub async fn apply(
                 });
             }
             ChangeViewOutcome::Unchanged(_) => {}
-            ChangeViewOutcome::NotFound | ChangeViewOutcome::VersionConflict(_) => {
+            ChangeViewOutcome::NotFound
+            | ChangeViewOutcome::VersionConflict(_)
+            | ChangeViewOutcome::Full => {
                 return Ok(stop(
                     ProblemKind::NotFound,
                     format!("{at}.view"),

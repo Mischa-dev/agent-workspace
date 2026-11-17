@@ -19,8 +19,10 @@ use crate::{
     fields::{self, DateBucket, FieldDefinition, FieldType, LinkTarget},
 };
 
-/// Views one collection keeps.
+/// Shared views one collection keeps.
 pub const MAX_VIEWS: i64 = 30;
+/// Views of their own one person keeps in one collection.
+pub const MAX_PERSONAL_VIEWS: i64 = 100;
 /// Sort keys one view or query takes.
 pub const MAX_SORTS: usize = 3;
 pub const MIN_COLUMN_WIDTH: u16 = 48;
@@ -436,9 +438,46 @@ pub struct View {
     pub name: String,
     pub view_type: ViewType,
     pub config: ViewConfig,
-    /// 0-based order among the collection's views.
+    /// 0-based order among the collection's shared views, or among its
+    /// owner's own.
     pub position: i32,
     pub version: i64,
+    /// None for a view shared with everyone who can see the collection.
+    pub owner_actor_id: Option<Uuid>,
+    /// One of the views every Tasks collection starts with.
+    pub builtin: Option<String>,
+}
+
+impl View {
+    pub fn scope(&self) -> Scope {
+        match self.owner_actor_id {
+            Some(owner) => Scope::Personal(owner),
+            None => Scope::Shared,
+        }
+    }
+}
+
+/// Whose views: the collection's shared ones, or one account's own.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Scope {
+    Shared,
+    Personal(Uuid),
+}
+
+impl Scope {
+    fn owner(self) -> Option<Uuid> {
+        match self {
+            Self::Shared => None,
+            Self::Personal(owner) => Some(owner),
+        }
+    }
+
+    fn limit(self) -> i64 {
+        match self {
+            Self::Shared => MAX_VIEWS,
+            Self::Personal(_) => MAX_PERSONAL_VIEWS,
+        }
+    }
 }
 
 #[derive(FromRow)]
@@ -450,6 +489,8 @@ struct ViewRow {
     config: Value,
     position: i32,
     version: i64,
+    owner_actor_id: Option<Uuid>,
+    builtin: Option<String>,
 }
 
 impl TryFrom<ViewRow> for View {
@@ -466,6 +507,8 @@ impl TryFrom<ViewRow> for View {
                 .map_err(|_| AppError::Internal("stored view config"))?,
             position: row.position,
             version: row.version,
+            owner_actor_id: row.owner_actor_id,
+            builtin: row.builtin,
         })
     }
 }
@@ -500,25 +543,61 @@ impl ViewSummary {
     }
 }
 
-const VIEW_COLUMNS: &str = "id, collection_id, name, view_type, config, position, version";
+const VIEW_COLUMNS: &str =
+    "id, collection_id, name, view_type, config, position, version, owner_actor_id, builtin";
 
-/// A collection's views in order.
+/// A collection's shared views in order.
 pub async fn list(
     executor: impl sqlx::PgExecutor<'_>,
     project_id: Uuid,
     collection_id: Uuid,
 ) -> Result<Vec<View>, AppError> {
+    in_scope(executor, project_id, collection_id, Scope::Shared).await
+}
+
+/// The views in one scope, in order.
+pub async fn in_scope(
+    executor: impl sqlx::PgExecutor<'_>,
+    project_id: Uuid,
+    collection_id: Uuid,
+    scope: Scope,
+) -> Result<Vec<View>, AppError> {
     sqlx::query_as::<_, ViewRow>(&format!(
         "SELECT {VIEW_COLUMNS} FROM collection_views \
-         WHERE project_id = $1 AND collection_id = $2 ORDER BY position, id LIMIT {MAX_VIEWS}"
+         WHERE project_id = $1 AND collection_id = $2 \
+           AND owner_actor_id IS NOT DISTINCT FROM $3 \
+         ORDER BY position, id LIMIT {limit}",
+        limit = scope.limit()
     ))
     .bind(project_id)
     .bind(collection_id)
+    .bind(scope.owner())
     .fetch_all(executor)
     .await?
     .into_iter()
     .map(View::try_from)
     .collect()
+}
+
+/// The views `reader` sees in a collection: the shared ones in order, then
+/// their own.
+pub async fn visible(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    reader: Uuid,
+) -> Result<Vec<View>, AppError> {
+    let mut views = list(&mut *connection, project_id, collection_id).await?;
+    views.extend(
+        in_scope(
+            &mut *connection,
+            project_id,
+            collection_id,
+            Scope::Personal(reader),
+        )
+        .await?,
+    );
+    Ok(views)
 }
 
 /// Finds one of `views` by ID or name, ignoring case.
@@ -580,6 +659,8 @@ pub struct NewView {
     pub config: ViewConfig,
     /// 1-based place among the views; the end when None.
     pub position: Option<i32>,
+    /// Shared, or one account's own.
+    pub scope: Scope,
 }
 
 #[derive(Clone, Debug)]
@@ -587,12 +668,12 @@ pub enum CreateViewOutcome {
     Created(View),
     /// A view of the collection already has the name, ignoring case.
     NameTaken(View),
-    /// `MAX_VIEWS` already.
+    /// `MAX_VIEWS` (or `MAX_PERSONAL_VIEWS`) already.
     Full,
 }
 
-/// Adds a view. The caller holds the project lock and the collection's
-/// row, and has checked the actor may build collections.
+/// Adds a view. The caller holds the collection's row, and has checked the
+/// actor may build collections when the view is shared.
 pub async fn create(
     connection: &mut PgConnection,
     project_id: Uuid,
@@ -603,14 +684,14 @@ pub async fn create(
     if crate::collections::normalize_name(&new.name).as_deref() != Some(new.name.as_str()) {
         return Err(AppError::Validation("name"));
     }
-    let existing = list(&mut *connection, project_id, collection_id).await?;
+    let existing = in_scope(&mut *connection, project_id, collection_id, new.scope).await?;
     if let Some(taken) = existing
         .iter()
         .find(|view| view.name.to_lowercase() == new.name.to_lowercase())
     {
         return Ok(CreateViewOutcome::NameTaken(taken.clone()));
     }
-    if existing.len() as i64 >= MAX_VIEWS {
+    if existing.len() as i64 >= new.scope.limit() {
         return Ok(CreateViewOutcome::Full);
     }
     let id = Uuid::now_v7();
@@ -619,11 +700,12 @@ pub async fn create(
     sqlx::query(
         r#"
         INSERT INTO collection_views (
-            id, project_id, collection_id, name, view_type, config, position, created_by_actor_id
+            id, project_id, collection_id, name, view_type, config, position,
+            created_by_actor_id, owner_actor_id
         )
         VALUES ($1, $2, $3, $4, $5, $6,
                 (SELECT COALESCE(max(position) + 1, 0) FROM collection_views
-                 WHERE collection_id = $3), $7)
+                 WHERE collection_id = $3 AND owner_actor_id IS NOT DISTINCT FROM $8), $7, $8)
         "#,
     )
     .bind(id)
@@ -633,10 +715,11 @@ pub async fn create(
     .bind(new.view_type.as_str())
     .bind(config)
     .bind(actor_id)
+    .bind(new.scope.owner())
     .execute(&mut *connection)
     .await?;
     if let Some(position) = new.position {
-        move_to(connection, project_id, collection_id, id, position).await?;
+        move_to(connection, project_id, collection_id, new.scope, id, position).await?;
     }
     let view = one(connection, project_id, collection_id, id)
         .await?
@@ -644,7 +727,8 @@ pub async fn create(
     Ok(CreateViewOutcome::Created(view))
 }
 
-async fn one(
+/// One view by ID, in whichever scope.
+pub async fn one(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
@@ -672,6 +756,8 @@ pub struct ViewChange {
     pub position: Option<i32>,
     /// Checked only when something would change.
     pub expected_version: Option<i64>,
+    /// A personal view becomes shared, at the end of the shared views.
+    pub share: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -685,21 +771,26 @@ pub enum ChangeViewOutcome {
     NotFound,
     VersionConflict(View),
     NameTaken(String),
+    /// Sharing it would pass `MAX_VIEWS`.
+    Full,
 }
 
-/// Renames a view, changes what it shows, or moves it. The caller holds
-/// the project lock and the collection's row.
+/// Renames a view, changes what it shows, moves it among the views in its
+/// scope, or shares a personal view. The caller holds the collection's row
+/// and has checked who may change a view in `scope`.
 pub async fn change(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
+    scope: Scope,
     view_id: Uuid,
     change: ViewChange,
 ) -> Result<ChangeViewOutcome, AppError> {
-    let views = list(&mut *connection, project_id, collection_id).await?;
+    let views = in_scope(&mut *connection, project_id, collection_id, scope).await?;
     let Some(current) = views.iter().find(|view| view.id == view_id).cloned() else {
         return Ok(ChangeViewOutcome::NotFound);
     };
+    let share = change.share && scope != Scope::Shared;
     let name = change.name.clone().unwrap_or_else(|| current.name.clone());
     if crate::collections::normalize_name(&name).as_deref() != Some(name.as_str()) {
         return Err(AppError::Validation("name"));
@@ -725,6 +816,9 @@ pub async fn change(
     if moves {
         changed.push("position");
     }
+    if share {
+        changed.push("shared");
+    }
     if changed.is_empty() {
         return Ok(ChangeViewOutcome::Unchanged(current));
     }
@@ -741,12 +835,29 @@ pub async fn change(
     {
         return Ok(ChangeViewOutcome::NameTaken(other.name.clone()));
     }
+    if share {
+        let shared = list(&mut *connection, project_id, collection_id).await?;
+        if let Some(other) = shared
+            .iter()
+            .find(|view| view.name.to_lowercase() == name.to_lowercase())
+        {
+            return Ok(ChangeViewOutcome::NameTaken(other.name.clone()));
+        }
+        if shared.len() as i64 >= MAX_VIEWS {
+            return Ok(ChangeViewOutcome::Full);
+        }
+    }
     let config_value =
         serde_json::to_value(&config).map_err(|_| AppError::Internal("encode view config"))?;
     sqlx::query(
         r#"
         UPDATE collection_views
-        SET name = $4, config = $5, version = version + 1, updated_at = now()
+        SET name = $4, config = $5, version = version + 1, updated_at = now(),
+            owner_actor_id = CASE WHEN $6 THEN NULL ELSE owner_actor_id END,
+            position = CASE WHEN $6 THEN
+                (SELECT COALESCE(max(shared.position) + 1, 0) FROM collection_views shared
+                 WHERE shared.collection_id = $2 AND shared.owner_actor_id IS NULL)
+                ELSE position END
         WHERE project_id = $1 AND collection_id = $2 AND id = $3
         "#,
     )
@@ -755,10 +866,12 @@ pub async fn change(
     .bind(view_id)
     .bind(&name)
     .bind(config_value)
+    .bind(share)
     .execute(&mut *connection)
     .await?;
+    let scope = if share { Scope::Shared } else { scope };
     if moves && let Some(position) = change.position {
-        move_to(connection, project_id, collection_id, view_id, position).await?;
+        move_to(connection, project_id, collection_id, scope, view_id, position).await?;
     }
     let view = one(connection, project_id, collection_id, view_id)
         .await?
@@ -773,23 +886,25 @@ pub async fn change(
 pub enum RemoveViewOutcome {
     Removed(View),
     NotFound,
-    /// A collection keeps at least one view.
+    /// A collection keeps at least one shared view.
     LastView,
 }
 
 /// Removes a view. What it showed stays: views hold no records. The caller
-/// holds the project lock and the collection's row.
+/// holds the collection's row and has checked who may remove a view in
+/// `scope`.
 pub async fn remove(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
+    scope: Scope,
     view_id: Uuid,
 ) -> Result<RemoveViewOutcome, AppError> {
-    let views = list(&mut *connection, project_id, collection_id).await?;
+    let views = in_scope(&mut *connection, project_id, collection_id, scope).await?;
     let Some(view) = views.iter().find(|view| view.id == view_id).cloned() else {
         return Ok(RemoveViewOutcome::NotFound);
     };
-    if views.len() <= 1 {
+    if scope == Scope::Shared && views.len() <= 1 {
         return Ok(RemoveViewOutcome::LastView);
     }
     sqlx::query(
@@ -803,21 +918,24 @@ pub async fn remove(
     Ok(RemoveViewOutcome::Removed(view))
 }
 
-/// Puts a view at a 1-based place among the collection's views and
+/// Puts a view at a 1-based place among the views in its scope and
 /// renumbers the rest.
 async fn move_to(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection_id: Uuid,
+    scope: Scope,
     view_id: Uuid,
     position: i32,
 ) -> Result<(), AppError> {
     let mut order = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM collection_views WHERE project_id = $1 AND collection_id = $2 \
+           AND owner_actor_id IS NOT DISTINCT FROM $3 \
          ORDER BY position, id",
     )
     .bind(project_id)
     .bind(collection_id)
+    .bind(scope.owner())
     .fetch_all(&mut *connection)
     .await?;
     order.retain(|id| *id != view_id);
@@ -841,6 +959,166 @@ async fn move_to(
     .bind(&positions)
     .execute(&mut *connection)
     .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Pins and defaults (T1.6)
+
+/// Built-in views that start in everyone's sidebar until they unpin them.
+pub fn pinned_unless_unpinned(view: &View) -> bool {
+    matches!(
+        view.builtin.as_deref(),
+        Some("my_tasks") | Some("ready_for_agents")
+    )
+}
+
+/// Whether `reader` keeps each view in their sidebar, and where: the views
+/// they pinned or unpinned themselves, by ID.
+pub async fn pins(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    reader: Uuid,
+) -> Result<std::collections::HashMap<Uuid, (bool, i32)>, AppError> {
+    let rows = sqlx::query_as::<_, (Uuid, bool, i32)>(
+        "SELECT pin.view_id, pin.pinned, pin.position FROM collection_view_pins pin \
+         JOIN collection_views view ON view.project_id = pin.project_id AND view.id = pin.view_id \
+         WHERE pin.project_id = $1 AND view.collection_id = $2 AND pin.actor_id = $3",
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .bind(reader)
+    .fetch_all(&mut *connection)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(view, pinned, position)| (view, (pinned, position)))
+        .collect())
+}
+
+/// Pins or unpins a view for one account. A pinned view goes to the end
+/// of their pinned views unless `position` (0-based) says where.
+pub async fn set_pin(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    view_id: Uuid,
+    actor_id: Uuid,
+    pinned: bool,
+    position: Option<i32>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO collection_view_pins (workspace_id, project_id, view_id, actor_id, pinned, position)
+        SELECT project.organization_id, $1, $2, $3, $4,
+               COALESCE($5, (SELECT COALESCE(max(other.position) + 1, 0)
+                             FROM collection_view_pins other
+                             WHERE other.project_id = $1 AND other.actor_id = $3 AND other.pinned))
+        FROM projects project WHERE project.id = $1
+        ON CONFLICT (view_id, actor_id) DO UPDATE
+        SET pinned = EXCLUDED.pinned, position = EXCLUDED.position, updated_at = now()
+        "#,
+    )
+    .bind(project_id)
+    .bind(view_id)
+    .bind(actor_id)
+    .bind(pinned)
+    .bind(position.map(|position| position.max(0)))
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+/// Whose default a view is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DefaultFor {
+    /// One account's own; it wins over their role's.
+    Account(Uuid),
+    /// Everyone holding a role in the space.
+    Role(Uuid),
+}
+
+/// The view a collection opens on for `reader`: their own default, else
+/// their role's in the space, else the first shared view. None only when
+/// the collection has no shared view.
+pub async fn default_view(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    reader: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    let chosen = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT preference.view_id FROM collection_view_defaults preference
+        JOIN collection_views view
+          ON view.project_id = preference.project_id AND view.id = preference.view_id
+        WHERE preference.project_id = $1 AND preference.collection_id = $2
+          AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $3)
+          AND (preference.actor_id = $3
+               OR preference.role_id = (SELECT membership.role_id FROM project_memberships membership
+                                        WHERE membership.project_id = $1 AND membership.actor_id = $3))
+        ORDER BY (preference.actor_id IS NULL), preference.updated_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .bind(reader)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if chosen.is_some() {
+        return Ok(chosen);
+    }
+    Ok(list(&mut *connection, project_id, collection_id)
+        .await?
+        .first()
+        .map(|view| view.id))
+}
+
+/// Sets (or, with no view, clears) a default. The caller has checked the
+/// view is one the default's holder can see.
+pub async fn set_default(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    holder: DefaultFor,
+    view_id: Option<Uuid>,
+    set_by: Uuid,
+) -> Result<(), AppError> {
+    let (role_id, actor_id) = match holder {
+        DefaultFor::Account(actor) => (None, Some(actor)),
+        DefaultFor::Role(role) => (Some(role), None),
+    };
+    sqlx::query(
+        "DELETE FROM collection_view_defaults \
+         WHERE project_id = $1 AND collection_id = $2 \
+           AND role_id IS NOT DISTINCT FROM $3 AND actor_id IS NOT DISTINCT FROM $4",
+    )
+    .bind(project_id)
+    .bind(collection_id)
+    .bind(role_id)
+    .bind(actor_id)
+    .execute(&mut *connection)
+    .await?;
+    if let Some(view_id) = view_id {
+        sqlx::query(
+            r#"
+            INSERT INTO collection_view_defaults
+                (id, workspace_id, project_id, collection_id, role_id, actor_id, view_id, set_by_actor_id)
+            SELECT $1, project.organization_id, $2, $3, $4, $5, $6, $7
+            FROM projects project WHERE project.id = $2
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(collection_id)
+        .bind(role_id)
+        .bind(actor_id)
+        .bind(view_id)
+        .bind(set_by)
+        .execute(&mut *connection)
+        .await?;
+    }
     Ok(())
 }
 

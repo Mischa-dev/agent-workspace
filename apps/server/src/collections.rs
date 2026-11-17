@@ -30,6 +30,7 @@ pub mod http;
 pub mod ops;
 pub mod records;
 pub mod task_like;
+pub mod task_query;
 pub mod task_writes;
 pub mod tasks;
 /// A collection's views and how records are found: the one views engine

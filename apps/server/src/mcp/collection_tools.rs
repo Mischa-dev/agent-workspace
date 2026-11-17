@@ -1015,7 +1015,9 @@ pub(super) async fn record_query(
         // The view to start from, then what this call says instead.
         let mut config = match arguments.view.as_deref() {
             Some(reference) => {
-                let saved = views::list(&mut *connection, project_id, collection.id).await?;
+                let saved =
+                    views::visible(&mut connection, project_id, collection.id, principal.actor_id)
+                        .await?;
                 match views::find(&saved, reference) {
                     Some(view) => view.config.active(&definitions),
                     None => {
