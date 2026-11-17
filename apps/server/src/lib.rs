@@ -26,6 +26,7 @@ pub mod config;
 pub mod connected_apps;
 pub mod conversations;
 pub mod custom_emoji;
+pub mod dashboards;
 pub mod db;
 pub mod direct;
 pub mod discussion;

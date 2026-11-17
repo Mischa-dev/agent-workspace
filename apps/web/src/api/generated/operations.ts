@@ -36,9 +36,15 @@ export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" 
 
 export type CustomEmojiView = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
 
+export type DashboardEntry = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
 
 export type DraftView = { conversationId: string; conversationKind: string; conversationName?: string | null; draft: unknown; previous?: unknown; spaceId: string; updatedAt: string }
+
+export type FigureGroup = { count: number; name: string; value?: number | null }
+
+export type Figures = { collectionName: string; groups: FigureGroup[]; measure?: string | null; records: string[]; total: number; value?: number | null; viewName: string; viewType: string }
 
 export type FollowedThreadView = { id: string; lastActivityAt: string; messageCount: number; name: string; originMessageId?: string | null; outcome?: string | null; parentId: string; parentKind: string; parentName?: string | null; spaceId: string; spaceName: string; status: string; unread: boolean }
 
@@ -100,6 +106,12 @@ export type SubjectKind = "page" | "sheet" | "whiteboard" | "record" | "task"
 
 export type ThingInput = { id: string; kind: SubjectKind }
 
+export type TileEntry = { collection?: string | null; figures?: Figures | null; height: number; id: string; kind: TileKind; text: string; title: string; unseen?: string | null; view?: string | null; width: number }
+
+export type TileInput = { height?: number | null; id?: string | null; kind?: TileKind | null; text?: string | null; title?: string | null; view?: string | null; width?: number | null }
+
+export type TileKind = "view" | "text"
+
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
 export type ViewEntry = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
@@ -149,6 +161,26 @@ export type CustomEmojiListOutput = { emoji: CustomEmojiView[] }
 export type CustomEmojiUpdateInput = { id: string; retired: boolean }
 
 export type CustomEmojiUpdateOutput = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
+
+export type DashboardCreateInput = { description?: string | null; name: string; shared?: boolean | null; spaceId: string; tiles?: TileInput[] }
+
+export type DashboardCreateOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+
+export type DashboardDeleteInput = { dashboard: string }
+
+export type DashboardDeleteOutput = { id: string; removed: boolean }
+
+export type DashboardGetInput = { dashboard: string; figures?: boolean | null }
+
+export type DashboardGetOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+
+export type DashboardListInput = { spaceId: string }
+
+export type DashboardListOutput = { dashboards: DashboardEntry[] }
+
+export type DashboardUpdateInput = { dashboard: string; description?: string | null; expectedVersion?: number | null; name?: string | null; share?: boolean; tiles?: TileInput[] | null }
+
+export type DashboardUpdateOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -330,6 +362,11 @@ export type Operations = {
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
   custom_emoji_list: { input: CustomEmojiListInput; output: CustomEmojiListOutput }
   custom_emoji_update: { input: CustomEmojiUpdateInput; output: CustomEmojiUpdateOutput }
+  dashboard_create: { input: DashboardCreateInput; output: DashboardCreateOutput }
+  dashboard_delete: { input: DashboardDeleteInput; output: DashboardDeleteOutput }
+  dashboard_get: { input: DashboardGetInput; output: DashboardGetOutput }
+  dashboard_list: { input: DashboardListInput; output: DashboardListOutput }
+  dashboard_update: { input: DashboardUpdateInput; output: DashboardUpdateOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }

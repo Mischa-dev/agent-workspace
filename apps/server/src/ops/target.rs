@@ -113,6 +113,14 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = view.project_id \
          WHERE view.id = $1 AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2)",
     ),
+    // A dashboard: shared, or the caller's own (anyone else's is not found).
+    (
+        "dashboard",
+        "SELECT project.organization_id, project.id FROM dashboards dashboard \
+         JOIN projects project ON project.id = dashboard.project_id \
+         WHERE dashboard.id = $1 \
+           AND (dashboard.owner_actor_id IS NULL OR dashboard.owner_actor_id = $2)",
+    ),
     // Any thing by id alone (K3.19), from the registry: a conversation or
     // anything that follows one (a message, a decision from it, a file in
     // it) only when the viewer may see that conversation. Those are checked

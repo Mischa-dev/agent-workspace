@@ -343,6 +343,15 @@ pub static SHEET_UPDATED: EventType = fact(
 )
 .legacy(&["sheet.updated"]);
 
+// --- dashboards ------------------------------------------------------------
+pub static DASHBOARD_UPDATED: EventType = fact(
+    "dashboard.updated",
+    "dashboards",
+    Some("dashboard"),
+    "A shared dashboard's name or tiles changed, or it was removed",
+)
+.legacy(&["dashboard.updated"]);
+
 // --- whiteboards -----------------------------------------------------------
 pub static WHITEBOARD_SCENE_CHANGED: EventType = signal(
     "whiteboard.scene_changed",
@@ -512,6 +521,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &DECISION_RECORDED,
         &DECISION_UPDATED,
         &SHEET_UPDATED,
+        &DASHBOARD_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_VERSION_RESTORED,
         &COLLECTION_UPDATED,

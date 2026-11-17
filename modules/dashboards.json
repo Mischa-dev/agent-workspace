@@ -1,0 +1,49 @@
+{
+  "id": "dashboards",
+  "name": "Dashboards",
+  "description": "Pages of charts, figures and notes over a project's collections, each tile read live as whoever looks.",
+  "version": 1,
+  "order": 85,
+  "kind": "core",
+  "switchable": true,
+  "needs": ["collections"],
+  "worksWith": ["tasks"],
+  "permissions": [],
+  "tools": {
+    "dashboard_list": "query",
+    "dashboard_get": "describe",
+    "dashboard_create": "create",
+    "dashboard_update": "change",
+    "dashboard_delete": "change"
+  },
+  "routes": [],
+  "events": { "emits": ["dashboard.updated"], "listens": [] },
+  "notifications": [],
+  "search": [],
+  "automations": { "triggers": [], "actions": [] },
+  "things": [
+    {
+      "kind": "dashboard",
+      "one": "Dashboard",
+      "many": "Dashboards",
+      "href": "/projects/{projectId}/dashboards/{id}",
+      "fields": [{ "id": "updatedAt", "label": "Edited", "type": "date" }]
+    }
+  ],
+  "links": [],
+  "embeds": [],
+  "web": { "folder": "dashboards" },
+  "slots": {
+    "pages": ["/projects/:projectId/dashboards/*"],
+    "parts": ["area.dashboards"],
+    "sidebar": ["dashboards"],
+    "home": [],
+    "settings": [],
+    "palette": ["p:dashboards"],
+    "shortcuts": [],
+    "slash": [],
+    "setup": []
+  },
+  "settings": [],
+  "nouns": []
+}

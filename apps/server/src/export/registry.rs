@@ -1068,6 +1068,23 @@ pub const DECLARATIONS: &[ExportDecl] = &[
         not_exported: &[],
     },
     ExportDecl {
+        module: "dashboards",
+        version: 1,
+        after: &["collections"],
+        kinds: &[KindDecl {
+            kind: "dashboards",
+            table: "dashboards",
+            references: &[
+                ("project_id", "projects"),
+                ("owner_actor_id", "actors"),
+                ("created_by_actor_id", "actors"),
+            ],
+            text_references: &[],
+            exclude: &[],
+        }],
+        not_exported: &[],
+    },
+    ExportDecl {
         module: "sheets",
         version: 1,
         after: &["projects"],

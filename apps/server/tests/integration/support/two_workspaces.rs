@@ -92,6 +92,8 @@ pub(crate) struct World {
     /// A button field on it (T1.21) that records a decision.
     pub(crate) collection_button: Uuid,
     pub(crate) collection_view: Uuid,
+    /// A shared dashboard (T1.32) with a tile over `collection_view`.
+    pub(crate) dashboard: Uuid,
     pub(crate) record: Uuid,
     /// A sheet (AWD-54) with a header, a value and a formula.
     pub(crate) sheet: Uuid,
@@ -761,6 +763,17 @@ async fn build_workspace(
     .fetch_one(pool)
     .await
     .expect("collection view");
+    let dashboard = call(
+        "dashboard_create",
+        json!({
+            "spaceId": project,
+            "name": format!("Numbers{m}"),
+            "tiles": [{"view": collection_view.to_string()}, {"text": format!("Note{m}")}],
+            "clientRequestId": "dashboard-1",
+        }),
+    )
+    .await;
+    let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("dashboard id");
 
     // Sheets (AWD-54): a header row, a value and a formula over it.
     let sheet = call(
@@ -1688,6 +1701,7 @@ async fn build_workspace(
         collection_field,
         collection_button,
         collection_view,
+        dashboard,
         record,
         sheet,
         file,

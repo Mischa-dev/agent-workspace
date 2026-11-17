@@ -279,6 +279,15 @@ pub async fn stage(
             Some(p.revision),
             None,
         ),
+        P::DashboardUpdated(p) => (
+            &catalog::DASHBOARD_UPDATED,
+            "dashboard",
+            p.dashboard_id,
+            None,
+            Audience::Space,
+            Some(p.version),
+            None,
+        ),
     };
     // A notification's subject is the account, which is not a thing.
     let thing = (kind != "account").then_some((id, kind));

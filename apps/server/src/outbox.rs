@@ -43,6 +43,7 @@ pub enum OutboxResourceKind {
     Page,
     Collection,
     Sheet,
+    Dashboard,
 }
 
 impl OutboxResourceKind {
@@ -60,6 +61,7 @@ impl OutboxResourceKind {
             Self::Page => "page",
             Self::Collection => "collection",
             Self::Sheet => "sheet",
+            Self::Dashboard => "dashboard",
         }
     }
 }
@@ -296,6 +298,15 @@ pub struct SheetUpdatedPayload {
     pub revision: i64,
 }
 
+/// A shared dashboard's name, tiles or place changed, or it was removed
+/// (T1.32). IDs and the version only: open screens fetch it again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DashboardUpdatedPayload {
+    pub dashboard_id: Uuid,
+    pub version: i64,
+}
+
 /// Every outbox event type; each has a catalogue entry naming it as a
 /// legacy name (`events::catalog`).
 pub const LEGACY_EVENT_TYPES: &[&str] = &[
@@ -387,6 +398,7 @@ pub enum OutboxEventPayload {
     PageDiscussionUpdated(PageDiscussionUpdatedPayload),
     CollectionUpdated(CollectionUpdatedPayload),
     SheetUpdated(SheetUpdatedPayload),
+    DashboardUpdated(DashboardUpdatedPayload),
     ProjectModulesUpdated(ProjectModulesUpdatedPayload),
     CustomEmojiChanged(CustomEmojiChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
@@ -417,6 +429,7 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(_) => "page.discussion.updated",
             Self::CollectionUpdated(_) => "collection.updated",
             Self::SheetUpdated(_) => "sheet.updated",
+            Self::DashboardUpdated(_) => "dashboard.updated",
             Self::ProjectModulesUpdated(_) => "project.modules.updated",
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
@@ -450,6 +463,7 @@ impl OutboxEventPayload {
             | Self::PageDiscussionUpdated(_)
             | Self::CollectionUpdated(_)
             | Self::SheetUpdated(_)
+            | Self::DashboardUpdated(_)
             | Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
             | Self::MessageDraftChanged(_)
@@ -498,6 +512,7 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(_) => OutboxResourceKind::Page,
             Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
             Self::SheetUpdated(_) => OutboxResourceKind::Sheet,
+            Self::DashboardUpdated(_) => OutboxResourceKind::Dashboard,
             Self::ProjectModulesUpdated(_) | Self::CustomEmojiChanged(_) => {
                 OutboxResourceKind::Project
             }
@@ -530,6 +545,7 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(payload) => payload.page_id,
             Self::CollectionUpdated(payload) => payload.collection_id,
             Self::SheetUpdated(payload) => payload.sheet_id,
+            Self::DashboardUpdated(payload) => payload.dashboard_id,
             Self::ProjectModulesUpdated(payload) => payload.project_id,
             Self::CustomEmojiChanged(payload) => payload.project_id,
             // Keyed by its writer, like notifications.
@@ -599,6 +615,11 @@ impl OutboxEventPayload {
             Self::SheetUpdated(payload) if payload.revision < 1 || payload.sheet_id.is_nil() => {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::DashboardUpdated(payload)
+                if payload.version < 1 || payload.dashboard_id.is_nil() =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
             Self::ProjectModulesUpdated(payload)
                 if payload.workspace_id.is_nil()
                     || payload.project_id.is_nil()
@@ -649,6 +670,7 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(payload) => serde_json::to_value(payload),
             Self::CollectionUpdated(payload) => serde_json::to_value(payload),
             Self::SheetUpdated(payload) => serde_json::to_value(payload),
+            Self::DashboardUpdated(payload) => serde_json::to_value(payload),
             Self::ProjectModulesUpdated(payload) => serde_json::to_value(payload),
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
@@ -726,6 +748,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "sheet.updated" => Self::SheetUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "dashboard.updated" => Self::DashboardUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "custom_emoji.changed" => Self::CustomEmojiChanged(
@@ -960,6 +985,24 @@ pub async fn enqueue_project_modules_updated(
             workspace_id,
             project_id,
             changed,
+        }),
+    )
+    .await
+}
+
+/// Enqueue `dashboard.updated` for a shared dashboard at its new version.
+pub async fn enqueue_dashboard_updated(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    dashboard_id: Uuid,
+    version: i64,
+) -> Result<Uuid, AppError> {
+    enqueue_typed(
+        transaction,
+        project_id,
+        OutboxEventPayload::DashboardUpdated(DashboardUpdatedPayload {
+            dashboard_id,
+            version,
         }),
     )
     .await

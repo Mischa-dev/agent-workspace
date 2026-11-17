@@ -62,6 +62,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("conversation_read_states", WORKSPACE_ID),
     ("conversations", WORKSPACE_ID),
     ("custom_emojis", WORKSPACE_ID),
+    ("dashboards", WORKSPACE_ID),
     ("custom_harnesses", ORGANIZATION_ID),
     ("event_staging", WORKSPACE_ID),
     ("events", WORKSPACE_ID),

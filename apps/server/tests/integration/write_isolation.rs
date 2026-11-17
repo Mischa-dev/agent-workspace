@@ -459,6 +459,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "conversation_members",
     "conversation_start",
     "conversation_update",
+    "dashboard_create",
+    "dashboard_delete",
+    "dashboard_update",
     "decision_record",
     "environment_write",
     "file_delete",
@@ -2003,6 +2006,8 @@ struct Spares {
     role: Uuid,
     /// A second view in A's collection, removed by view_delete.
     collection_view: Uuid,
+    /// A second dashboard in A's project, removed by dashboard_delete.
+    dashboard: Uuid,
 }
 
 /// The redirect a hosted OAuth client registers.
@@ -2602,6 +2607,15 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await;
     let collection_view =
         Uuid::parse_str(&string_at(&view, "/value/id")).expect("spare collection view");
+    let dashboard = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v2/w/{}/ops/dashboard_create", a.organization),
+        json!({"spaceId": a.project, "name": "Net spare dashboard"}),
+    )
+    .await;
+    let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("spare dashboard");
 
     // Last, so it's the newest of A's sessions: revoked by A's own request.
     login_as(app, "owner").await;
@@ -2649,6 +2663,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         agent_profile,
         provider_account,
         collection_view,
+        dashboard,
     }
 }
 
@@ -6851,6 +6866,28 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"view": b.collection_view}),
                 json!({"view": bx.view}),
             ],
+        ),
+        // Dashboards (T1.32): made in the project named, over A's own views;
+        // B's dashboards can't be changed or removed from A.
+        mcp_case(
+            "dashboard_create",
+            json!({"spaceId": a.project, "name": "Net mcp dashboard", "tiles": [{"view": a.collection_view}]}),
+            vec![
+                json!({"spaceId": b.project, "name": "Net mcp dashboard"}),
+                json!({"spaceId": b.project, "name": "Net over B", "tiles": [{"view": b.collection_view}]}),
+            ],
+        )
+        .rejecting(vec![json!({"spaceId": a.project, "name": "Net", "tiles": [{"view": b.collection_view}]})]),
+        mcp_case(
+            "dashboard_update",
+            json!({"dashboard": a.dashboard, "name": "Net renamed dashboard"}),
+            vec![json!({"dashboard": b.dashboard, "name": "Net"})],
+        )
+        .rejecting(vec![json!({"dashboard": a.dashboard, "tiles": [{"view": b.collection_view}]})]),
+        mcp_case(
+            "dashboard_delete",
+            json!({"dashboard": sp.dashboard}),
+            vec![json!({"dashboard": b.dashboard})],
         ),
         mcp_case(
             "label_write",
