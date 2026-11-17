@@ -35,7 +35,7 @@ pub async fn personal(
     workspace: Uuid,
     account: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
-    if let Some(space) = existing(&mut **transaction, workspace, account).await? {
+    if let Some(space) = existing(transaction, workspace, account).await? {
         return Ok(Some(space));
     }
     let Some((display_name, handle, actor_kind)) = sqlx::query_as::<_, (String, String, String)>(
@@ -57,8 +57,7 @@ pub async fn personal(
     else {
         return Ok(None);
     };
-    crate::workspace::lifecycle::ensure_open(&mut **transaction, workspace, "space_personal_open")
-        .await?;
+    crate::workspace::lifecycle::ensure_open(transaction, workspace, "space_personal_open").await?;
     let base = key_for(account);
     for suffix in std::iter::once(None).chain(KEY_SUFFIXES.chars().map(Some)) {
         let key = match suffix {
@@ -90,7 +89,7 @@ pub async fn personal(
         .await?;
         if made.is_none() {
             // Someone else made it first, or the key is taken.
-            if let Some(space) = existing(&mut **transaction, workspace, account).await? {
+            if let Some(space) = existing(transaction, workspace, account).await? {
                 return Ok(Some(space));
             }
             continue;
@@ -206,10 +205,10 @@ mod tests {
         let account = Uuid::now_v7();
         let key = key_for(account);
         assert_eq!(key.len(), 7);
-        assert_eq!(manage::normalize_key(&key).unwrap(), key);
+        assert_eq!(manage::normalize_key(&key).ok(), Some(key.clone()));
         assert_eq!(
-            manage::normalize_key(&format!("{key}9")).unwrap(),
-            format!("{key}9")
+            manage::normalize_key(&format!("{key}9")).ok(),
+            Some(format!("{key}9"))
         );
     }
 }

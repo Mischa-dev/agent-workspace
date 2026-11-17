@@ -1762,6 +1762,21 @@ pub(crate) async fn sweep_ids(pool: &PgPool, organization: Uuid) -> HashSet<Stri
         .await
         .expect("users");
     ids.extend(users);
+    // K4.17: DMs and groups live in the direct scope, not in a workspace;
+    // they belong to the people in them.
+    let direct = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        -- visibility: a test sweep of every row a workspace's people own.
+        SELECT DISTINCT conversation.id FROM conversations conversation
+        JOIN conversation_members member ON member.conversation_id = conversation.id
+        WHERE conversation.project_id IS NULL AND member.actor_id = ANY($1)
+        "#,
+    )
+    .bind(&actors)
+    .fetch_all(pool)
+    .await
+    .expect("direct conversations");
+    ids.extend(direct);
 
     // Tables with a UUID `id` and one of these parent columns.
     let tables = sqlx::query_as::<_, (String, String)>(

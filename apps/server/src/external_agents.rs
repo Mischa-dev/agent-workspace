@@ -370,7 +370,11 @@ struct CreatedAgent {
 /// Create the agent's Actor, memberships, connection, and first credential.
 /// Where an agent added under Messages lives: DMs are in no space (K4.17),
 /// so "Messages only" means the caller's default workspace's own space.
-async fn home_space(state: &AppState, actor: Uuid, place: Uuid) -> Result<Uuid, AppError> {
+pub(crate) async fn home_space(
+    state: &AppState,
+    actor: Uuid,
+    place: Uuid,
+) -> Result<Uuid, AppError> {
     if place != crate::spaces::DIRECT {
         return Ok(place);
     }

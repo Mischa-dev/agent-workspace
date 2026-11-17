@@ -498,7 +498,13 @@ async fn create_many(
     }
     let project_id = principal.project_id;
     // Tasks never go where DMs live, which is no space at all.
-    if crate::spaces::kind::holds_messages(project_id) {
+    if crate::spaces::kind::holds_messages(project_id)
+        || super::common::anchored_in_workspace(
+            &mut *crate::db::scoped_tx(&state.pool).await?,
+            principal,
+        )
+        .await?
+    {
         return Ok(BatchResult::invalid("projectId", PROJECT_MESSAGE));
     }
     let Some(project_key) =

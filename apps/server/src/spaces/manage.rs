@@ -133,8 +133,7 @@ pub async fn create(
     }
     // H1.24: no new space in a suspended or deleting workspace, whichever
     // edge asked.
-    crate::workspace::lifecycle::ensure_open(&mut **transaction, new.workspace_id, "space_create")
-        .await?;
+    crate::workspace::lifecycle::ensure_open(transaction, new.workspace_id, "space_create").await?;
     let space_id = Uuid::now_v7();
     let insert = sqlx::query(
         r#"
@@ -221,7 +220,7 @@ pub(super) async fn furnish(
     .execute(&mut **transaction)
     .await?;
     events::emit(
-        &mut **transaction,
+        transaction,
         NewEvent::thing(&catalog::SPACE_CREATED, space_id, "space", space_id)
             .workspace(workspace_id)
             .actor(owner.account_id)
@@ -459,12 +458,12 @@ mod tests {
 
     #[test]
     fn keys_names_and_icons_are_checked() {
-        assert_eq!(normalize_key(" web ").unwrap(), "WEB");
+        assert_eq!(normalize_key(" web ").ok().as_deref(), Some("WEB"));
         assert!(normalize_key("1AB").is_err());
         assert!(normalize_key("A").is_err());
         assert!(normalize_name("  ").is_err());
-        assert_eq!(normalize_icon("🚀").unwrap().as_deref(), Some("🚀"));
-        assert_eq!(normalize_icon(" ").unwrap(), None);
+        assert_eq!(normalize_icon("🚀").ok().flatten().as_deref(), Some("🚀"));
+        assert_eq!(normalize_icon(" ").ok(), Some(None));
         assert!(normalize_icon("ab").is_err());
         assert!(normalize_icon("🚀 🚀").is_err());
         assert!(normalize_key("TOO-LONG-KEY").is_err());

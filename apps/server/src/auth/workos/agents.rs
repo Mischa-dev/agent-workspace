@@ -349,6 +349,8 @@ async fn list(
     principal: AuthenticatedActor,
     ApiPath((project, connection)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
+    // K4.17: an agent added under Messages lives in the workspace's space.
+    let project = crate::external_agents::home_space(&state, principal.actor_id, project).await?;
     let mut tx = crate::db::scoped_tx(&state.pool).await?;
     crate::external_agents::authorize_identity_binding(&mut tx, &principal, project, connection)
         .await?;
@@ -373,6 +375,8 @@ async fn attach(
     ApiPath((project, connection)): ApiPath<(Uuid, Uuid)>,
     ApiJson(input): ApiJson<Attach>,
 ) -> Result<Json<BindingView>, AppError> {
+    // K4.17: an agent added under Messages lives in the workspace's space.
+    let project = crate::external_agents::home_space(&state, principal.actor_id, project).await?;
     require_authenticated_write(&state, &headers, &principal).await?;
     let config = config(&state)?;
     domain(config)?;
@@ -576,6 +580,8 @@ async fn revoke(
     principal: AuthenticatedActor,
     ApiPath((project, connection, binding)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
+    // K4.17: an agent added under Messages lives in the workspace's space.
+    let project = crate::external_agents::home_space(&state, principal.actor_id, project).await?;
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut tx = crate::db::scoped_tx(&state.pool).await?;
     crate::external_agents::authorize_identity_binding(&mut tx, &principal, project, connection)

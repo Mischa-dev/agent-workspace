@@ -89,13 +89,14 @@ async fn non_members_see_no_private_conversation_in_any_list() {
         hidden.push(thread);
         words.push(word);
     }
-    let space =
-        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM conversations WHERE id = $1::uuid")
-            .bind(&world.conversations["lena+mara"])
-            .fetch_one(pool)
-            .await
-            .expect("space")
-            .to_string();
+    let space = sqlx::query_scalar::<_, Uuid>(
+        "SELECT COALESCE(project_id, direct_scope_id()) FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&world.conversations["lena+mara"])
+    .fetch_one(pool)
+    .await
+    .expect("space")
+    .to_string();
 
     // A member finds the words: the searches below would see them.
     for word in &words {

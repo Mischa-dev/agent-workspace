@@ -583,7 +583,8 @@ pub(super) async fn message_history(
         let Some(conversation_id) = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT conversation_id FROM messages
-            WHERE id = $1 AND project_id = $2 AND conversation_visible_to(conversation_id, $3)
+            WHERE id = $1 AND COALESCE(project_id, direct_scope_id()) = $2
+              AND conversation_visible_to(conversation_id, $3)
             "#,
         )
         .bind(message_id)

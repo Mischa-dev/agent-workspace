@@ -3299,7 +3299,12 @@ async fn module_off_here(
     // and leaves out those where its module is off itself, so it's on
     // wherever it's on somewhere, even for a connection anchored in one.
     let spans = !principal.project_explicit && SPANNING_LISTS.contains(&tool);
+    // A connection anchored in the workspace's own space (an agent made at
+    // workspace level, or for Messages only) acts across the workspace when
+    // it names nothing: that space's shape isn't where it works.
+    let anchored_in_workspace = common::anchored_in_workspace(&mut connection, principal).await?;
     if !spans
+        && !anchored_in_workspace
         && (principal.project_explicit || !principal.account_wide)
         && let Some(modules) = crate::modules::state::for_project(
             &mut connection,

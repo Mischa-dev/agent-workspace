@@ -174,15 +174,14 @@ pub(crate) async fn add_for_message(
         return Ok(());
     }
     // The message's workspace: its space's, or the direct scope for a DM.
-    let organization_id =
-        sqlx::query_scalar::<_, Uuid>(
-            "SELECT workspace_id FROM messages \
+    let organization_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT workspace_id FROM messages \
              -- visibility: the workspace of a message just sent by its author\n \
              WHERE id = $1",
-        )
-            .bind(message_id)
-            .fetch_one(&mut **transaction)
-            .await?;
+    )
+    .bind(message_id)
+    .fetch_one(&mut **transaction)
+    .await?;
     let project_id = crate::spaces::space_of(project_id);
     let effective = settings::resolve(
         transaction,

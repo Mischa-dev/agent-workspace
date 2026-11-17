@@ -787,19 +787,30 @@ async fn a_saved_key_never_shows_in_a_dump_a_response_a_log_or_a_run_environment
             .expose(),
         webhook_secret
     );
-    // Server-made secrets aren't listed with the ones people add.
-    let (_, project_secrets) = send(
+    // Server-made secrets aren't listed with the ones people add. The agent
+    // lives in the workspace's own space (K4.17), whose secrets are the
+    // workspace's list.
+    let (_, listed_secrets) = send(
         &setup.app,
         setup.browser.request(
             "GET",
-            &format!("/api/v1/projects/{space}/secrets"),
+            &format!("/api/v1/organizations/{organization}/secrets"),
             None,
             Value::Null,
         ),
     )
     .await;
-    assert_eq!(project_secrets["secrets"], json!([]), "{project_secrets}");
-    responses.push(project_secrets.to_string());
+    let listed = listed_secrets["secrets"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{listed_secrets}"));
+    assert!(
+        listed
+            .iter()
+            .all(|secret| secret["id"] != json!(secret_id.to_string())
+                && secret["name"] == "anthropic_api_key"),
+        "{listed_secrets}"
+    );
+    responses.push(listed_secrets.to_string());
 
     // Nothing anyone can read holds either value.
     for needle in [PLAINTEXT_KEY, webhook_secret.as_str()] {

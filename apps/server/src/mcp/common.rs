@@ -243,6 +243,24 @@ pub(super) fn project_is_chosen(principal: &McpPrincipal) -> bool {
     principal.project_explicit || !principal.account_wide
 }
 
+/// A connection anchored in the workspace's own space (an agent made at
+/// workspace level, or for Messages only) that names no project: it acts
+/// across the workspace, so that space's shape isn't where it works, and a
+/// new task needs a project named (K4.17).
+pub(crate) async fn anchored_in_workspace(
+    connection: &mut sqlx::PgConnection,
+    principal: &McpPrincipal,
+) -> Result<bool, AppError> {
+    if principal.project_explicit || principal.account_wide {
+        return Ok(false);
+    }
+    Ok(
+        crate::spaces::get(connection, principal.actor_id, principal.project_id)
+            .await?
+            .is_some_and(|space| space.kind == crate::spaces::SpaceKind::Workspace),
+    )
+}
+
 /// A stored membership role: the plain role, and the custom role's
 /// permissions when it holds one.
 #[derive(Clone, Debug, sqlx::FromRow)]

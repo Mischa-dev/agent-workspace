@@ -2020,7 +2020,8 @@ async fn a_space_narrows_its_own_modules_only() {
         json!({"switches": {"whiteboards": false}, "space": direct}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // Where DMs live is no space at all (K4.17).
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let (status, body) = switch(
         &setup,
         &setup.browser,

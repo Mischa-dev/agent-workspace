@@ -354,7 +354,7 @@ impl WriteResult {
         self
     }
 
-    fn unavailable() -> Self {
+    pub(super) fn unavailable() -> Self {
         Self::TemporarilyUnavailable {
             retry_category: "retry_with_backoff".to_owned(),
         }

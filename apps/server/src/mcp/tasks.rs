@@ -2431,7 +2431,16 @@ pub(super) async fn task_create(
         // Tasks never go in the hidden Messages space, where nobody would
         // see them. A subtask goes where its parent is.
         let in_messages_space = crate::spaces::kind::holds_messages(principal.project_id);
-        if !project_is_chosen(principal) || in_messages_space {
+        let workspace_wide = match crate::db::scoped_tx(&state.pool).await {
+            Ok(mut connection) => {
+                match super::common::anchored_in_workspace(&mut connection, principal).await {
+                    Ok(wide) => wide,
+                    Err(_) => return writes::WriteResult::unavailable(),
+                }
+            }
+            Err(_) => return writes::WriteResult::unavailable(),
+        };
+        if !project_is_chosen(principal) || in_messages_space || workspace_wide {
             const PROJECT_MESSAGE: &str = "Say which project with projectId (see projects_list).";
             return writes::WriteResult::InvalidRequest {
                 field: "projectId".to_owned(),

@@ -1094,7 +1094,7 @@ pub async fn record_decision(
         let conversation_id = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT conversation_id FROM messages
-            WHERE id = $1 AND project_id IS NOT DISTINCT FROM $2 AND removed_at IS NULL
+            WHERE id = $1 AND (project_id = $2 OR project_id IS NULL) AND removed_at IS NULL
               AND conversation_visible_to(conversation_id, $3)
             FOR SHARE
             "#,
@@ -1111,7 +1111,8 @@ pub async fn record_decision(
         source_conversation_id = Some(conversation_id);
     } else if let Some(conversation_id) = source_conversation_id {
         let visible = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM conversations WHERE id = $1 AND project_id = $2 AND conversation_visible_to(id, $3))",
+            "SELECT EXISTS (SELECT 1 FROM conversations WHERE id = $1 \
+             AND (project_id = $2 OR project_id IS NULL) AND conversation_visible_to(id, $3))",
         )
         .bind(conversation_id)
         .bind(project_id)
@@ -1262,7 +1263,7 @@ pub async fn set_pin(
         "message" => sqlx::query_scalar::<_, i32>(
             r#"
             SELECT 1 FROM messages
-            WHERE id = $1 AND project_id IS NOT DISTINCT FROM $2 AND removed_at IS NULL
+            WHERE id = $1 AND (project_id = $2 OR project_id IS NULL) AND removed_at IS NULL
               AND conversation_visible_to(conversation_id, $3)
             FOR SHARE
             "#,
@@ -1784,6 +1785,36 @@ async fn get_claim_http(
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
     Ok(Json(ClaimResponse { claim }))
+}
+
+/// Where a DM's or group's decision is kept: its workspace's own space, or
+/// for a personal one (in the direct scope) the recorder's default
+/// workspace's. None when there is no such space.
+pub(crate) async fn direct_home_space(
+    transaction: &mut Transaction<'_, Postgres>,
+    account: Uuid,
+    conversation: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    let Some(workspace) = sqlx::query_scalar::<_, Uuid>(
+        "SELECT workspace_id FROM conversations \
+         -- visibility: its workspace only; the decision checks the conversation is readable\n \
+         WHERE id = $1",
+    )
+    .bind(conversation)
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let workspace = if workspace == crate::spaces::DIRECT {
+        match crate::workspace::default_workspace(&mut **transaction, account).await? {
+            Some((workspace, _)) => workspace,
+            None => return Ok(None),
+        }
+    } else {
+        workspace
+    };
+    crate::spaces::workspace::find(transaction, workspace).await
 }
 
 #[cfg(test)]

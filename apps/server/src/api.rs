@@ -227,6 +227,11 @@ pub(crate) async fn start_run_in(
     if conversation.kind != "thread" {
         return Err(AppError::Invalid("agent runs require a Thread"));
     }
+    // K4.17: a DM's thread lives in no space, so it has no repositories or
+    // run settings to start a run with; runs start in a space's threads.
+    if crate::spaces::kind::holds_messages(conversation.project_id) {
+        return Err(AppError::Invalid("agent runs start in a space's threads"));
+    }
 
     let idempotency_key = idempotency_key?;
     let request_hash = RequestHash::for_value(&request)?;

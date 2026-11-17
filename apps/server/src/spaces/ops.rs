@@ -537,10 +537,9 @@ impl Operation for SpaceCreate {
         let tx = call.tx().await?;
         // The owner is named as they are in this workspace, whatever their
         // kind.
-        let (display_name, login_name) =
-            crate::accounts::names_in(&mut **tx, workspace_id, account)
-                .await?
-                .ok_or_else(|| OpError::not_found("That workspace"))?;
+        let (display_name, login_name) = crate::accounts::names_in(tx, workspace_id, account)
+            .await?
+            .ok_or_else(|| OpError::not_found("That workspace"))?;
         let space_id = manage::create(
             tx,
             NewSpace {

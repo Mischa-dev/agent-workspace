@@ -102,22 +102,21 @@ pub async fn issue_scoped(
     // An agent reaches spaces through its connection in the workspace, as
     // the token will when it's used.
     account.connection_id =
-        connection_in(&mut **transaction, request.account_id, request.workspace_id).await?;
+        connection_in(transaction, request.account_id, request.workspace_id).await?;
     let checked = spaces.clone().unwrap_or_else(|| vec![request.home_space]);
     let mut held = PermissionSet::EMPTY;
     for space in &checked {
-        let holding =
-            super::holding::load(&mut **transaction, &account, Scope::Space(*space), true)
-                .await?
-                .filter(|holding| holding.workspace_id == request.workspace_id)
-                .ok_or(AppError::Refused {
-                    field: "spaces",
-                    message: "The account isn't in every space the token would reach.",
-                })?;
+        let holding = super::holding::load(transaction, &account, Scope::Space(*space), true)
+            .await?
+            .filter(|holding| holding.workspace_id == request.workspace_id)
+            .ok_or(AppError::Refused {
+                field: "spaces",
+                message: "The account isn't in every space the token would reach.",
+            })?;
         held = held.union(holding.permissions);
     }
     if let Some(holding) = super::holding::load(
-        &mut **transaction,
+        transaction,
         &account,
         Scope::Workspace(request.workspace_id),
         true,

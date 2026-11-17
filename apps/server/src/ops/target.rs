@@ -305,6 +305,19 @@ async fn thing(
         .fetch_optional(&mut *connection)
         .await
         .map_err(|error| OpError::logged("locate", &error.into()))?,
+        // A registry thing with no space: a DM's or group's conversation,
+        // message or file is located at it.
+        ("thing", None) => sqlx::query_scalar::<_, Option<Uuid>>(
+            "-- visibility: the thing was just found through conversation_visible_to\n\
+             SELECT COALESCE( \
+                 (SELECT id FROM conversations WHERE id = $1 AND project_id IS NULL), \
+                 (SELECT conversation_id FROM messages WHERE id = $1 AND project_id IS NULL), \
+                 (SELECT conversation_id FROM files WHERE id = $1 AND project_id IS NULL))",
+        )
+        .bind(id)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|error| OpError::logged("locate", &error.into()))?,
         _ => None,
     };
     Ok(Located {

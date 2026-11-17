@@ -369,7 +369,8 @@ pub(super) async fn agent_list(
                    count(*) FILTER (WHERE status = 'claimed' AND lease_expires_at > now())
                        AS answering
             FROM reply_requests
-            WHERE agent_actor_id = ANY($1) AND project_id = ANY($2)
+            WHERE agent_actor_id = ANY($1)
+              AND COALESCE(project_id, direct_scope_id()) = ANY($2)
               AND status IN ('pending', 'claimed')
               AND conversation_visible_to(conversation_id, $3)
             GROUP BY agent_actor_id

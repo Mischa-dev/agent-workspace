@@ -697,6 +697,9 @@ async fn accounts_world(name: &str) -> Option<AccountsWorld> {
         stranger.to_string(),
     ];
     forbidden.extend(b_projects);
+    // The direct scope (K4.17) is one id every workspace shares, not B's.
+    let direct = agent_workspace_server::spaces::DIRECT.to_string();
+    forbidden.retain(|word| *word != direct);
     Some(AccountsWorld {
         person: Person {
             actor: member,
