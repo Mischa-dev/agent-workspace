@@ -178,6 +178,14 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "events",
                 "the server's event log (K3.2): history of this server, not state to move; the rows it describes are exported",
             ),
+            (
+                "event_archives",
+                "the server's event log moved to its store (K3.25): history of this server, like the log itself",
+            ),
+            (
+                "history_archives",
+                "where this server keeps cold page versions (K3.25); an export carries each version's body in its row",
+            ),
             ("events_default", "a partition of the server's event log"),
             ("events_p0", "a partition of the server's event log"),
             (
@@ -944,7 +952,9 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("agent_session_id", "agent_sessions"),
                 ],
                 text_references: &[],
-                exclude: &[],
+                // Where a cold body is kept on this server (K3.25): an
+                // export warms every version first, so each carries its body.
+                exclude: &["archive_id", "body_md5"],
             },
             KindDecl {
                 kind: "project_page_suggestions",

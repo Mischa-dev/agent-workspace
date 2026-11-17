@@ -238,26 +238,14 @@ const VISIBLE_EVENTS: &str = r#"
                AND NOT conversation_visible_to((event.metadata->>'conversationId')::uuid, $2))
 "#;
 
-async fn list_events(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiQuery(query): ApiQuery<EventQuery>,
-) -> Result<Json<EventsResponse>, AppError> {
-    require_reader(&state, &principal, organization_id).await?;
-    let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
-    if !(1..=MAX_LIMIT).contains(&limit) {
-        return Err(AppError::Validation("limit"));
-    }
-    let app = query.app.as_deref().map(parse_app).transpose()?;
-    let kind = query.kind.as_deref().map(parse_kind).transpose()?;
-    let before = query.before.as_deref().map(parse_cursor).transpose()?;
-    let (channel, client) = match app {
-        Some(AppFilter::Channel(channel)) => (Some(channel), None),
-        Some(AppFilter::Client(client)) => (None, Some(client)),
-        None => (None, None),
-    };
-    let rows = sqlx::query_as::<_, EventRow>(&format!(
+/// One page of the trail from `source` (`events`, or the log with the
+/// archived files a reader loaded).
+async fn page_of(
+    connection: &mut sqlx::PgConnection,
+    source: &str,
+    page: &Page<'_>,
+) -> Result<Vec<EventRow>, AppError> {
+    Ok(sqlx::query_as::<_, EventRow>(&format!(
         r#"
         {combined}
         SELECT event.id, event.occurred_at, event.action, event.outcome,
@@ -281,22 +269,108 @@ async fn list_events(
         ORDER BY event.occurred_at DESC, event.id DESC
         LIMIT $12
         "#,
-        combined = crate::events::activity::audit_relation(),
+        combined = crate::events::activity::audit_relation_from(source),
     ))
-    .bind(organization_id)
-    .bind(principal.actor_id)
-    .bind(query.actor_id)
-    .bind(channel)
-    .bind(client)
-    .bind(kind)
-    .bind(query.project_id)
-    .bind(query.since)
-    .bind(query.until)
-    .bind(before.map(|(time, _)| time))
-    .bind(before.map(|(_, id)| id))
-    .bind(limit + 1)
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?;
+    .bind(page.organization_id)
+    .bind(page.reader)
+    .bind(page.actor_id)
+    .bind(page.channel)
+    .bind(page.client)
+    .bind(page.kind)
+    .bind(page.project_id)
+    .bind(page.since)
+    .bind(page.until)
+    .bind(page.before.map(|(time, _)| time))
+    .bind(page.before.map(|(_, id)| id))
+    .bind(page.limit + 1)
+    .fetch_all(&mut *connection)
+    .await?)
+}
+
+struct Page<'a> {
+    organization_id: Uuid,
+    reader: Uuid,
+    actor_id: Option<Uuid>,
+    channel: Option<&'a str>,
+    client: Option<&'a str>,
+    kind: Option<&'a str>,
+    project_id: Option<Uuid>,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+    before: Option<(DateTime<Utc>, Uuid)>,
+    limit: i64,
+}
+
+async fn list_events(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(organization_id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<EventQuery>,
+) -> Result<Json<EventsResponse>, AppError> {
+    require_reader(&state, &principal, organization_id).await?;
+    let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
+    if !(1..=MAX_LIMIT).contains(&limit) {
+        return Err(AppError::Validation("limit"));
+    }
+    let app = query.app.as_deref().map(parse_app).transpose()?;
+    let kind = query.kind.as_deref().map(parse_kind).transpose()?;
+    let before = query.before.as_deref().map(parse_cursor).transpose()?;
+    let (channel, client) = match app {
+        Some(AppFilter::Channel(channel)) => (Some(channel), None),
+        Some(AppFilter::Client(client)) => (None, Some(client)),
+        None => (None, None),
+    };
+    let page = Page {
+        organization_id,
+        reader: principal.actor_id,
+        actor_id: query.actor_id,
+        channel,
+        client: client.as_deref(),
+        kind: kind.as_deref(),
+        project_id: query.project_id,
+        since: query.since,
+        until: query.until,
+        before,
+        limit,
+    };
+    let (mut rows, archives) = {
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        let rows = page_of(&mut connection, "events", &page).await?;
+        // The cold log's files that start before the page's upper bound,
+        // newest first (K3.25).
+        let upper = match (before.map(|(at, _)| at), query.until) {
+            (Some(before), Some(until)) => Some(before.min(until)),
+            (before, until) => before.or(until),
+        };
+        let archives = crate::events::archive::reaching_back(
+            &mut connection,
+            organization_id,
+            None,
+            None,
+            upper,
+        )
+        .await?;
+        (rows, archives)
+    };
+    // One file at a time while the page is short or a file reaches into
+    // it: slower, never shorter.
+    let mut loaded = Vec::new();
+    for archive in archives {
+        let full = rows.len() as i64 > limit;
+        let oldest = rows.get(limit as usize - 1).map(|row| row.occurred_at);
+        if full && oldest.is_some_and(|oldest| archive.last_at < oldest) {
+            break;
+        }
+        loaded.extend(crate::events::archive::fetch(&state, &archive).await?);
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        crate::events::archive::load(&mut connection, loaded.clone()).await?;
+        rows = page_of(
+            &mut connection,
+            crate::events::archive::WITH_ARCHIVED,
+            &page,
+        )
+        .await?;
+    }
     let has_more = rows.len() as i64 > limit;
     let events = rows
         .into_iter()

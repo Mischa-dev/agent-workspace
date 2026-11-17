@@ -43,6 +43,7 @@ mod compat_clients;
 mod content_events;
 mod direct_conversations;
 mod domain_events;
+mod event_archive;
 mod event_log;
 mod export_declarations;
 mod files_links;

@@ -97,6 +97,13 @@ pub(crate) fn app_of(column: &str) -> String {
 /// action is its type (`task.updated`); its metadata holds the keys of what
 /// changed, the version and who asked for it, never content.
 pub(crate) fn audit_relation() -> String {
+    audit_relation_from("events")
+}
+
+/// [`audit_relation`] over `source`: `events`, or
+/// [`super::archive::WITH_ARCHIVED`] once a reader has loaded the files it
+/// reaches back into.
+pub(crate) fn audit_relation_from(source: &str) -> String {
     format!(
         r#"
     WITH event AS (
@@ -106,7 +113,7 @@ pub(crate) fn audit_relation() -> String {
         FROM audit_events audit
         WHERE audit.organization_id = $1
           AND NOT (audit.outcome = 'succeeded' AND audit.target_id IS NOT NULL
-                   AND EXISTS (SELECT 1 FROM events fact
+                   AND EXISTS (SELECT 1 FROM {source} fact
                                WHERE fact.thing_id = audit.target_id
                                  AND fact.workspace_id = audit.organization_id
                                  AND fact.class = 'fact'
@@ -122,7 +129,7 @@ pub(crate) fn audit_relation() -> String {
                    'version', fact.thing_version,
                    'conversation_id', fact.conversation_id,
                    'requestedBy', fact.requested_by_account_id))
-        FROM events fact
+        FROM {source} fact
         WHERE fact.workspace_id = $1 AND fact.class = 'fact'
     )
     "#,
@@ -131,10 +138,12 @@ pub(crate) fn audit_relation() -> String {
 }
 
 /// The facts about `thing` in `workspace` that `reader` may see, newest
-/// first, before `before` (a position) when given. The caller has already
+/// first, before `before` (a position) when given, read from `source`
+/// (`events`, or [`super::archive::WITH_ARCHIVED`]). The caller has already
 /// shown that `reader` sees the thing.
 pub async fn for_thing(
     connection: &mut PgConnection,
+    source: &str,
     workspace: Uuid,
     reader: Uuid,
     thing: Uuid,
@@ -148,7 +157,7 @@ pub async fn for_thing(
                fact.requested_by_account_id AS requested_by_id,
                {requested_by} AS requested_by,
                fact.changes, fact.thing_version
-        FROM events fact
+        FROM {source} fact
         WHERE fact.workspace_id = $1
           AND fact.thing_id = $2
           AND fact.class = 'fact'
@@ -245,16 +254,63 @@ impl Operation for ActivityList {
         let id = input.thing.id();
         let kind = crate::history::ops::visible_kind(call, id).await?;
         let workspace = call.ctx.workspace_id;
+        let limit = i64::from(input.limit.unwrap_or(30)).clamp(1, MAX_ACTIVITY);
+        let (entries, archives) = {
+            let mut connection = crate::db::scoped_tx(&call.state.pool)
+                .await
+                .map_err(AppError::from)?;
+            let entries = for_thing(
+                &mut connection,
+                "events",
+                workspace,
+                call.account_id(),
+                id,
+                input.before,
+                limit,
+            )
+            .await?;
+            // The cold log's files naming the thing (K3.25): every one a
+            // short page may go on into, and any reaching into a full one.
+            let full = entries.len() as i64 >= limit;
+            let oldest = entries.last().map(|entry| entry.position);
+            let archives = super::archive::reaching_back(
+                &mut connection,
+                workspace,
+                Some(id),
+                input.before,
+                None,
+            )
+            .await?
+            .into_iter()
+            .filter(|archive| !full || oldest.is_some_and(|oldest| archive.last_position >= oldest))
+            .collect::<Vec<_>>();
+            (entries, archives)
+        };
+        if archives.is_empty() {
+            return Ok(ActivityListOutput { kind, entries });
+        }
+        let mut rows = Vec::new();
+        for archive in &archives {
+            let thing = id.to_string();
+            rows.extend(
+                super::archive::fetch(call.state, archive)
+                    .await?
+                    .into_iter()
+                    .filter(|row| row.get("thing_id").and_then(|v| v.as_str()) == Some(&thing)),
+            );
+        }
         let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(AppError::from)?;
+        super::archive::load(&mut connection, rows).await?;
         let entries = for_thing(
             &mut connection,
+            super::archive::WITH_ARCHIVED,
             workspace,
             call.account_id(),
             id,
             input.before,
-            i64::from(input.limit.unwrap_or(30)),
+            limit,
         )
         .await?;
         Ok(ActivityListOutput { kind, entries })

@@ -13,6 +13,7 @@
 //! `outbox::enqueue` (`notice`); they are events like any other.
 
 pub mod activity;
+pub mod archive;
 pub mod catalog;
 pub mod consumer;
 pub mod notice;

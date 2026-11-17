@@ -561,6 +561,9 @@ pub(super) async fn page_write(
     };
     let result = async {
         let project_id = principal.project_id;
+        if let (Some(page_id), Some(version)) = (page_id, input.restore_version) {
+            crate::history::cold::warm_page(state, page_id, version).await?;
+        }
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         // Making a page needs edit or edit-own (it will be theirs); changing
         // one is decided below, once its maker is known.

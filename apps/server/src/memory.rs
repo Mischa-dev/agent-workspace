@@ -1436,6 +1436,9 @@ async fn update_page_http(
     require_authenticated_write(&state, &headers, &principal).await?;
     let writer = browser_writer(&principal)?;
     let project_id = page_project(&state.pool, page_id).await?;
+    if let Some(version) = input.restore_version {
+        crate::history::cold::warm_page(&state, page_id, version).await?;
+    }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     project_access(
         &mut *transaction,
@@ -1478,6 +1481,7 @@ async fn get_revision_http(
     )
     .await
     .map_err(|_| AppError::NotFound("page"))?;
+    crate::history::cold::warm_page(&state, page_id, version).await?;
     get_revision(&state.pool, page_id, version, principal.actor_id)
         .await?
         .map(Json)

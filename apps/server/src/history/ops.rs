@@ -212,6 +212,9 @@ impl Operation for HistoryShow {
         if let Support::Not(reason) = adapter_for(&kind)?.show {
             return Err(not_supported(&kind, "show a version", reason));
         }
+        if kind == "page" {
+            super::cold::warm_page(call.state, id, input.version).await?;
+        }
         let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(crate::error::AppError::from)?;
@@ -319,6 +322,9 @@ impl Operation for HistoryRestore {
             workspace_id: call.ctx.workspace_id,
             actor_id: call.account_id(),
         };
+        if kind == "page" {
+            super::cold::warm_page(call.state, id, input.version).await?;
+        }
         let tx = call.tx().await?;
         let version = super::restore(
             tx,

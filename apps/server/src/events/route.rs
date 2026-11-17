@@ -75,6 +75,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
         Ok(())
     });
     super::upkeep::register_jobs(registry);
+    super::archive::register_jobs(registry);
 }
 
 /// What one event is about. IDs only.
