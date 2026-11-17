@@ -70,7 +70,7 @@ export default function MoveTaskDialog({
   const moved = useMoved(projectId, task, onClose)
   // Worked out by the server from your actual permissions in each project.
   const projects = useQuery({
-    queryKey: ['task-move-destinations', actorId, projectId, task.id] as const,
+    queryKey: queryKeys.taskMoveDestinations(actorId, projectId, task.id),
     queryFn: () => listMoveDestinations(projectId, task.id),
     gcTime: 0,
     retry: false,

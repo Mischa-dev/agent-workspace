@@ -77,12 +77,7 @@ export type StoredFile = { id: string; mimeType: string; dataURL: string; create
 
 export type LinkTargetKind = 'project' | 'task' | 'page'
 
-export const whiteboardKeys = {
-  all: ['whiteboards'] as const,
-  list: (filters: Record<string, unknown>) => ['whiteboards', 'list', filters] as const,
-  detail: (id: string) => ['whiteboards', 'detail', id] as const,
-  linked: (kind: LinkTargetKind, targetId: string) => ['whiteboards', 'linked', kind, targetId] as const,
-}
+export { whiteboardKeys } from './keys'
 
 const base = '/api/v1/whiteboards'
 const board = (id: string) => `${base}/${encodeURIComponent(id)}`

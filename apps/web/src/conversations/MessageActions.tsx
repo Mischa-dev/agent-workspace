@@ -22,6 +22,7 @@ import type {
   ConversationWorkItemReference,
   MessageReaction,
 } from './types'
+import { queryKeys } from '../api/queryKeys'
 
 type MessageCapabilities = Pick<
   ConversationCapabilities,
@@ -124,7 +125,7 @@ export function useMessageActions({
       (Boolean(capabilities?.removeOwnMessages) && message.author.id === viewerId))
 
   const refreshLists = () => {
-    void queryClient.invalidateQueries({ queryKey: ['direct'] })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.direct })
     void queryClient.invalidateQueries({
       predicate: (query) => query.queryKey[0] === 'project' && query.queryKey[1] === projectId,
     })

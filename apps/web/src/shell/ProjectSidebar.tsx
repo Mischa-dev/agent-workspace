@@ -11,7 +11,7 @@ import { useProjects, useSetRailOrder, useUpdateProjectNavigation } from '../pro
 import type { Project } from '../projects/types'
 import { IconButton, showToast, type MenuEntry } from '../ui'
 import { projectSection } from './projectSections'
-import { railOrderAfterStep, railProjects } from './railProjects'
+import { railOrderAfterStep, railOrderKeepingOthers, railProjects } from './railProjects'
 import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from './SidebarParts'
 import { projectSettingsHref } from '../settings/paths'
 
@@ -62,11 +62,14 @@ export function ProjectSidebar({
   // Keyboard users move a pin up and down the rail from here; others drag it.
   const projects = useProjects()
   const setRailOrder = useSetRailOrder()
-  const rail = railProjects((projects.data?.projects ?? []).filter((candidate) => !candidate.archivedAt), project.id)
+  const open = (projects.data?.projects ?? []).filter((candidate) => !candidate.archivedAt)
+  // The rail shows this workspace's projects; other workspaces keep their own order.
+  const rail = railProjects(open.filter((candidate) => candidate.organizationId === project.organizationId), project.id)
+  const keepingOthers = (order: string[] | null) => (order ? railOrderKeepingOthers(order, open) : null)
   const railSteps = pinned
     ? ([
-        ['Move up in the rail', 'arrow-up', railOrderAfterStep(rail, project.id, -1)],
-        ['Move down in the rail', 'arrow-down', railOrderAfterStep(rail, project.id, 1)],
+        ['Move up in the rail', 'arrow-up', keepingOthers(railOrderAfterStep(rail, project.id, -1))],
+        ['Move down in the rail', 'arrow-down', keepingOthers(railOrderAfterStep(rail, project.id, 1))],
       ] as const)
     : []
   const togglePin = () => {

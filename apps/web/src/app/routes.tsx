@@ -9,9 +9,11 @@ import {
   RootLayout,
   RouteErrorPage,
 } from './boundaries'
+import { isWorkspacePath, workspaceRoutePath } from './href'
 import type { ModuleRoute, WebModule } from '../modules/define'
 import { WEB_MODULES } from '../modules/registry'
 import { ShellLayout } from '../shell/ShellLayout'
+import { WorkspaceBoundary, WorkspaceProvider, WorkspaceRedirect } from './WorkspaceBoundary'
 import {
   DesignSystemPage,
   ForgotPasswordPage,
@@ -91,14 +93,15 @@ const publicRoutes: AppRoute[] = [
 ]
 
 /**
- * Signed in: every page needs the session. Keep paths exactly as they are;
- * `public/sw.js` lists the ones it serves offline. The workspace's own pages
- * are here; each module's come from its registration. The router ranks
- * routes by how specific they are, so their order doesn't matter.
+ * Signed in: every page needs the session. A workspace's own pages are listed
+ * here by their old root paths and served under `/w/:ws` (W1.14a), the old
+ * path redirecting there; `public/sw.js` lists the first segments it serves
+ * offline. The workspace's own pages are here; each module's come from its
+ * registration. The router ranks routes by how specific they are, so their
+ * order doesn't matter.
  */
 const sessionRoutes: AppRoute[] = [
   page('/settings/*', SettingsArea, 'settings'),
-  { path: '/', element: <Navigate replace to="/home" />, handle: { space: 'workspace', layout: 'redirect' } },
   page('/home', HomePage, 'home'),
   page('/welcome', OnboardingPage, 'workspace'),
   { path: '/projects/:projectId/settings', element: <LegacyProjectSettingsRedirect />, handle: { space: 'project', layout: 'redirect' } },
@@ -108,6 +111,30 @@ const sessionRoutes: AppRoute[] = [
   ...moduleRoutes('routes'),
   page('*', NotFoundPage, 'workspace'),
 ]
+
+const inWorkspace = (route: AppRoute) => Boolean(route.path && isWorkspacePath(route.path))
+const framed = (route: AppRoute) => route.handle?.layout === 'shell'
+
+/** The old root address of each workspace page, and `/`: the same page in the current workspace. */
+const workspaceRedirects: AppRoute[] = [
+  { path: '/', element: <WorkspaceRedirect />, handle: { space: 'workspace', layout: 'redirect' } },
+  ...sessionRoutes.filter(inWorkspace).map((route) => ({
+    path: route.path,
+    element: <WorkspaceRedirect />,
+    handle: { space: route.handle?.space ?? 'workspace', layout: 'redirect' as const },
+  })),
+]
+
+/** `/w/:ws` and the workspace pages under it, in the shell or on their own canvas. */
+function workspaceRoutes(shell: boolean): AppRoute {
+  const children: AppRoute[] = sessionRoutes
+    .filter((route) => inWorkspace(route) && framed(route) === shell)
+    .map((route) => ({ ...route, path: workspaceRoutePath(route.path ?? '').slice(1) }))
+  if (shell) children.unshift({ index: true, element: <Navigate replace to="home" />, handle: { space: 'home', layout: 'redirect' } })
+  return { path: '/w/:ws', element: <WorkspaceBoundary />, children }
+}
+
+const atRoot = sessionRoutes.filter((route) => !inWorkspace(route))
 
 /** The whole app's addresses, as data (W1.10). */
 export const appRoutes: RouteObject[] = [
@@ -119,28 +146,35 @@ export const appRoutes: RouteObject[] = [
       {
         element: <SessionBoundary />,
         children: [
-          // W1.11: every shell page inside one persistent shell, so the rail
-          // and sidebar stay mounted from page to page.
-          { element: <ShellLayout />, children: sessionRoutes.filter((route) => route.handle?.layout === 'shell') },
-          ...sessionRoutes.filter((route) => route.handle?.layout !== 'shell'),
+          {
+            element: <WorkspaceProvider />,
+            children: [
+              // W1.11: every shell page inside one persistent shell, so the rail
+              // and sidebar stay mounted from page to page.
+              { element: <ShellLayout />, children: [...atRoot.filter(framed), workspaceRoutes(true)] },
+              ...atRoot.filter((route) => !framed(route)),
+              workspaceRoutes(false),
+              ...workspaceRedirects,
+            ],
+          },
         ],
       },
     ],
   },
 ]
 
-/** Every route path, in table order: what the module guards read. */
-export function routePaths(routes: RouteObject[] = appRoutes): string[] {
-  return routes.flatMap((route) => [
-    ...(route.path ? [route.path] : []),
-    ...routePaths(route.children ?? []),
-  ])
+const joined = (parent: string, path: string) => (path.startsWith('/') || !parent ? path : `${parent.replace(/\/$/, '')}/${path}`)
+
+/** Every page's route, with its whole path, in table order: what the module guards read. Layout routes (no page of their own) are left out. */
+export function routesWithHandles(routes: RouteObject[] = appRoutes, parent = ''): AppRoute[] {
+  return routes.flatMap((route): AppRoute[] => {
+    const path = route.path ? joined(parent, route.path) : parent
+    if (route.children?.length) return routesWithHandles(route.children, path)
+    return route.path || route.index ? [{ ...(route as AppRoute), path }] : []
+  })
 }
 
-/** Every route that has a path, with its handle. */
-export function routesWithHandles(routes: RouteObject[] = appRoutes): AppRoute[] {
-  return routes.flatMap((route) => [
-    ...(route.path ? [route as AppRoute] : []),
-    ...routesWithHandles(route.children ?? []),
-  ])
+/** Every page's whole path, in table order. */
+export function routePaths(routes: RouteObject[] = appRoutes): string[] {
+  return routesWithHandles(routes).map((route) => route.path ?? '')
 }

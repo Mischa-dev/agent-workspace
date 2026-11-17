@@ -1,17 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
-import { callOp } from '../api/ops'
-import { useHomeWorkspaceId } from '../experience/layout'
+import { opQuery } from '../api/ops'
+import { useWorkspaceId } from '../app/workspace'
 import { projectLocationHref } from '../projects/locations'
 import { EmptyState, ErrorState, ListSkeleton, formatRelative, plainPreview } from '../ui'
 
 /** Drafts (C2.28): what you started writing and haven't sent, on any device. */
 export function DraftsList() {
-  const workspaceId = useHomeWorkspaceId()
+  const workspaceId = useWorkspaceId()
   const drafts = useQuery({
-    queryKey: ['drafts', workspaceId],
-    queryFn: () => callOp('message_draft_list', {}, { workspaceId: workspaceId ?? undefined }),
+    ...opQuery('message_draft_list', {}, { workspaceId: workspaceId ?? undefined }),
     enabled: Boolean(workspaceId),
   })
   if (drafts.isPending) return <ListSkeleton label="Loading drafts" rows={3} />

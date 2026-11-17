@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { apiUrl, origins, requestJson } from '../api/client'
 import { uploadFile } from '../files/api'
-import { load as loadClientConfig } from './clientConfig'
+import { load as loadClientConfig, offersSignIn } from './clientConfig'
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -105,5 +105,15 @@ describe('client config (H1.41)', () => {
     expect(sent.url).toBe('https://api.example.com/api/v1/conversations/c1/files?name=a.txt')
     expect(sent.headers['x-csrf-token']).toBe('upload-token')
     expect(sent.credentials).toBe(true)
+  })
+
+  it('remembers the ways in the server offers, and assumes all of them without an answer (W1.38)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ apiOrigin: null, signIn: { methods: ['password'] } })))
+    await loadClientConfig()
+    expect(offersSignIn('password')).toBe(true)
+    expect(offersSignIn('workos')).toBe(false)
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
+    await loadClientConfig()
+    expect(offersSignIn('workos')).toBe(true)
   })
 })

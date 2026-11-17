@@ -9,6 +9,7 @@ import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
 import { Banner, Button, ButtonLink, Checkbox, TextField, describeError, describeLoadError } from '../ui'
 import { AuthLayout } from './AuthLayout'
+import { authKeys } from './workos'
 import './auth.css'
 
 type ResetInspection = { loginName: string; twoFactorRequired: boolean }
@@ -55,7 +56,7 @@ function ErrorBanner({ message }: { message: string | null }) {
 }
 
 export function ForgotPasswordPage() {
-  const available = useQuery({ queryKey: ['password-reset-available'], queryFn: passwordResetAvailable })
+  const available = useQuery({ queryKey: authKeys.passwordResetAvailable, queryFn: passwordResetAvailable })
   const [login, setLogin] = useState('')
   const [sent, setSent] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -115,7 +116,7 @@ export function ForgotPasswordPage() {
 export function ResetPasswordPage() {
   const token = useHashToken()
   const inspection = useQuery({
-    queryKey: ['password-reset', token],
+    queryKey: authKeys.passwordReset(token),
     queryFn: () => inspectReset(token),
     enabled: Boolean(token),
     retry: false,
@@ -223,7 +224,7 @@ export function ResetPasswordPage() {
 export function VerifyEmailPage() {
   const token = useHashToken()
   const result = useQuery({
-    queryKey: ['verify-email', token],
+    queryKey: authKeys.verifyEmail(token),
     queryFn: () => verifyEmail(token),
     enabled: Boolean(token),
     retry: false,

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import workerSource from '../../public/sw.js?raw'
+import { routePaths } from './routes'
 
 type FetchEvent = {
   request: { url: string; method: string; mode: string }
@@ -51,6 +52,8 @@ describe('service worker', () => {
     expect(handles(`${origin}/projects/p1/threads/t1`, { mode: 'navigate' })).toBe(true)
     expect(handles(`${origin}/join?token=abc`, { mode: 'navigate' })).toBe(true)
     expect(handles(`${origin}/assets/index-Cx1.js`)).toBe(true)
+    // The start-up configuration is kept with the shell (W1.38).
+    expect(handles(`${origin}/client-config`)).toBe(true)
   })
 
   it('opens every app page offline, including task links, but not server files', () => {
@@ -59,6 +62,18 @@ describe('service worker', () => {
     }
     for (const path of ['/llms.txt', '/mcp-tools.md', '/.well-known/oauth-authorization-server', '/health', '/AW-0', '/AW-12/x']) {
       expect(handles(`${origin}${path}`, { mode: 'navigate' })).toBe(false)
+    }
+  })
+
+  it('opens every first segment of the route table offline (W1.14a)', () => {
+    const firsts = new Set(routePaths().map((path) => path.split('/')[1] ?? ''))
+    for (const first of firsts) {
+      if (first === '*') continue
+      const sample = first === ':taskKey' ? 'AWD-12' : first
+      expect(handles(`${origin}/${sample}`, { mode: 'navigate' }), `/${first}`).toBe(true)
+    }
+    for (const path of ['/w/acme/home', '/w/-/inbox', '/dm/c1', '/w/acme/spaces/new']) {
+      expect(handles(`${origin}${path}`, { mode: 'navigate' }), path).toBe(true)
     }
   })
 })

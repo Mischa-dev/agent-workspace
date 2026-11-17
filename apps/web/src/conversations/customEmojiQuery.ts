@@ -2,14 +2,15 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { callOp } from '../api/ops'
-import { useHomeWorkspaceId } from '../experience/layout'
+import { queryKeys } from '../api/queryKeys'
+import { useWorkspaceId } from '../app/workspace'
 import type { ReactionChoice } from './reactions'
 
-export const customEmojiKeys = { list: (workspaceId: string | null) => ['custom-emoji', workspaceId] as const }
+export const customEmojiKeys = { list: queryKeys.customEmojiOf }
 
 /** The live custom emoji of `workspace` (the message's; your home one when unknown), as picker choices; none until `enabled`. */
 export function useCustomEmoji(enabled: boolean, workspace?: string | null): ReactionChoice[] {
-  const home = useHomeWorkspaceId()
+  const home = useWorkspaceId()
   const workspaceId = workspace || home
   const query = useQuery({
     queryKey: customEmojiKeys.list(workspaceId),

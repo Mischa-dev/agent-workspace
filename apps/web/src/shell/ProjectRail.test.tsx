@@ -9,12 +9,18 @@ import {
   useSwitchProject,
 } from '../projects/hooks'
 import type { Project } from '../projects/types'
+import { WorkspaceContext } from '../app/workspace'
 import { resetCommandState } from './commandStore'
 import { ProjectRail } from './ProjectRail'
+
+const session = vi.hoisted(() => ({
+  organizations: [{ id: 'org-1', name: 'Mischa', slug: 'mischa', role: 'owner' }] as { id: string; name: string; slug: string; role: string }[],
+}))
 
 vi.mock('../auth/session', () => ({
   clearAuthenticatedQueryCache: vi.fn(),
   logout: vi.fn(),
+  useAuthenticatedSession: () => session,
 }))
 
 vi.mock('../projects/hooks', () => ({
@@ -133,5 +139,38 @@ describe('ProjectRail', () => {
     // The drawer closes so the menu isn't stacked on top of it on phones.
     expect(onNavigate).toHaveBeenCalledOnce()
     act(() => resetCommandState())
+  })
+  it('switches workspace from the rail, with what needs you in the others (W1.14a)', async () => {
+    const acme = { id: viewerProject.organizationId, name: 'Acme Labs', slug: 'acme', role: 'owner' as const }
+    const beta = { id: 'org-beta', name: 'Beta', slug: 'beta', role: 'member' as const }
+    session.organizations = [acme, beta]
+    const betaProject: Project = { ...viewerProject, id: 'project-beta', organizationId: beta.id, key: 'BETA', name: 'Beta Project', attentionCount: 3 }
+    vi.mocked(useProjects).mockReturnValue({
+      data: { projects: [viewerProject, betaProject] },
+      isError: false,
+      isPending: false,
+    } as ReturnType<typeof useProjects>)
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={['/w/acme/home']}>
+          <WorkspaceContext.Provider value={acme}>
+            <ProjectRail currentProjectId={null} mobileOpen={false} onNavigate={vi.fn()} user={user} />
+          </WorkspaceContext.Provider>
+          <LocationProbe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    try {
+      // Only this workspace's projects, and its own Home.
+      expect(screen.getByRole('link', { name: 'Viewer Project' })).toBeVisible()
+      expect(screen.queryByRole('link', { name: /Beta Project/ })).toBeNull()
+      expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/w/acme/home')
+      fireEvent.click(screen.getByRole('button', { name: 'Workspace: Acme Labs, 3 unread in others' }))
+      expect(await screen.findByRole('menuitemcheckbox', { name: 'Acme Labs' })).toHaveAttribute('aria-checked', 'true')
+      fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Beta, 3 unread' }))
+      await waitFor(() => expect(screen.getByLabelText('Current route')).toHaveTextContent('/w/beta/home'))
+    } finally {
+      session.organizations = [{ id: 'org-1', name: 'Mischa', slug: 'mischa', role: 'owner' }]
+    }
   })
 })

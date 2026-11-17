@@ -10,7 +10,7 @@ import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { Banner, Button, ConversationIntro, ErrorState, IconButton, MessageSkeleton } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
 import { getConversationTimeline, retryReplyRequest, searchMentionableActors, stopReplyRequest } from './api'
@@ -224,6 +224,40 @@ export function ChannelPage() {
     if (page && !restoreChannel.isPending) restoreChannel.mutate(page.conversation.version)
   }
 
+  // Until the page can draw, the shell keeps the space the address names.
+  useShellPage(
+    project.data
+      ? {
+          context: openThreadId && validBoundary ? (
+              <ThreadPanel
+                fullPageHref={threadRoute(openThreadId)}
+                key={openThreadId}
+                onClose={() => openThread(null)}
+                parentId={channelId}
+                parentName={`#${name}`}
+                projectId={projectId}
+                searchActors={searchActors}
+                searchWorkItems={searchWorkItems}
+                threadId={openThreadId}
+                viewer={viewer}
+              />
+            ) : boardOpen ? (
+              <ThreadBoard
+                conversationId={channelId}
+                onClose={() => setBoardOpen(false)}
+                onOpen={(thread) => openThread(thread.id)}
+                onStart={canStartThread ? () => startThread(null) : undefined}
+                projectId={projectId}
+              />
+            ) : undefined,
+          contextKey: openThreadId ?? (boardOpen ? 'threads' : undefined),
+          mainClassName: 'aw-main--conversation',
+          onContextDismiss: () => (openThreadId ? openThread(null) : setBoardOpen(false)),
+          project: project.data,
+          selectedChannelId: validBoundary ? channelId : undefined,
+        }
+      : {},
+  )
   if (isApiError(timeline.error) && timeline.error.status === 404) {
     return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}`} />
   }
@@ -232,54 +266,19 @@ export function ChannelPage() {
   }
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading />
-      </AppShell>
+      <ProjectPageLoading />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
   const dialog = threadDialog?.channelId === channelId ? threadDialog : null
 
   return (
-    <AppShell
-      context={
-        openThreadId && validBoundary ? (
-          <ThreadPanel
-            fullPageHref={threadRoute(openThreadId)}
-            key={openThreadId}
-            onClose={() => openThread(null)}
-            parentId={channelId}
-            parentName={`#${name}`}
-            projectId={projectId}
-            searchActors={searchActors}
-            searchWorkItems={searchWorkItems}
-            threadId={openThreadId}
-            viewer={viewer}
-          />
-        ) : boardOpen ? (
-          <ThreadBoard
-            conversationId={channelId}
-            onClose={() => setBoardOpen(false)}
-            onOpen={(thread) => openThread(thread.id)}
-            onStart={canStartThread ? () => startThread(null) : undefined}
-            projectId={projectId}
-          />
-        ) : undefined
-      }
-      contextKey={openThreadId ?? (boardOpen ? 'threads' : undefined)}
-      mainClassName="aw-main--conversation"
-      onContextDismiss={() => (openThreadId ? openThread(null) : setBoardOpen(false))}
-      project={project.data}
-      selectedChannelId={validBoundary ? channelId : undefined}
-      user={session.user}
-    >
+    <>
       <NavigationSyncAlert {...navigationSync} />
       <ConversationHeader
         actions={
@@ -449,6 +448,6 @@ export function ChannelPage() {
         />
       ) : null}
       {messageActions.dialogs}
-    </AppShell>
+    </>
   )
 }

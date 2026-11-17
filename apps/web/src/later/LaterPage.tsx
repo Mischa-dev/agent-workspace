@@ -3,8 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
-import { useAuthenticatedSession } from '../auth/session'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import {
   Banner,
   Button,
@@ -67,7 +66,6 @@ function useMinuteClock() {
 
 /** Saved messages and tasks, reminders, and messages scheduled to send. */
 export function LaterPage() {
-  const session = useAuthenticatedSession()
   const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
   const tab: Tab = TABS.some((option) => option.value === params.get('view')) ? (params.get('view') as Tab) : 'open'
@@ -145,12 +143,13 @@ export function LaterPage() {
     }
   }
 
+  useShellPage({ home: true, mainClassName: 'aw-main--page' })
   const items = saved.data?.items ?? []
   const waiting = scheduled.data ?? []
   const list = tab === 'scheduled' ? scheduled : saved
 
   return (
-    <AppShell home mainClassName="aw-main--page" user={session.user}>
+    <>
       <div className="aw-page aw-later">
         <PageHeader
           actions={
@@ -298,7 +297,7 @@ export function LaterPage() {
       >
         {discarding ? `“${plainPreview(discarding.plainText, 120)}” won’t be sent, and its text can’t be brought back. Copy it first if you need it.` : null}
       </ConfirmDialog>
-    </AppShell>
+    </>
   )
 }
 

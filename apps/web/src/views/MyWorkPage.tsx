@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjectExperience } from '../experience/layout'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { useProjects } from '../projects/hooks'
 import { ButtonLink, EmptyState, ErrorState, ListSkeleton, PageHeader, Section, StatusChip, actorKind, countLabel } from '../ui'
 import { useListKeys } from '../ui/listKeys'
@@ -89,8 +89,10 @@ export function MyWorkPage() {
     />
   ) : undefined
 
+  useShellPage({ context: panel, contextKey: shown?.id, home: true, mainClassName: 'aw-main--page', onContextDismiss: closeTask })
+
   return (
-    <AppShell context={panel} contextKey={shown?.id} home mainClassName="aw-main--page" onContextDismiss={closeTask} user={session.user}>
+    <>
       <div className="aw-page aw-mywork" ref={pageRef}>
         <PageHeader icon="checklist" title="My work" />
         {work.isPending ? <ListSkeleton label="Loading your work" rows={6} /> : null}
@@ -143,7 +145,7 @@ export function MyWorkPage() {
           </>
         ) : null}
       </div>
-    </AppShell>
+    </>
   )
 }
 

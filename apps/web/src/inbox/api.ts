@@ -6,8 +6,10 @@ import { whenChoices } from '../later/when'
 import { actorKind, type ActorKind } from '../ui/identityModel'
 
 export const inboxKeys = {
-  root: ['inbox'] as const,
+  root: queryKeys.inbox,
   list: (view: InboxView, category: InboxCategory) => ['inbox', 'list', view, category] as const,
+  /** One project's unread notifications (its overview). */
+  project: (projectId: string) => ['inbox', 'project', projectId] as const,
 }
 
 export function invalidateInbox(queryClient: QueryClient) {
