@@ -57,6 +57,16 @@ async fn drafts_follow_their_writer_and_stay_theirs() {
     assert_eq!(saved["outcome"], "ok", "{saved}");
     assert_eq!(saved["value"]["draft"]["draft"]["text"], "Half a thought");
     assert_eq!(saved["value"]["keptNewer"], false);
+    // The writer's other devices hear of it: their id only.
+    let announced = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM outbox_events WHERE event_type = 'message_draft.changed' \
+         AND payload->>'actorId' = $1",
+    )
+    .bind(world.owner.actor.to_string())
+    .fetch_one(world.pool())
+    .await
+    .expect("events");
+    assert!(announced >= 1, "the draft is announced");
 
     // A slower device that started before it saves: the newer draft stays,
     // and the slower one is the copy.

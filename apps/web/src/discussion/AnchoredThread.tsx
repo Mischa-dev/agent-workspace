@@ -6,9 +6,8 @@ import { queryKeys } from '../api/queryKeys'
 import { searchMentionableActors } from '../conversations/api'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
-import { TimelineEntries } from '../conversations/Timeline'
-import { useConversationTimeline } from '../conversations/useConversationTimeline'
-import { Button, ErrorState, MessageSkeleton } from '../ui'
+import { Button } from '../ui'
+import { DiscussionEntries } from './DiscussionEntries'
 import '../styles/conversation.css'
 
 export type AnchoredThreadProps = {
@@ -33,7 +32,6 @@ export type AnchoredThreadProps = {
 export default function AnchoredThread({ acceptsComments, anchor, kind, spaceId, thingId, thread, viewerId }: AnchoredThreadProps) {
   const queryClient = useQueryClient()
   const thing = { kind, id: thingId }
-  const timeline = useConversationTimeline(spaceId, thread?.id ?? '')
 
   const refresh = async () => {
     await invalidateOps(queryClient, ['comment_list'])
@@ -63,11 +61,7 @@ export default function AnchoredThread({ acceptsComments, anchor, kind, spaceId,
   const resolved = thread?.status.toLowerCase() === 'resolved'
   return (
     <section aria-label="Comments here" className="aw-thingcomments">
-      {thread && timeline.isPending ? <MessageSkeleton label="Loading comments" rows={2} /> : null}
-      {thread && timeline.isError ? (
-        <ErrorState error={timeline.error} onRetry={() => void timeline.refetch()} title="Comments didn’t load" />
-      ) : null}
-      {thread && timeline.data ? <TimelineEntries conversationId={thread.id} entries={timeline.data.entries} viewerId={viewerId} /> : null}
+      {thread ? <DiscussionEntries conversationId={thread.id} spaceId={spaceId} viewerId={viewerId} /> : null}
       {!thread ? <p className="aw-thingcomments__empty">No comments here yet.</p> : null}
       {acceptsComments ? (
         <StructuredComposer

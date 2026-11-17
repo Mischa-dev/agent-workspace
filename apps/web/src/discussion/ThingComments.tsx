@@ -6,9 +6,8 @@ import { queryKeys } from '../api/queryKeys'
 import { searchMentionableActors } from '../conversations/api'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
-import { TimelineEntries } from '../conversations/Timeline'
-import { useConversationTimeline } from '../conversations/useConversationTimeline'
 import { ErrorState, MessageSkeleton } from '../ui'
+import { DiscussionEntries } from './DiscussionEntries'
 import '../styles/conversation.css'
 
 export type ThingCommentsProps = {
@@ -28,7 +27,6 @@ export default function ThingComments({ kind, thingId, viewerId }: ThingComments
   const summary = useQuery(opQuery('comment_list', { thing }))
   const spaceId = summary.data?.spaceId ?? ''
   const conversationId = summary.data?.conversationId ?? ''
-  const timeline = useConversationTimeline(spaceId, conversationId)
 
   const submit = async (submission: ComposerSubmission) => {
     await callOp(
@@ -54,12 +52,7 @@ export default function ThingComments({ kind, thingId, viewerId }: ThingComments
   const threads = summary.data.threads
   return (
     <section aria-label="Comments" className="aw-thingcomments">
-      {timeline.isError ? (
-        <ErrorState error={timeline.error} onRetry={() => void timeline.refetch()} title="Comments didn’t load" />
-      ) : null}
-      {timeline.data ? (
-        <TimelineEntries conversationId={conversationId} entries={timeline.data.entries} viewerId={viewerId} />
-      ) : null}
+      {spaceId && conversationId ? <DiscussionEntries conversationId={conversationId} spaceId={spaceId} viewerId={viewerId} /> : null}
       {threads.length > 0 ? (
         <ul aria-label="Discussions" className="aw-thingcomments__threads">
           {threads.map((thread) => (

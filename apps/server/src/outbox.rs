@@ -338,6 +338,15 @@ pub struct CustomEmojiChangedPayload {
     pub emoji_id: Uuid,
 }
 
+/// Someone's draft changed (C2.28): saved or cleared on one of their
+/// devices. Their id only, delivered to them alone; their open draft lists
+/// read again over HTTP.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MessageDraftChangedPayload {
+    pub actor_id: Uuid,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -363,6 +372,7 @@ pub enum OutboxEventPayload {
     SheetUpdated(SheetUpdatedPayload),
     ProjectModulesUpdated(ProjectModulesUpdatedPayload),
     CustomEmojiChanged(CustomEmojiChangedPayload),
+    MessageDraftChanged(MessageDraftChangedPayload),
 }
 
 impl OutboxEventPayload {
@@ -391,6 +401,7 @@ impl OutboxEventPayload {
             Self::SheetUpdated(_) => "sheet.updated",
             Self::ProjectModulesUpdated(_) => "project.modules.updated",
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
+            Self::MessageDraftChanged(_) => "message_draft.changed",
         }
     }
 
@@ -421,7 +432,8 @@ impl OutboxEventPayload {
             | Self::CollectionUpdated(_)
             | Self::SheetUpdated(_)
             | Self::ProjectModulesUpdated(_)
-            | Self::CustomEmojiChanged(_) => None,
+            | Self::CustomEmojiChanged(_)
+            | Self::MessageDraftChanged(_) => None,
         }
     }
 
@@ -434,6 +446,7 @@ impl OutboxEventPayload {
             Self::ConversationMemberRemoved(payload) => Some(payload.actor_id),
             Self::NotificationsUpdated(payload) => Some(payload.actor_id),
             Self::AccountManagersChanged(payload) => Some(payload.actor_id),
+            Self::MessageDraftChanged(payload) => Some(payload.actor_id),
             _ => None,
         }
     }
@@ -453,6 +466,7 @@ impl OutboxEventPayload {
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
             Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
+            Self::MessageDraftChanged(_) => OutboxResourceKind::Account,
             Self::AccountManagersChanged(_) | Self::AccountStatusChanged(_) => {
                 OutboxResourceKind::Account
             }
@@ -495,6 +509,8 @@ impl OutboxEventPayload {
             Self::SheetUpdated(payload) => payload.sheet_id,
             Self::ProjectModulesUpdated(payload) => payload.project_id,
             Self::CustomEmojiChanged(payload) => payload.project_id,
+            // Keyed by its writer, like notifications.
+            Self::MessageDraftChanged(payload) => payload.actor_id,
         }
     }
 
@@ -611,6 +627,7 @@ impl OutboxEventPayload {
             Self::SheetUpdated(payload) => serde_json::to_value(payload),
             Self::ProjectModulesUpdated(payload) => serde_json::to_value(payload),
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
+            Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -684,6 +701,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "custom_emoji.changed" => Self::CustomEmojiChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "message_draft.changed" => Self::MessageDraftChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "project.modules.updated" => Self::ProjectModulesUpdated(
