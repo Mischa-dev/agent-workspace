@@ -65,7 +65,7 @@ async fn require_owner(
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     match caller_role(&mut connection, principal, organization_id, false).await? {
         WorkspaceRole::Owner => Ok(()),
         _ => Err(AppError::Forbidden),
@@ -211,7 +211,7 @@ async fn save_http(
     }
     let config =
         serde_json::to_value(&request.smtp).map_err(|_| AppError::Internal("mail settings"))?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let previous = sqlx::query_scalar::<_, Value>(
         "SELECT provider_config FROM workspace_mail_settings WHERE organization_id = $1 FOR UPDATE",
     )
@@ -299,7 +299,7 @@ async fn remove_http(
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     require_owner(&state, &principal, organization_id).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("DELETE FROM workspace_mail_settings WHERE organization_id = $1")
         .bind(organization_id)
         .execute(&mut *transaction)
@@ -373,11 +373,13 @@ async fn test_http(
             .await?
             .ok_or(AppError::Validation("to"))?,
     };
-    let workspace_name =
+    let workspace_name = crate::db::scoped_one(&state.pool, async |connection| {
         sqlx::query_scalar::<_, String>("SELECT name FROM organizations WHERE id = $1")
             .bind(organization_id)
-            .fetch_one(&state.pool)
-            .await?;
+            .fetch_one(connection)
+            .await
+    })
+    .await?;
     let transport = super::load(&state, row).await?;
     let result = super::send(
         &state,
@@ -397,21 +399,24 @@ async fn test_http(
         .err()
         .map(MailError::message)
         .map(str::to_owned);
-    sqlx::query(
-        r#"
+    crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query(
+            r#"
         UPDATE workspace_mail_settings
         SET last_test_at = now(), last_test_ok = $2, last_test_error = $3
         WHERE organization_id = $1
         "#,
-    )
-    .bind(organization_id)
-    .bind(error.is_none())
-    .bind(
-        error
-            .as_deref()
-            .map(|error| error.chars().take(400).collect::<String>()),
-    )
-    .execute(&state.pool)
+        )
+        .bind(organization_id)
+        .bind(error.is_none())
+        .bind(
+            error
+                .as_deref()
+                .map(|error| error.chars().take(400).collect::<String>()),
+        )
+        .execute(connection)
+        .await
+    })
     .await?;
     Ok(Json(TestResponse {
         ok: error.is_none(),

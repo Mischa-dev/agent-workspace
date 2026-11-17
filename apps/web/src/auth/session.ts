@@ -24,6 +24,8 @@ export type OrganizationSummary = {
   name: string
   slug: string
   role: OrganizationRole
+  /** `suspended` or `deleting` when the workspace refuses changes (H1.24); missing means active. */
+  lifecycle?: 'active' | 'importing' | 'suspended' | 'deleting'
 }
 
 export type SessionUser = {
@@ -109,7 +111,12 @@ function normalizeOrganization(value: unknown): OrganizationSummary | null {
       ? record.slug
       : null
   const role = isOrganizationRole(record.role) ? record.role : null
-  return id && name && slug && role ? { id, name, slug, role } : null
+  const lifecycle =
+    record.lifecycle === 'importing' || record.lifecycle === 'suspended' || record.lifecycle === 'deleting'
+      ? record.lifecycle
+      : undefined
+  if (!id || !name || !slug || !role) return null
+  return lifecycle ? { id, name, slug, role, lifecycle } : { id, name, slug, role }
 }
 
 function normalizeUser(value: unknown): SessionUser | null {

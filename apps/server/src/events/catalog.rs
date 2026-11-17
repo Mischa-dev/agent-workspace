@@ -429,6 +429,14 @@ pub static SPACE_MODULES_CHANGED: EventType = fact(
 )
 .legacy(&["project.modules.updated"]);
 
+pub static WORKSPACE_LIFECYCLE_CHANGED: EventType = fact(
+    "workspace.lifecycle_changed",
+    "workspace",
+    Some("workspace"),
+    "A workspace was suspended, resumed, scheduled for deletion or kept",
+)
+.legacy(&["workspace.lifecycle.changed"]);
+
 // --- workspace -------------------------------------------------------------
 pub static FILE_ATTACHED: EventType = fact(
     "file.attached",
@@ -523,6 +531,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &PULL_REQUEST_CLOSED,
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
+        &WORKSPACE_LIFECYCLE_CHANGED,
         &FILE_ATTACHED,
         &FILE_REMOVED,
         &ACCOUNT_STATUS_CHANGED,

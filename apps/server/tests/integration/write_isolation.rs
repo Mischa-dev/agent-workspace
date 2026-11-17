@@ -589,6 +589,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workspace_template_save",
     "project_template_write",
     "workspace_update",
+    "workspace_delete",
+    "workspace_delete_cancel",
 ];
 
 /// Write tools this suite deliberately doesn't call, and why.
@@ -2780,12 +2782,16 @@ pub(super) async fn digest_ignoring(
     digest_tables(pool, pattern, ignored, &tables).await
 }
 
-/// Every table in the schema (partitions and their parents included).
+/// Every table in the schema (partitions and their parents included),
+/// except the shared limit counters: every call into a workspace spends its
+/// budget (H1.1), so a counter row changes on reads too. They hold numbers,
+/// never records; `hosting_limits` checks whose budget a call spends.
 async fn base_tables(pool: &PgPool) -> Vec<String> {
     sqlx::query_scalar::<_, String>(
         r#"
         SELECT table_name::text FROM information_schema.tables
         WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
+          AND table_name <> 'rate_limit_counters'
         ORDER BY 1
         "#,
     )
@@ -6158,6 +6164,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"keywords": ["net launch"]}),
             vec![json!({"workspace": b.organization, "keywords": ["net launch"]})],
         ),
+        // H1.24: deleting a workspace, or keeping it, only ever acts on the
+        // caller's own. A's own call would stop every later case here;
+        // workspace_lifecycle.rs runs it.
+        mcp_case(
+            "workspace_delete",
+            json!({}),
+            vec![json!({"workspace": b.organization, "confirm": b.slug})],
+        )
+        .without_own("deleting A would stop every later case; workspace_lifecycle.rs covers it"),
+        mcp_case(
+            "workspace_delete_cancel",
+            json!({}),
+            vec![json!({"workspace": b.organization})],
+        )
+        .without_own("A isn't being deleted; workspace_lifecycle.rs covers keeping it"),
         mcp_case(
             "agent_profile_write",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),

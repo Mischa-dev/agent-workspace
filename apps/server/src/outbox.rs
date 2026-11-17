@@ -364,6 +364,19 @@ pub struct NotificationKeywordsChangedPayload {
     pub actor_id: Uuid,
 }
 
+/// A workspace's lifecycle changed (H1.24): suspended, resumed, deletion
+/// scheduled or kept. Ids and the state only; open screens refetch the
+/// session. Delivered in the workspace's own space.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceLifecycleChangedPayload {
+    pub workspace_id: Uuid,
+    /// The workspace's own space, which carries the envelope.
+    pub project_id: Uuid,
+    /// `active`, `importing`, `suspended` or `deleting`.
+    pub lifecycle: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -391,6 +404,7 @@ pub enum OutboxEventPayload {
     CustomEmojiChanged(CustomEmojiChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
+    WorkspaceLifecycleChanged(WorkspaceLifecycleChangedPayload),
 }
 
 impl OutboxEventPayload {
@@ -421,6 +435,7 @@ impl OutboxEventPayload {
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
+            Self::WorkspaceLifecycleChanged(_) => "workspace.lifecycle.changed",
         }
     }
 
@@ -453,7 +468,8 @@ impl OutboxEventPayload {
             | Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
             | Self::MessageDraftChanged(_)
-            | Self::NotificationKeywordsChanged(_) => None,
+            | Self::NotificationKeywordsChanged(_)
+            | Self::WorkspaceLifecycleChanged(_) => None,
         }
     }
 
@@ -501,6 +517,7 @@ impl OutboxEventPayload {
             Self::ProjectModulesUpdated(_) | Self::CustomEmojiChanged(_) => {
                 OutboxResourceKind::Project
             }
+            Self::WorkspaceLifecycleChanged(_) => OutboxResourceKind::Project,
         }
     }
 
@@ -535,6 +552,7 @@ impl OutboxEventPayload {
             // Keyed by its writer, like notifications.
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
+            Self::WorkspaceLifecycleChanged(payload) => payload.project_id,
         }
     }
 
@@ -599,6 +617,15 @@ impl OutboxEventPayload {
             Self::SheetUpdated(payload) if payload.revision < 1 || payload.sheet_id.is_nil() => {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::WorkspaceLifecycleChanged(payload)
+                if payload.workspace_id.is_nil()
+                    || !matches!(
+                        payload.lifecycle.as_str(),
+                        "active" | "importing" | "suspended" | "deleting"
+                    ) =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
             Self::ProjectModulesUpdated(payload)
                 if payload.workspace_id.is_nil()
                     || payload.project_id.is_nil()
@@ -653,6 +680,7 @@ impl OutboxEventPayload {
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
+            Self::WorkspaceLifecycleChanged(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -738,6 +766,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "project.modules.updated" => Self::ProjectModulesUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "workspace.lifecycle.changed" => Self::WorkspaceLifecycleChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             _ => return Err(OutboxEventError::UnknownEventType),
@@ -849,8 +880,16 @@ pub async fn enqueue(
     transaction: &mut Transaction<'_, Postgres>,
     event: &NewOutboxEvent,
 ) -> Result<Uuid, AppError> {
+    enqueue_on(transaction, event).await
+}
+
+/// [`enqueue`] on a connection the caller holds inside its transaction.
+pub async fn enqueue_on(
+    connection: &mut sqlx::PgConnection,
+    event: &NewOutboxEvent,
+) -> Result<Uuid, AppError> {
     crate::events::notice::stage(
-        transaction,
+        connection,
         event.event_id,
         event.project_id,
         &event.payload,

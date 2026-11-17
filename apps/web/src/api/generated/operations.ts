@@ -48,6 +48,8 @@ export type HostOwnerChoice = "person" | "workspace"
 
 export type HostView = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
+export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
+
 export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
 
 export type OwnerView = { id: string; kind: string; name: string }
@@ -270,6 +272,14 @@ export type WhiteboardTemplateListInput = { spaceId?: string | null }
 
 export type WhiteboardTemplateListOutput = { templates: WhiteboardTemplateView[] }
 
+export type WorkspaceDeleteInput = { confirm: string }
+
+export type WorkspaceDeleteOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
+
+export type WorkspaceDeleteCancelInput = Record<string, never>
+
+export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
+
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
@@ -315,6 +325,8 @@ export type Operations = {
   status_set: { input: StatusSetInput; output: StatusSetOutput }
   thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
   whiteboard_template_list: { input: WhiteboardTemplateListInput; output: WhiteboardTemplateListOutput }
+  workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
+  workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
 }
 
 export type OpName = keyof Operations

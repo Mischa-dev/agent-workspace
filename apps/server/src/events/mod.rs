@@ -220,10 +220,10 @@ pub const MAX_PAYLOAD_BYTES: usize = 8192;
 /// Stages one event in the change's transaction; the sequencer gives it a
 /// position once the transaction commits, and a rollback leaves nothing.
 pub async fn emit(
-    transaction: &mut Transaction<'_, Postgres>,
+    connection: &mut sqlx::PgConnection,
     event: NewEvent<'_>,
 ) -> Result<Uuid, AppError> {
-    emit_on(transaction, event).await
+    emit_on(connection, event).await
 }
 
 /// [`emit`] on a connection the caller holds inside its transaction, for

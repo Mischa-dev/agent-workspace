@@ -1,0 +1,93 @@
+# Agent Workspace on one machine (H1.13): the server and PostgreSQL.
+#
+#   ./init.sh            # once: writes .env and the secret files, then starts
+#   docker compose up -d # afterwards (Podman Compose works the same)
+#
+# The server connects as `aw_app`, a role that owns the schema and is not a
+# superuser (initdb/10-app-role.sql), so row security applies to it.
+name: agent-workspace
+
+# What the server and its backups both read.
+x-app-environment: &app-environment
+  AGENT_WORKSPACE_ENV: production
+  AGENT_WORKSPACE_SERVER_ADDR: 0.0.0.0:3100
+  AGENT_WORKSPACE_PUBLIC_ORIGIN: ${AW_PUBLIC_ORIGIN:-http://localhost:3100}
+  AGENT_WORKSPACE_DATABASE_URL_FILE: /run/secrets/db_app_url
+  AGENT_WORKSPACE_DATA_ROOT: /var/lib/agent-workspace
+  AGENT_WORKSPACE_SECRETS_KEY_PATH: /var/lib/agent-workspace-keys/keyring
+  AGENT_WORKSPACE_PROFILE: ${AW_PROFILE:-standard}
+
+services:
+  db:
+    image: docker.io/library/postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    environment:
+      POSTGRES_DB: agent_workspace
+      POSTGRES_USER: aw_admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_admin_password
+      AW_APP_PASSWORD_FILE: /run/secrets/db_app_password
+    secrets: [db_admin_password, db_app_password]
+    volumes:
+      # PostgreSQL 18 keeps versioned clusters below this directory.
+      - db:/var/lib/postgresql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aw_admin -d agent_workspace"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  app:
+    image: ${AW_IMAGE:-agent-workspace}:${AW_VERSION:-latest}
+    build:
+      context: ../..
+      dockerfile: deploy/container/Containerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    # Until the host program is its own image (A1.17), runs use the
+    # built-in host inside the server.
+    environment: *app-environment
+    secrets: [db_app_url]
+    volumes:
+      - data:/var/lib/agent-workspace
+      - keys:/var/lib/agent-workspace-keys
+    ports:
+      - "127.0.0.1:${AW_PORT:-3100}:3100"
+    healthcheck:
+      test: ["CMD", "agent-workspace-server", "health"]
+      interval: 10s
+      timeout: 6s
+      start_period: 120s
+      retries: 3
+    restart: unless-stopped
+
+  # `docker compose --profile backup up -d`: a set every day at 03:30 UTC
+  # in ./backups, kept 14 days (docs/self-host/backups.md).
+  backup:
+    profiles: [backup]
+    image: ${AW_IMAGE:-agent-workspace}:${AW_VERSION:-latest}
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["agent-workspace-server", "backup", "schedule", "--to", "/backups", "--at", "03:30", "--keep-days", "14"]
+    environment: *app-environment
+    secrets: [db_app_url]
+    volumes:
+      - data:/var/lib/agent-workspace:ro
+      - keys:/var/lib/agent-workspace-keys:ro
+      - ./backups:/backups
+    restart: unless-stopped
+
+secrets:
+  db_admin_password:
+    file: ./secrets/db_admin_password
+  db_app_password:
+    file: ./secrets/db_app_password
+  db_app_url:
+    file: ./secrets/db_app_url
+
+volumes:
+  db: {}
+  data: {}
+  keys: {}

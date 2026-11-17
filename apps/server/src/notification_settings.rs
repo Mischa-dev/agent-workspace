@@ -342,8 +342,9 @@ pub async fn conversation_still_notifies(
         .fetch_one(&mut *connection)
         .await?;
     Ok(match kind {
-        kind::CONVERSATION_MESSAGE => level == "all",
-        // Mentions, DMs, followed threads' replies, keywords and comments
+        // Choosing mentions on a thread unfollows it.
+        kind::CONVERSATION_MESSAGE | kind::THREAD_REPLY => level == "all",
+        // Mentions, DMs, keywords and comments
         // on things you follow reach you unless the conversation is muted
         // since.
         _ => level != "nothing",
@@ -455,10 +456,11 @@ pub async fn home_workspace(
 }
 
 pub async fn read(
-    pool: &PgPool,
+    state: &AppState,
     actor_id: Uuid,
     organization_id: Uuid,
 ) -> Result<NotificationSettingsView, AppError> {
+    let pool = &state.pool;
     let rows = sqlx::query_as::<_, (String, String, bool)>(
         r#"
         SELECT kind_group, channel, enabled FROM notification_channel_preferences
@@ -517,7 +519,8 @@ pub async fn read(
     .collect();
     let mut connection = crate::db::scoped_tx(pool).await?;
     let (quiet_hours, digest) = quiet_hours(&mut connection, organization_id, actor_id).await?;
-    let mail_configured = crate::mail::configured(&mut *connection, organization_id).await?;
+    let mail_configured =
+        crate::mail::notification_mail_configured(state, &mut *connection, organization_id).await?;
     let email_address = crate::mail::verified_address_for_actor(&mut *connection, actor_id).await?;
     Ok(NotificationSettingsView {
         organization_id,
@@ -803,7 +806,7 @@ async fn read_http(
     let organization_id =
         home_workspace(&state.pool, principal.actor_id, query.organization_id).await?;
     Ok(Json(
-        read(&state.pool, principal.actor_id, organization_id).await?,
+        read(&state, principal.actor_id, organization_id).await?,
     ))
 }
 
@@ -837,7 +840,7 @@ async fn set_channel_http(
     )
     .await?;
     Ok(Json(
-        read(&state.pool, principal.actor_id, organization_id).await?,
+        read(&state, principal.actor_id, organization_id).await?,
     ))
 }
 
@@ -875,7 +878,7 @@ async fn set_mute_http(
             .fetch_one(crate::db::scoped(&state.pool))
             .await?;
     Ok(Json(
-        read(&state.pool, principal.actor_id, organization_id).await?,
+        read(&state, principal.actor_id, organization_id).await?,
     ))
 }
 

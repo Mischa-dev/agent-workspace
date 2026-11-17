@@ -8,7 +8,7 @@
   "switchable": false,
   "needs": [],
   "worksWith": [],
-  "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage"],
+  "permissions": ["members.view", "directory.view", "members.invite", "members.manage", "roles.manage", "settings.manage", "workspace.delete"],
   "tools": {
     "briefing": "query",
     "settings_get": "describe",
@@ -32,6 +32,8 @@
     "history_restore": "change",
     "module_list": "describe",
     "workspace_update": "change",
+    "workspace_delete": "change",
+    "workspace_delete_cancel": "change",
     "role_list": "query",
     "role_get": "describe",
     "my_permissions": "describe",
@@ -79,7 +81,10 @@
     "/api/v1/workspace-invitations/*",
     "/api/v1/workspaces/by-slug/*"
   ],
-  "events": { "emits": ["file.attached", "file.removed", "account.status_changed", "custom_emoji.changed"], "listens": [] },
+  "events": {
+    "emits": ["file.attached", "file.removed", "account.status_changed", "custom_emoji.changed", "workspace.lifecycle_changed"],
+    "listens": []
+  },
   "notifications": ["thing_update"],
   "search": ["files"],
   "automations": { "triggers": [], "actions": [] },

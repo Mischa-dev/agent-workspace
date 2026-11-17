@@ -30,8 +30,10 @@ import {
 import type { SettingsPageProps } from '../types'
 import { defaultWorkspace, useSwitchWorkspace } from '../workspaceChoice'
 import {
+  deleteWorkspace,
   getServerVersion,
   getWorkspace,
+  keepWorkspace,
   leaveWorkspace,
   listWorkspaceMembers,
   renameWorkspace,
@@ -64,6 +66,7 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
         <ErrorState error={workspace.error} onRetry={() => void workspace.refetch()} title="The workspace didn’t load" />
       ) : (
         <>
+          <LifecycleNotice workspace={workspace.data} />
           <Section id="workspace-details-heading" title="About this workspace">
             <DetailList
               items={[
@@ -88,6 +91,7 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
           {session.organizations.length > 1 && <DefaultSection current={summary.id} session={session} />}
           {workspace.data.capabilities.transferOwnership && <TransferSection workspace={workspace.data} />}
           <LeaveSection workspace={workspace.data} />
+          {workspace.data.capabilities.delete && <DeleteSection workspace={workspace.data} />}
         </>
       )}
     </>
@@ -355,6 +359,118 @@ function LeaveSection({ workspace }: { workspace: Workspace }) {
           : 'You’ll lose access to this workspace.'}{' '}
         Someone has to invite you again for you to come back.
       </ConfirmDialog>
+    </Section>
+  )
+}
+
+/** Why a workspace that isn't active refuses changes. */
+function LifecycleNotice({ workspace }: { workspace: Workspace }) {
+  if (workspace.lifecycle === 'suspended') {
+    return (
+      <Banner title="This workspace is suspended" tone="warning">
+        Nothing in it can be changed, and its agents and apps are refused, until the server’s operators resume it.
+      </Banner>
+    )
+  }
+  if (workspace.lifecycle === 'deleting' && workspace.deleteAfter) {
+    return (
+      <Banner title="This workspace is being deleted" tone="danger">
+        It and everything in it go for good on {formatFullDate(workspace.deleteAfter)}. Until then nothing in it can be
+        changed. An owner can keep it below.
+      </Banner>
+    )
+  }
+  return null
+}
+
+/** Delete the whole workspace after 14 days, or keep it while it's waiting. */
+function DeleteSection({ workspace }: { workspace: Workspace }) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [typed, setTyped] = useState('')
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: workspaceKeys.workspace(workspace.id) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.session })
+  }
+  const remove = useMutation({
+    mutationFn: () => deleteWorkspace(workspace.id, typed.trim()),
+    onSuccess: () => {
+      setOpen(false)
+      setTyped('')
+      refresh()
+      showToast({ tone: 'success', title: 'Workspace scheduled for deletion', description: 'You have 14 days to keep it.' })
+    },
+  })
+  const keep = useMutation({
+    mutationFn: () => keepWorkspace(workspace.id),
+    onSuccess: () => {
+      refresh()
+      showToast({ tone: 'success', title: 'Workspace kept' })
+    },
+    onError: (reason) => toastError('The workspace wasn’t kept', reason),
+  })
+  const close = () => {
+    setOpen(false)
+    setTyped('')
+    remove.reset()
+  }
+  if (workspace.lifecycle === 'deleting') {
+    return (
+      <Section description="Keep the workspace and everything in it, and let everyone use it again." id="delete-workspace-heading" title="Keep this workspace">
+        <div>
+          <Button busy={keep.isPending} onClick={() => keep.mutate()} variant="primary">
+            Keep workspace
+          </Button>
+        </div>
+      </Section>
+    )
+  }
+  if (workspace.lifecycle === 'suspended') return null
+  const confirmed = typed.trim().toLowerCase() === workspace.slug
+  return (
+    <Section
+      description="Delete the workspace and everything in it: projects, conversations, tasks, pages, files and runs. People keep their accounts; agents and apps the workspace owns are retired."
+      id="delete-workspace-heading"
+      title="Delete this workspace"
+    >
+      <div>
+        <Button icon="trash" onClick={() => setOpen(true)} variant="danger">
+          Delete workspace…
+        </Button>
+      </div>
+      <Dialog
+        description="Nothing is deleted for 14 days, and an owner can keep it until then. While it waits, nobody can change anything in it."
+        footer={
+          <>
+            <Button onClick={close}>Cancel</Button>
+            <Button busy={remove.isPending} disabled={!confirmed} type="submit" variant="danger">
+              Delete workspace
+            </Button>
+          </>
+        }
+        dirty={Boolean(typed)}
+        onClose={close}
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (confirmed) remove.mutate()
+        }}
+        open={open}
+        title={`Delete ${workspace.name}?`}
+      >
+        <div className="aw-form">
+          <TextField
+            autoComplete="off"
+            hint={`Type ${workspace.slug} to confirm.`}
+            id="delete-workspace-confirm"
+            label="Workspace address"
+            onChange={(event) => setTyped(event.target.value)}
+            value={typed}
+          />
+          {remove.isError ? (
+            <Banner tone="danger">The workspace wasn’t scheduled for deletion. {describeError(remove.error).message}</Banner>
+          ) : null}
+        </div>
+      </Dialog>
     </Section>
   )
 }

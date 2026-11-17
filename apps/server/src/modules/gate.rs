@@ -103,7 +103,7 @@ pub async fn forget_everywhere(
 
 /// Where a request acts, read from its path.
 #[derive(Debug, PartialEq, Eq)]
-enum Scope {
+pub(crate) enum Scope {
     Project(Uuid),
     Workspace(Uuid),
 }
@@ -112,7 +112,7 @@ enum Scope {
 /// right after `/api/v1/projects/` or `/api/v1/organizations/`. The ID is
 /// the route's decoded parameter, as its handler sees it, so an encoded
 /// spelling of the same ID can't step around the gate.
-fn scope(template: &str, param: impl Fn(&str) -> Option<String>) -> Option<Scope> {
+pub(crate) fn scope(template: &str, param: impl Fn(&str) -> Option<String>) -> Option<Scope> {
     let mut pattern = template.trim_start_matches('/').split('/');
     if pattern.next()? != "api" || pattern.next()? != "v1" {
         return None;
@@ -195,7 +195,7 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
 ];
 
 /// The scope a route named by id acts in, looked up from the database.
-async fn id_scope(
+pub(crate) async fn id_scope(
     state: &AppState,
     template: &str,
     param: impl Fn(&str) -> Option<String>,
@@ -210,10 +210,13 @@ async fn id_scope(
     let Some(id) = param(route.param).and_then(|raw| Uuid::parse_str(&raw).ok()) else {
         return Ok(None);
     };
-    let found = sqlx::query_as::<_, (Option<Uuid>, Uuid)>(route.lookup)
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?;
+    let found = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (Option<Uuid>, Uuid)>(route.lookup)
+            .bind(id)
+            .fetch_optional(connection)
+            .await
+    })
+    .await?;
     Ok(found.map(|(project, workspace)| match project {
         Some(project) => Scope::Project(project),
         None => Scope::Workspace(workspace),
@@ -265,12 +268,16 @@ async fn off_module(
             let (organization_id, kind) = match known {
                 Some(found) => found,
                 None => {
-                    let Some((organization_id, kind)) = sqlx::query_as::<_, (Uuid, String)>(
-                        "SELECT organization_id, kind FROM projects WHERE id = $1",
-                    )
-                    .bind(project_id)
-                    .fetch_optional(&state.pool)
-                    .await?
+                    let Some((organization_id, kind)) =
+                        crate::db::scoped_one(&state.pool, async |connection| {
+                            sqlx::query_as::<_, (Uuid, String)>(
+                                "SELECT organization_id, kind FROM projects WHERE id = $1",
+                            )
+                            .bind(project_id)
+                            .fetch_optional(connection)
+                            .await
+                        })
+                        .await?
                     else {
                         // No such project: the handler answers that.
                         return Ok(Off::No);
@@ -309,7 +316,7 @@ async fn off_module(
     let (set, narrowing) = match kept {
         Some(kept) => kept,
         None => {
-            let mut connection = state.pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(&state.pool).await?;
             let set = state::workspace(&mut connection, organization_id).await?;
             // Narrowed for some: a role turns modules off, or a space
             // keeps switches of its own.
@@ -359,7 +366,7 @@ async fn off_for_caller(
     let Some(actor) = auth::load_authenticated_actor(state, headers).await? else {
         return Ok(None);
     };
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let set = match scope {
         Scope::Project(project_id) => {
             if !sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, NULL, $2)")
@@ -400,15 +407,19 @@ async fn caller_can_see(
     };
     let visible = match scope {
         Scope::Project(project_id) => {
-            sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, NULL, $2)")
-                .bind(actor.actor_id)
-                .bind(project_id)
-                .fetch_one(&state.pool)
-                .await?
+            crate::db::scoped_one(&state.pool, async |connection| {
+                sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, NULL, $2)")
+                    .bind(actor.actor_id)
+                    .bind(project_id)
+                    .fetch_one(connection)
+                    .await
+            })
+            .await?
         }
         Scope::Workspace(organization_id) => {
-            sqlx::query_scalar::<_, bool>(
-                r#"
+            crate::db::scoped_one(&state.pool, async |connection| {
+                sqlx::query_scalar::<_, bool>(
+                    r#"
                 SELECT EXISTS (
                     SELECT 1
                     FROM organization_memberships membership
@@ -417,10 +428,12 @@ async fn caller_can_see(
                       AND membership.enabled
                 )
                 "#,
-            )
-            .bind(organization_id)
-            .bind(actor.actor_id)
-            .fetch_one(&state.pool)
+                )
+                .bind(organization_id)
+                .bind(actor.actor_id)
+                .fetch_one(connection)
+                .await
+            })
             .await?
         }
     };

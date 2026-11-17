@@ -142,6 +142,9 @@ pub enum AppError {
     /// (AWD-97); `module` is its id, such as `tasks`.
     #[error("the {module} module is turned off")]
     ModuleOff { module: &'static str },
+    /// The workspace is suspended, or being deleted (H1.24).
+    #[error("the workspace is suspended")]
+    WorkspaceSuspended,
     #[error("internal invariant failed: {0}")]
     Internal(&'static str),
     /// Work under a lease (K5.2) found the lease gone: another instance
@@ -183,6 +186,7 @@ impl AppError {
             Self::DevelopmentAuthUnavailable => "development_auth_unavailable",
             Self::SecretsNotConfigured => "secrets_not_configured",
             Self::ModuleOff { .. } => "module_off",
+            Self::WorkspaceSuspended => "workspace_suspended",
             Self::Internal(_) => "internal",
             Self::LeaseLost => "lease_lost",
         }
@@ -399,6 +403,12 @@ impl IntoResponse for AppError {
                 StatusCode::FORBIDDEN,
                 "module_off",
                 "This part of the workspace is turned off.",
+                None,
+            ),
+            Self::WorkspaceSuspended => (
+                StatusCode::LOCKED,
+                "workspace_suspended",
+                "This workspace is suspended or being deleted. Its owners can see why in its settings.",
                 None,
             ),
             Self::Database(error) => {

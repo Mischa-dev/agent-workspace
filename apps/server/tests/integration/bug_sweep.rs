@@ -175,7 +175,7 @@ async fn reset_mail_goes_only_through_a_workspace_the_person_owns_or_only_belong
         mail::transport_for_actor(state, actor)
             .await
             .expect("transport")
-            .map(|transport| transport.organization_id)
+            .and_then(|transport| transport.organization_id)
     };
     // It's the only workspace Mara is in, so it carries her mail.
     assert_eq!(transport(mara).await, Some(setup.organization_id));
@@ -293,7 +293,7 @@ async fn joining_another_workspace_doesnt_route_reset_mail_through_it() {
         mail::transport_for_actor(state, actor)
             .await
             .expect("transport")
-            .map(|transport| transport.organization_id)
+            .and_then(|transport| transport.organization_id)
     };
     let mail_through = |organization: Uuid, by: Uuid| async move {
         sqlx::query(

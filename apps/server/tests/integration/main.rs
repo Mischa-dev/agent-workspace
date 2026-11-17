@@ -52,6 +52,7 @@ mod followed_threads;
 mod github_task_keys;
 mod harness_support;
 mod history_seam;
+mod hosting_limits;
 mod journey;
 mod keywords;
 mod layouts;
@@ -149,6 +150,7 @@ mod w3_tasks_http;
 mod w7_launch;
 mod w9_capacity_and_push;
 mod workspace_isolation;
+mod workspace_lifecycle;
 mod write_isolation;
 
 /// The PostgreSQL tests skip themselves when `AGENT_WORKSPACE_DATABASE_URL`
