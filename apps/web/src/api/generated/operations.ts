@@ -210,9 +210,9 @@ export type CommentCreateInput = { anchor?: unknown; attachmentIds?: string[]; c
 
 export type CommentCreateOutput = { conversationId: string; href?: string | null; messageId: string; threadId?: string | null }
 
-export type CommentListInput = { status?: string | null; thing: ThingInput }
+export type CommentListInput = { cursor?: string | null; limit?: number | null; status?: string | null; thing: ThingInput }
 
-export type CommentListOutput = { acceptsComments: boolean; conversationId?: string | null; messageCount: number; spaceId?: string | null; threads: CommentThreadView[]; unread: boolean }
+export type CommentListOutput = { acceptsComments: boolean; conversationId?: string | null; messageCount: number; nextCursor?: string | null; spaceId?: string | null; threads: CommentThreadView[]; unread: boolean }
 
 export type CommentThreadUpdateInput = { outcome?: string | null; status: string; threadId: string }
 

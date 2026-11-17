@@ -117,6 +117,61 @@ pub(crate) async fn open_for(
     Ok((conversation_id, project_id))
 }
 
+/// Moves a thing's discussion to the space the thing moved to: its comments
+/// conversation, the threads under it and everything on their messages
+/// (one update; the composite keys carry it down, migration
+/// `20261117194000_discussions_follow_their_thing`). Called in the
+/// transaction that moves the thing, after the thing's own row. Nothing to
+/// do for a thing nobody has commented on.
+pub(crate) async fn follow(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    kind: SubjectKind,
+    thing_id: Uuid,
+    project_id: Uuid,
+) -> Result<(), AppError> {
+    let Some(comments_id) = threads::comments_of(transaction, kind.as_str(), thing_id).await?
+    else {
+        return Ok(());
+    };
+    sqlx::query("SELECT set_config('aw.discussion_move', 'on', true)")
+        .execute(&mut **transaction)
+        .await?;
+    // Where someone last was in the old space isn't a place in the new one.
+    sqlx::query(
+        r#"
+        DELETE FROM project_navigation_states
+        WHERE conversation_id = $1
+           OR conversation_id IN (
+               -- visibility: the tree of a thing's comments, moved with the thing
+               SELECT id FROM conversations WHERE parent_channel_id = $1)
+        "#,
+    )
+    .bind(comments_id)
+    .execute(&mut **transaction)
+    .await?;
+    let moved =
+        sqlx::query("UPDATE conversations SET project_id = $2 WHERE id = $1 AND project_id <> $2")
+            .bind(comments_id)
+            .bind(project_id)
+            .execute(&mut **transaction)
+            .await;
+    sqlx::query("SELECT set_config('aw.discussion_move', 'off', true)")
+        .execute(&mut **transaction)
+        .await?;
+    match moved {
+        Ok(_) => Ok(()),
+        // Something tied to the old space hangs off the discussion (an
+        // agent's run that can't move with it).
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23503") => {
+            Err(AppError::Conflict(
+                kind.as_str(),
+                "its discussion has work tied to its current space",
+            ))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Posts a comment on a thing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn post(

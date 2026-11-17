@@ -246,6 +246,12 @@ pub struct CommentListInput {
     /// Only threads with this status, such as Open or Resolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// The nextCursor of an earlier call, for the threads after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// Threads per page (default and at most 200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
 }
 
 impl Targeted for CommentListInput {
@@ -270,6 +276,10 @@ pub struct CommentThreadView {
     /// Messages here you haven't seen.
     pub unread: bool,
     pub created_at: String,
+    /// Its creation time in microseconds, for the page cursor.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub created_micros: i64,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -288,14 +298,27 @@ pub struct CommentListOutput {
     /// Comments in the stream (not in threads).
     pub message_count: i64,
     pub unread: bool,
-    /// Its threads, oldest first.
+    /// Its threads, oldest first, a page at a time.
     pub threads: Vec<CommentThreadView>,
+    /// Pass as cursor for the next page of threads; none on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
     /// False when the thing takes no new comments here (archived, or a
     /// task or page, whose comments move here later).
     pub accepts_comments: bool,
 }
 
-const MAX_THREADS: i64 = 200;
+const MAX_THREADS: u16 = 200;
+
+/// A page boundary in a thing's threads: the last thread's creation time
+/// (microseconds) and id.
+fn decode_thread_cursor(cursor: &str) -> Result<(chrono::DateTime<chrono::Utc>, Uuid), OpError> {
+    let invalid = || OpError::invalid("cursor", "Pass the nextCursor of an earlier call.");
+    let (micros, id) = cursor.split_once('_').ok_or_else(invalid)?;
+    let micros = micros.parse::<i64>().map_err(|_| invalid())?;
+    let at = chrono::DateTime::from_timestamp_micros(micros).ok_or_else(invalid)?;
+    Ok((at, id.parse().map_err(|_| invalid())?))
+}
 
 impl Operation for CommentList {
     const NAME: &'static str = "comment_list";
@@ -306,8 +329,8 @@ impl Operation for CommentList {
     const TITLE: &'static str = "List comments";
     const DESCRIPTION: &'static str = "A sheet's, whiteboard's or record's discussion: its \
         comments conversation (read the comments with conversation_read), how many comments \
-        and whether any are unread, and its threads with their status, anchor and counts. \
-        Filter threads by status, such as Open.";
+        and whether any are unread, and its threads with their status, anchor and counts, 200 \
+        at a time (pass nextCursor as cursor for more). Filter threads by status, such as Open.";
 
     type Input = CommentListInput;
     type Output = CommentListOutput;
@@ -325,6 +348,12 @@ impl Operation for CommentList {
             .status
             .map(|status| status.trim().to_owned())
             .filter(|status| !status.is_empty());
+        let after = input
+            .cursor
+            .as_deref()
+            .map(decode_thread_cursor)
+            .transpose()?;
+        let limit = input.limit.unwrap_or(MAX_THREADS).clamp(1, MAX_THREADS);
         let connection = &mut **call.tx().await?;
         let subject = kind.subject();
         let home = subject
@@ -341,6 +370,7 @@ impl Operation for CommentList {
                 message_count: 0,
                 unread: false,
                 threads: Vec::new(),
+                next_cursor: None,
                 accepts_comments,
             });
         };
@@ -364,7 +394,7 @@ impl Operation for CommentList {
         .await
         .map_err(AppError::from)?
         .ok_or(OpError::not_found("That thing"))?;
-        let threads = sqlx::query_as::<_, CommentThreadView>(
+        let mut threads = sqlx::query_as::<_, CommentThreadView>(
             r#"
             SELECT thread.id, thread.name, thread.thread_status AS status,
                    thread.thread_outcome AS outcome, thread.anchor,
@@ -372,13 +402,16 @@ impl Operation for CommentList {
                    thread.last_message_sequence
                        > COALESCE(read_state.highest_seen_sequence, 0) AS unread,
                    to_char(thread.created_at AT TIME ZONE 'UTC',
-                           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
+                           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at,
+                   (extract(epoch FROM date_trunc('microseconds', thread.created_at))
+                       * 1000000)::bigint AS created_micros
             FROM conversations thread
             LEFT JOIN conversation_read_states read_state
               ON read_state.conversation_id = thread.id AND read_state.actor_id = $2
             WHERE thread.parent_channel_id = $1 AND thread.kind = 'thread'
               AND thread.archived_at IS NULL
               AND ($3::text IS NULL OR lower(thread.thread_status) = lower($3))
+              AND ($5::timestamptz IS NULL OR (thread.created_at, thread.id) > ($5, $6))
               AND conversation_visible_to(thread.id, $2)
             ORDER BY thread.created_at, thread.id
             LIMIT $4
@@ -387,16 +420,27 @@ impl Operation for CommentList {
         .bind(conversation_id)
         .bind(viewer)
         .bind(status)
-        .bind(MAX_THREADS)
+        .bind(i64::from(limit) + 1)
+        .bind(after.map(|(at, _)| at))
+        .bind(after.map(|(_, id)| id))
         .fetch_all(&mut *connection)
         .await
         .map_err(AppError::from)?;
+        let next_cursor = if threads.len() > usize::from(limit) {
+            threads.truncate(usize::from(limit));
+            threads
+                .last()
+                .map(|thread| format!("{}_{}", thread.created_micros, thread.id))
+        } else {
+            None
+        };
         Ok(CommentListOutput {
             conversation_id: Some(conversation_id),
             space_id: Some(space_id),
             message_count,
             unread,
             threads,
+            next_cursor,
             accepts_comments,
         })
     }

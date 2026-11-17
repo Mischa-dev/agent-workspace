@@ -706,3 +706,175 @@ async fn sheet_anchor_follows_a_row_insert() {
         "{listed}"
     );
 }
+
+/// Follow-up from #287's review: a board's discussion moves with the board,
+/// to another space and to the workspace, with its threads, replies and
+/// reactions, and the new space's members can read and add to it.
+#[tokio::test]
+async fn a_boards_discussion_moves_with_it() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .project("OTHER")
+        .person("lena", "member")
+        .person("nina", "member")
+        .build("d2_board_discussion_moves")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let other = Uuid::parse_str(world.project("OTHER")).expect("other");
+    let lena = &world.people["lena"];
+    let nina = &world.people["nina"];
+    // Nina is only in OTHER.
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work)
+    .bind(nina.actor)
+    .execute(pool)
+    .await
+    .expect("nina leaves WORK");
+
+    let (_, board) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_create",
+        json!({
+            "title": "Flow",
+            "projectId": work,
+            "operations": [{"op": "add", "type": "rectangle", "id": "start", "text": "Start"}],
+        }),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let board = board["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let thing = json!({"kind": "whiteboard", "id": board});
+    let (_, first) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "comment_create",
+        json!({"thing": thing, "text": "Start smaller.", "anchor": {"kind": "elements", "elementIds": ["start"], "at": {"x": 1, "y": 2}}}),
+    )
+    .await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    let thread = first["value"]["threadId"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
+    let (_, reply) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "comment_create",
+        json!({"thing": thing, "text": "And label it.", "threadId": thread}),
+    )
+    .await;
+    assert_eq!(reply["outcome"], "ok", "{reply}");
+    let (_, stream) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "comment_create",
+        json!({"thing": thing, "text": "Looks good overall."}),
+    )
+    .await;
+    assert_eq!(stream["outcome"], "ok", "{stream}");
+    let comments = Uuid::parse_str(
+        stream["value"]["conversationId"]
+            .as_str()
+            .expect("comments"),
+    )
+    .expect("comments id");
+
+    // Nina can't see it while the board is in WORK.
+    let (_, hidden) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "comment_list",
+        json!({"thing": thing}),
+    )
+    .await;
+    assert_eq!(hidden["outcome"], "not_found", "{hidden}");
+
+    // Lena moves the board to OTHER: the whole discussion goes with it.
+    let (_, moved) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_update",
+        json!({"whiteboardId": board, "projectId": other}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let places = sqlx::query_scalar::<_, Uuid>(
+        "SELECT DISTINCT project_id FROM conversations WHERE id = $1 OR parent_channel_id = $1 \
+         UNION SELECT DISTINCT project_id FROM messages WHERE conversation_id IN \
+             (SELECT id FROM conversations WHERE id = $1 OR parent_channel_id = $1)",
+    )
+    .bind(comments)
+    .fetch_all(pool)
+    .await
+    .expect("places");
+    assert_eq!(places, vec![other]);
+    let (_, listed) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "comment_list",
+        json!({"thing": thing}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(listed["value"]["threads"][0]["messageCount"], 2, "{listed}");
+    assert_eq!(listed["value"]["messageCount"], 1, "{listed}");
+    let (_, nina_says) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "comment_create",
+        json!({"thing": thing, "text": "Agreed.", "threadId": thread}),
+    )
+    .await;
+    assert_eq!(nina_says["outcome"], "ok", "{nina_says}");
+
+    // And to the whole workspace: into the workspace's own space.
+    let (_, workspace_wide) = op(
+        app,
+        &lena.browser,
+        workspace,
+        "whiteboard_update",
+        json!({"whiteboardId": board, "workspaceWide": true}),
+    )
+    .await;
+    assert_eq!(workspace_wide["outcome"], "ok", "{workspace_wide}");
+    let (board_space, comments_space) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT board.project_id, conversation.project_id FROM whiteboards board, conversations conversation \
+         WHERE board.id = $1::uuid AND conversation.id = $2",
+    )
+    .bind(&board)
+    .bind(comments)
+    .fetch_one(pool)
+    .await
+    .expect("spaces");
+    assert_eq!(board_space, comments_space);
+    assert_ne!(comments_space, other);
+    let (_, after) = op(
+        app,
+        &nina.browser,
+        workspace,
+        "comment_list",
+        json!({"thing": thing}),
+    )
+    .await;
+    assert_eq!(after["value"]["threads"][0]["messageCount"], 3, "{after}");
+}

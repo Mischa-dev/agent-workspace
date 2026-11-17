@@ -620,6 +620,15 @@ pub async fn change(
     .bind(new_template)
     .execute(&mut **transaction)
     .await?;
+    if new_project != project_id {
+        crate::discussion::follow(
+            transaction,
+            crate::discussion::SubjectKind::Whiteboard,
+            whiteboard_id,
+            new_project,
+        )
+        .await?;
+    }
     let action = match (deleted, new_deleted) {
         (false, true) => "whiteboard.deleted",
         (true, false) => "whiteboard.restored",
