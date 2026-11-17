@@ -911,6 +911,25 @@ async fn insert_revision(
     .bind(note)
     .execute(&mut **transaction)
     .await?;
+    // The page's own fact, once per kept version (K3.5): saves merged into
+    // the writer's recent version (`record_revision`) don't fire again.
+    let project_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
+            .bind(page_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::PAGE_UPDATED,
+            project_id,
+            "page",
+            page_id,
+        )
+        .version(version)
+        .actor(writer.actor_id),
+    )
+    .await?;
     Ok(())
 }
 

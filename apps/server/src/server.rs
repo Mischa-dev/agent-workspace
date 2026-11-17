@@ -2,8 +2,16 @@
 //! the listeners and the loops. `main.rs` parses the command line and runs
 //! one; the cluster tests run two or more against one database, each with
 //! its own state, listener and loops, and stop one gracefully or abruptly.
+//!
+//! Roles (K5.7) say what an instance runs: `api` serves the app's routes
+//! and GitHub's webhooks; `live` holds browsers' sockets and the tail that
+//! feeds them; `work` runs the jobs, the log's sequencer and consumers, the
+//! reply worker, GitHub's jobs, the one-off startup work and, unless the
+//! built-in host is switched off, the host (runs, recovery, repositories).
+//! An instance without `api` or `live` answers health checks only. Every
+//! instance beats its heartbeat and listens for wakes.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, bail};
 use sqlx::PgPool;
@@ -14,7 +22,9 @@ use crate::{
     cluster::{Cluster, LeaseName},
     config::AppConfig,
     error::AppError,
-    github, jobs,
+    github,
+    health::{self, HealthState, Process},
+    jobs,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
@@ -63,7 +73,7 @@ impl Server {
         // heartbeat starts with the loops.
         let cluster = Cluster::register(
             pool.clone(),
-            crate::cluster::Roles::ALL,
+            config.roles,
             config.instance_label.clone(),
             config.lease_ttl,
         )
@@ -73,11 +83,16 @@ impl Server {
         // One-off work at startup runs once however many instances start
         // together: under `server.startup`, which nobody else can hold
         // meanwhile. One that finds it held leaves it to that instance.
-        match cluster
-            .try_acquire(LeaseName::StartupMaintenance)
-            .await
-            .context("take the startup lease")?
-        {
+        // Only `work` instances do it, so an `api` starts cold and fast.
+        let startup = if config.roles.work {
+            cluster
+                .try_acquire(LeaseName::StartupMaintenance)
+                .await
+                .context("take the startup lease")?
+        } else {
+            None
+        };
+        match startup {
             Some(lease) => {
                 let moved = crate::secrets::migrate_plaintext_webhook_secrets(&pool, &config)
                     .await
@@ -96,7 +111,10 @@ impl Server {
                     );
                 }
             }
-            None => tracing::info!("another instance is doing the startup work"),
+            None if config.roles.work => {
+                tracing::info!("another instance is doing the startup work");
+            }
+            None => {}
         }
 
         // Modules (and their operations) that don't fit together stop the
@@ -132,37 +150,72 @@ impl Server {
         &self.cluster
     }
 
-    /// Serve the app on `listener` and GitHub webhooks on `webhooks`, and
-    /// start the loops.
-    pub fn spawn(self, listener: TcpListener, webhooks: TcpListener) -> RunningServer {
+    /// Serve on `listener` what this instance's roles serve (the app with
+    /// `api`, sockets with `live`, otherwise health checks only), and
+    /// GitHub webhooks on `webhooks` with `api`; and start the loops its
+    /// roles run.
+    pub fn spawn(self, listener: TcpListener, webhooks: Option<TcpListener>) -> RunningServer {
         let Self {
             state,
             cluster,
             tail_start,
             jobs,
         } = self;
+        let roles = state.config.roles;
+        let host = roles.work && state.config.builtin_host;
         let address = listener.local_addr().ok();
         let (shutdown, receiver) = watch::channel(false);
         // The wake listener (K5.4) runs the sequencer, the tail and lease
         // standbys; each also polls, so it is only ever an optimisation.
         let wakes = crate::realtime::wake::Wakes {
             control: cluster.release_wake(),
-            ephemeral: Some(state.realtime.clone()),
+            ephemeral: roles.live.then(|| state.realtime.clone()),
             ..crate::realtime::wake::Wakes::default()
         };
         let tail = crate::realtime::tail::channel();
+        let progress = crate::realtime::tail::Progress::default();
+        let process = Process::new(
+            cluster.instance_id().0,
+            roles,
+            roles.live.then(|| progress.clone()),
+        );
+        if !roles.live {
+            // No sockets here: the hub refuses them from the start.
+            state.realtime.drain();
+        }
         // This instance's sockets hear the log through the tail (K5.5).
         let feed =
             crate::realtime::tail::feed(state.realtime.clone(), tail.subscribe(), receiver.clone());
-        crate::harnesses::spawn_reloader(state.clone());
+        if roles.work {
+            crate::harnesses::spawn_reloader(state.clone());
+        }
         // The run scheduler, recovery and host jobs, on whichever instance
         // holds the built-in host's lease (K5.3).
-        let scheduler = tokio::spawn(crate::scheduler::run_host(
-            state.clone(),
-            cluster.clone(),
-            receiver.clone(),
-        ));
-        let github = tokio::spawn(github::run_jobs(state.clone(), receiver.clone()));
+        let scheduler = tokio::spawn({
+            let state = state.clone();
+            let cluster = cluster.clone();
+            let receiver = receiver.clone();
+            async move {
+                if host {
+                    crate::scheduler::run_host(state, cluster, receiver).await
+                } else {
+                    wait_for_shutdown(receiver).await;
+                    Ok(())
+                }
+            }
+        });
+        let github = tokio::spawn({
+            let state = state.clone();
+            let receiver = receiver.clone();
+            async move {
+                if roles.work {
+                    github::run_jobs(state, receiver).await
+                } else {
+                    wait_for_shutdown(receiver).await;
+                    Ok(())
+                }
+            }
+        });
         // Not supervised like the loops above: a failure here delays
         // wakeups and lease expiry but never loses data, so it must not
         // stop the server.
@@ -182,6 +235,7 @@ impl Server {
                 tail_start,
                 Arc::clone(&wakes.events),
                 tail.clone(),
+                progress,
                 receiver.clone(),
             );
             let listener = crate::realtime::wake::run(
@@ -212,36 +266,73 @@ impl Server {
             async move {
                 let heartbeat = heartbeat_cluster.run_heartbeat(heartbeat_shutdown);
                 tokio::join!(
-                    replies, sequencer, tail, feed, listener, router, notifier, heartbeat
+                    only_if(roles.work, replies),
+                    only_if(roles.work, sequencer),
+                    only_if(roles.live, tail),
+                    only_if(roles.live, feed),
+                    listener,
+                    only_if(roles.work, router),
+                    only_if(roles.work, notifier),
+                    heartbeat
                 );
             }
         });
         // Background jobs (F9). A job lost to a crash is retried once its
         // lease runs out, so like the reply worker this doesn't stop the
         // server.
-        let job_workers = tokio::spawn(jobs::run_workers(
-            state.clone(),
-            jobs,
-            jobs::WorkerOptions {
-                concurrency: state.config.job_concurrency,
-                ..jobs::WorkerOptions::default()
-            },
-            receiver.clone(),
-        ));
+        let job_workers = tokio::spawn({
+            let state = state.clone();
+            let receiver = receiver.clone();
+            async move {
+                if roles.work {
+                    let options = jobs::WorkerOptions {
+                        concurrency: state.config.job_concurrency,
+                        ..jobs::WorkerOptions::default()
+                    };
+                    jobs::run_workers(state, jobs, options, receiver).await
+                } else {
+                    wait_for_shutdown(receiver).await;
+                    Ok(())
+                }
+            }
+        });
         let application_shutdown = receiver.clone();
         let webhook_shutdown = receiver;
         let http_state = state.clone();
+        let http_process = process.clone();
         let http = tokio::spawn(async move {
-            let application = axum::serve(listener, router(http_state.clone()).into_make_service())
+            let application = if roles.api {
+                router(http_state.clone())
+            } else if roles.live {
+                live_router(http_state.clone())
+            } else {
+                health_router(http_state.clone())
+            }
+            .layer(axum::Extension(http_process));
+            let application = axum::serve(listener, application.into_make_service())
                 .with_graceful_shutdown(wait_for_shutdown(application_shutdown));
-            let webhooks = axum::serve(
-                webhooks,
-                github::webhook_router(http_state).into_make_service(),
-            )
-            .with_graceful_shutdown(wait_for_shutdown(webhook_shutdown));
+            let webhooks = async move {
+                match webhooks.filter(|_| roles.api) {
+                    Some(webhooks) => {
+                        axum::serve(
+                            webhooks,
+                            github::webhook_router(http_state).into_make_service(),
+                        )
+                        .with_graceful_shutdown(wait_for_shutdown(webhook_shutdown))
+                        .await
+                    }
+                    None => Ok(()),
+                }
+            };
             tokio::try_join!(application, webhooks).map(|_| ())
         });
         RunningServer {
+            drainer: Drainer {
+                process,
+                cluster: cluster.clone(),
+                hub: state.realtime.clone(),
+                drain: state.config.drain,
+            },
             state,
             cluster,
             tail,
@@ -256,8 +347,61 @@ impl Server {
     }
 }
 
+/// An instance without `api`: browsers' sockets and health checks.
+fn live_router(state: AppState) -> axum::Router {
+    axum::Router::new()
+        .merge(health::router(HealthState {
+            pool: state.pool.clone(),
+        }))
+        .route(
+            "/api/v1/realtime",
+            axum::routing::get(crate::realtime::websocket),
+        )
+        .with_state(state)
+        .layer(axum::middleware::from_fn(crate::tenancy::scope_requests))
+}
+
+/// An instance with neither `api` nor `live`: health checks only.
+fn health_router(state: AppState) -> axum::Router {
+    health::router(HealthState { pool: state.pool })
+        .layer(axum::middleware::from_fn(crate::tenancy::scope_requests))
+}
+
+async fn only_if(on: bool, work: impl Future<Output = ()>) {
+    if on {
+        work.await;
+    }
+}
+
+/// The first steps of a graceful stop (K5.7): say "not ready" at once, give
+/// the balancer the drain time to move off, then close every socket with
+/// 1012 so its browser reconnects to another instance. Stopping the
+/// listeners and loops, and releasing the leases, follows.
+#[derive(Clone)]
+pub struct Drainer {
+    process: Process,
+    cluster: Cluster,
+    hub: crate::realtime::RealtimeHub,
+    drain: Duration,
+}
+
+impl Drainer {
+    pub async fn drain(&self) {
+        self.process.drain();
+        if let Err(error) = self.cluster.mark_draining().await {
+            tracing::warn!(
+                error_category = error.log_category(),
+                "instance not marked draining"
+            );
+        }
+        tokio::time::sleep(self.drain).await;
+        self.hub.drain();
+    }
+}
+
 /// A server that is listening and running its loops.
 pub struct RunningServer {
+    drainer: Drainer,
     state: AppState,
     cluster: Cluster,
     tail: crate::realtime::tail::TailSender,
@@ -292,13 +436,20 @@ impl RunningServer {
         self.address
     }
 
-    /// Ask for a graceful stop; `wait` then returns.
+    /// Ask for a graceful stop; `wait` then returns. Drain first.
     pub fn shutdown(&self) -> watch::Sender<bool> {
         self.shutdown.clone()
     }
 
-    /// Stop gracefully: listeners close, loops finish their step.
+    /// What drains this instance before it stops.
+    pub fn drainer(&self) -> Drainer {
+        self.drainer.clone()
+    }
+
+    /// Stop gracefully: drain, then listeners close and loops finish their
+    /// step.
     pub async fn stop(self) -> anyhow::Result<()> {
+        self.drainer.drain().await;
         let _ = self.shutdown.send(true);
         self.wait().await
     }

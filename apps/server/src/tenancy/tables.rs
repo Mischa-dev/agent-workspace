@@ -30,6 +30,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("agent_profiles", ORGANIZATION_ID),
     ("agent_run_acknowledgements", WORKSPACE_ID),
     ("agent_run_events", WORKSPACE_ID),
+    ("agent_templates", WORKSPACE_ID),
     ("agent_run_usage", ORGANIZATION_ID),
     ("agent_runs", WORKSPACE_ID),
     ("agent_sessions", ORGANIZATION_ID),
@@ -108,6 +109,9 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("message_work_item_references", WORKSPACE_ID),
     ("messages", WORKSPACE_ID),
     ("module_installs", WORKSPACE_ID),
+    ("module_nav", WORKSPACE_ID),
+    ("module_parts", WORKSPACE_ID),
+    ("modules", WORKSPACE_ID),
     ("notification_action_tokens", ORGANIZATION_ID),
     ("notification_channel_preferences", ORGANIZATION_ID),
     ("notification_email_digests", ORGANIZATION_ID),
@@ -118,6 +122,9 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("operation_alias_usage", WORKSPACE_ID),
     ("organization_actor_profiles", ORGANIZATION_ID),
     ("organization_memberships", ORGANIZATION_ID),
+    ("package_installs", WORKSPACE_ID),
+    ("package_objects", WORKSPACE_ID),
+    ("packages", WORKSPACE_ID),
     ("project_counters", WORKSPACE_ID),
     ("project_decisions", WORKSPACE_ID),
     ("project_environments", ORGANIZATION_ID),
@@ -295,6 +302,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the server's own key history, not any workspace's",
     ),
     (
+        "mcp_ended_sessions",
+        "digests of MCP session ids their clients ended; a session belongs to a connection, not a workspace (K5.7)",
+    ),
+    (
         "server_instances",
         "the server processes sharing this database and their heartbeats (K5.2)",
     ),
@@ -305,10 +316,6 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "thing_kinds",
         "the kinds of thing the server knows: a kind is the server's, not a workspace's (K3.10)",
-    ),
-    (
-        "things_backfill",
-        "how far the server's registry backfill got per source table",
     ),
     (
         "user_email_addresses",

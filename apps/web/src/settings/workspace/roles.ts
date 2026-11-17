@@ -72,6 +72,8 @@ export const PERMISSION_KEYS = [
   'agents.create',
   'webhooks.manage',
   'automations.manage',
+  'modules.build',
+  'modules.manage',
   'workspace.delete',
 ] as const
 

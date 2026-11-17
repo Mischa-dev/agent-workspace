@@ -112,6 +112,9 @@ pub enum Permission {
     AgentsCreate,
     WebhooksManage,
     AutomationsManage,
+    // M1.6: building built modules and switching them.
+    ModulesBuild,
+    ModulesManage,
     // H1.24: deleting the whole workspace.
     WorkspaceDelete,
 }
@@ -199,7 +202,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 66] = [
+pub const PERMISSIONS: [PermissionInfo; 68] = [
     on(
         "space",
         Level::See,
@@ -914,6 +917,25 @@ pub const PERMISSIONS: [PermissionInfo; 66] = [
         "Manage automations",
         "See and change every automation rule, not only their own.",
         PermissionScope::Project,
+        MANAGERS,
+    ),
+    // M1.6: built modules.
+    permission(
+        Permission::ModulesBuild,
+        "modules.build",
+        "settings",
+        "Build modules",
+        "Make and change built modules: bundles of collections, forms, automations and navigation.",
+        PermissionScope::Both,
+        MANAGERS,
+    ),
+    permission(
+        Permission::ModulesManage,
+        "modules.manage",
+        "settings",
+        "Manage modules",
+        "Switch built modules on and off, archive and restore them.",
+        PermissionScope::Both,
         MANAGERS,
     ),
     // H1.24: deleting the whole workspace, after a 14-day grace period

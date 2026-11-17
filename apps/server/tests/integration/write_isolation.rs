@@ -466,6 +466,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "bug_report_link_write",
     "channel_create",
     "conversation_continue",
+    "conversation_mark_read",
     "conversation_members",
     "conversation_start",
     "conversation_update",
@@ -494,17 +495,25 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "request_respond",
     "request_cancel",
     "launch_cancel",
-    "mark_read",
     "message_delete",
-    "message_edit",
     "message_forward",
     "message_preview_hide",
     "message_react",
     "message_schedule",
     "message_send",
+    "message_update",
     "milestone_write",
+    "module_archive",
+    "module_create",
+    "module_part_link",
+    "module_part_unlink",
+    "module_restore",
+    "module_set",
+    "module_update",
     "model_catalog_write",
     "notification_update",
+    "package_install",
+    "package_remove",
     "page_comment",
     "page_comment_update",
     "page_edit",
@@ -548,24 +557,24 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "session_bind",
     "settings_set",
     "task_claim",
-    "task_comment",
+    "task_archive",
+    "task_comment_create",
     "task_comment_delete",
-    "task_comment_edit",
+    "task_comment_update",
     "task_create",
     "task_create_many",
-    "task_criteria",
+    "task_criteria_update",
     "task_depend",
     "task_from_template",
     "task_import",
     "task_launch",
     "task_link",
     "task_link_pull_request",
-    "task_mark_blocked",
-    "task_mark_ready_for_review",
     "task_move",
     "task_relate",
     "task_release",
     "task_reorder",
+    "task_restore",
     "task_update",
     "task_update_many",
     "task_watch",
@@ -577,7 +586,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "webhook_write",
     "whiteboard_create",
     "whiteboard_duplicate",
-    "whiteboard_edit",
+    "whiteboard_update_elements",
     "whiteboard_link",
     "whiteboard_update",
     "whiteboard_trash_empty",
@@ -2706,21 +2715,21 @@ async fn reply_request(
 // The digest of B's rows
 // ---------------------------------------------------------------------------
 
-/// Every row, in any table, whose JSON form mentions one of B's IDs, by
+/// Every row, in any table, whose JSON form mentions one of `ids`, by
 /// table. A new row that points at B shows up as well as a change.
-async fn digest(pool: &PgPool, pattern: &str) -> BTreeMap<String, BTreeSet<String>> {
-    digest_ignoring(pool, pattern, &[]).await
+async fn digest(pool: &PgPool, ids: &[String]) -> BTreeMap<String, BTreeSet<String>> {
+    digest_ignoring(pool, ids, &[]).await
 }
 
 /// [`digest`], leaving out the `ignored` columns of every row (ones a read
 /// may legitimately touch, such as a credential's `last_used_at`).
 pub(super) async fn digest_ignoring(
     pool: &PgPool,
-    pattern: &str,
+    ids: &[String],
     ignored: &[&str],
 ) -> BTreeMap<String, BTreeSet<String>> {
     let tables = base_tables(pool).await;
-    digest_tables(pool, pattern, ignored, &tables).await
+    digest_tables(pool, ids, ignored, &tables).await
 }
 
 /// Every table in the schema (partitions and their parents included),
@@ -2741,26 +2750,47 @@ async fn base_tables(pool: &PgPool) -> Vec<String> {
     .expect("tables")
 }
 
-/// [`digest_ignoring`] over the named tables only.
+/// [`digest_ignoring`] over the named tables only. One statement over the
+/// tables, and each row's UUIDs compared with the IDs as a set: a regex
+/// alternating a few hundred IDs, one statement per table, made this most of
+/// the isolation tests' time.
 pub(super) async fn digest_tables(
     pool: &PgPool,
-    pattern: &str,
+    ids: &[String],
     ignored: &[&str],
     tables: &[String],
 ) -> BTreeMap<String, BTreeSet<String>> {
-    let mut rows = BTreeMap::new();
-    for table in tables {
-        let found = sqlx::query_scalar::<_, String>(&format!(
-            r#"SELECT listed.row_text FROM (SELECT (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value) listed WHERE listed.row_text ~ $1"#
-        ))
-        .bind(pattern)
-        .bind(ignored)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_else(|error| panic!("digest {table}: {error}"));
-        if !found.is_empty() {
-            rows.insert(table.clone(), found.into_iter().collect::<BTreeSet<_>>());
-        }
+    let mut rows = BTreeMap::<String, BTreeSet<String>>::new();
+    if tables.is_empty() {
+        return rows;
+    }
+    let scans = tables
+        .iter()
+        .map(|table| {
+            let name = table.replace('\'', "''");
+            format!(
+                r#"SELECT '{name}'::text AS table_name, (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n");
+    let found = sqlx::query_as::<_, (String, String)>(&format!(
+        r#"SELECT listed.table_name, listed.row_text FROM ({scans}) listed
+        WHERE ARRAY(
+            SELECT found[1] FROM regexp_matches(
+                listed.row_text,
+                '([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})',
+                'g'
+            ) found
+        ) && $1::text[]"#
+    ))
+    .bind(ids)
+    .bind(ignored)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|error| panic!("digest: {error}"));
+    for (table, row) in found {
+        rows.entry(table).or_default().insert(row);
     }
     rows
 }
@@ -2795,7 +2825,7 @@ pub(super) async fn table_fingerprints(pool: &PgPool) -> BTreeMap<String, String
 /// return the new fingerprints.
 pub(super) async fn refresh_digest(
     pool: &PgPool,
-    pattern: &str,
+    ids: &[String],
     ignored: &[&str],
     fingerprints: &BTreeMap<String, String>,
     rows: &mut BTreeMap<String, BTreeSet<String>>,
@@ -2812,7 +2842,7 @@ pub(super) async fn refresh_digest(
                 .cloned(),
         )
         .collect::<Vec<_>>();
-    let refreshed = digest_tables(pool, pattern, ignored, &moved).await;
+    let refreshed = digest_tables(pool, ids, ignored, &moved).await;
     for table in &moved {
         rows.remove(table);
     }
@@ -2875,8 +2905,8 @@ async fn one_workspace_never_writes_to_another() {
     let bx = more_targets(app, pool, b).await;
     let sp = spares(app, pool, a, &ax).await;
     let b_ids = sweep_ids(pool, b.organization).await;
-    let pattern = b_ids.iter().cloned().collect::<Vec<_>>().join("|");
-    let before = digest(pool, &pattern).await;
+    let b_list = b_ids.iter().cloned().collect::<Vec<_>>();
+    let before = digest(pool, &b_list).await;
     eprintln!(
         "B's digest: {} rows in {} tables",
         before.values().map(BTreeSet::len).sum::<usize>(),
@@ -2951,7 +2981,7 @@ async fn one_workspace_never_writes_to_another() {
             .await;
         }
     }
-    let after_foreign = digest(pool, &pattern).await;
+    let after_foreign = digest(pool, &b_list).await;
     for change in digest_changes(&before, &after_foreign) {
         report
             .failures
@@ -2972,7 +3002,7 @@ async fn one_workspace_never_writes_to_another() {
     for case in http.iter().filter(|case| case.last) {
         own_http(&mut sender, case, &b_ids, &mut report).await;
     }
-    let after_own = digest(pool, &pattern).await;
+    let after_own = digest(pool, &b_list).await;
     for change in digest_changes(&after_foreign, &after_own) {
         report
             .failures
@@ -6258,7 +6288,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         ),
         mcp_case(
-            "message_edit",
+            "message_update",
             json!({"messageId": a.message, "text": "Launch message, edited again"}),
             vec![json!({"messageId": b.message, "text": "Net edit"})],
         ),
@@ -6284,7 +6314,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"conversationId": b.group})],
         ),
         mcp_case(
-            "mark_read",
+            "conversation_mark_read",
             json!({"conversationId": a.channel}),
             vec![json!({"conversationId": b.channel})],
         ),
@@ -6539,7 +6569,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "taskIds": [a.subtask], "fields": keyed(ax.person_field, json!(b.rook)), "clientRequestId": "net-update-many-m5"}),
         ]),
         mcp_case(
-            "task_criteria",
+            "task_criteria_update",
             json!({
                 "taskId": a.task,
                 "expectedVersion": task_version(a.task),
@@ -6560,7 +6590,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "clientRequestId": "net-criteria-mixed",
         })]),
         mcp_case(
-            "task_comment",
+            "task_comment_create",
             json!({
                 "taskId": a.task,
                 "text": "Net comment",
@@ -6576,7 +6606,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "clientRequestId": "net-comment-mixed",
         })]),
         mcp_case(
-            "task_comment_edit",
+            "task_comment_update",
             json!({"taskId": a.task, "commentId": a.comment, "text": "Launch comment, edited by a tool"}),
             vec![json!({"taskId": b.task, "commentId": b.comment, "text": "Net edit"})],
         )
@@ -6594,31 +6624,29 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"taskId": b.task, "commentId": sp.comments[1]}),
         ]),
         mcp_case(
-            "task_mark_blocked",
+            "task_archive",
             json!({
-                "taskId": a.subtask,
-                "expectedVersion": task_version(a.subtask),
-                "reason": "Net waiting",
-                "clientRequestId": "net-blocked-own",
+                "taskId": sp.second_task,
+                "expectedVersion": task_version(sp.second_task),
+                "clientRequestId": "net-archive-own",
             }),
             vec![json!({
                 "taskId": b.task,
                 "expectedVersion": task_version(b.task),
-                "reason": "Net waiting",
-                "clientRequestId": "net-blocked-b",
+                "clientRequestId": "net-archive-b",
             })],
         ),
         mcp_case(
-            "task_mark_ready_for_review",
+            "task_restore",
             json!({
-                "taskId": a.subtask,
-                "expectedVersion": task_version(a.subtask),
-                "clientRequestId": "net-review-own",
+                "taskId": sp.second_task,
+                "expectedVersion": task_version(sp.second_task),
+                "clientRequestId": "net-restore-own",
             }),
             vec![json!({
                 "taskId": b.task,
                 "expectedVersion": task_version(b.task),
-                "clientRequestId": "net-review-b",
+                "clientRequestId": "net-restore-b",
             })],
         ),
         mcp_case(
@@ -6872,7 +6900,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "linkTo": {"targetKind": "task", "targetId": b.task},
         })]),
         mcp_case(
-            "whiteboard_edit",
+            "whiteboard_update_elements",
             json!({"whiteboardId": a.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]}),
             vec![json!({"whiteboardId": b.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]})],
         ),
@@ -6905,6 +6933,64 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": b.task}),
             json!({"whiteboardId": a.whiteboard, "targetKind": "page", "targetId": b.page}),
         ]),
+        // Packages (M1.9). An install needs a fresh preview's planHash
+        // (packages_install.rs installs for real); another workspace's
+        // space or install is never reached.
+        mcp_case(
+            "package_install",
+            json!({}),
+            vec![json!({"package": tiny_package(), "target": {"spaceId": b.project}, "planHash": "sha256:0", "clientRequestId": "net-package-b"})],
+        )
+        .without_own("needs a planHash from a preview; packages_install.rs covers installing"),
+        mcp_case(
+            "package_remove",
+            json!({"installId": a.package_install, "parts": "keep", "clientRequestId": "net-package-remove-own"}),
+            vec![json!({"installId": b.package_install, "parts": "archive", "clientRequestId": "net-package-remove-b"})],
+        ),
+        // Built modules (M1.6). Linked, then unlinked, so A's collection
+        // stays visible to the cases after these.
+        mcp_case(
+            "module_create",
+            json!({"spaceId": a.project, "key": "net_own", "name": "Net", "clientRequestId": "net-module-own"}),
+            vec![json!({"spaceId": b.project, "key": "net_b", "name": "Net", "clientRequestId": "net-module-b"})],
+        )
+        .rejecting(vec![
+            json!({"spaceId": a.project, "key": "net_m1", "name": "Net", "parts": [{"kind": "collection", "id": b.collection}], "clientRequestId": "net-module-m1"}),
+            json!({"spaceId": a.project, "key": "net_m2", "name": "Net", "parts": [{"kind": "automation", "id": b.rule}], "clientRequestId": "net-module-m2"}),
+        ]),
+        mcp_case(
+            "module_update",
+            json!({"moduleId": a.module, "expectedRevision": 1, "name": "Net", "clientRequestId": "net-module-update-own"}),
+            vec![json!({"moduleId": b.module, "expectedRevision": 1, "name": "Net", "clientRequestId": "net-module-update-b"})],
+        ),
+        mcp_case(
+            "module_part_link",
+            json!({"moduleId": a.module, "part": {"kind": "collection", "id": a.collection}, "clientRequestId": "net-part-link-own"}),
+            vec![json!({"moduleId": b.module, "part": {"kind": "collection", "id": b.collection}, "clientRequestId": "net-part-link-b"})],
+        )
+        .rejecting(vec![
+            json!({"moduleId": a.module, "part": {"kind": "collection", "id": b.collection}, "clientRequestId": "net-part-link-m1"}),
+        ]),
+        mcp_case(
+            "module_part_unlink",
+            json!({"moduleId": a.module, "part": {"kind": "collection", "id": a.collection}, "clientRequestId": "net-part-unlink-own"}),
+            vec![json!({"moduleId": b.module, "part": {"kind": "collection", "id": b.collection}, "clientRequestId": "net-part-unlink-b"})],
+        ),
+        mcp_case(
+            "module_set",
+            json!({"moduleId": a.module, "on": true, "clientRequestId": "net-module-set-own"}),
+            vec![json!({"moduleId": b.module, "on": false, "clientRequestId": "net-module-set-b"})],
+        ),
+        mcp_case(
+            "module_archive",
+            json!({"moduleId": a.module, "parts": "keep", "clientRequestId": "net-module-archive-own"}),
+            vec![json!({"moduleId": b.module, "parts": "archive", "clientRequestId": "net-module-archive-b"})],
+        ),
+        mcp_case(
+            "module_restore",
+            json!({"moduleId": a.module, "clientRequestId": "net-module-restore-own"}),
+            vec![json!({"moduleId": b.module, "clientRequestId": "net-module-restore-b"})],
+        ),
         // K3.19: restoring any thing's version, by id alone.
         mcp_case(
             "history_restore",
@@ -7311,4 +7397,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"launchId": bx.launch})],
         ),
     ]
+}
+
+/// The smallest package (M1.9's isolation cases).
+fn tiny_package() -> Value {
+    json!({
+        "format": "agent-workspace-package/1",
+        "id": "net_tiny",
+        "version": "1.0.0",
+        "name": "Tiny",
+        "target": "space",
+        "contents": [{"kind": "collection", "key": "tiny", "body": {
+            "name": "Tiny", "titleName": "Name", "fields": [], "views": []}}],
+    })
 }

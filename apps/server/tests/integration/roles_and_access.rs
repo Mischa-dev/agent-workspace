@@ -686,7 +686,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         json!({"taskId": made_title, "title": "Renamed by the app", "expectedVersion": 1}),
     )
     .await;
-    assert_ne!(refused["outcome"], "applied", "{refused}");
+    assert_ne!(refused["outcome"], "ok", "{refused}");
     assert_ne!(refused["outcome"], "ok", "{refused}");
 
     // The public API is an app acting for her too.
@@ -757,12 +757,14 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     )
     .await;
     assert_ne!(made["outcome"], "permission_denied", "{made}");
+    // An operation's input names its conversation by id (K2.7).
+    let general = create_channel(&setup, &work, "general-limits").await;
     let refused = tool(
         app,
         &bea_app,
         &session,
         "message_send",
-        json!({"projectId": work, "conversationId": "general", "text": "Hello"}),
+        json!({"conversationId": general, "text": "Hello"}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");

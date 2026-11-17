@@ -387,6 +387,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &session_id,
         "task_create",
         json!({
+            "projectId":seed.project_id.to_string(),
             "title":"External teammate fixture",
             "description":"Created through the canonical M9 MCP command.",
             "priority":"medium",
@@ -395,8 +396,8 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         }),
     )
     .await;
-    assert_eq!(created_work_item["outcome"], "applied");
-    let external_work_item_id = created_work_item["workItemId"]
+    assert_eq!(created_work_item["outcome"], "ok");
+    let external_work_item_id = created_work_item["value"]["workItemId"]
         .as_str()
         .expect("created Work Item id")
         .parse::<Uuid>()
@@ -407,6 +408,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &session_id,
         "task_create",
         json!({
+            "projectId":seed.project_id.to_string(),
             "title":"External teammate fixture",
             "description":"A different description must not replay.",
             "priority":"medium",
@@ -416,7 +418,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     )
     .await;
     assert_eq!(mismatched_create["outcome"], "conflict");
-    assert_eq!(mismatched_create["retryCategory"], "use_new_request_id");
+    assert_eq!(mismatched_create["code"], "request_id_reused");
     let created_subtask = call_mcp_tool(
         &application,
         &first_token,
@@ -430,7 +432,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         }),
     )
     .await;
-    assert_eq!(created_subtask["outcome"], "applied");
+    assert_eq!(created_subtask["outcome"], "ok");
     let mismatched_subtask = call_mcp_tool(
         &application,
         &first_token,
@@ -445,7 +447,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     )
     .await;
     assert_eq!(mismatched_subtask["outcome"], "conflict");
-    assert_eq!(mismatched_subtask["retryCategory"], "use_new_request_id");
+    assert_eq!(mismatched_subtask["code"], "request_id_reused");
     let updated_work_item = call_mcp_tool(
         &application,
         &first_token,
@@ -459,8 +461,8 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         }),
     )
     .await;
-    assert_eq!(updated_work_item["outcome"], "applied");
-    assert_eq!(updated_work_item["version"], 2);
+    assert_eq!(updated_work_item["outcome"], "ok");
+    assert_eq!(updated_work_item["value"]["version"], 2);
     let read_work_item = call_mcp_tool(
         &application,
         &first_token,
@@ -998,7 +1000,8 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .fetch_one(&pool)
         .await
         .expect("external audit count"),
-        10
+        // K2.7: a sent message leaves an audit row (its replay doesn't).
+        11
     );
 
     drop(application);

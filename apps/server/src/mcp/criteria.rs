@@ -41,7 +41,7 @@ const REQUEST_ID_MESSAGE: &str = "Use a clientRequestId of 1 to 128 letters, dig
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskCriteriaArguments {
+pub struct TaskCriteriaArguments {
     /// The task's ID, link, or key such as AWD-12.
     #[serde(rename = "taskId", alias = "workItemId")]
     pub task_id: String,
@@ -53,9 +53,9 @@ pub(super) struct TaskCriteriaArguments {
     pub client_request_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct CriterionOperationArgument {
+pub struct CriterionOperationArgument {
     /// add, edit (new text), check, uncheck, remove, or move (to a position).
     pub op: CriterionOp,
     /// Which criterion (not for add): its ID, or its position (such as 2) in
@@ -72,7 +72,7 @@ pub(super) struct CriterionOperationArgument {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum CriterionOp {
+pub enum CriterionOp {
     Add,
     Edit,
     Check,
@@ -97,7 +97,7 @@ impl CriterionOp {
 /// task_criteria's result. It is stored for replays, so it deserializes too.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CriteriaValue {
+pub struct CriteriaValue {
     pub task_id: String,
     /// The task's key, such as AWD-12.
     pub key: String,
@@ -119,7 +119,7 @@ pub(super) struct CriteriaValue {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CriterionOperationOutcome {
+pub struct CriterionOperationOutcome {
     pub op: CriterionOp,
     /// The criterion it changed; for add, the new criterion's ID.
     pub criterion_id: String,
@@ -130,7 +130,7 @@ pub(super) struct CriterionOperationOutcome {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CriterionValue {
+pub struct CriterionValue {
     pub id: String,
     pub position: i32,
     pub text: String,

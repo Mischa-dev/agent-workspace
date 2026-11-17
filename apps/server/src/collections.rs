@@ -294,6 +294,7 @@ pub async fn list(
             WHERE record.collection_id = collection.id AND record.archived_at IS NULL) AS records \
          FROM collections collection \
          WHERE collection.project_id = $1 AND ($2 OR collection.archived_at IS NULL) \
+           AND module_part_on('collection', collection.id) \
          ORDER BY collection.archived_at IS NOT NULL, collection.builtin IS NULL, \
            collection.position, collection.id \
          LIMIT {MAX_COLLECTION_ROWS}"
@@ -328,7 +329,8 @@ pub async fn get(
 ) -> Result<Option<Collection>, AppError> {
     Ok(sqlx::query_as::<_, Collection>(&format!(
         "SELECT {COLUMNS} FROM collections collection \
-         WHERE collection.project_id = $1 AND collection.id = $2"
+         WHERE collection.project_id = $1 AND collection.id = $2 \
+           AND module_part_on('collection', collection.id)"
     ))
     .bind(project_id)
     .bind(collection_id)
@@ -349,6 +351,7 @@ pub async fn find(
         "SELECT {COLUMNS} FROM collections collection \
          WHERE collection.project_id = $1 \
            AND (collection.id = $2 OR ($2 IS NULL AND lower(collection.name) = lower($3))) \
+           AND module_part_on('collection', collection.id) \
          ORDER BY collection.archived_at IS NOT NULL, collection.archived_at DESC, collection.id \
          LIMIT 1"
     ))
@@ -393,7 +396,8 @@ pub async fn lock(
 ) -> Result<Option<Collection>, AppError> {
     Ok(sqlx::query_as::<_, Collection>(&format!(
         "SELECT {COLUMNS} FROM collections collection \
-         WHERE collection.project_id = $1 AND collection.id = $2 FOR UPDATE"
+         WHERE collection.project_id = $1 AND collection.id = $2 \
+           AND module_part_on('collection', collection.id) FOR UPDATE"
     ))
     .bind(project_id)
     .bind(collection_id)

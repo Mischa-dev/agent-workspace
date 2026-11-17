@@ -31,6 +31,24 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
     reconcile(state, None).await
 }
 
+/// The built-in host's lease that recovery's writes are fenced by, so a
+/// server that lost the host can't overwrite what the new holder recovers.
+/// None only in tests of recovery alone.
+pub(crate) type HostFence<'a> = Option<(&'a Cluster, &'a Lease)>;
+
+/// A transaction that fails with `LeaseLost` unless the fence's lease is
+/// still held, and keeps it from being taken until the transaction ends.
+pub(crate) async fn fenced_tx(
+    pool: &PgPool,
+    fence: HostFence<'_>,
+) -> Result<Transaction<'static, Postgres>, AppError> {
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    if let Some((cluster, lease)) = fence {
+        cluster.fence(&mut transaction, lease).await?;
+    }
+    Ok(transaction)
+}
+
 /// What the built-in host's holder does as it takes the lease (K5.3), at
 /// startup or when it takes over from a holder that died: recover the runs
 /// that were running, each transition fenced by the lease, then the
@@ -40,12 +58,13 @@ pub async fn reconcile_owned(
     cluster: &Cluster,
     lease: &Lease,
 ) -> Result<(), AppError> {
-    let recovered = reconcile(state, Some((cluster, lease))).await?;
+    let fence = Some((cluster, lease));
+    let recovered = reconcile(state, fence).await?;
     if recovered > 0 {
         tracing::warn!(recovered, "reconciled non-terminal Agent Runs");
     }
-    let inspected_worktrees = reconcile_registered_worktrees(state).await?;
-    let withdrawn_requests = withdraw_finished_run_requests(state).await?;
+    let inspected_worktrees = reconcile_worktrees(state, fence).await?;
+    let withdrawn_requests = withdraw_requests(state, fence).await?;
     tracing::info!(
         inspected_worktrees,
         withdrawn_requests,
@@ -56,7 +75,7 @@ pub async fn reconcile_owned(
 
 // A queued run's scheduler claim is left alone: a lapsed one is cleared by
 // the next claim, and a live one belongs to whoever holds it (K5.3).
-async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Result<u64, AppError> {
+async fn reconcile(state: &AppState, fence: HostFence<'_>) -> Result<u64, AppError> {
     let runs = sqlx::query_as::<_, RecoverableRun>(
         r#"
         SELECT run.id, run.state AS previous_state, run.conversation_id,
@@ -72,10 +91,7 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
     .await?;
 
     for run in &runs {
-        let mut transition = crate::db::scoped_tx(&state.pool).await?;
-        if let Some((cluster, lease)) = fence {
-            cluster.fence(&mut transition, lease).await?;
-        }
+        let mut transition = fenced_tx(&state.pool, fence).await?;
         crate::hosts::builtin::transition(&mut transition, run.id, RunState::Recovering, None)
             .await?;
         outbox::enqueue_agent_run_updated(
@@ -111,19 +127,10 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
                 })
                 .await
                 .map_err(|_| AppError::Internal("join recovery Git inspection"))?;
-                sqlx::query(
-                    r#"
-                    UPDATE git_worktrees
-                    SET state = $2, dirty = $3,
-                        last_inspected_at = now(), updated_at = now()
-                    WHERE id = $1
-                    "#,
-                )
-                .bind(worktree_id)
-                .bind(worktree_state)
-                .bind(dirty)
-                .execute(crate::db::scoped(&state.pool))
-                .await?;
+                // Inspection took a while: write only while the host is ours.
+                let mut transaction = fenced_tx(&state.pool, fence).await?;
+                record_inspection(&mut transaction, worktree_id, worktree_state, dirty).await?;
+                transaction.commit().await?;
                 (Some(PathBuf::from(path)), worktree_state, dirty)
             }
             None => (None, "missing", false),
@@ -139,6 +146,7 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
         let recovered_completion = match &provider_outcome {
             ProviderRecovery::Completed { message } => provider::complete_recovered_run(
                 state,
+                fence,
                 run.id,
                 message,
                 &run.previous_state,
@@ -157,7 +165,7 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
         if let (ProviderRecovery::Resumed { latest_turn_status }, Some(path)) =
             (&provider_outcome, &worktree_path)
             && latest_turn_status == "inProgress"
-            && provider::follow_recovered_run(state, run.id, path.clone())
+            && provider::follow_recovered_run(state, fence, run.id, path.clone())
                 .await
                 .unwrap_or(false)
         {
@@ -198,7 +206,7 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
             }
         };
 
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let mut transaction = fenced_tx(&state.pool, fence).await?;
         crate::hosts::builtin::transition(
             &mut transaction,
             run.id,
@@ -227,7 +235,7 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
         transaction.commit().await?;
     }
 
-    let idled_provider_sessions = idle_terminal_provider_sessions(&state.pool).await?;
+    let idled_provider_sessions = idle_terminal_provider_sessions(&state.pool, fence).await?;
     if idled_provider_sessions > 0 {
         tracing::warn!(
             idled_provider_sessions,
@@ -238,7 +246,11 @@ async fn reconcile(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
     Ok(runs.len() as u64)
 }
 
-async fn idle_terminal_provider_sessions(pool: &PgPool) -> Result<u64, AppError> {
+async fn idle_terminal_provider_sessions(
+    pool: &PgPool,
+    fence: HostFence<'_>,
+) -> Result<u64, AppError> {
+    let mut transaction = fenced_tx(pool, fence).await?;
     let result = sqlx::query(
         r#"
         UPDATE provider_sessions ps
@@ -259,12 +271,17 @@ async fn idle_terminal_provider_sessions(pool: &PgPool) -> Result<u64, AppError>
           )
         "#,
     )
-    .execute(crate::db::scoped(pool))
+    .execute(&mut *transaction)
     .await?;
+    transaction.commit().await?;
     Ok(result.rows_affected())
 }
 
 pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, AppError> {
+    reconcile_worktrees(state, None).await
+}
+
+async fn reconcile_worktrees(state: &AppState, fence: HostFence<'_>) -> Result<u64, AppError> {
     let worktrees = sqlx::query_as::<_, (Uuid, String)>(
         r#"
         SELECT id, path
@@ -282,27 +299,43 @@ pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, App
             tokio::task::spawn_blocking(move || inspect_worktree(&inspection_path))
                 .await
                 .map_err(|_| AppError::Internal("join registered worktree inspection"))?;
-        sqlx::query(
-            r#"
-            UPDATE git_worktrees
-            SET state = $2, dirty = $3,
-                last_inspected_at = now(), updated_at = now()
-            WHERE id = $1
-            "#,
-        )
-        .bind(worktree_id)
-        .bind(worktree_state)
-        .bind(dirty)
-        .execute(crate::db::scoped(&state.pool))
-        .await?;
+        let mut transaction = fenced_tx(&state.pool, fence).await?;
+        record_inspection(&mut transaction, *worktree_id, worktree_state, dirty).await?;
+        transaction.commit().await?;
     }
     Ok(worktrees.len() as u64)
+}
+
+async fn record_inspection(
+    transaction: &mut Transaction<'static, Postgres>,
+    worktree_id: Uuid,
+    worktree_state: &str,
+    dirty: bool,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE git_worktrees
+        SET state = $2, dirty = $3,
+            last_inspected_at = now(), updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(worktree_id)
+    .bind(worktree_state)
+    .bind(dirty)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
 }
 
 /// What finished runs still asked for is withdrawn (their finish withdraws
 /// it; this catches any a crash left open).
 pub async fn withdraw_finished_run_requests(state: &AppState) -> Result<u64, AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    withdraw_requests(state, None).await
+}
+
+async fn withdraw_requests(state: &AppState, fence: HostFence<'_>) -> Result<u64, AppError> {
+    let mut transaction = fenced_tx(&state.pool, fence).await?;
     let runs = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT DISTINCT request.run_id

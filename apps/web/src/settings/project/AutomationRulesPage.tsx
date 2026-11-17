@@ -80,6 +80,12 @@ function describeTrigger(trigger: Trigger): string {
       return 'When a record is added'
     case 'record_changed':
       return 'When a record changes'
+    case 'page_changed':
+      return trigger.pageId ? 'When this page changes' : 'When a page changes'
+    case 'sheet_changed':
+      return trigger.sheetId ? 'When this sheet changes' : 'When a sheet changes'
+    case 'whiteboard_changed':
+      return trigger.whiteboardId ? 'When this whiteboard changes' : 'When a whiteboard changes'
   }
 }
 

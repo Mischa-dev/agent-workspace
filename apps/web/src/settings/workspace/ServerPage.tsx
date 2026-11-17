@@ -178,8 +178,33 @@ function ServerDetails({ status }: { status: ServerStatus }) {
           />
         </Section>
       ) : null}
+      {status.instances && status.instances.length > 0 ? (
+        <Section
+          description="The server processes sharing this database. Work that must run in one place at a time goes to whichever holds its lease."
+          id="server-instances-heading"
+          title={countLabel(status.instances.length, 'process', 'processes')}
+        >
+          <RowList label="Server processes">
+            {status.instances.map((instance) => (
+              <Row
+                key={instance.id}
+                leading={instance.draining ? <StatusChip tone="warning">Stopping</StatusChip> : <StatusChip tone="success">Running</StatusChip>}
+                meta={[rolesLabel(instance.roles), `release ${instance.release}`, `heard from ${waitedFor(instance.heartbeatSeconds)} ago`, instance.leases.length > 0 ? `holds ${instance.leases.join(', ')}` : null]
+                  .filter(Boolean)
+                  .join(' · ')}
+                title={instance.label ?? instance.id.slice(0, 8)}
+              />
+            ))}
+          </RowList>
+        </Section>
+      ) : null}
     </>
   )
+}
+
+function rolesLabel(roles: string[]) {
+  const names: Record<string, string> = { api: 'requests', live: 'live updates', work: 'background work' }
+  return roles.map((role) => names[role] ?? role).join(', ')
 }
 
 function stepLabel(step: string) {

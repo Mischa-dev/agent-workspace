@@ -16,6 +16,7 @@ impl CoreModule for Module {
         module.routes(crate::work_items::router);
         module.routes(crate::work_items::comments::router);
         module.routes(crate::bug_reports::router);
+        module.operations(crate::work_items::ops::register_ops);
         module.export(ExportPart {
             name: "tasks",
             describe: "Tasks, their comments and history.",
