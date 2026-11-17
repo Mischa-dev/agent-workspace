@@ -109,6 +109,7 @@ function normalizeSidebarChannel(value: unknown): SidebarChannel | null {
     id: item.id,
     name: item.name,
     archivedAt: nullableString(item.archivedAt),
+    private: item.private === true,
     highestSequence: Math.max(0, integer(item.highestSequence)),
     highestSeenSequence: Math.max(0, integer(item.highestSeenSequence)),
     unread: item.unread === true,

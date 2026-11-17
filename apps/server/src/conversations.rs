@@ -746,6 +746,7 @@ struct SidebarChannelRow {
     id: Uuid,
     name: String,
     archived_at: Option<String>,
+    private: bool,
     version: i64,
     highest_sequence: i64,
     highest_seen_sequence: i64,
@@ -791,6 +792,8 @@ struct SidebarChannelView {
     id: Uuid,
     name: String,
     archived_at: Option<String>,
+    /// Only its members see it (C2.6).
+    private: bool,
     version: i64,
     highest_sequence: i64,
     highest_seen_sequence: i64,
@@ -3458,6 +3461,7 @@ async fn project_conversation_sidebar(
             channel.id,
             channel.name,
             channel.archived_at::text AS archived_at,
+            channel.visibility = 'members' AS private,
             channel.version,
             channel.next_entry_sequence - 1 AS highest_sequence,
             COALESCE(read_state.highest_seen_sequence, 0) AS highest_seen_sequence
@@ -3580,6 +3584,7 @@ async fn project_conversation_sidebar(
                 id: channel.id,
                 name: channel.name,
                 archived_at: channel.archived_at,
+                private: channel.private,
                 version: channel.version,
                 highest_sequence: channel.highest_sequence,
                 highest_seen_sequence: channel.highest_seen_sequence,

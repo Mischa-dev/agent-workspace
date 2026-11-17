@@ -153,7 +153,7 @@ export function ProjectSidebar({
             const rows = [
               <SidebarLink
                 badge={!channel.muted && channel.mentions > 0 ? channel.mentions : undefined}
-                icon="hash"
+                icon={channel.private ? 'lock' : 'hash'}
                 keep={selected || channel.unread}
                 key={channel.id}
                 label={channel.name}

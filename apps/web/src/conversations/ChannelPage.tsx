@@ -16,6 +16,7 @@ import { searchWorkItemReferences } from '../work-items/api'
 import { getConversationTimeline, retryReplyRequest, searchMentionableActors, stopReplyRequest } from './api'
 import { useArchiveConversation, useRestoreConversation } from './useArchiveConversation'
 import { useAutoMarkSeen } from './useAutoMarkSeen'
+import { ChannelMembers } from './ChannelMembers'
 import { ConversationHeader } from './ConversationHeader'
 import { useProjectConversationSidebar } from './hooks'
 import { useConversationTimeline } from './useConversationTimeline'
@@ -51,20 +52,31 @@ export function ChannelPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const includeArchived = searchParams.get('includeArchived') === 'true'
   const boardOpen = searchParams.get('threads') === 'all'
+  const membersParam = searchParams.get('members') === '1'
   const openThreadId = searchParams.get('thread')
   const setBoardOpen = (open: boolean) => {
     const next = new URLSearchParams(searchParams)
-    // The board and an open thread share the side panel: showing one closes the other.
+    // The board, the members and an open thread share the side panel: showing one closes the others.
+    next.delete('members')
     if (open) {
       next.set('threads', 'all')
       next.delete('thread')
     } else next.delete('threads')
     setSearchParams(next, { replace: true })
   }
+  const setMembersOpen = (open: boolean) => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('threads')
+    next.delete('thread')
+    if (open) next.set('members', '1')
+    else next.delete('members')
+    setSearchParams(next, { replace: true })
+  }
   // Threads open beside the channel, so you keep your place in it.
   const openThread = (threadId: string | null) => {
     const next = new URLSearchParams(searchParams)
     next.delete('threads')
+    next.delete('members')
     if (threadId) next.set('thread', threadId)
     else next.delete('thread')
     setSearchParams(next)
@@ -152,6 +164,8 @@ export function ChannelPage() {
   const name = validBoundary ? (page?.conversation.name ?? 'Channel') : 'Channel'
   usePageTitle(validBoundary ? `#${name}` : null)
   const archived = Boolean(page?.conversation.archivedAt)
+  const isPrivate = Boolean(validBoundary && page?.conversation.private)
+  const membersOpen = membersParam && isPrivate
   const canPost = Boolean(validBoundary && page?.capabilities.sendMessage && !archived)
   // A layout without threads keeps the threads already here reachable but doesn't offer new ones.
   const threadsShown = useProjectExperience(projectId).shows('talk.threads')
@@ -241,6 +255,14 @@ export function ChannelPage() {
                 threadId={openThreadId}
                 viewer={viewer}
               />
+            ) : membersOpen ? (
+              <ChannelMembers
+                channelId={channelId}
+                onClose={() => setMembersOpen(false)}
+                onLeft={() => navigate(`/projects/${encodeURIComponent(projectId)}`)}
+                projectId={projectId}
+                viewerId={viewer.actorId}
+              />
             ) : boardOpen ? (
               <ThreadBoard
                 conversationId={channelId}
@@ -250,9 +272,9 @@ export function ChannelPage() {
                 projectId={projectId}
               />
             ) : undefined,
-          contextKey: openThreadId ?? (boardOpen ? 'threads' : undefined),
+          contextKey: openThreadId ?? (membersOpen ? 'members' : boardOpen ? 'threads' : undefined),
           mainClassName: 'aw-main--conversation',
-          onContextDismiss: () => (openThreadId ? openThread(null) : setBoardOpen(false)),
+          onContextDismiss: () => (openThreadId ? openThread(null) : membersOpen ? setMembersOpen(false) : setBoardOpen(false)),
           project: project.data,
           selectedChannelId: validBoundary ? channelId : undefined,
         }
@@ -283,6 +305,15 @@ export function ChannelPage() {
       <ConversationHeader
         actions={
           <>
+            {isPrivate ? (
+              <IconButton
+                icon="users"
+                label={membersOpen ? 'Hide members' : 'Members'}
+                onClick={() => setMembersOpen(!membersOpen)}
+                pressed={membersOpen}
+                side="bottom"
+              />
+            ) : null}
             {threadsShown || boardOpen ? (
               <IconButton
                 icon="list"
@@ -295,7 +326,7 @@ export function ChannelPage() {
             {canStartThread ? <IconButton icon="messages" label="Start a thread" onClick={() => startThread(null)} side="bottom" /> : null}
           </>
         }
-        icon="hash"
+        icon={isPrivate ? 'lock' : 'hash'}
         menu={[
           ...(canStartThread ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => startThread(null) }] : []),
           ...tools.levelMenu,
@@ -354,7 +385,11 @@ export function ChannelPage() {
               </>
             }
           >
-            {archived ? null : `Everyone in ${project.data.name} can read and post here. Mention someone with @ to ask them directly.`}
+            {archived
+              ? null
+              : isPrivate
+                ? 'This channel is private: only its members can find it and read it. Mention someone with @ to ask them directly.'
+                : `Everyone in ${project.data.name} can read and post here. Mention someone with @ to ask them directly.`}
           </ConversationIntro>
         ) : null}
         <TimelineEntries

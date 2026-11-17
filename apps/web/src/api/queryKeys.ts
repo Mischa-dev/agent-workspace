@@ -131,6 +131,9 @@ export const queryKeys = {
   /** A thread's origin message, shown above its replies. */
   originMessage: (projectId: string, parentId: string, originId: string) =>
     ['project', projectId, 'conversation', parentId, 'timeline', 'origin', originId] as const,
+  /** A private channel's or group's members (C2.6). */
+  conversationMembers: (projectId: string, conversationId: string) =>
+    ['project', projectId, 'conversation', conversationId, 'members'] as const,
   conversationRestorable: (projectId: string, conversationId: string) =>
     ['project', projectId, 'conversation', conversationId, 'restorable'] as const,
   conversationSidebarRoot: (projectId: string) =>
