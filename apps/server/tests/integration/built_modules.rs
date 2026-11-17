@@ -2,7 +2,8 @@
 //! still shows its records (in queries, search or a thing's page), still
 //! takes form answers or still runs its automations; switching it back on
 //! losing data; a retried create making two of everything; a part from
-//! another workspace joining a module; and a role deciding by account kind.
+//! another workspace joining a module, or one from a space being shown to
+//! someone outside it; and a role deciding by account kind.
 
 use agent_workspace_server::jobs::{self, WorkerOptions};
 use axum::http::StatusCode;
@@ -439,5 +440,60 @@ async fn a_part_from_another_workspace_never_joins() {
             .await
             .expect("parts");
     assert_eq!(parts, 0);
+
+    // Someone in the closed space put its collection into the workspace-wide
+    // module (as Vee could). The owner, who isn't in that space, can open
+    // the module but learns nothing of the part: not its id, its name or
+    // that it is there.
+    sqlx::query(
+        "INSERT INTO module_parts (module_id, workspace_id, space_id, part_kind, object_id) \
+         VALUES ($1, $2, $3, 'collection', $4)",
+    )
+    .bind(Uuid::parse_str(wide["value"]["id"].as_str().expect("id")).expect("uuid"))
+    .bind(world.organization)
+    .bind(closed_space)
+    .bind(hidden)
+    .execute(&pool)
+    .await
+    .expect("vee's part");
+    let opened = tool(
+        &world,
+        "builder",
+        "module_open",
+        json!({"moduleId": wide["value"]["id"]}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert_eq!(opened["value"]["parts"], json!([]), "{opened}");
+    assert!(
+        !opened.to_string().contains(&hidden.to_string()),
+        "{opened}"
+    );
+    assert!(!opened.to_string().contains("Hidden"), "{opened}");
+    let listed = tool(&world, "builder", "module_list", json!({})).await;
+    let wide_listed = listed["value"]["built"]
+        .as_array()
+        .and_then(|built| built.iter().find(|row| row["id"] == wide["value"]["id"]))
+        .unwrap_or_else(|| panic!("the wide module is listed: {listed}"));
+    assert_eq!(wide_listed["parts"], 0, "{listed}");
+    // Once the owner joins the space, the part is theirs to see.
+    sqlx::query(
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
+         VALUES ($1, $2, $3, 'member', 'Owner', 'owner')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(closed_space)
+    .bind(world.owner.actor)
+    .execute(&pool)
+    .await
+    .expect("the owner joins the closed space");
+    let opened = tool(
+        &world,
+        "builder",
+        "module_open",
+        json!({"moduleId": wide["value"]["id"]}),
+    )
+    .await;
+    assert_eq!(opened["value"]["parts"][0]["name"], "Hidden", "{opened}");
     world.finish().await;
 }

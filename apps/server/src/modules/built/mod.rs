@@ -442,12 +442,27 @@ struct PartRow {
     name: Option<String>,
 }
 
-/// A module's parts, in order, each with its name.
+/// Whether `reader` may know of a part (`part` aliases `module_parts`): one
+/// in a space only to that space's members, a channel only to those who can
+/// see it. A workspace-wide module may gather parts from several spaces, and
+/// anyone in the workspace can open it.
+const PART_VISIBLE: &str = r#"
+    (part.space_id IS NULL OR EXISTS (
+        SELECT 1 FROM project_memberships membership
+        WHERE membership.project_id = part.space_id
+          AND membership.actor_id = $2
+          AND membership.enabled
+    ))
+    AND (part.part_kind <> 'channel' OR conversation_visible_to(part.object_id, $2))
+"#;
+
+/// A module's parts that `reader` may know of, in order, each with its name.
 pub async fn parts(
     connection: &mut PgConnection,
     module_id: Uuid,
+    reader: Uuid,
 ) -> Result<Vec<PartView>, AppError> {
-    let rows = sqlx::query_as::<_, PartRow>(
+    let rows = sqlx::query_as::<_, PartRow>(&format!(
         r#"
         SELECT part.part_kind, part.object_id,
                CASE part.part_kind
@@ -458,11 +473,12 @@ pub async fn parts(
                    WHEN 'nav' THEN (SELECT label FROM module_nav WHERE id = part.object_id)
                END AS name
         FROM module_parts part
-        WHERE part.module_id = $1
+        WHERE part.module_id = $1 AND {PART_VISIBLE}
         ORDER BY part.part_kind, part.position, part.object_id
-        "#,
-    )
+        "#
+    ))
     .bind(module_id)
+    .bind(reader)
     .fetch_all(&mut *connection)
     .await?;
     Ok(rows
@@ -511,15 +527,18 @@ pub async fn nav(connection: &mut PgConnection, module_id: Uuid) -> Result<Vec<N
     .collect())
 }
 
-/// Counts of parts per module, for lists.
+/// Counts of the parts `reader` may know of, per module, for lists.
 pub async fn part_counts(
     connection: &mut PgConnection,
     module_ids: &[Uuid],
+    reader: Uuid,
 ) -> Result<BTreeMap<Uuid, i64>, AppError> {
-    Ok(sqlx::query_as::<_, (Uuid, i64)>(
-        "SELECT module_id, count(*) FROM module_parts WHERE module_id = ANY($1) GROUP BY module_id",
-    )
+    Ok(sqlx::query_as::<_, (Uuid, i64)>(&format!(
+        "SELECT part.module_id, count(*) FROM module_parts part \
+         WHERE part.module_id = ANY($1) AND {PART_VISIBLE} GROUP BY part.module_id"
+    ))
     .bind(module_ids)
+    .bind(reader)
     .fetch_all(&mut *connection)
     .await?
     .into_iter()

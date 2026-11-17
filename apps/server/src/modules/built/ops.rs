@@ -60,11 +60,12 @@ pub struct ModuleView {
     pub nav: Vec<NavView>,
 }
 
-async fn view(
-    connection: &mut sqlx::PgConnection,
-    workspace_id: Uuid,
-    module_id: Uuid,
-) -> Result<ModuleView, OpError> {
+/// The module as the caller sees it: parts in spaces they aren't in, and
+/// channels they can't see, are left out.
+async fn view(call: &mut OpCall<'_>, module_id: Uuid) -> Result<ModuleView, OpError> {
+    let workspace_id = call.ctx.workspace_id;
+    let reader = call.account_id();
+    let connection = call.tx().await?;
     let row = super::get(connection, workspace_id, module_id)
         .await?
         .ok_or(OpError::not_found(MODULE))?;
@@ -80,7 +81,7 @@ async fn view(
         on,
         archived: row.archived_at.is_some(),
         archived_parts: row.archived_parts.clone(),
-        parts: super::parts(connection, row.id).await?,
+        parts: super::parts(connection, row.id, reader).await?,
         nav: super::nav(connection, row.id).await?,
     })
 }
@@ -613,8 +614,7 @@ impl Operation for ModuleCreate {
                 "nav": input.nav.len(),
             }),
         );
-        let tx = call.tx().await?;
-        view(tx, workspace, module_id).await
+        view(call, module_id).await
     }
 }
 
@@ -650,9 +650,7 @@ impl Operation for ModuleOpen {
     type Output = ModuleView;
 
     async fn run(call: &mut OpCall<'_>, input: ModuleIdInput) -> Result<ModuleView, OpError> {
-        let workspace = call.ctx.workspace_id;
-        let tx = call.tx().await?;
-        view(tx, workspace, input.module_id.id()).await
+        view(call, input.module_id.id()).await
     }
 }
 
@@ -727,7 +725,6 @@ impl Operation for ModuleUpdate {
         }
         let name = input.name.as_deref().map(str::trim).unwrap_or(&module.name);
         check_text(name, input.description.as_deref(), input.icon.as_deref())?;
-        let workspace = call.ctx.workspace_id;
         let tx = call.tx().await?;
         sqlx::query(
             "UPDATE modules SET name = $2, description = COALESCE($3, description), \
@@ -756,8 +753,7 @@ impl Operation for ModuleUpdate {
         }
         super::touch(tx, module.id).await?;
         call.audit_target("module", module.id, json!({ "key": module.module_key }));
-        let tx = call.tx().await?;
-        view(tx, workspace, module.id).await
+        view(call, module.id).await
     }
 }
 
@@ -800,7 +796,6 @@ impl Operation for ModulePartLink {
         let kind = part_kind(&input.part.kind)?;
         let module = locked(call, input.module_id.id()).await?;
         live(&module)?;
-        let workspace = call.ctx.workspace_id;
         let actor = call.account_id();
         let tx = call.tx().await?;
         if super::link_part(tx, &module, kind, input.part.id.id(), actor).await? {
@@ -813,8 +808,7 @@ impl Operation for ModulePartLink {
             module.id,
             json!({ "part": kind, "partId": input.part.id.id() }),
         );
-        let tx = call.tx().await?;
-        view(tx, workspace, module.id).await
+        view(call, module.id).await
     }
 }
 
@@ -836,7 +830,6 @@ impl Operation for ModulePartUnlink {
         let kind = part_kind(&input.part.kind)?;
         let module = locked(call, input.module_id.id()).await?;
         live(&module)?;
-        let workspace = call.ctx.workspace_id;
         let tx = call.tx().await?;
         if super::unlink_part(tx, &module, kind, input.part.id.id()).await? {
             super::touch(tx, module.id).await?;
@@ -848,8 +841,7 @@ impl Operation for ModulePartUnlink {
             module.id,
             json!({ "part": kind, "partId": input.part.id.id() }),
         );
-        let tx = call.tx().await?;
-        view(tx, workspace, module.id).await
+        view(call, module.id).await
     }
 }
 
@@ -945,8 +937,7 @@ impl Operation for ModuleSet {
             module.id,
             json!({ "on": input.on, "changed": changed }),
         );
-        let tx = call.tx().await?;
-        view(tx, workspace, module.id).await
+        view(call, module.id).await
     }
 }
 
@@ -998,14 +989,12 @@ impl Operation for ModuleArchive {
     async fn run(call: &mut OpCall<'_>, input: ModuleArchiveInput) -> Result<ModuleView, OpError> {
         let module = locked(call, input.module_id.id()).await?;
         live(&module)?;
-        let workspace = call.ctx.workspace_id;
         let tx = call.tx().await?;
         // Readers of its collections hear of it before they go or stay.
         announce(tx, module.id).await?;
         super::archive(tx, &module, input.parts == ArchiveParts::Keep).await?;
         call.audit_target("module", module.id, json!({ "parts": input.parts }));
-        let tx = call.tx().await?;
-        view(tx, workspace, module.id).await
+        view(call, module.id).await
     }
 }
 
@@ -1025,16 +1014,13 @@ impl Operation for ModuleRestore {
 
     async fn run(call: &mut OpCall<'_>, input: ModuleIdInput) -> Result<ModuleView, OpError> {
         let module = locked(call, input.module_id.id()).await?;
-        let workspace = call.ctx.workspace_id;
         if module.archived_at.is_none() {
-            let tx = call.tx().await?;
-            return view(tx, workspace, module.id).await;
+            return view(call, module.id).await;
         }
         let tx = call.tx().await?;
         super::restore(tx, &module).await?;
         announce(tx, module.id).await?;
         call.audit_target("module", module.id, json!({}));
-        let tx = call.tx().await?;
-        view(tx, workspace, module.id).await
+        view(call, module.id).await
     }
 }

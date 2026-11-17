@@ -2697,17 +2697,17 @@ async fn reply_request(
 // The digest of B's rows
 // ---------------------------------------------------------------------------
 
-/// Every row, in any table, whose JSON form mentions one of B's IDs, by
+/// Every row, in any table, whose JSON form mentions one of `ids`, by
 /// table. A new row that points at B shows up as well as a change.
-async fn digest(pool: &PgPool, pattern: &str) -> BTreeMap<String, BTreeSet<String>> {
-    digest_ignoring(pool, pattern, &[]).await
+async fn digest(pool: &PgPool, ids: &[String]) -> BTreeMap<String, BTreeSet<String>> {
+    digest_ignoring(pool, ids, &[]).await
 }
 
 /// [`digest`], leaving out the `ignored` columns of every row (ones a read
 /// may legitimately touch, such as a credential's `last_used_at`).
 pub(super) async fn digest_ignoring(
     pool: &PgPool,
-    pattern: &str,
+    ids: &[String],
     ignored: &[&str],
 ) -> BTreeMap<String, BTreeSet<String>> {
     let tables = sqlx::query_scalar::<_, String>(
@@ -2720,19 +2720,38 @@ pub(super) async fn digest_ignoring(
     .fetch_all(pool)
     .await
     .expect("tables");
-    let mut rows = BTreeMap::new();
-    for table in tables {
-        let found = sqlx::query_scalar::<_, String>(&format!(
-            r#"SELECT listed.row_text FROM (SELECT (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value) listed WHERE listed.row_text ~ $1"#
-        ))
-        .bind(pattern)
-        .bind(ignored)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_else(|error| panic!("digest {table}: {error}"));
-        if !found.is_empty() {
-            rows.insert(table, found.into_iter().collect::<BTreeSet<_>>());
-        }
+    // One statement over every table, and each row's UUIDs compared with the
+    // IDs as a set: a regex alternating a few hundred IDs, one statement per
+    // table, made this most of the isolation tests' time (callers digest
+    // after every tool, a few hundred times a test).
+    let scans = tables
+        .iter()
+        .map(|table| {
+            let name = table.replace('\'', "''");
+            format!(
+                r#"SELECT '{name}'::text AS table_name, (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n");
+    let found = sqlx::query_as::<_, (String, String)>(&format!(
+        r#"SELECT listed.table_name, listed.row_text FROM ({scans}) listed
+        WHERE ARRAY(
+            SELECT found[1] FROM regexp_matches(
+                listed.row_text,
+                '([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})',
+                'g'
+            ) found
+        ) && $1::text[]"#
+    ))
+    .bind(ids)
+    .bind(ignored)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|error| panic!("digest: {error}"));
+    let mut rows = BTreeMap::<String, BTreeSet<String>>::new();
+    for (table, row) in found {
+        rows.entry(table).or_default().insert(row);
     }
     rows
 }
@@ -2792,8 +2811,8 @@ async fn one_workspace_never_writes_to_another() {
     let bx = more_targets(app, pool, b).await;
     let sp = spares(app, pool, a, &ax).await;
     let b_ids = sweep_ids(pool, b.organization).await;
-    let pattern = b_ids.iter().cloned().collect::<Vec<_>>().join("|");
-    let before = digest(pool, &pattern).await;
+    let b_list = b_ids.iter().cloned().collect::<Vec<_>>();
+    let before = digest(pool, &b_list).await;
     eprintln!(
         "B's digest: {} rows in {} tables",
         before.values().map(BTreeSet::len).sum::<usize>(),
@@ -2868,7 +2887,7 @@ async fn one_workspace_never_writes_to_another() {
             .await;
         }
     }
-    let after_foreign = digest(pool, &pattern).await;
+    let after_foreign = digest(pool, &b_list).await;
     for change in digest_changes(&before, &after_foreign) {
         report
             .failures
@@ -2889,7 +2908,7 @@ async fn one_workspace_never_writes_to_another() {
     for case in http.iter().filter(|case| case.last) {
         own_http(&mut sender, case, &b_ids, &mut report).await;
     }
-    let after_own = digest(pool, &pattern).await;
+    let after_own = digest(pool, &b_list).await;
     for change in digest_changes(&after_foreign, &after_own) {
         report
             .failures

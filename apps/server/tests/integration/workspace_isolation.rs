@@ -2671,8 +2671,8 @@ async fn check_mcp(
     // P0.23: a read-only tool changes nothing. A's rows are digested before
     // and after each tool's calls; only the columns reads may touch differ.
     let a_ids = sweep_ids(pool, a.organization).await;
-    let a_pattern = a_ids.iter().cloned().collect::<Vec<_>>().join("|");
-    let mut a_rows = digest_ignoring(pool, &a_pattern, READ_TOUCHES).await;
+    let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
+    let mut a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
         ("A's agent", &a.agent_token, &agent_session, true),
@@ -2729,7 +2729,7 @@ async fn check_mcp(
                     b_ids,
                 );
             }
-            a_rows = digest_ignoring(pool, &a_pattern, READ_TOUCHES).await;
+            a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(
