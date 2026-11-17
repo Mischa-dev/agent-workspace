@@ -430,6 +430,20 @@ pub static INCOMING_HOOK_RECEIVED: EventType = fact(
 )
 .automatable();
 
+// --- links (K3.15) ---------------------------------------------------------
+pub static LINK_CREATED: EventType = fact(
+    "link.created",
+    "workspace",
+    None,
+    "Someone linked two things",
+);
+pub static LINK_DELETED: EventType = fact(
+    "link.deleted",
+    "workspace",
+    None,
+    "Someone took a link away",
+);
+
 // --- spaces (today's projects) ---------------------------------------------
 pub static SPACE_MEMBER_CHANGED: EventType = fact(
     "space.member.changed",
@@ -535,6 +549,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &PULL_REQUEST_MERGED,
         &PULL_REQUEST_CLOSED,
         &INCOMING_HOOK_RECEIVED,
+        &LINK_CREATED,
+        &LINK_DELETED,
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
         &WORKSPACE_LIFECYCLE_CHANGED,

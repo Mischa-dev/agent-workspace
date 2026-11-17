@@ -350,13 +350,13 @@ const STILL_USEFUL: &str = r#"
         AND (suggestion.kind <> 'blocks'
              OR other_status.semantic_category NOT IN ('completed', 'canceled'))
         AND NOT EXISTS (
-            SELECT 1 FROM work_item_dependencies dependency
+            SELECT 1 FROM task_dependencies dependency
             WHERE (dependency.blocked_work_item_id = suggestion.work_item_id
                    AND dependency.blocking_work_item_id = suggestion.other_work_item_id)
                OR (dependency.blocked_work_item_id = suggestion.other_work_item_id
                    AND dependency.blocking_work_item_id = suggestion.work_item_id))
         AND NOT EXISTS (
-            SELECT 1 FROM work_item_relations relation
+            SELECT 1 FROM task_relations relation
             WHERE (relation.work_item_id = suggestion.work_item_id
                    AND relation.other_work_item_id = suggestion.other_work_item_id)
                OR (relation.work_item_id = suggestion.other_work_item_id

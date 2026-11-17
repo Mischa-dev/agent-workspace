@@ -492,6 +492,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "invite_link_revoke",
     "incoming_hook_create",
     "incoming_hook_delete",
+    "thing_link",
+    "thing_unlink",
     "label_write",
     "layout_preset_write",
     "field_write",
@@ -6976,6 +6978,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"thing": a.page, "version": 1, "expectedVersion": version("project_pages", &a.page)}),
             vec![json!({"thing": b.page, "version": 1, "expectedVersion": 1})],
         ),
+        // K3.15: links by hand, from one thing to another, never across
+        // workspaces from either end.
+        mcp_case(
+            "thing_link",
+            json!({"from": a.page, "to": a.whiteboard, "kind": "about"}),
+            vec![json!({"from": b.page, "to": b.whiteboard, "kind": "about"})],
+        )
+        .rejecting(vec![
+            json!({"from": a.page, "to": b.whiteboard, "kind": "about"}),
+            json!({"from": a.page, "to": b.task, "kind": "relates_to"}),
+        ]),
+        mcp_case(
+            "thing_unlink",
+            json!({"from": a.page, "to": a.whiteboard, "kind": "about"}),
+            vec![json!({"from": b.page, "to": b.whiteboard, "kind": "about"})],
+        )
+        .rejecting(vec![json!({"from": a.page, "to": b.whiteboard, "kind": "about"})]),
         // K3.26: incoming hooks, made and deleted in a space.
         mcp_case(
             "incoming_hook_create",

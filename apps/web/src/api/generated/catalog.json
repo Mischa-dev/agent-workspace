@@ -554,6 +554,38 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "link.created"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "thing_link",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Link two things"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "link.deleted"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "thing_unlink",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Take a link away"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "workspace.lifecycle.changed"
     ],
     "idempotent": true,

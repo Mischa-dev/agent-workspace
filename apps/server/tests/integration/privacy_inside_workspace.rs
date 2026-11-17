@@ -1758,3 +1758,79 @@ async fn only_holders_of_workspace_delete_may_delete_or_keep_it() {
     assert_eq!(body["outcome"], "ok", "the owner keeps it: {status} {body}");
     assert_eq!(lifecycle().await, "active");
 }
+
+/// K3.15: linking needs edit on the thing the link starts at and sight of
+/// the other end. A viewer can't link, and nobody can link to a private
+/// group they aren't in (the answer is the same as for no such thing).
+#[tokio::test]
+async fn links_by_hand_need_edit_on_the_start_and_sight_of_the_end() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("vera", "viewer")
+        .person("ana", "member")
+        .private_group("secret", &["ana"])
+        .build("privacy_hand_links")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let work = world.project("WORK").to_owned();
+    let mut pages = Vec::new();
+    for title in ["Plan", "Notes"] {
+        let (status, page) = send(
+            &world.app,
+            world.owner.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{work}/pages"),
+                None,
+                json!({ "title": title, "body": "" }),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{page}");
+        pages.push(page["id"].as_str().expect("page").to_owned());
+    }
+    let (plan, notes) = (&pages[0], &pages[1]);
+    let link = |person: &str, op: &str, to: &str, key: &str| {
+        let browser = &world.people[person].browser;
+        send(
+            &world.app,
+            browser.request(
+                "POST",
+                &route(op),
+                Some(key),
+                json!({ "from": plan, "to": to, "kind": "about" }),
+            ),
+        )
+    };
+
+    let (status, refused) = link("vera", "thing_link", notes, "vera-link").await;
+    assert_ne!(refused["outcome"], "ok", "{status} {refused}");
+    let secret = world.conversations["secret"].clone();
+    let (status, hidden) = link("lena", "thing_link", &secret, "lena-secret").await;
+    assert_ne!(hidden["outcome"], "ok", "{status} {hidden}");
+    assert!(
+        !hidden.to_string().contains("conversation"),
+        "a hidden end reads as no such thing: {hidden}"
+    );
+    let held = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM links WHERE from_thing_id = $1::uuid AND origin = 'explicit'",
+    )
+    .bind(plan)
+    .fetch_one(world.pool())
+    .await
+    .expect("links");
+    assert_eq!(held, 0, "no refused link was kept");
+
+    let (status, made) = link("lena", "thing_link", notes, "lena-link").await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    assert_eq!(made["value"]["changed"], true, "{made}");
+    let (status, vera_unlink) = link("vera", "thing_unlink", notes, "vera-unlink").await;
+    assert_ne!(vera_unlink["outcome"], "ok", "{status} {vera_unlink}");
+    let (status, gone) = link("lena", "thing_unlink", notes, "lena-unlink").await;
+    assert_eq!(gone["outcome"], "ok", "{status} {gone}");
+    assert_eq!(gone["value"]["changed"], true, "{gone}");
+    world.finish().await;
+}

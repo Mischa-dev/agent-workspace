@@ -30,6 +30,21 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 text_references: &[],
                 exclude: &[],
             },
+            // Every link between two things (K3.15): the explicit ones
+            // (dependencies, relations) are only here; text, field and
+            // derived ones are read again from their sources on import.
+            KindDecl {
+                kind: "links",
+                table: "links",
+                references: &[
+                    ("from_thing_id", "things"),
+                    ("to_thing_id", "things"),
+                    ("created_by_account_id", "actors"),
+                    ("requested_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
             KindDecl {
                 kind: "field_definitions",
                 table: "field_definitions",
@@ -172,10 +187,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "link_previews",
                 "a cache or index derived from other rows, rebuilt on import",
-            ),
-            (
-                "links",
-                "a cache or index derived from other rows, rebuilt on import (K3.12 mirrors the stores that hold links until K3.13)",
             ),
             (
                 "things",
@@ -739,19 +750,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
-                kind: "work_item_dependencies",
-                table: "work_item_dependencies",
-                references: &[
-                    ("project_id", "projects"),
-                    ("blocking_work_item_id", "work_items"),
-                    ("blocked_work_item_id", "work_items"),
-                    ("created_by_actor_id", "actors"),
-                    ("blocking_project_id", "projects"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
                 kind: "work_item_handoffs",
                 table: "work_item_handoffs",
                 references: &[
@@ -792,19 +790,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 references: &[
                     ("work_item_id", "work_items"),
                     ("project_id", "projects"),
-                    ("created_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_relations",
-                table: "work_item_relations",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("other_project_id", "projects"),
-                    ("other_work_item_id", "work_items"),
                     ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],

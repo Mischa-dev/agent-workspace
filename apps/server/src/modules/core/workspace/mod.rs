@@ -16,6 +16,7 @@ impl CoreModule for Module {
         module.operations(crate::packages::ops::register_ops);
         module.operations(crate::history::ops::register_ops);
         module.operations(crate::events::activity::register_ops);
+        module.operations(crate::links::ops::register_ops);
         module.operations(crate::accounts::claims::register_ops);
         module.routes(crate::accounts::claims::router);
         module.operations(crate::spaces::invite_links::register_ops);

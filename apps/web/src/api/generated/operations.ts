@@ -34,6 +34,8 @@ export type DecisionView = { createdAt: string; decidedBy: string; detail: strin
 
 export type DeliveryView = { deliveryId: string; outcome: string; reason?: string | null; receivedAt: string }
 
+export type HandLinkKind = "about" | "relates_to" | "made_from"
+
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
 
 export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
@@ -230,6 +232,14 @@ export type RunUsageReportInput = { cachedInputTokens?: number | null; cost?: nu
 
 export type RunUsageReportOutput = { duplicate: boolean; reportId: string; runId?: string | null }
 
+export type ThingLinkInput = { from: string; kind: HandLinkKind; to: string }
+
+export type ThingLinkOutput = { changed: boolean }
+
+export type ThingUnlinkInput = { from: string; kind: HandLinkKind; to: string }
+
+export type ThingUnlinkOutput = { changed: boolean }
+
 export type WorkspaceDeleteInput = { confirm: string }
 
 export type WorkspaceDeleteOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
@@ -275,6 +285,8 @@ export type Operations = {
   run_result_report: { input: RunResultReportInput; output: RunResultReportOutput }
   run_update: { input: RunUpdateInput; output: RunUpdateOutput }
   run_usage_report: { input: RunUsageReportInput; output: RunUsageReportOutput }
+  thing_link: { input: ThingLinkInput; output: ThingLinkOutput }
+  thing_unlink: { input: ThingUnlinkInput; output: ThingUnlinkOutput }
   workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
   workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
 }

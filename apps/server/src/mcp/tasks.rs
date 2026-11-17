@@ -263,7 +263,7 @@ const READY: &str = r#"
     AND status.semantic_category NOT IN ('completed', 'canceled')
     AND item.blocked_reason IS NULL
     AND NOT EXISTS (SELECT 1
-       FROM work_item_dependencies ready_dependency
+       FROM task_dependencies ready_dependency
        JOIN task_rows ready_blocker
          ON ready_blocker.project_id = ready_dependency.blocking_project_id
         AND ready_blocker.id = ready_dependency.blocking_work_item_id

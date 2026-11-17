@@ -952,7 +952,7 @@ pub(crate) async fn open_blockers(
         SELECT blocker.id, blocker.project_id,
                project.project_key || '-' || blocker.number::text AS key,
                blocker.title
-        FROM work_item_dependencies dependency
+        FROM task_dependencies dependency
         JOIN task_rows blocker
           ON blocker.project_id = dependency.blocking_project_id
          AND blocker.id = dependency.blocking_work_item_id

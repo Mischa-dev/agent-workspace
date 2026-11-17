@@ -841,10 +841,10 @@ impl RunContext<'_> {
         let rows = crate::db::scoped_one(&self.state.pool, async |connection| {
             sqlx::query_as::<_, (Uuid, Uuid)>(
                 r#"
-            SELECT blocking_work_item_id, blocked_work_item_id FROM work_item_dependencies
+            SELECT blocking_work_item_id, blocked_work_item_id FROM task_dependencies
             WHERE project_id = $1 OR blocking_project_id = $1
             UNION ALL
-            SELECT work_item_id, other_work_item_id FROM work_item_relations
+            SELECT work_item_id, other_work_item_id FROM task_relations
             WHERE project_id = $1 OR other_project_id = $1
             UNION ALL
             SELECT id, parent_work_item_id FROM work_items

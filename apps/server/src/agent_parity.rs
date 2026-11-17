@@ -941,6 +941,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/incoming-hooks/{hook_id}",
+            Plumbing("another service's signed deliveries to an incoming hook"),
+        ),
+        (
+            Post,
             "/api/v1/projects/{project_id}/invitations",
             Tool("invitation_write"),
         ),

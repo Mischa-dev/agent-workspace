@@ -25,6 +25,8 @@
     "history_list": "query",
     "history_show": "describe",
     "history_restore": "change",
+    "thing_link": "change",
+    "thing_unlink": "change",
     "module_list": "describe",
     "workspace_update": "change",
     "workspace_delete": "change",
@@ -83,7 +85,7 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["file.attached", "file.removed", "workspace.lifecycle_changed"],
+    "emits": ["file.attached", "file.removed", "link.created", "link.deleted", "workspace.lifecycle_changed"],
     "listens": []
   },
   "notifications": [],
