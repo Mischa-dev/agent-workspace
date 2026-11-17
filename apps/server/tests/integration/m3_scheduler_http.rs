@@ -702,7 +702,7 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     assert!(dirty_preserved);
     assert!(second_worktree.join("UNCOMMITTED.txt").is_file());
     let failure_event_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM agent_run_events WHERE agent_run_id = $1 AND kind = 'run_failed'",
+        "SELECT id FROM run_activities WHERE run_id = $1 AND payload->>'step' = 'run_failed'",
     )
     .bind(unsafe_retry_id)
     .fetch_one(&pool)

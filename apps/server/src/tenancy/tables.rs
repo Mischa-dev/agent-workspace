@@ -28,8 +28,6 @@ pub const WORKSPACE_ID: &str = "workspace_id";
 pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("agent_profiles", ORGANIZATION_ID),
     ("agent_run_acknowledgements", WORKSPACE_ID),
-    ("agent_run_events", WORKSPACE_ID),
-    ("agent_run_usage", ORGANIZATION_ID),
     ("agent_runs", WORKSPACE_ID),
     ("agent_sessions", ORGANIZATION_ID),
     ("agent_setup_links", WORKSPACE_ID),

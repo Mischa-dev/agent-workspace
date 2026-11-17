@@ -67,12 +67,12 @@ async fn authenticated_interrupt_idles_only_an_unowned_provider_session() {
                 run.finished_at IS NOT NULL,
                 (
                     SELECT count(*)
-                    FROM agent_run_events event
+                    FROM run_activities event
                     JOIN conversation_entries entry
-                      ON entry.agent_run_event_id = event.id
+                      ON entry.run_activity_id = event.id
                      AND entry.conversation_id = run.conversation_id
-                    WHERE event.agent_run_id = run.id
-                      AND event.kind = 'run_interrupted'
+                    WHERE event.run_id = run.id
+                      AND event.payload->>'step' = 'run_interrupted'
                 ),
                 (
                     SELECT count(*)
@@ -223,11 +223,11 @@ async fn provider_turn_failure_idles_its_linked_session_without_live_credentials
         SELECT
             (
                 SELECT count(*)
-                FROM agent_run_events event
+                FROM run_activities event
                 JOIN conversation_entries entry
-                  ON entry.agent_run_event_id = event.id
-                WHERE event.agent_run_id = $1
-                  AND event.kind = 'run_failed'
+                  ON entry.run_activity_id = event.id
+                WHERE event.run_id = $1
+                  AND event.payload->>'step' = 'run_failed'
             ),
             (
                 SELECT count(*)

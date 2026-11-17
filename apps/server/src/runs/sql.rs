@@ -37,9 +37,11 @@ pub fn builtin_terminal_states() -> String {
 }
 
 /// A conversation entry's run step: brings `event` (`id`, `agent_run_id`,
-/// `kind`, `summary`, `created_at`, `payload`) beside `entry`.
-pub const ENTRY_EVENT_JOIN: &str =
-    "LEFT JOIN agent_run_events event ON event.id = entry.agent_run_event_id";
+/// `kind` (the built-in step's name), `summary`, `created_at`, `payload`)
+/// beside `entry`.
+pub const ENTRY_EVENT_JOIN: &str = "LEFT JOIN (SELECT step.id, step.run_id AS agent_run_id, \
+     step.payload->>'step' AS kind, step.summary, step.occurred_at AS created_at, step.payload \
+     FROM run_activities step) event ON event.id = entry.run_activity_id";
 
 /// Whether the conversation `conversation` (a column) has a built-in run
 /// that hasn't finished: a boolean expression.
@@ -99,8 +101,8 @@ pub(crate) use newest_state_in_thread;
 pub fn last_entry_sequence(run: &str) -> String {
     format!(
         "(SELECT max(run_entry.sequence) FROM conversation_entries run_entry \
-          JOIN agent_run_events run_event ON run_event.id = run_entry.agent_run_event_id \
-          WHERE run_event.agent_run_id = {run})"
+          JOIN run_activities run_step ON run_step.id = run_entry.run_activity_id \
+          WHERE run_step.run_id = {run})"
     )
 }
 

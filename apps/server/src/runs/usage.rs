@@ -1,7 +1,6 @@
 //! A1.3: usage on a run. A reporter's usage for one of its runs adds to the
-//! run's totals per model as exact (`attribution = 'reported'`). The
-//! built-in host's usage still lands in `agent_run_usage`, mirrored here by
-//! a trigger until A1.22. A1.15: window reports are split onto the runs
+//! run's totals per model as exact (`attribution = 'reported'`), the
+//! built-in host's included ([`add_builtin`]). A1.15: window reports are split onto the runs
 //! going during the window ([`attribute_window_usage`]), and [`totals`] is
 //! what budgets and metering read.
 
@@ -19,6 +18,99 @@ use crate::{
     error::AppError,
     jobs::{JobContext, JobError, JobRegistry},
 };
+
+/// What the built-in host needs to price a run's usage.
+#[derive(Clone, Debug, FromRow)]
+pub struct BuiltinScope {
+    pub workspace_id: Uuid,
+    pub adapter_kind: String,
+    pub model: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A built-in run's workspace, harness and chosen model.
+pub async fn builtin_scope(
+    executor: impl PgExecutor<'_>,
+    run_id: Uuid,
+) -> Result<BuiltinScope, AppError> {
+    Ok(sqlx::query_as::<_, BuiltinScope>(
+        r#"
+        SELECT project.organization_id AS workspace_id, account.adapter_kind,
+               run.config ->> 'model' AS model, run.created_at
+        FROM agent_runs run
+        JOIN projects project ON project.id = run.project_id
+        JOIN execution_profiles profile ON profile.id = run.execution_profile_id
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
+        WHERE run.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(executor)
+    .await?)
+}
+
+/// Tokens a built-in run used on one turn, priced by the catalog where it
+/// can be.
+#[derive(Clone, Debug)]
+pub struct BuiltinTokens {
+    pub model: String,
+    pub backend: String,
+    pub date: NaiveDate,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub estimated_cost: Option<f64>,
+    pub currency: Option<String>,
+    pub reported_cost_usd: Option<f64>,
+}
+
+/// Add a built-in run's turn to its usage for the model, as reported.
+pub async fn add_builtin(
+    executor: impl PgExecutor<'_>,
+    run_id: Uuid,
+    tokens: &BuiltinTokens,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO run_usage (
+            run_id, model, attribution, workspace_id, space_id, account_id, backend,
+            usage_date, input_tokens, output_tokens, cached_input_tokens,
+            estimated_cost, currency, reported_cost, reported_currency, confidence, updated_at
+        )
+        SELECT run.id, $2, 'reported', run.workspace_id, run.space_id, run.account_id,
+               left($3, 80), $4, $5, $6, $7, $8, $9, $10,
+               CASE WHEN $10::double precision IS NOT NULL THEN 'USD' END, 'exact', now()
+          FROM runs run
+         WHERE run.id = $1
+        ON CONFLICT (run_id, model, attribution) DO UPDATE SET
+            input_tokens = run_usage.input_tokens + EXCLUDED.input_tokens,
+            output_tokens = run_usage.output_tokens + EXCLUDED.output_tokens,
+            cached_input_tokens = run_usage.cached_input_tokens + EXCLUDED.cached_input_tokens,
+            estimated_cost = CASE
+                WHEN EXCLUDED.estimated_cost IS NULL THEN run_usage.estimated_cost
+                ELSE COALESCE(run_usage.estimated_cost, 0) + EXCLUDED.estimated_cost END,
+            currency = COALESCE(EXCLUDED.currency, run_usage.currency),
+            reported_cost = CASE
+                WHEN EXCLUDED.reported_cost IS NULL THEN run_usage.reported_cost
+                ELSE COALESCE(run_usage.reported_cost, 0) + EXCLUDED.reported_cost END,
+            reported_currency = COALESCE(EXCLUDED.reported_currency, run_usage.reported_currency),
+            updated_at = now()
+        "#,
+    )
+    .bind(run_id)
+    .bind(&tokens.model)
+    .bind(&tokens.backend)
+    .bind(tokens.date)
+    .bind(tokens.input_tokens)
+    .bind(tokens.output_tokens)
+    .bind(tokens.cached_input_tokens)
+    .bind(tokens.estimated_cost)
+    .bind(&tokens.currency)
+    .bind(tokens.reported_cost_usd)
+    .execute(executor)
+    .await?;
+    Ok(())
+}
 
 /// Add one reported amount to a run's usage for its model.
 pub async fn add_reported(

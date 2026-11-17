@@ -672,15 +672,15 @@ async fn acknowledge_run_failure(
         SELECT EXISTS (
             SELECT 1
               FROM agent_runs run
-              JOIN agent_run_events event ON event.agent_run_id = run.id
+              JOIN run_activities event ON event.run_id = run.id
               JOIN conversation_entries entry
-                ON entry.agent_run_event_id = event.id
+                ON entry.run_activity_id = event.id
                AND entry.conversation_id = run.conversation_id
              WHERE run.id = $1
                AND run.project_id = $2
                AND run.state = 'failed'
                AND event.id = $3
-               AND event.kind = 'run_failed'
+               AND event.payload->>'step' = 'run_failed'
         )
         "#,
     )
@@ -1073,7 +1073,7 @@ pub(crate) async fn interrupt_run_in(
     .await?;
     retain_run_workspace(&mut transaction, run_id).await?;
     crate::provider::idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
-    let event_id = insert_significant_event(
+    let event_id = crate::runs::steps::record_new(
         &mut transaction,
         run_id,
         "run_interrupted",
@@ -1081,7 +1081,7 @@ pub(crate) async fn interrupt_run_in(
         serde_json::json!({"actor_id": principal.actor_id()}),
     )
     .await?;
-    insert_event_entry(&mut transaction, context.conversation_id, event_id).await?;
+    crate::runs::steps::show_in_thread(&mut transaction, context.conversation_id, event_id).await?;
     outbox::enqueue_agent_run_updated(
         &mut transaction,
         context.project_id,
@@ -1102,33 +1102,6 @@ pub(crate) async fn interrupt_run_in(
     Ok(context.project_id)
 }
 
-pub(crate) async fn insert_significant_event(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    run_id: Uuid,
-    kind: &str,
-    summary: &str,
-    payload: serde_json::Value,
-) -> Result<Uuid, AppError> {
-    let event_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (
-            id, agent_run_id, event_key, kind, summary, payload
-        )
-        VALUES ($1, $2, $3, $4, $5, $6)
-        "#,
-    )
-    .bind(event_id)
-    .bind(run_id)
-    .bind(format!("{kind}:{event_id}"))
-    .bind(kind)
-    .bind(summary)
-    .bind(payload)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(event_id)
-}
-
 pub(crate) async fn retain_run_workspace(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
@@ -1142,29 +1115,6 @@ pub(crate) async fn retain_run_workspace(
         "#,
     )
     .bind(run_id)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
-}
-
-pub(crate) async fn insert_event_entry(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    conversation_id: Uuid,
-    event_id: Uuid,
-) -> Result<(), AppError> {
-    let sequence = allocate_conversation_sequence(transaction, conversation_id).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (
-            id, conversation_id, sequence, kind, agent_run_event_id
-        )
-        VALUES ($1, $2, $3, 'worker_event', $4)
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(conversation_id)
-    .bind(sequence)
-    .bind(event_id)
     .execute(&mut **transaction)
     .await?;
     Ok(())

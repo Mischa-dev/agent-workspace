@@ -38,12 +38,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use agent_workspace_server::policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod};
 use agent_workspace_server::test_support::source::{
     routes as shared_routes, rust_files, server_src, strip_tests,
-};
-use agent_workspace_server::{
-    domain::allocate_conversation_sequence,
-    policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod},
 };
 use axum::{
     body::{Body, to_bytes},
@@ -1593,33 +1590,21 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .execute(pool)
     .await
     .expect("failed run");
-    let failed_event = Uuid::now_v7();
     let mut transaction = pool.begin().await.expect("failure transaction");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (id, agent_run_id, event_key, kind, summary, payload)
-        VALUES ($1, $2, 'net:failed', 'run_failed', 'Net failure.', '{}'::jsonb)
-        "#,
+    let failed_event = agent_workspace_server::runs::steps::record_new(
+        &mut transaction,
+        failed_run,
+        "run_failed",
+        "Net failure.",
+        serde_json::json!({}),
     )
-    .bind(failed_event)
-    .bind(failed_run)
-    .execute(&mut *transaction)
     .await
     .expect("failure event");
-    let sequence = allocate_conversation_sequence(&mut transaction, run_threads[2])
-        .await
-        .expect("failure sequence");
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (id, conversation_id, sequence, kind, agent_run_event_id)
-        VALUES ($1, $2, $3, 'worker_event', $4)
-        "#,
+    agent_workspace_server::runs::steps::show_in_thread(
+        &mut transaction,
+        run_threads[2],
+        failed_event,
     )
-    .bind(Uuid::now_v7())
-    .bind(run_threads[2])
-    .bind(sequence)
-    .bind(failed_event)
-    .execute(&mut *transaction)
     .await
     .expect("failure entry");
     transaction.commit().await.expect("commit failure");

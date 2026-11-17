@@ -223,9 +223,9 @@ done
             SELECT ar.state, ps.state, are.payload->>'previous_state'
             FROM agent_runs ar
             JOIN provider_sessions ps ON ps.id = ar.provider_session_id
-            JOIN agent_run_events are
-              ON are.agent_run_id = ar.id
-             AND are.kind = 'recovery'
+            JOIN run_activities are
+              ON are.run_id = ar.id
+             AND are.payload->>'step' = 'recovery'
             WHERE ar.id = $1
             "#,
         )
@@ -335,9 +335,9 @@ done
               FROM agent_runs run
               JOIN provider_sessions session ON session.id = run.provider_session_id
               JOIN messages message ON message.agent_run_id = run.id
-              JOIN agent_run_events event
-                ON event.agent_run_id = run.id
-               AND event.kind = 'recovery'
+              JOIN run_activities event
+                ON event.run_id = run.id
+               AND event.payload->>'step' = 'recovery'
              WHERE run.id = $1
             "#,
         )
@@ -414,9 +414,9 @@ done
                    (event.payload->>'provider_resumed')::boolean,
                    (SELECT count(*) FROM messages WHERE agent_run_id = run.id)
               FROM agent_runs run
-              JOIN agent_run_events event
-                ON event.agent_run_id = run.id
-               AND event.kind = 'recovery'
+              JOIN run_activities event
+                ON event.run_id = run.id
+               AND event.payload->>'step' = 'recovery'
              WHERE run.id = $1
             "#,
         )

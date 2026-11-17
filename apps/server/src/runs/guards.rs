@@ -21,7 +21,6 @@ const LEGACY_RUN_SQL: &[(&str, &str)] = &[
     ("mcp/code.rs", "A1.17"),
     ("provider.rs", "A1.17"),
     ("recovery.rs", "A1.17"),
-    ("run_log.rs", "A1.14"),
     ("scheduler.rs", "A1.17"),
     ("usage/history.rs", "A1.17"),
 ];
@@ -41,8 +40,6 @@ const RUN_TABLES: &[&str] = &[
     "run_usage",
     "usage_reports",
     "agent_runs",
-    "agent_run_events",
-    "agent_run_usage",
 ];
 const SQL_VERBS: &[&str] = &["FROM", "JOIN", "INTO", "UPDATE"];
 const STATES: &[&str] = &[

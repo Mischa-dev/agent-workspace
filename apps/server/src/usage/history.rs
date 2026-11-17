@@ -441,7 +441,14 @@ pub(crate) async fn account_history(
     }
     let cost_tracked = crate::db::scoped_one(pool, async |connection| {
         sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM agent_run_usage WHERE provider_account_id = $1)",
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM run_usage usage
+                  JOIN agent_runs run ON run.id = usage.run_id
+                  JOIN execution_profiles profile ON profile.id = run.execution_profile_id
+                 WHERE profile.provider_account_id = $1
+            )
+            "#,
         )
         .bind(account_id)
         .fetch_one(connection)

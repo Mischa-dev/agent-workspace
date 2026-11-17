@@ -133,7 +133,7 @@ pub async fn settled(
         (false, true) => "approved",
         (false, false) => "denied",
     };
-    let event = crate::api::insert_significant_event(
+    let event = crate::runs::steps::record_new(
         transaction,
         run_id,
         if question {
@@ -154,7 +154,7 @@ pub async fn settled(
         }),
     )
     .await?;
-    crate::api::insert_event_entry(transaction, place.conversation_id, event).await?;
+    crate::runs::steps::show_in_thread(transaction, place.conversation_id, event).await?;
     if goes_on {
         if state == RunState::Blocked {
             crate::domain::resume_answered_run(transaction, run_id).await?;
@@ -173,7 +173,7 @@ pub async fn settled(
         .await?;
         crate::api::retain_run_workspace(transaction, run_id).await?;
         crate::provider::idle_provider_session_for_terminal_run(transaction, run_id).await?;
-        let interrupted = crate::api::insert_significant_event(
+        let interrupted = crate::runs::steps::record_new(
             transaction,
             run_id,
             "run_interrupted",
@@ -185,7 +185,7 @@ pub async fn settled(
             json!({}),
         )
         .await?;
-        crate::api::insert_event_entry(transaction, place.conversation_id, interrupted).await?;
+        crate::runs::steps::show_in_thread(transaction, place.conversation_id, interrupted).await?;
     }
     outbox::enqueue_agent_run_updated(transaction, place.project_id, place.conversation_id, run_id)
         .await?;

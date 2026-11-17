@@ -252,25 +252,17 @@ pub async fn transition(
     .execute(&mut **transaction)
     .await?;
 
-    let event_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (
-            id, agent_run_id, event_key, kind, summary, payload
-        )
-        VALUES ($1, $2, $3, 'run_state_changed', $4, $5)
-        "#,
+    crate::runs::steps::record_new(
+        transaction,
+        run_id,
+        "run_state_changed",
+        &format!("Run moved from {current} to {next}."),
+        serde_json::json!({
+            "from": current,
+            "to": next,
+            "reason": reason,
+        }),
     )
-    .bind(event_id)
-    .bind(run_id)
-    .bind(format!("state:{next}:{event_id}"))
-    .bind(format!("Run moved from {current} to {next}."))
-    .bind(serde_json::json!({
-        "from": current,
-        "to": next,
-        "reason": reason,
-    }))
-    .execute(&mut **transaction)
     .await?;
 
     if terminal {

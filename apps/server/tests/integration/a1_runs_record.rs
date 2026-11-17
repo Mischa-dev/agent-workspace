@@ -273,24 +273,17 @@ async fn existing_runs_usage_and_events_are_carried_across_once() {
         )
     );
 
-    // The activities wait for the backfill job, which is queued.
+    // Every step is an activity of the run, under the step's own id, with
+    // its name kept beside it (A1.14); nothing is left for a job to copy.
     let queued = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM background_jobs WHERE kind = $1 AND state = 'queued'",
+        "SELECT count(*) FROM background_jobs WHERE kind = 'runs.backfill_activities'",
     )
-    .bind(runs::BACKFILL_ACTIVITIES_KIND)
     .fetch_one(&pool)
     .await
     .expect("backfill job");
-    assert_eq!(queued, 1);
-    let last = runs::backfill_activities(&pool, None)
-        .await
-        .expect("backfill");
-    assert_eq!(last, events.iter().max().copied());
-    runs::backfill_activities(&pool, None)
-        .await
-        .expect("backfill again");
+    assert_eq!(queued, 0);
     let copied = sqlx::query_as::<_, (Uuid, i64, String, serde_json::Value)>(
-        r#"SELECT legacy_event_id, seq, kind, payload FROM run_activities
+        r#"SELECT id, seq, kind, payload FROM run_activities
            WHERE run_id = $1 ORDER BY seq"#,
     )
     .bind(completed)
@@ -298,6 +291,11 @@ async fn existing_runs_usage_and_events_are_carried_across_once() {
     .await
     .expect("activities");
     assert_eq!(copied.len(), events.len(), "each event copied once");
+    assert_eq!(
+        copied.iter().map(|row| row.0).collect::<Vec<_>>(),
+        events,
+        "under the step's own id"
+    );
     let kinds = copied
         .iter()
         .map(|(_, _, kind, _)| kind.as_str())
@@ -307,7 +305,8 @@ async fn existing_runs_usage_and_events_are_carried_across_once() {
         ["run_started", "tool_call", "text_message", "run_finished"]
     );
     assert_eq!(copied[3].3["outcome"], "done");
-    assert_eq!(copied[1].3["legacyKind"], "command_completed");
+    assert_eq!(copied[1].3["step"], "command_completed");
+    assert!(copied[1].3.get("legacyKind").is_none());
     assert_eq!(
         copied.iter().map(|row| row.1).collect::<Vec<_>>(),
         [1, 2, 3, 4]
@@ -372,21 +371,42 @@ async fn the_mirror_keeps_runs_equal_to_built_in_runs() {
         "each change bumps the version"
     );
 
-    let event = insert_event(
-        &pool,
+    // The built-in host's steps go straight into the run's log (A1.14).
+    let mut transaction = pool.begin().await.expect("begin");
+    let step = runs::steps::record(
+        &mut transaction,
         run,
+        "ask:1",
         "approval_requested",
-        serde_json::json!({"summary": "Run the migration?"}),
+        "Run the migration?",
+        serde_json::json!({}),
     )
-    .await;
-    let (kind, seq) = sqlx::query_as::<_, (String, i64)>(
-        "SELECT kind, seq FROM run_activities WHERE legacy_event_id = $1",
+    .await
+    .expect("record a step")
+    .expect("a new step");
+    let again = runs::steps::record(
+        &mut transaction,
+        run,
+        "ask:1",
+        "approval_requested",
+        "Run the migration?",
+        serde_json::json!({}),
     )
-    .bind(event)
+    .await
+    .expect("record it again");
+    transaction.commit().await.expect("commit");
+    assert_eq!(again, None, "a step is kept once");
+    let (kind, seq, name) = sqlx::query_as::<_, (String, i64, Option<String>)>(
+        "SELECT kind, seq, payload->>'step' FROM run_activities WHERE id = $1",
+    )
+    .bind(step)
     .fetch_one(&pool)
     .await
-    .expect("mirrored activity");
-    assert_eq!((kind.as_str(), seq), ("interrupt", 1));
+    .expect("recorded activity");
+    assert_eq!(
+        (kind.as_str(), seq, name.as_deref()),
+        ("interrupt", 1, Some("approval_requested"))
+    );
 
     sqlx::query(
         "UPDATE agent_runs SET state = 'interrupted', failure_reason = $2, finished_at = now() WHERE id = $1",
@@ -399,35 +419,33 @@ async fn the_mirror_keeps_runs_equal_to_built_in_runs() {
     let (state, _, finished) = run_state(&pool, run).await;
     assert_eq!((state.as_str(), finished), ("cancelled", true));
 
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_usage (
-            agent_run_id, model, organization_id, project_id, adapter_kind, usage_date,
-            input_tokens, output_tokens
+    // Its usage adds up on the run, per model.
+    for input_tokens in [10, 20] {
+        runs::usage::add_builtin(
+            &pool,
+            run,
+            &runs::usage::BuiltinTokens {
+                model: "model-b".to_owned(),
+                backend: "test_adapter".to_owned(),
+                date: chrono::Utc::now().date_naive(),
+                input_tokens,
+                output_tokens: 2,
+                cached_input_tokens: 0,
+                estimated_cost: None,
+                currency: None,
+                reported_cost_usd: None,
+            },
         )
-        VALUES ($1, 'model-b', $2, $3, 'test_adapter', current_date, 10, 2)
-        "#,
-    )
-    .bind(run)
-    .bind(seed.organization_id)
-    .bind(seed.project_id)
-    .execute(&pool)
-    .await
-    .expect("usage");
-    sqlx::query(
-        "UPDATE agent_run_usage SET input_tokens = 30 WHERE agent_run_id = $1 AND model = 'model-b'",
-    )
-    .bind(run)
-    .execute(&pool)
-    .await
-    .expect("more usage");
+        .await
+        .expect("usage");
+    }
     let tokens = sqlx::query_scalar::<_, i64>(
         "SELECT input_tokens FROM run_usage WHERE run_id = $1 AND model = 'model-b'",
     )
     .bind(run)
     .fetch_one(&pool)
     .await
-    .expect("mirrored usage");
+    .expect("run usage");
     assert_eq!(tokens, 30);
 }
 

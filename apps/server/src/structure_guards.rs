@@ -378,12 +378,7 @@ pub(crate) fn agent_runs_sql(source: &str) -> usize {
     sql(source)
         .map(|sql| {
             let mut found = 0;
-            for table in [
-                "agent_runs",
-                "agent_run_events",
-                "agent_run_usage",
-                "agent_approvals",
-            ] {
+            for table in ["agent_runs"] {
                 for verb in ["FROM", "JOIN", "INTO", "UPDATE"] {
                     found += count_word(&sql, &format!("{verb} {table}"));
                 }
@@ -1147,12 +1142,7 @@ async fn notify(pool: &PgPool, client: &reqwest::Client) -> Result<(), Error> {
             0
         );
         assert_eq!(account_kind_checks("let kind = ActorKind::Human;"), 0);
-        assert_eq!(
-            agent_runs_sql(&literal(
-                "SELECT 1 FROM agent_runs run JOIN agent_approvals a"
-            )),
-            2
-        );
+        assert_eq!(agent_runs_sql(&literal("SELECT 1 FROM agent_runs run")), 1);
         assert_eq!(
             agent_runs_sql(&literal("SELECT 1 FROM agent_runs_archive")),
             0

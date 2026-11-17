@@ -108,7 +108,7 @@ async fn an_approval_reaches_the_owner_and_the_harness_hears_the_answer_once() {
         "the harness is handed an answer once"
     );
     let resolved = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM agent_run_events WHERE agent_run_id = $1 AND kind = 'approval_resolved'",
+        "SELECT count(*) FROM run_activities WHERE run_id = $1 AND payload->>'step' = 'approval_resolved'",
     )
     .bind(run_id)
     .fetch_one(pool)
