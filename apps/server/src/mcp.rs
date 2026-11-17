@@ -63,12 +63,12 @@ use crate::{
 mod admin;
 mod agent_profile_tools;
 mod agents;
-mod ai_tools;
+pub(crate) mod ai_tools;
 mod approvals;
 mod automation_tools;
 mod batch_tools;
-mod briefing;
-mod bug_report_tools;
+pub(crate) mod briefing;
+pub(crate) mod bug_report_tools;
 mod channels;
 mod code;
 mod collaboration;
@@ -79,26 +79,26 @@ mod criteria;
 #[cfg(test)]
 mod description_words;
 mod environment_tools;
-mod field_tools;
+pub(crate) mod field_tools;
 mod file_tools;
 mod github_tools;
 mod groups;
 mod history;
 mod invitation_tools;
-mod labels;
+pub(crate) mod labels;
 mod later_tools;
 mod launch_tools;
 mod layout_preset_tools;
-mod memory_tools;
+pub(crate) mod memory_tools;
 mod message_edits;
 pub(crate) mod messaging;
 pub(crate) use common::string_or_number;
 mod model_catalog_tools;
-mod module_tools;
+pub(crate) mod module_tools;
 mod notifications;
 mod oauth;
 mod page_discussion;
-mod planning;
+pub(crate) mod planning;
 mod project_template_tools;
 mod publish_tools;
 mod question_tools;
@@ -112,16 +112,16 @@ mod runs;
 mod settings_tools;
 mod sheet_tools;
 mod talk;
-mod task_batch;
+pub(crate) mod task_batch;
 mod workspace_template_tools;
 pub(crate) use task_batch::{ImportTask, create_for_import};
 pub(crate) mod task_commands;
 mod task_drafts;
-mod task_move;
-mod tasks;
+pub(crate) mod task_move;
+pub(crate) mod tasks;
 mod tool_permissions;
 mod usage_tools;
-mod views_data;
+pub(crate) mod views_data;
 pub(crate) mod whiteboard_commands;
 mod whiteboard_tools;
 mod workflow;
@@ -220,13 +220,6 @@ macro_rules! principal_or {
 
 fn unauthenticated<T>() -> common::ToolResult<T> {
     common::ToolResult::denied("Sign in again: this connection isn't authorized.")
-}
-
-fn write_denied() -> writes::WriteResult {
-    writes::WriteResult::PermissionDenied {
-        retry_category: "reauthenticate".to_owned(),
-        message: Some("Sign in again: this connection isn't authorized.".to_owned()),
-    }
 }
 
 #[tool_router]
@@ -1425,230 +1418,6 @@ impl McpServer {
         Json(tasks::task_open(&self.state, principal, arguments).await)
     }
 
-    #[tool(
-        description = "Create up to 100 tasks in one project at once, all or nothing, such as a plan turned into tasks. Each takes a title and optionally a description, priority, status and type (by name), assignee, labels and acceptanceCriteria. Make subtasks with parentRef (the ref of an earlier task in the list) or parentId (an existing task such as AWD-12). Send preview: true first to check everything and see the keys they'd get, without creating anything. clientRequestId is required: a retry within 24 hours returns the first result instead of creating twice. createMissingLabels: true creates labels the project doesn't have yet. If anything is wrong, nothing is created and each problem is listed. Keep one call under about 1 MB; split bigger plans into several calls.",
-        annotations(
-            title = "Create tasks",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_create_many(
-        &self,
-        Parameters(arguments): Parameters<task_batch::TaskCreateManyArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<task_batch::BatchResult<task_batch::CreateManyValue>> {
-        let principal = principal_or!(
-            parts,
-            task_batch::BatchResult::denied("Sign in again: this connection isn't authorized.")
-        );
-        Json(task_batch::task_create_many(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Apply one change to up to 200 tasks in one project, all or nothing: a status (each task must be allowed to move there directly), priority, assignee, type, labels to add or remove, or archived (true archives, false restores; pass it on its own). Pass the versions you read as expectedVersions to stop if someone changed a task since. If any task can't take the change, nothing changes and each problem is listed with what to do, such as the steps a status change needs. preview: true shows the result without changing anything; clientRequestId makes a retry safe.",
-        annotations(
-            title = "Update tasks",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_update_many(
-        &self,
-        Parameters(arguments): Parameters<task_batch::TaskUpdateManyArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<task_batch::BatchResult<task_batch::UpdateManyValue>> {
-        let principal = principal_or!(
-            parts,
-            task_batch::BatchResult::denied("Sign in again: this connection isn't authorized.")
-        );
-        Json(task_batch::task_update_many(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Older name for task_link with pullRequestId, kept for one release so existing bridges keep working. Links a GitHub pull request Agent Workspace already knows about to a task. Needs expectedVersion and clientRequestId.",
-        annotations(
-            title = "Link pull request",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = true
-        )
-    )]
-    async fn task_link_pull_request(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<writes::LinkPullRequestArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<writes::WriteResult> {
-        let principal = principal_or!(parts, write_denied());
-        Json(writes::link_pull_request(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Put tasks in order on the board, all from one status column. Pass them in the order you want, then say where: position top (the default) or bottom, or beforeTaskId / afterTaskId to place them next to another task in that column. Calling it again with the same arguments changes nothing.",
-        annotations(
-            title = "Reorder tasks",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_reorder(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskReorderArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<tasks::ReorderValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(tasks::task_reorder(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Claim a task before working on it, so other agents and people see you're on it. Fails if someone else holds it. Claims last 2 hours by default; claim again to renew. Returns the last handoff note left on the task, if any: read it first.",
-        annotations(
-            title = "Claim task",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_claim(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskClaimArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<tasks::ClaimValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(tasks::task_claim(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Release your claim on a task when you stop working on it. If it isn't done, leave a handoff note: where you got to and what's left. The next task_claim returns it.",
-        annotations(
-            title = "Release task",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_release(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskReleaseArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<tasks::ReleaseValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(tasks::task_release(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Link a task to where it came from or what it touches: a thread or conversation, a message, a page, a decision, a repository (role primary or related; the primary is the one runs on this task's thread use), or a pull request Agent Workspace already knows about (with the project's GitHub automation on, a linked pull request moves the task when it's opened or merged). Pass remove to unlink. Linking twice changes nothing.",
-        annotations(
-            title = "Link task",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = true
-        )
-    )]
-    async fn task_link(
-        &self,
-        Parameters(arguments): Parameters<tasks::TaskLinkArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<tasks::LinkValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(tasks::task_link(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "List a project's labels by name, with each one's color, description, how many tasks carry it, and the version label_write needs. Archived labels are left out unless includeArchived.",
-        annotations(title = "List labels", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn label_list(
-        &self,
-        Parameters(arguments): Parameters<labels::LabelListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<labels::LabelListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(labels::label_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Create a label in a project, or change one (pass label: its name or ID): rename, recolor, describe, archive it (archived: true) or restore it (archived: false). Creating a name that already exists returns that label unchanged. Archiving hides it from every task until it's restored; nothing is deleted.",
-        annotations(
-            title = "Write label",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn label_write(
-        &self,
-        Parameters(arguments): Parameters<labels::LabelWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<labels::LabelWriteValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(labels::label_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "List a project's task fields (custom fields such as Risk or Customer): each one's name, type (text, long_text, number, date, single_choice, multiple_choice, person, url, email, phone, checkbox, link), options, and the version field_write needs. Set values with task_update's fields, by name; filter with task_list's fieldFilters. Archived fields are left out unless includeArchived.",
-        annotations(title = "List fields", read_only_hint = true, open_world_hint = false)
-    )]
-    async fn field_list(
-        &self,
-        Parameters(arguments): Parameters<field_tools::FieldListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<field_tools::FieldListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(field_tools::field_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Add a task field to a project, or change one (pass field: its name or ID): rename, describe, reorder (position), change a choice field's options, archive it (archived: true) or restore it (archived: false). Owners and admins only. A field's type never changes; archiving hides it everywhere and keeps every task's value.",
-        annotations(
-            title = "Write field",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn field_write(
-        &self,
-        Parameters(arguments): Parameters<field_tools::FieldWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<field_tools::FieldWriteValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(field_tools::field_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Move a task, with its subtasks, to another project. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that project, acceptance criteria, labels (by name; missing ones are created there), and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Custom field values carry over into a field of the same name and type when they fit there; the rest stay on the original. Call first with preview: true to see what carries over and what needs a choice, then move with its snapshot, one resolution per issue (set it in a target field, or leave it) and a clientRequestId. Moving it again returns where it went.",
-        annotations(
-            title = "Move task",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_move(
-        &self,
-        Parameters(arguments): Parameters<task_move::TaskMoveArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<task_move::TaskMoveValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(task_move::task_move(&self.state, principal, arguments).await)
-    }
-
     // -- Collections (AWD-90) ------------------------------------------------
 
     #[tool(
@@ -2106,61 +1875,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Say which tasks block a task (blockedBy) or which it blocks (blocks), or remove them (remove: true). The other tasks may be in another project of the same workspace that you can reach; a dependency that would make a cycle is refused with the path. Returns the task's blockers with their status and whether it's ready.",
-        annotations(
-            title = "Set dependencies",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_depend(
-        &self,
-        Parameters(arguments): Parameters<planning::TaskDependArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<planning::DependencyValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(planning::task_depend(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A project's saved views: the built-in My tasks, Ready for agents, Blocked and Recently changed, plus views people saved (yours and shared ones). Pass a view's name as `view` to task_list to list its tasks.",
-        annotations(
-            title = "List saved views",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn view_list(
-        &self,
-        Parameters(arguments): Parameters<views_data::ViewListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<views_data::ViewListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(views_data::view_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Save a view of a project's tasks (a name, the task list's query, list or board, columns), or change, pin or delete one (pass view: its name or ID). Views are yours alone unless shared: true, which needs the right to edit the project's tasks. Pinning only changes your own sidebar. List a view's tasks with task_list's view.",
-        annotations(
-            title = "Write saved view",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn view_write(
-        &self,
-        Parameters(arguments): Parameters<views_data::ViewWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<views_data::ViewWriteValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(views_data::view_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Your work across your projects (or one, with projectId): tasks assigned to you that aren't finished (due first), tasks you or agents you set up are working on, and tasks in review that you made or watch.",
         annotations(title = "My work", read_only_hint = true, open_world_hint = false)
     )]
@@ -2171,61 +1885,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<views_data::MyWorkValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(views_data::my_work(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A project's task templates (title, description, labels, acceptance criteria and subtasks a new task starts with) and the schedules that make tasks from them.",
-        annotations(
-            title = "List task templates",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn template_list(
-        &self,
-        Parameters(arguments): Parameters<views_data::TemplateListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<views_data::TemplateListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(views_data::template_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Make a task template in a project, or change one (pass template: its name or ID): name, title, description, type, priority, labels, acceptance criteria, subtasks, estimate. Fields you leave out keep what the template has. archived: true retires it and pauses schedules that use it. Make tasks from it with task_from_template.",
-        annotations(
-            title = "Write task template",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn template_write(
-        &self,
-        Parameters(arguments): Parameters<views_data::TemplateWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<views_data::TemplateWriteValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(views_data::template_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Schedule a task template to make a task daily, weekly or monthly, or change, pause (enabled: false), restart or delete a schedule (pass recurring: its ID from template_list). Fields you leave out keep what the schedule has. A schedule acts as whoever last set it up, so the tasks it makes are created as you.",
-        annotations(
-            title = "Write recurring task",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn recurring_write(
-        &self,
-        Parameters(arguments): Parameters<views_data::RecurringWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<views_data::RecurringWriteValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(views_data::recurring_write(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -2245,63 +1904,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<views_data::TaskFromTemplateValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(views_data::task_from_template(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A project's bug report links: each is a URL a game, site or form posts reports to, and every report becomes a task. Lists each link's name, state, maker and report count, never its URL.",
-        annotations(
-            title = "List bug report links",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn bug_report_link_list(
-        &self,
-        Parameters(arguments): Parameters<bug_report_tools::BugReportLinkListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(bug_report_tools::bug_report_link_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "People: make a bug report link (its URL is shown once), rename or pause it, give it a new URL, or delete it, as the project's settings do. Anyone who can add tasks makes one; its maker or the project's owners and admins change it. Agents read links with bug_report_link_list. Audited.",
-        annotations(
-            title = "Change bug report link",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn bug_report_link_write(
-        &self,
-        Parameters(arguments): Parameters<bug_report_tools::BugReportLinkWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(bug_report_tools::bug_report_link_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Import tasks from Markdown, CSV (Linear and Jira exports work as they are) or a connected repository's GitHub issues. It previews first: each row's status, labels, assignee and milestone, and anything that doesn't match. Call again with the importId and commit: true to create them. Rows imported before from the same source are skipped.",
-        annotations(
-            title = "Import tasks",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn task_import(
-        &self,
-        Parameters(arguments): Parameters<views_data::TaskImportArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<views_data::TaskImportValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(views_data::task_import(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -2428,42 +2030,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "A project's milestones: target dates, how many tasks are finished, and which are overdue.",
-        annotations(
-            title = "List milestones",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn milestone_list(
-        &self,
-        Parameters(arguments): Parameters<planning::MilestoneListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<planning::MilestoneListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(planning::milestone_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Create or change a milestone (name, description, targetDate, archived), and put tasks in it (addTasks) or take them out (removeTasks). Creating one whose name exists returns that one.",
-        annotations(
-            title = "Write milestone",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn milestone_write(
-        &self,
-        Parameters(arguments): Parameters<planning::MilestoneWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<planning::MilestoneValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(planning::milestone_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "What to work on next in a project: open tasks ranked by priority, how many tasks each unblocks, and how close its milestone or due date is, each with readiness checks (blockers done, not marked blocked, acceptance criteria, a description, a repository). scope agents lists only tasks an agent can pick up now. taskId returns one task's checks.",
         annotations(
             title = "What to do next",
@@ -2569,63 +2135,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<serde_json::Value>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(ai_tools::ai_summarize(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Turn a plan into milestones, tasks and dependencies. Start with title and plan (Markdown or text, drafted by the AI; or JSON in the draft shape or a roadmap with workstreams and items, read as is) or pageId; you get a draft to review. Then call again with importId, commit: true and expectedVersion to create it all, in batches that resume where they stopped. importId alone reads an import's progress.",
-        annotations(
-            title = "Import a plan",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn plan_import(
-        &self,
-        Parameters(arguments): Parameters<ai_tools::PlanImportArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(ai_tools::plan_import(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Say how a task relates to another: relates_to (the default) or duplicates (this task duplicates the other; close: true also closes it as canceled). remove: true takes the relation away. The other task may be in another project of the same workspace that you can reach.",
-        annotations(
-            title = "Relate tasks",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_relate(
-        &self,
-        Parameters(arguments): Parameters<planning::TaskRelateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<planning::RelationsValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(planning::task_relate(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Watch a task to hear about its changes, or stop (watching: false). Returns who watches it.",
-        annotations(
-            title = "Watch task",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn task_watch(
-        &self,
-        Parameters(arguments): Parameters<planning::TaskWatchArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<planning::WatchValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(planning::task_watch(&self.state, principal, arguments).await)
     }
 
     #[tool(

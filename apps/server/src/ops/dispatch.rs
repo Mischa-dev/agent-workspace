@@ -158,9 +158,18 @@ async fn task_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
-    for field in ["taskId", "workItemId", "parentId", "parentWorkItemId"] {
+    // K2.14: a bulk change's first task too, which says where it acts (the
+    // command resolves the rest).
+    for field in [
+        "/taskId",
+        "/workItemId",
+        "/parentId",
+        "/parentWorkItemId",
+        "/taskIds/0",
+        "/links/0/taskId",
+    ] {
         let Some((space_key, number)) = input
-            .get(field)
+            .pointer(field)
             .and_then(Value::as_str)
             .and_then(crate::mcp::split_task_key)
             .map(|(key, number)| (key.to_owned(), number))
@@ -213,7 +222,11 @@ async fn task_keys_to_ids(
         .await
         .map_err(|error: sqlx::Error| OpError::logged("task key", &error.into()))?;
         match found.as_slice() {
-            [id] => input[field] = Value::String(id.to_string()),
+            [id] => {
+                if let Some(slot) = input.pointer_mut(field) {
+                    *slot = Value::String(id.to_string());
+                }
+            }
             [] => return Err(OpError::not_found("That task")),
             _ => {
                 return Err(OpError::invalid(
@@ -399,6 +412,7 @@ async fn pipeline<O: Operation>(
             .map(|key| key.as_str().to_owned())
             .or(request.request_id),
         op: O::NAME,
+        preview: request.preview,
     };
 
     let mut call = OpCall {

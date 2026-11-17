@@ -28,10 +28,9 @@ use crate::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, CommandActor, ConflictKind, CreateWorkItemCommand,
         CreateWorkItemOutcome, LockedWorkItem, MAX_SUBTASK_LEVELS, NewTaskFields, ParentProblem,
-        PlacementProblem, PullRequestLinkChange, TaskFieldChanges, UpdateWorkItemCommand,
-        UpdateWorkItemOutcome, authorize_mutation, change_pull_request_link, conflict_kind,
-        create_work_item as execute_create_work_item, finalize_comment, lock_membership,
-        lock_work_item, normalize_criterion_text, record_audit,
+        PlacementProblem, TaskFieldChanges, UpdateWorkItemCommand, UpdateWorkItemOutcome,
+        authorize_mutation, conflict_kind, create_work_item as execute_create_work_item,
+        finalize_comment, lock_membership, lock_work_item, normalize_criterion_text, record_audit,
         set_archived as execute_set_archived, update_locked_work_item, update_work_item_by_id,
     },
     work_item_labels::{self, LabelDelta, MAX_LABELS_PER_TASK, echo},
@@ -219,16 +218,6 @@ pub struct SetArchivedArguments {
     pub work_item_id: String,
     pub expected_version: i64,
     pub archived: bool,
-    pub client_request_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LinkPullRequestArguments {
-    #[serde(rename = "taskId", alias = "workItemId")]
-    pub work_item_id: String,
-    pub expected_version: i64,
-    pub pull_request_id: String,
     pub client_request_id: String,
 }
 
@@ -1458,127 +1447,6 @@ async fn post_update_inner(
     complete(&mut transaction, &reservation, StatusCode::CREATED, &result).await?;
     transaction.commit().await?;
     Ok(result)
-}
-
-pub async fn link_pull_request(
-    state: &AppState,
-    principal: &McpPrincipal,
-    arguments: LinkPullRequestArguments,
-) -> WriteResult {
-    let result = async {
-        let Some(work_item_id) = parse_id(&arguments.work_item_id) else {
-            return Ok(WriteResult::invalid("workItemId", TASK_ID_MESSAGE));
-        };
-        let Some(pull_request_id) = parse_id(&arguments.pull_request_id) else {
-            return Ok(WriteResult::invalid(
-                "pullRequestId",
-                "Pass the pull request's ID (see pull_request_get).",
-            ));
-        };
-        if arguments.expected_version < 1 {
-            return Ok(WriteResult::invalid(
-                "expectedVersion",
-                EXPECTED_VERSION_MESSAGE,
-            ));
-        }
-        let Some(key) = parse_request_id(&arguments.client_request_id) else {
-            return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
-        };
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        if let Some(result) = authorize_write(&mut transaction, principal).await? {
-            return Ok(result);
-        }
-        let scope = resource_bound_scope("mcp_work_items", work_item_id, "link_pull_request")?;
-        let request_hash = RequestHash::for_value(&arguments)?;
-        let reservation = match reserve(
-            &mut transaction,
-            principal.actor_id,
-            &scope,
-            &key,
-            request_hash,
-        )
-        .await?
-        {
-            IdempotencyOutcome::Replay(replay) => {
-                transaction.commit().await?;
-                return Ok(replay.decode::<WriteResult>()?.replayed());
-            }
-            IdempotencyOutcome::Reserved(reservation) => reservation,
-        };
-        let Some(current) =
-            lock_work_item(&mut transaction, principal.project_id, work_item_id).await?
-        else {
-            return Ok(WriteResult::not_found(TASK_NOT_FOUND_MESSAGE));
-        };
-        if let Some(conflict) = conflict_for(
-            &mut transaction,
-            principal.project_id,
-            &current,
-            arguments.expected_version,
-            principal.actor_id,
-        )
-        .await?
-        {
-            return Ok(conflict);
-        }
-        let (changed, version, activity_id) = match change_pull_request_link(
-            &mut transaction,
-            principal.project_id,
-            work_item_id,
-            current.version,
-            None,
-            pull_request_id,
-            principal.actor_id,
-            true,
-            "Pull request linked through MCP",
-        )
-        .await?
-        {
-            PullRequestLinkChange::NotInProject => {
-                return Ok(WriteResult::not_found(
-                    "That pull request wasn't found in this task's project.",
-                ));
-            }
-            PullRequestLinkChange::Unchanged => (false, current.version, None),
-            PullRequestLinkChange::Changed {
-                version,
-                activity_id,
-            } => (true, version, Some(activity_id)),
-            PullRequestLinkChange::VersionConflict => {
-                return Err(AppError::Internal("pull request link checked its version"));
-            }
-        };
-        let result_id = insert_mcp_audit(
-            &mut transaction,
-            principal,
-            "work_item.mcp_pull_request_linked",
-            work_item_id,
-            key.as_str(),
-            serde_json::json!({"pullRequestId": pull_request_id, "changed": changed}),
-        )
-        .await?;
-        let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
-        let result = applied(
-            work_item_id,
-            version,
-            if changed {
-                vec!["pullRequest".to_owned(), "version".to_owned()]
-            } else {
-                Vec::new()
-            },
-            activity_id,
-            result_id,
-            location,
-        );
-        complete(&mut transaction, &reservation, StatusCode::OK, &result).await?;
-        transaction.commit().await?;
-        Ok(result)
-    }
-    .await;
-    match result {
-        Ok(result) => result,
-        Err(error) => command_error("work_item_link_pull_request", error),
-    }
 }
 
 pub async fn mark_blocked(

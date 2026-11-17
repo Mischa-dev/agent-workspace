@@ -1056,6 +1056,7 @@ async fn apply(
                 .map(|text| CriteriaOperation::Add {
                     text,
                     position: None,
+                    completed: false,
                 })
                 .collect::<Vec<_>>();
             let outcome = crate::work_item_commands::change_criteria(

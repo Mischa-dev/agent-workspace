@@ -4,6 +4,7 @@
 //! `work_item_workflow`, `work_item_labels` and `work_item_commands`, which
 //! MCP calls too.
 
+use crate::work_item_commands::claims::{self, Released, Releaser};
 use std::collections::BTreeMap;
 
 use axum::{
@@ -34,8 +35,8 @@ use crate::{
     policy::{Action, Permission},
     work_item_commands::{
         ArchiveCommand, ArchiveOutcome, AuditVersionMetadata, CommandActor, TaskFieldChanges,
-        UpdateWorkItemCommand, UpdateWorkItemOutcome, enqueue_update, insert_activity,
-        record_audit_for, set_archived, update_work_item_by_id,
+        UpdateWorkItemCommand, UpdateWorkItemOutcome, record_audit_for, set_archived,
+        update_work_item_by_id,
     },
     work_item_labels::{
         self, ChangeLabelOutcome, CreateLabelOutcome, LabelChange, LabelDelta, LabelLimit,
@@ -492,40 +493,29 @@ pub(super) async fn release_claim(
     if !exists {
         return Err(AppError::NotFound("work_item"));
     }
-    let claimer = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM work_item_claims WHERE project_id = $1 AND work_item_id = $2 FOR UPDATE",
+    // The same command task_release runs (K2.14). Whoever may manage the
+    // project ends anyone's claim; everyone else only their own.
+    let releaser = if is_manager(&write.membership)? {
+        Releaser::Anyone
+    } else {
+        Releaser::Holder
+    };
+    let released = claims::release(
+        &mut write.transaction,
+        project_id,
+        task_id,
+        principal.actor_id,
+        None,
+        None,
+        releaser,
     )
-    .bind(project_id)
-    .bind(task_id)
-    .fetch_optional(&mut *write.transaction)
     .await?;
-    if let Some(claimer) = claimer {
-        if claimer != principal.actor_id && !is_manager(&write.membership)? {
-            return Err(AppError::Forbidden);
-        }
-        sqlx::query("DELETE FROM work_item_claims WHERE project_id = $1 AND work_item_id = $2")
-            .bind(project_id)
-            .bind(task_id)
-            .execute(&mut *write.transaction)
-            .await?;
-        insert_activity(
-            &mut write.transaction,
-            project_id,
-            task_id,
-            principal.actor_id,
-            "work_item_updated",
-            "Released the claim",
-            &json!({ "claim": false, "claimedBy": claimer }),
-        )
-        .await?;
-        let version = sqlx::query_scalar::<_, i64>(
-            "SELECT version FROM work_items WHERE project_id = $1 AND id = $2",
-        )
-        .bind(project_id)
-        .bind(task_id)
-        .fetch_one(&mut *write.transaction)
-        .await?;
-        enqueue_update(&mut write.transaction, project_id, task_id, version).await?;
+    let holds_another = matches!(released, Released::Nothing)
+        && claims::current(&mut write.transaction, task_id)
+            .await?
+            .is_some_and(|claim| claim.actor_id != principal.actor_id);
+    if holds_another {
+        return Err(AppError::Forbidden);
     }
     let item = write.task(principal.actor_id, task_id).await?;
     write.finish(StatusCode::OK, &item).await

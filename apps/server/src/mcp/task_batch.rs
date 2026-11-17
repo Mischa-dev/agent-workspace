@@ -76,7 +76,7 @@ const MAX_NOTES: usize = 20;
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-pub(super) enum BatchResult<T> {
+pub(crate) enum BatchResult<T> {
     /// Done; with preview, what would be done.
     Ok {
         value: T,
@@ -112,7 +112,7 @@ pub(super) enum BatchResult<T> {
 /// Why one task in a batch can't go ahead.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct BatchProblem {
+pub(crate) struct BatchProblem {
     /// Where the task is in the list you sent, counting from 0.
     pub index: u32,
     /// The task's ref, when you gave it one.
@@ -130,7 +130,7 @@ pub(super) struct BatchProblem {
 }
 
 impl BatchProblem {
-    pub(super) fn new(index: usize, field: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(index: usize, field: &str, message: impl Into<String>) -> Self {
         Self {
             index: u32::try_from(index).unwrap_or(u32::MAX),
             reference: None,
@@ -141,7 +141,7 @@ impl BatchProblem {
         }
     }
 
-    pub(super) fn with_ref(mut self, reference: Option<String>) -> Self {
+    pub(crate) fn with_ref(mut self, reference: Option<String>) -> Self {
         self.reference = reference;
         self
     }
@@ -153,7 +153,7 @@ impl BatchProblem {
 }
 
 impl<T> BatchResult<T> {
-    pub(super) fn denied(message: impl Into<String>) -> Self {
+    pub(crate) fn denied(message: impl Into<String>) -> Self {
         Self::PermissionDenied {
             message: message.into(),
             retry_category: None,
@@ -357,9 +357,9 @@ fn update_rejected<T>(
 // ---------------------------------------------------------------------------
 // task_create_many
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskCreateManyArguments {
+pub(crate) struct TaskCreateManyArguments {
     /// The project: ID, link, or key such as "AWD" (see projects_list).
     /// Required for apps connected for a whole account; agents and
     /// single-project connections default to their own project.
@@ -382,7 +382,7 @@ pub(super) struct TaskCreateManyArguments {
 /// added later must be optional.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CreateManyValue {
+pub(crate) struct CreateManyValue {
     /// True when nothing was created: this is what would be.
     pub preview: bool,
     pub project_key: String,
@@ -403,7 +403,7 @@ pub(super) struct CreateManyValue {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CreatedTask {
+pub(crate) struct CreatedTask {
     /// Where it was in the list you sent, counting from 0.
     pub index: u32,
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
@@ -443,7 +443,7 @@ struct CreateManyFingerprint<'a> {
     tasks: &'a [task_drafts::Draft],
 }
 
-pub(super) async fn task_create_many(
+pub(crate) async fn task_create_many(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskCreateManyArguments,
@@ -549,6 +549,45 @@ async fn create_many(
         }
     }
 
+    // Existing blockers (AWD-168), among the tasks the caller can reach.
+    let mut blockers = drafts
+        .iter()
+        .flat_map(|draft| draft.blocked_by.iter())
+        .filter_map(|blocker| match blocker {
+            task_drafts::Blocker::Written(written) => Some(written.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    blockers.sort();
+    blockers.dedup();
+    if !blockers.is_empty() {
+        let found = resolve_tasks(state, principal, &blockers).await?;
+        let found = blockers.iter().zip(found).collect::<HashMap<_, _>>();
+        for (index, draft) in drafts.iter_mut().enumerate() {
+            for blocker in &mut draft.blocked_by {
+                let task_drafts::Blocker::Written(written) = blocker else {
+                    continue;
+                };
+                match found.get(written) {
+                    Some(Some((task_id, _))) => {
+                        *blocker = task_drafts::Blocker::Existing(*task_id);
+                    }
+                    _ => problems.push(
+                        BatchProblem::new(
+                            index,
+                            "blockedByRefs",
+                            format!(
+                                "{} isn't a ref in this list or a task you can reach.",
+                                echo(written)
+                            ),
+                        )
+                        .with_ref(draft.reference.clone()),
+                    ),
+                }
+            }
+        }
+    }
+
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     if let Some(refused) = BatchResult::refused_access(
         check_access_for(&mut transaction, principal, Action::WorkItemCreate).await?,
@@ -611,6 +650,51 @@ async fn create_many(
         }
     };
 
+    // Dependencies between the new tasks and on existing ones (AWD-168),
+    // in the same transaction: a cycle refuses the whole batch.
+    let mut versions = vec![1_i64; created.len()];
+    for (position, task) in prepared.tasks.iter().enumerate() {
+        if task.blocked_by.is_empty() {
+            continue;
+        }
+        let edges = task
+            .blocked_by
+            .iter()
+            .filter_map(|blocker| match blocker {
+                task_drafts::Blocker::InBatch(at) => created.get(*at).map(|row| row.work_item_id),
+                task_drafts::Blocker::Existing(id) => Some(*id),
+                task_drafts::Blocker::Written(_) => None,
+            })
+            .map(|other| (other, crate::work_item_planning::Direction::BlockedBy))
+            .collect::<Vec<_>>();
+        let task_id = created[position].work_item_id;
+        match crate::work_item_planning::change_dependencies(
+            &mut transaction,
+            &actor,
+            task_id,
+            &edges,
+            false,
+        )
+        .await?
+        {
+            Ok(outcome) => versions[position] = outcome.version,
+            Err((at, refusal)) => {
+                transaction.rollback().await?;
+                let named = match task.blocked_by.get(at) {
+                    Some(task_drafts::Blocker::InBatch(other)) => keys_hint(&prepared, *other),
+                    _ => String::from("that task"),
+                };
+                return Ok(create_rejected(
+                    total,
+                    vec![
+                        BatchProblem::new(task.index, "blockedByRefs", refusal.message(&named))
+                            .with_ref(task.reference.clone()),
+                    ],
+                ));
+            }
+        }
+    }
+
     let assignee_ids = prepared
         .tasks
         .iter()
@@ -659,7 +743,7 @@ async fn create_many(
                 .and_then(|id| assignee_names.get(&id).cloned()),
             labels,
             criteria_count: u32::try_from(task.acceptance_criteria.len()).unwrap_or(u32::MAX),
-            version: 1,
+            version: versions.get(task.index).copied().unwrap_or(1),
             url: Some(public_url(
                 state,
                 &format!("/projects/{project_id}/work-items/{}", row.work_item_id),
@@ -704,6 +788,15 @@ async fn create_many(
     }
     transaction.commit().await?;
     Ok(BatchResult::Ok { value })
+}
+
+/// How a refusal names a task of the batch: its ref, or its place.
+fn keys_hint(prepared: &task_drafts::Prepared, at: usize) -> String {
+    prepared
+        .tasks
+        .get(at)
+        .and_then(|task| task.reference.clone())
+        .unwrap_or_else(|| format!("the task at {at}"))
 }
 
 /// One task a plan import creates (roadmap W10, AI3).
@@ -763,6 +856,11 @@ pub(crate) async fn create_for_import(
             parent_ref: task.parent_in_batch.clone(),
             parent_id: None,
             fields: None,
+            milestone: None,
+            start_date: None,
+            due_date: None,
+            estimate: None,
+            blocked_by_refs: None,
         })
         .collect::<Vec<_>>();
     let (mut drafts, mut problems) = task_drafts::check_shapes(&new_tasks);
@@ -849,9 +947,9 @@ async fn title_notes(
 // ---------------------------------------------------------------------------
 // task_update_many
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskUpdateManyArguments {
+pub(crate) struct TaskUpdateManyArguments {
     /// Optional: the project the tasks are all in (ID, link, or key such as
     /// "AWD"). Left out, it's the project of the tasks.
     pub project_id: Option<String>,
@@ -904,7 +1002,7 @@ pub(super) struct TaskUpdateManyArguments {
 /// added later must be optional.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct UpdateManyValue {
+pub(crate) struct UpdateManyValue {
     /// True when nothing was changed: this is what would be.
     pub preview: bool,
     pub changed_count: u32,
@@ -922,7 +1020,7 @@ pub(super) struct UpdateManyValue {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct UpdatedTask {
+pub(crate) struct UpdatedTask {
     /// Where it was in taskIds, counting from 0.
     pub index: u32,
     pub id: String,
@@ -1138,7 +1236,7 @@ impl Change {
     }
 }
 
-pub(super) async fn task_update_many(
+pub(crate) async fn task_update_many(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskUpdateManyArguments,

@@ -35,8 +35,8 @@ use crate::{
     },
 };
 
-pub(super) const DATE_MESSAGE: &str = "Use YYYY-MM-DD, or \"\" to clear it.";
-pub(super) const ESTIMATE_MESSAGE: &str =
+pub(crate) const DATE_MESSAGE: &str = "Use YYYY-MM-DD, or \"\" to clear it.";
+pub(crate) const ESTIMATE_MESSAGE: &str =
     "Use an estimate from 0 to 100000 (points or hours, as the project counts them).";
 
 fn access_refusal<T>(access: WriteAccess) -> Option<ToolResult<T>> {
@@ -57,7 +57,7 @@ fn access_refusal<T>(access: WriteAccess) -> Option<ToolResult<T>> {
 
 /// A date argument: YYYY-MM-DD, or "" (or "none") to clear it. None when it
 /// isn't a date.
-pub(super) fn date_change(value: &str) -> Option<Option<NaiveDate>> {
+pub(crate) fn date_change(value: &str) -> Option<Option<NaiveDate>> {
     match value.trim() {
         "" => Some(None),
         value if value.eq_ignore_ascii_case("none") => Some(None),
@@ -67,7 +67,7 @@ pub(super) fn date_change(value: &str) -> Option<Option<NaiveDate>> {
 
 /// An estimate and its clear flag: `Some(None)` clears it. The message names
 /// what's wrong.
-pub(super) fn estimate_change(
+pub(crate) fn estimate_change(
     estimate: Option<f64>,
     clear: Option<bool>,
 ) -> Result<Option<Option<f64>>, &'static str> {
@@ -83,7 +83,7 @@ pub(super) fn estimate_change(
 /// A milestone named by an agent: an active milestone of the project by ID
 /// or name (any case), or "none" (or "") to take the task out of its
 /// milestone. None when nothing matches.
-pub(super) async fn milestone_change(
+pub(crate) async fn milestone_change(
     connection: &mut PgConnection,
     project_id: Uuid,
     value: &str,
@@ -114,7 +114,7 @@ pub(super) async fn milestone_change(
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskRef {
+pub(crate) struct TaskRef {
     pub id: String,
     pub key: String,
     pub title: String,
@@ -142,7 +142,7 @@ impl From<work_item_planning::TaskRef> for TaskRef {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RelationRef {
+pub(crate) struct RelationRef {
     /// relates_to, duplicates (this task duplicates the other) or
     /// duplicated_by.
     pub kind: String,
@@ -151,7 +151,7 @@ pub(super) struct RelationRef {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WatcherRef {
+pub(crate) struct WatcherRef {
     pub name: String,
     pub handle: String,
     /// person or agent.
@@ -160,21 +160,21 @@ pub(super) struct WatcherRef {
 
 /// A task's blockers, the tasks it blocks and its relations, limited to
 /// projects the caller can reach. `ready` counts every blocker, seen or not.
-pub(super) struct VisibleLinks {
+pub(crate) struct VisibleLinks {
     pub blocked_by: Vec<TaskRef>,
     pub blocks: Vec<TaskRef>,
     pub relations: Vec<RelationRef>,
     pub ready: bool,
 }
 
-pub(super) fn reader(principal: &McpPrincipal) -> Reader {
+pub(crate) fn reader(principal: &McpPrincipal) -> Reader {
     Reader {
         actor_id: principal.actor_id,
         connection_id: principal.external_agent_connection_id,
     }
 }
 
-pub(super) async fn visible_links(
+pub(crate) async fn visible_links(
     connection: &mut PgConnection,
     principal: &McpPrincipal,
     project_id: Uuid,
@@ -219,7 +219,7 @@ pub(super) async fn visible_links(
     })
 }
 
-pub(super) async fn visible_watchers(
+pub(crate) async fn visible_watchers(
     connection: &mut PgConnection,
     project_id: Uuid,
     task_id: Uuid,
@@ -242,7 +242,7 @@ pub(super) async fn visible_watchers(
 }
 
 /// One task of this project as a reference.
-pub(super) async fn own_task_ref(
+pub(crate) async fn own_task_ref(
     connection: &mut PgConnection,
     project_id: Uuid,
     task_id: Uuid,
@@ -277,7 +277,7 @@ pub(super) async fn own_task_ref(
 /// gets only its id and key: no title, status or whether it's finished.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ChangedTask {
+pub(crate) struct ChangedTask {
     pub id: String,
     pub key: String,
     /// Left out without "see tasks" here.
@@ -390,9 +390,9 @@ fn link_refusal<T>(field: &str, reference: &str, refusal: &LinkRefusal) -> ToolR
 // ---------------------------------------------------------------------------
 // task_depend
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskDependArguments {
+pub(crate) struct TaskDependArguments {
     /// The task: ID, link, or key such as AWD-12.
     pub task_id: String,
     /// Tasks that must be done before this one (keys or IDs). They may be in
@@ -406,7 +406,7 @@ pub(super) struct TaskDependArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct DependencyValue {
+pub(crate) struct DependencyValue {
     pub task: ChangedTask,
     /// What blocks it, each with its status. Tasks in projects you can't
     /// reach are left out.
@@ -424,26 +424,11 @@ pub(super) struct DependencyValue {
     pub version: i64,
 }
 
-pub(super) async fn task_depend(
+pub(crate) async fn task_depend(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskDependArguments,
 ) -> ToolResult<DependencyValue> {
-    let blocked_by = arguments.blocked_by.clone().unwrap_or_default();
-    let blocks = arguments.blocks.clone().unwrap_or_default();
-    let remove = arguments.remove.unwrap_or(false);
-    if blocked_by.len() + blocks.len() > MAX_LINKS_PER_CALL {
-        return ToolResult::invalid(
-            "blockedBy",
-            format!("Change at most {MAX_LINKS_PER_CALL} dependencies in one call."),
-        );
-    }
-    if blocked_by.is_empty() && blocks.is_empty() {
-        return ToolResult::invalid(
-            "blockedBy",
-            "Name the tasks in blockedBy or blocks (keys such as AWD-3, or IDs).",
-        );
-    }
     let Some(task_id) = parse_id(&arguments.task_id) else {
         return ToolResult::not_found("That task");
     };
@@ -455,80 +440,266 @@ pub(super) async fn task_depend(
         {
             return Ok(refusal);
         }
-        if let Some(refusal) = link_target_refusal(&mut transaction, project_id, task_id).await? {
-            return Ok(refusal);
-        }
-        let references = blocked_by
-            .iter()
-            .chain(blocks.iter())
-            .cloned()
-            .collect::<Vec<_>>();
-        let others =
-            match resolve_linked(&mut transaction, principal, project_id, &references).await? {
-                Ok(others) => others,
-                Err(reference) => {
-                    return Ok(ToolResult::NotFound {
-                        message: LinkRefusal::NotFound.message(&reference),
-                    });
-                }
-            };
-        let edges = others
-            .iter()
-            .enumerate()
-            .map(|(index, other)| {
-                let direction = if index < blocked_by.len() {
-                    Direction::BlockedBy
-                } else {
-                    Direction::Blocks
-                };
-                (*other, direction)
-            })
-            .collect::<Vec<_>>();
-        let field = |index: usize| {
-            if index < blocked_by.len() {
-                "blockedBy"
-            } else {
-                "blocks"
-            }
+        let links = DependencyLinks {
+            task_id: arguments.task_id,
+            blocked_by: arguments.blocked_by,
+            blocks: arguments.blocks,
         };
-        let actor = command_actor(principal, project_id);
-        let outcome = match work_item_planning::change_dependencies(
+        let remove = arguments.remove.unwrap_or(false);
+        match depend_in(
             &mut transaction,
-            &actor,
+            principal,
+            project_id,
             task_id,
-            &edges,
+            &links,
             remove,
         )
         .await?
         {
-            Ok(outcome) => outcome,
-            Err((index, refusal)) => {
-                let reference = references.get(index).map_or("", String::as_str);
-                return Ok(link_refusal(field(index), reference, &refusal));
+            Ok(value) => {
+                transaction.commit().await?;
+                Ok::<_, AppError>(ToolResult::ok(value))
             }
-        };
-        let (task, sees) = changed_task(&mut transaction, principal, project_id, task_id).await?;
-        let links = visible_links(&mut transaction, principal, project_id, task_id).await?;
-        transaction.commit().await?;
-        Ok::<_, AppError>(ToolResult::ok(DependencyValue {
-            task,
-            blocked_by: links.blocked_by,
-            blocks: links.blocks,
-            ready: sees.then_some(links.ready),
-            changed: u32::try_from(outcome.changed).unwrap_or(u32::MAX),
-            version: outcome.version,
-        }))
+            Err(refusal) => Ok(refusal),
+        }
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "task_depend"))
 }
 
+/// One task's dependencies to add or remove, for task_link_many (AWD-168).
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DependencyLinks {
+    /// The task: ID, link, or key such as AWD-12.
+    pub task_id: String,
+    /// Tasks that must be done before this one (keys or IDs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<Vec<String>>,
+    /// Tasks that can't start until this one is done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<Vec<String>>,
+}
+
+/// What task_link_many changed, task by task, in the order given.
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DependencyManyValue {
+    pub tasks: Vec<DependencyChange>,
+    /// How many dependencies the call added or removed in all.
+    pub changed: u32,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DependencyChange {
+    /// The task's key, such as AWD-12.
+    pub key: String,
+    /// The task's version now.
+    pub version: i64,
+    /// How many of its dependencies this call added or removed.
+    pub changed: u32,
+    /// True when it isn't finished, isn't marked blocked, and everything
+    /// blocking it is finished.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready: Option<bool>,
+}
+
+/// The most tasks one task_link_many call changes.
+pub(crate) const MAX_TASKS_PER_LINK_MANY: usize = 100;
+
+/// Writes many tasks' dependencies in one transaction, all or nothing: the
+/// first refusal names its task by index and nothing is kept (AWD-168).
+pub(crate) async fn task_depend_many(
+    state: &AppState,
+    principal: &McpPrincipal,
+    links: Vec<DependencyLinks>,
+    remove: bool,
+) -> ToolResult<DependencyManyValue> {
+    if links.is_empty() || links.len() > MAX_TASKS_PER_LINK_MANY {
+        return ToolResult::invalid(
+            "links",
+            format!("Send 1 to {MAX_TASKS_PER_LINK_MANY} tasks with their dependencies."),
+        );
+    }
+    let project_id = principal.project_id;
+    let result = async {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        if let Some(refusal) =
+            access_refusal(check_write_access(&mut transaction, principal).await?)
+        {
+            return Ok(refusal);
+        }
+        let mut tasks = Vec::with_capacity(links.len());
+        let mut total = 0_u32;
+        for (index, entry) in links.iter().enumerate() {
+            let found = resolve_linked(
+                &mut transaction,
+                principal,
+                project_id,
+                &[entry.task_id.clone()],
+            )
+            .await?;
+            let task_id = match found.ok().and_then(|ids| ids.first().copied()) {
+                Some(task_id) => task_id,
+                None => {
+                    return Ok(ToolResult::NotFound {
+                        message: format!(
+                            "links[{index}]: {}",
+                            LinkRefusal::NotFound.message(&entry.task_id)
+                        ),
+                    });
+                }
+            };
+            match depend_in(
+                &mut transaction,
+                principal,
+                project_id,
+                task_id,
+                entry,
+                remove,
+            )
+            .await?
+            {
+                Ok(value) => {
+                    total = total.saturating_add(value.changed);
+                    tasks.push(DependencyChange {
+                        key: value.task.key.clone(),
+                        version: value.version,
+                        changed: value.changed,
+                        ready: value.ready,
+                    });
+                }
+                Err(refusal) => return Ok(at_index(index, refusal)),
+            }
+        }
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(DependencyManyValue {
+            tasks,
+            changed: total,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "task_link_many"))
+}
+
+/// A refusal of one entry of a many-call, saying which.
+fn at_index<T, U>(index: usize, refusal: ToolResult<T>) -> ToolResult<U> {
+    let prefix = |message: String| format!("links[{index}]: {message}");
+    match refusal {
+        ToolResult::Ok { .. } => ToolResult::TemporarilyUnavailable {
+            message: prefix("Try again.".to_owned()),
+        },
+        ToolResult::NotFound { message } => ToolResult::NotFound {
+            message: prefix(message),
+        },
+        ToolResult::InvalidRequest { field, message } => ToolResult::InvalidRequest {
+            field: format!("links[{index}].{field}"),
+            message: prefix(message),
+        },
+        ToolResult::PermissionDenied {
+            message,
+            retry_category,
+        } => ToolResult::PermissionDenied {
+            message: prefix(message),
+            retry_category,
+        },
+        ToolResult::Conflict { message } => ToolResult::Conflict {
+            message: prefix(message),
+        },
+        ToolResult::TemporarilyUnavailable { message } => ToolResult::TemporarilyUnavailable {
+            message: prefix(message),
+        },
+    }
+}
+
+/// One task's dependency change inside the caller's transaction.
+async fn depend_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    principal: &McpPrincipal,
+    project_id: Uuid,
+    task_id: Uuid,
+    links: &DependencyLinks,
+    remove: bool,
+) -> Result<Result<DependencyValue, ToolResult<DependencyValue>>, AppError> {
+    let blocked_by = links.blocked_by.clone().unwrap_or_default();
+    let blocks = links.blocks.clone().unwrap_or_default();
+    if blocked_by.len() + blocks.len() > MAX_LINKS_PER_CALL {
+        return Ok(Err(ToolResult::invalid(
+            "blockedBy",
+            format!("Change at most {MAX_LINKS_PER_CALL} dependencies in one call."),
+        )));
+    }
+    if blocked_by.is_empty() && blocks.is_empty() {
+        return Ok(Err(ToolResult::invalid(
+            "blockedBy",
+            "Name the tasks in blockedBy or blocks (keys such as AWD-3, or IDs).",
+        )));
+    }
+    if let Some(refusal) = link_target_refusal(transaction, project_id, task_id).await? {
+        return Ok(Err(refusal));
+    }
+    let references = blocked_by
+        .iter()
+        .chain(blocks.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let others = match resolve_linked(transaction, principal, project_id, &references).await? {
+        Ok(others) => others,
+        Err(reference) => {
+            return Ok(Err(ToolResult::NotFound {
+                message: LinkRefusal::NotFound.message(&reference),
+            }));
+        }
+    };
+    let edges = others
+        .iter()
+        .enumerate()
+        .map(|(index, other)| {
+            let direction = if index < blocked_by.len() {
+                Direction::BlockedBy
+            } else {
+                Direction::Blocks
+            };
+            (*other, direction)
+        })
+        .collect::<Vec<_>>();
+    let field = |index: usize| {
+        if index < blocked_by.len() {
+            "blockedBy"
+        } else {
+            "blocks"
+        }
+    };
+    let actor = command_actor(principal, project_id);
+    let outcome =
+        match work_item_planning::change_dependencies(transaction, &actor, task_id, &edges, remove)
+            .await?
+        {
+            Ok(outcome) => outcome,
+            Err((index, refusal)) => {
+                let reference = references.get(index).map_or("", String::as_str);
+                return Ok(Err(link_refusal(field(index), reference, &refusal)));
+            }
+        };
+    let (task, sees) = changed_task(transaction, principal, project_id, task_id).await?;
+    let links = visible_links(transaction, principal, project_id, task_id).await?;
+    Ok(Ok(DependencyValue {
+        task,
+        blocked_by: links.blocked_by,
+        blocks: links.blocks,
+        ready: sees.then_some(links.ready),
+        changed: u32::try_from(outcome.changed).unwrap_or(u32::MAX),
+        version: outcome.version,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // task_relate
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskRelateArguments {
+pub(crate) struct TaskRelateArguments {
     /// The task: ID, link, or key such as AWD-12.
     pub task_id: String,
     /// The other task (ID, link, or key). It may be in another project of
@@ -546,7 +717,7 @@ pub(super) struct TaskRelateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RelationsValue {
+pub(crate) struct RelationsValue {
     pub task: ChangedTask,
     /// The task's relations now. Tasks in projects you can't reach are left
     /// out.
@@ -557,7 +728,7 @@ pub(super) struct RelationsValue {
     pub version: i64,
 }
 
-pub(super) async fn task_relate(
+pub(crate) async fn task_relate(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskRelateArguments,
@@ -639,9 +810,9 @@ pub(super) async fn task_relate(
 // ---------------------------------------------------------------------------
 // task_watch
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TaskWatchArguments {
+pub(crate) struct TaskWatchArguments {
     /// The task: ID, link, or key such as AWD-12.
     pub task_id: String,
     /// true (the default) to watch it, false to stop.
@@ -650,7 +821,7 @@ pub(super) struct TaskWatchArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WatchValue {
+pub(crate) struct WatchValue {
     pub task: TaskRef,
     /// Whether you watch it now.
     pub watching: bool,
@@ -660,7 +831,7 @@ pub(super) struct WatchValue {
     pub watchers: Vec<WatcherRef>,
 }
 
-pub(super) async fn task_watch(
+pub(crate) async fn task_watch(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskWatchArguments,
@@ -721,9 +892,9 @@ pub(super) async fn task_watch(
 // ---------------------------------------------------------------------------
 // milestones
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct MilestoneListArguments {
+pub(crate) struct MilestoneListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// Include archived milestones.
@@ -732,7 +903,7 @@ pub(super) struct MilestoneListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MilestoneValue {
+pub(crate) struct MilestoneValue {
     pub id: String,
     pub name: String,
     pub description: String,
@@ -765,7 +936,7 @@ pub(super) struct MilestoneValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MilestoneListValue {
+pub(crate) struct MilestoneListValue {
     /// Active ones by target date (none last), then name; archived ones
     /// after them.
     pub milestones: Vec<MilestoneValue>,
@@ -793,7 +964,7 @@ fn milestone_value(state: &AppState, project_id: Uuid, view: MilestoneView) -> M
     }
 }
 
-pub(super) async fn milestone_list(
+pub(crate) async fn milestone_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: MilestoneListArguments,
@@ -833,7 +1004,7 @@ pub(super) async fn milestone_list(
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct MilestoneWriteArguments {
+pub(crate) struct MilestoneWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The milestone to change. Leave it out to create one (an active one with
@@ -858,7 +1029,7 @@ pub(super) struct MilestoneWriteArguments {
     pub client_request_id: Option<String>,
 }
 
-pub(super) async fn milestone_write(
+pub(crate) async fn milestone_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: MilestoneWriteArguments,

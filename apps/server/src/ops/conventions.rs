@@ -35,6 +35,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
         &[
             "update",
             "update_many",
+            "link_many",
             "update_blocks",
             "update_elements",
             "archive",

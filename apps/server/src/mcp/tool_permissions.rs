@@ -18,7 +18,7 @@ use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
     CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesEdit, ProjectsCreate,
     ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage,
-    SheetsEdit, TasksCreate, TasksDelete, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    SheetsEdit, TasksCreate, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -90,20 +90,8 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("reply_retry", Some(ChannelsPost)),
     ("task_list", Some(TasksView)),
     ("task_open", Some(TasksView)),
-    ("task_create_many", Some(TasksCreate)),
-    ("task_update_many", Some(TasksEdit)),
-    ("task_link_pull_request", Some(TasksEdit)),
-    ("task_reorder", Some(TasksEdit)),
-    ("task_claim", Some(TasksEdit)),
-    ("task_release", Some(TasksEdit)),
-    ("task_link", Some(TasksEdit)),
-    ("label_list", Some(TasksView)),
-    ("label_write", Some(TasksEdit)),
     // Custom fields (AWD-89): reading them is seeing tasks; defining them
     // is the workflow's permission. Values are set through task_update.
-    ("field_list", Some(TasksView)),
-    ("field_write", Some(TasksWorkflow)),
-    ("task_move", Some(TasksEdit)),
     // Collections (AWD-90): anyone in the project reads them; records need
     // collections.edit, and fields and views collections.build.
     ("collection_list", None),
@@ -135,17 +123,8 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("whiteboard_render", None),
     ("whiteboard_trash_empty", Some(WhiteboardsEdit)),
     ("approval_list", None),
-    ("task_depend", Some(TasksEdit)),
-    ("view_list", Some(TasksView)),
-    ("view_write", Some(TasksView)),
     ("my_work", None),
-    ("template_list", None),
-    ("template_write", Some(TasksEdit)),
-    ("recurring_write", Some(TasksCreate)),
     ("task_from_template", Some(TasksCreate)),
-    ("task_import", Some(TasksCreate)),
-    ("bug_report_link_list", Some(TasksView)),
-    ("bug_report_link_write", Some(TasksCreate)),
     ("project_export", Some(TasksView)),
     ("webhook_list", None),
     ("webhook_write", None),
@@ -153,17 +132,12 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("automation_list", None),
     ("automation_write", Some(TasksEdit)),
     ("automation_runs", None),
-    ("milestone_list", Some(TasksView)),
-    ("milestone_write", Some(TasksEdit)),
     ("task_ready_list", Some(TasksView)),
     ("dependency_graph", Some(TasksView)),
     ("ai_suggestions_list", Some(TasksView)),
     ("ai_suggestion_decide", Some(TasksEdit)),
     ("ai_analyze", Some(TasksEdit)),
     ("ai_summarize", Some(TasksView)),
-    ("plan_import", Some(TasksCreate)),
-    ("task_relate", Some(TasksEdit)),
-    ("task_watch", Some(TasksView)),
     ("workflow_update", Some(TasksWorkflow)),
     ("run_start", Some(RunsLaunch)),
     ("task_launch", Some(RunsLaunch)),
@@ -198,17 +172,9 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
 ];
 
 /// Tools another permission also opens, for the use the handler then
-/// checks itself: archiving through task_update_many needs only "archive
-/// tasks" (task_archive is the operation for one task), and uploading to a task needs only "edit tasks" (the
-/// handler checks "post messages" for a conversation upload).
-const ALSO_OPENED_BY: &[(&str, Permission)] = &[
-    ("task_update_many", TasksDelete),
-    ("file_upload", TasksEdit),
-    // Forms add a collection's records (AWD-110); the handler checks each
-    // write against what it makes.
-    ("bug_report_link_list", CollectionsEdit),
-    ("bug_report_link_write", CollectionsEdit),
-];
+/// checks itself: uploading to a task needs only "edit tasks" (the handler
+/// checks "post messages" for a conversation upload).
+const ALSO_OPENED_BY: &[(&str, Permission)] = &[("file_upload", TasksEdit)];
 
 /// Whether a caller holding `reach` may use a tool at all. A tool missing
 /// from the table is never reachable.
@@ -266,7 +232,6 @@ mod tests {
     #[test]
     fn archiving_alone_opens_the_task_update_tools() {
         let archive_only = PermissionSet::from_keys(&["tasks.view", "tasks.delete"]);
-        assert!(super::reachable("task_update_many", archive_only));
         assert!(!super::reachable("task_comment", archive_only));
     }
 
@@ -284,7 +249,6 @@ mod tests {
         for tool in [
             "task_list",
             "task_open",
-            "task_watch",
             "repository_list",
             "workflow_get",
             "project_export",

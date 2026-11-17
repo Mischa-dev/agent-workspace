@@ -177,7 +177,7 @@ impl<T> ReplyToolResult<T> {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct InboxItem {
+pub(crate) struct InboxItem {
     request_id: String,
     project_id: String,
     conversation_id: String,

@@ -16,6 +16,11 @@ pub enum OpError {
     NotFound {
         what: &'static str,
     },
+    /// Not found, in the command's own words (such as which repositories
+    /// there are). The words name only what the caller may see.
+    Missing {
+        message: Cow<'static, str>,
+    },
     Invalid {
         field: Cow<'static, str>,
         message: Cow<'static, str>,
@@ -115,7 +120,7 @@ impl OpError {
     pub fn outcome(&self) -> &'static str {
         match self {
             Self::Unauthenticated => "unauthenticated",
-            Self::NotFound { .. } => "not_found",
+            Self::NotFound { .. } | Self::Missing { .. } => "not_found",
             Self::Invalid { .. } => "invalid_request",
             Self::Denied { .. } => "permission_denied",
             Self::Conflict { .. } => "conflict",
@@ -130,7 +135,7 @@ impl OpError {
     pub fn retry_category(&self) -> RetryCategory {
         match self {
             Self::Unauthenticated => RetryCategory::Reauthenticate,
-            Self::NotFound { .. } => RetryCategory::FixInput,
+            Self::NotFound { .. } | Self::Missing { .. } => RetryCategory::FixInput,
             Self::Invalid { .. } => RetryCategory::FixInput,
             Self::Denied { reason, .. } => match reason {
                 DenyReason::ModuleOff { .. } => RetryCategory::Module,
@@ -157,7 +162,7 @@ impl OpError {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
-            Self::NotFound { .. } => StatusCode::NOT_FOUND,
+            Self::NotFound { .. } | Self::Missing { .. } => StatusCode::NOT_FOUND,
             Self::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Denied { .. } => StatusCode::FORBIDDEN,
             Self::Conflict { .. } => StatusCode::CONFLICT,
@@ -173,6 +178,7 @@ impl OpError {
         match self {
             Self::Unauthenticated => "Sign in again: this connection isn't authorized.".into(),
             Self::NotFound { what } => format!("{what} wasn't found, or you can't see it.").into(),
+            Self::Missing { message } => message.clone(),
             Self::Invalid { message, .. }
             | Self::Denied { message, .. }
             | Self::Conflict { message, .. } => message.clone(),

@@ -30,6 +30,52 @@
     "title": "List agent templates"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "bug_report_link.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "bug_report_link_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Create bug report link"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "bug_report_link_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List bug report links"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "bug_report_link.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "bug_report_link_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update bug report link"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [
@@ -125,6 +171,52 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "field.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "field_create",
+    "permission": "tasks.workflow",
+    "preview": false,
+    "proposable": false,
+    "title": "Create field"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "field_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List fields"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "field.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "field_update",
+    "permission": "tasks.workflow",
+    "preview": false,
+    "proposable": false,
+    "title": "Update field"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "host.agent_bound"
     ],
     "idempotent": true,
@@ -198,6 +290,52 @@
     "preview": false,
     "proposable": false,
     "title": "Unlink a host"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "label.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "label_create",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Create label"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "label_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List labels"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "label.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "label_update",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Update label"
   },
   {
     "automation": true,
@@ -324,6 +462,52 @@
     "preview": false,
     "proposable": false,
     "title": "Edit message"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "milestone.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "milestone_create",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Create milestone"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "milestone_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List milestones"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "milestone.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "milestone_update",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Update milestone"
   },
   {
     "automation": true,
@@ -529,6 +713,55 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "task.created",
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "plan_import",
+    "permission": "tasks.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Import a plan"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "recurring.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "recurring_create",
+    "permission": "tasks.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Schedule a template"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "recurring.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "recurring_update",
+    "permission": "tasks.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Update schedule"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "run.activity"
     ],
     "idempotent": true,
@@ -673,6 +906,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_claim",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Claim task"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "task.commented"
     ],
     "idempotent": true,
@@ -735,6 +984,22 @@
   },
   {
     "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "task_create_many",
+    "permission": "tasks.create",
+    "preview": true,
+    "proposable": false,
+    "title": "Create many tasks"
+  },
+  {
+    "automation": true,
     "destructive": true,
     "emits": [
       "task.updated"
@@ -748,6 +1013,103 @@
     "preview": false,
     "proposable": false,
     "title": "Task acceptance criteria"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "task_import",
+    "permission": "tasks.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Import tasks"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_link",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Link task"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_link_many",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Link many tasks"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "task.created",
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_move",
+    "permission": "tasks.edit",
+    "preview": true,
+    "proposable": false,
+    "title": "Move task"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_release",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Release task"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_reorder",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Reorder tasks"
   },
   {
     "automation": true,
@@ -780,6 +1142,130 @@
     "preview": false,
     "proposable": true,
     "title": "Update task"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_update_many",
+    "permission": null,
+    "preview": true,
+    "proposable": false,
+    "title": "Update many tasks"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_watch_set",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Watch task"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "template.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "template_create",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Create task template"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List task templates"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "template.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "template_update",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Update task template"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "view.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "view_create",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Save view"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "view_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List views"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "view.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "view_update",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Update view"
   },
   {
     "automation": true,
