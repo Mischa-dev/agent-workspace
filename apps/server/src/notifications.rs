@@ -912,6 +912,8 @@ async fn thing_comments(
         WHERE candidate.actor_id <> $3
           AND actor_can_access_project(candidate.actor_id, NULL, $5)
           AND conversation_visible_to($6, candidate.actor_id)
+          -- Muting the thing's comments, or the thread, quiets it.
+          AND conversation_notification_level(candidate.actor_id, $6) <> 'nothing'
           AND NOT EXISTS (
               SELECT 1 FROM message_mentions mention
               WHERE mention.message_id = $4 AND mention.actor_id = candidate.actor_id
@@ -936,7 +938,8 @@ async fn thing_comments(
                 kind::THING_COMMENT,
                 "conversation",
                 conversation_id,
-                format!("comments:{comments_id}"),
+                // One per place: the stream, or each thread on its own.
+                format!("comments:{conversation_id}"),
                 format!("message:{message_id}"),
             );
             notification.actor_id = Some(author);

@@ -328,6 +328,7 @@ pub async fn conversation_still_notifies(
                 | kind::THREAD_REPLY
                 | kind::DIRECT_MESSAGE
                 | kind::KEYWORD
+                | kind::THING_COMMENT
         )
     {
         return Ok(true);
@@ -339,8 +340,9 @@ pub async fn conversation_still_notifies(
         .await?;
     Ok(match kind {
         kind::CONVERSATION_MESSAGE => level == "all",
-        // Mentions, DMs, followed threads' replies and keywords reach you
-        // unless the conversation is muted since.
+        // Mentions, DMs, followed threads' replies, keywords and comments
+        // on things you follow reach you unless the conversation is muted
+        // since.
         _ => level != "nothing",
     })
 }

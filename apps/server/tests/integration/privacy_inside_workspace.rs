@@ -1237,3 +1237,162 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
     assert_eq!(events, vec![Some(ada)]);
     world.finish().await;
 }
+
+/// Comment writes (C1.3) keep to what the writer may see inside the
+/// workspace: a member who isn't in a DM can't quote its messages in a
+/// comment, and a role without `tasks.view` can't comment on a task or
+/// settle a discussion on one, though a sheet it may edit takes its
+/// comments.
+#[tokio::test]
+async fn comment_writes_keep_to_what_the_writer_may_see() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("omar", "member")
+        .person("nate", "member")
+        .connected_app("Phone")
+        .custom_role(
+            "No tasks",
+            &[
+                "projects.view",
+                "sheets.edit",
+                "channels.post",
+                "directory.view",
+            ],
+        )
+        .dm("lena", "mara")
+        .build("privacy_comment_writes")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = world.project("WORK").to_owned();
+    let phone = &world.apps["Phone"];
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    let setup = Setup {
+        app: app.clone(),
+        browser: Browser {
+            cookie: world.owner.browser.cookie.clone(),
+            csrf: world.owner.browser.csrf.clone(),
+        },
+        organization_id: workspace,
+        pool: pool.clone(),
+        cleanup: None,
+    };
+    // Nate holds the narrowed role in WORK.
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["No tasks"]).expect("role id"))
+    .bind(Uuid::parse_str(&work).expect("work"))
+    .bind(world.people["nate"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow nate");
+
+    let dm_message = say(
+        &setup,
+        &world.people["lena"].browser,
+        &world.conversations["lena+mara"],
+        "private-comment-quote",
+        text(&format!("The {PRIVATE} plan")),
+    )
+    .await;
+    let sheet = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "sheet_write",
+        json!({"projectId": work, "name": "Budget", "cells": [{"cell": "A1", "input": "Rent"}],
+               "clientRequestId": "privacy-sheet"}),
+    )
+    .await;
+    let sheet = string_at(&sheet, "/value/id");
+    let task = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "task_create",
+        json!({"projectId": "WORK", "title": format!("The {TASK} task"), "clientRequestId": "privacy-task"}),
+    )
+    .await;
+    let task = string_at(&task, "/workItemId");
+    let (status, thread) = op(
+        &world.owner.browser,
+        "comment_create",
+        json!({"thing": {"kind": "record", "id": task}, "text": "On the title",
+               "anchor": {"kind": "field", "field": "title"}}),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "owner comments on the task: {status} {thread}"
+    );
+    let thread = string_at(&thread, "/value/threadId");
+
+    // Omar isn't in the DM: quoting its message in a comment is refused and
+    // shows nothing of it.
+    let (status, quoted) = op(
+        &world.people["omar"].browser,
+        "comment_create",
+        json!({"thing": {"kind": "sheet", "id": sheet}, "text": "As said", "replyToMessageId": dm_message}),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "omar quotes the DM: {status} {quoted}"
+    );
+    assert!(!quoted.to_string().contains(PRIVATE), "{quoted}");
+
+    // Nate's role can't see tasks: no comment on the task, no reading or
+    // settling its discussion, nothing of it in the refusal; the sheet takes his comment.
+    for (name, input) in [
+        (
+            "comment_create",
+            json!({"thing": {"kind": "record", "id": task}, "text": "Me too"}),
+        ),
+        (
+            "comment_list",
+            json!({"thing": {"kind": "record", "id": task}}),
+        ),
+        (
+            "comment_thread_update",
+            json!({"threadId": thread, "status": "Resolved"}),
+        ),
+    ] {
+        let (status, refused) = op(&world.people["nate"].browser, name, input).await;
+        assert!(!status.is_success(), "nate {name}: {status} {refused}");
+        assert!(!refused.to_string().contains(TASK), "{refused}");
+    }
+    let (status, commented) = op(
+        &world.people["nate"].browser,
+        "comment_create",
+        json!({"thing": {"kind": "sheet", "id": sheet}, "text": "Rent is fine"}),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "nate on the sheet: {status} {commented}"
+    );
+    let status_now = sqlx::query_scalar::<_, String>(
+        "SELECT thread_status FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&thread)
+    .fetch_one(pool)
+    .await
+    .expect("thread status");
+    assert_ne!(status_now.to_lowercase(), "resolved");
+    world.finish().await;
+}
