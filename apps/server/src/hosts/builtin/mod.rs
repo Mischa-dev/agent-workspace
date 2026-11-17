@@ -16,6 +16,7 @@ use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 pub mod capacity;
+pub mod requests;
 
 use crate::{
     AppState,
@@ -193,6 +194,22 @@ pub(crate) async fn create(
     })
 }
 
+/// Lock a built-in run for a change, returning its state. Take it before
+/// anything else about the run: every write to it (a claim, a step, a state)
+/// locks this row first and its `runs` record second, through the mirror,
+/// so taking them the other way round deadlocks.
+pub async fn lock(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<Option<RunState>, AppError> {
+    sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
+        .bind(run_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .map(|state| state.parse::<RunState>())
+        .transpose()
+}
+
 /// Move a built-in run to `next`, writing its state-change step. Refuses a
 /// move the built-in state machine doesn't allow; a move to where it already
 /// is changes nothing.
@@ -202,13 +219,9 @@ pub async fn transition(
     next: RunState,
     reason: Option<&str>,
 ) -> Result<RunState, AppError> {
-    let current =
-        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
-            .bind(run_id)
-            .fetch_optional(&mut **transaction)
-            .await?
-            .ok_or(AppError::NotFound("agent_run"))?
-            .parse::<RunState>()?;
+    let current = lock(transaction, run_id)
+        .await?
+        .ok_or(AppError::NotFound("agent_run"))?;
 
     if current == next {
         return Ok(current);
@@ -261,6 +274,8 @@ pub async fn transition(
     .await?;
 
     if terminal {
+        // What it still asked for is withdrawn (A1.14).
+        crate::requests::withdraw_for_run(transaction, run_id).await?;
         crate::runs::finished::announce(transaction, run_id).await?;
         notify_sponsoring_agents(transaction, run_id, next).await?;
     }

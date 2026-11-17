@@ -87,6 +87,24 @@ impl Fixture {
         value
     }
 
+    /// The run an approved run request started.
+    async fn sponsored_run(&self, approval: &str) -> String {
+        sqlx::query_scalar::<_, Option<Uuid>>(
+            r#"
+            SELECT sponsored.agent_run_id
+            FROM requests request
+            JOIN external_execution_requests sponsored ON sponsored.id = request.subject_id
+            WHERE request.id = $1
+            "#,
+        )
+        .bind(approval.parse::<Uuid>().expect("approval UUID"))
+        .fetch_one(&self.pool)
+        .await
+        .expect("the run request")
+        .unwrap_or_else(|| panic!("approving {approval} started no run"))
+        .to_string()
+    }
+
     /// Who made a row, by the column that records it.
     async fn author(&self, sql: &str, id: &str) -> Uuid {
         sqlx::query_scalar::<_, Uuid>(sql)
@@ -207,7 +225,7 @@ async fn fixture() -> Option<Fixture> {
                 "displayName": "Planner",
                 "handle": "planner",
                 "role": "member",
-                "scopes": ["read", "write", "events", "approval_respond", "worker_request"]
+                "scopes": ["read", "write", "events", "worker_request"]
             }),
         ),
     )
@@ -430,23 +448,22 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
         )
         .await;
     let sponsorship = string(&requested, "/approvalId");
-    let approved = f
-        .web(
-            "POST",
-            &format!("/api/v1/agent-approvals/{sponsorship}/respond"),
-            json!({"decision": "approve"}),
-        )
-        .await;
-    let run = approved["agentRunId"]
-        .as_str()
-        .unwrap_or_else(|| panic!("no run: {approved}"))
+    f.web(
+        "POST",
+        "/api/v2/ops/request_respond",
+        json!({"requestId": sponsorship, "optionId": "approve"}),
+    )
+    .await;
+    let run = f
+        .sponsored_run(&sponsorship)
+        .await
         .parse::<Uuid>()
         .expect("run UUID");
 
     // The demo harness asks before it changes a file; the person allows it.
     wait_for_state(&f.pool, run, "blocked").await;
     let question = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM agent_approvals WHERE agent_run_id = $1 AND status = 'pending'",
+        "SELECT id FROM requests WHERE run_id = $1 AND status = 'open'",
     )
     .bind(run)
     .fetch_one(&f.pool)
@@ -454,8 +471,8 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
     .expect("the harness's question");
     f.web(
         "POST",
-        &format!("/api/v1/agent-approvals/{question}/respond"),
-        json!({"decision": "approve"}),
+        "/api/v2/ops/request_respond",
+        json!({"requestId": question, "optionId": "approve"}),
     )
     .await;
     wait_for_state(&f.pool, run, "completed").await;
@@ -582,17 +599,13 @@ async fn an_agent_stops_its_run_and_only_people_start_it_again() {
         )
         .await;
     let sponsorship = string(&requested, "/approvalId");
-    let approved = f
-        .web(
-            "POST",
-            &format!("/api/v1/agent-approvals/{sponsorship}/respond"),
-            json!({"decision": "approve"}),
-        )
-        .await;
-    let run = approved["agentRunId"]
-        .as_str()
-        .unwrap_or_else(|| panic!("no run: {approved}"))
-        .to_owned();
+    f.web(
+        "POST",
+        "/api/v2/ops/request_respond",
+        json!({"requestId": sponsorship, "optionId": "approve"}),
+    )
+    .await;
+    let run = f.sponsored_run(&sponsorship).await;
     let run_id = run.parse::<Uuid>().expect("run UUID");
     wait_for_state(&f.pool, run_id, "blocked").await;
 
@@ -605,7 +618,7 @@ async fn an_agent_stops_its_run_and_only_people_start_it_again() {
         .await;
     assert_eq!(stopped["value"]["stage"], "interrupted", "{stopped}");
     let pending = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM agent_approvals WHERE agent_run_id = $1 AND status = 'pending'",
+        "SELECT count(*) FROM requests WHERE run_id = $1 AND status = 'open'",
     )
     .bind(run_id)
     .fetch_one(&f.pool)

@@ -177,7 +177,7 @@ describe('App Thread access and capabilities', () => {
       fetchMock.mock.calls.some(
         ([path]) =>
           String(path).includes('/agent-runs') ||
-          String(path).includes('/agent-approvals'),
+          String(path).includes('/request_respond'),
       ),
     ).toBe(false)
   })
@@ -342,9 +342,9 @@ describe('App Thread access and capabilities', () => {
       activeRun: timeline.activeRun
         ? { ...timeline.activeRun, capabilities: {} }
         : null,
-      approvals: timeline.approvals.map((approval) => ({
-        ...approval,
-        capabilities: {},
+      requests: timeline.requests.map((request) => ({
+        ...request,
+        mayAnswer: false,
       })),
     }
     const viewerThreadProject = {
@@ -404,7 +404,7 @@ describe('App Thread access and capabilities', () => {
     const idleReadOnlyTimeline = {
       ...timeline,
       activeRun: null,
-      approvals: [],
+      requests: [],
       capabilities: {},
     }
     const fetchMock = installStandardApi()
@@ -439,7 +439,7 @@ describe('App Thread access and capabilities', () => {
     const invokableTimeline = {
       ...timeline,
       activeRun: null,
-      approvals: [],
+      requests: [],
       capabilities: { workerInvoke: true },
     }
     const fetchMock = installStandardApi()
@@ -474,7 +474,7 @@ describe('App Thread access and capabilities', () => {
     const bothTimeline = {
       ...timeline,
       activeRun: null,
-      approvals: [],
+      requests: [],
       capabilities: { sendMessage: true, workerInvoke: true },
     }
     const fetchMock = installStandardApi()

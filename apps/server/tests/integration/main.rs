@@ -1,6 +1,7 @@
 //! Every server integration test, built as one binary so the server is
 //! compiled and linked for tests once rather than once per file.
 
+mod a1_builtin_requests;
 mod a1_host_protocol;
 mod a1_launch_paths;
 mod a1_requests;

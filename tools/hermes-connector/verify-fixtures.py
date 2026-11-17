@@ -13,13 +13,12 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tools" / "hermes-connector" / "fixtures"
 COMPATIBILITY_NOTE = ROOT / "docs" / "compatibility" / "hermes-agent.md"
 MCP_SOURCE = ROOT / "apps" / "server" / "src" / "mcp.rs"
+SERVER_SOURCE = ROOT / "apps" / "server" / "src"
 
 EXPECTED_DEPENDENCY_SHA256 = (
     "cdd499d4ccdaa306d7e6ef1097f8efc79f40f60f58d1b118a4c5d15de55c7c9f"
 )
 EXPECTED_ALLOWLIST = (
-    "approval_get",
-    "approval_respond",
     "conversation_list",
     "conversation_read",
     "external_event_poll",
@@ -28,6 +27,8 @@ EXPECTED_ALLOWLIST = (
     "project_open",
     "pull_request_get",
     "repository_get",
+    "request_get",
+    "request_respond",
     "run_request",
     "task_comment",
     "task_create",
@@ -78,8 +79,14 @@ def main() -> None:
     if len(set(allowlist)) != len(allowlist):
         fail("Hermes tool allowlist contains duplicates")
     mcp_source = MCP_SOURCE.read_text(encoding="utf-8")
+    # A tool is hand-written in mcp.rs or an operation in a module's ops.rs.
+    operation_source = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(SERVER_SOURCE.rglob("ops.rs"))
+    )
     for tool_name in allowlist:
-        if not re.search(rf"async fn {re.escape(tool_name)}\s*\(", mcp_source):
+        if not re.search(rf"async fn {re.escape(tool_name)}\s*\(", mcp_source) and not re.search(
+            rf'const NAME: &\'static str = "{re.escape(tool_name)}";', operation_source
+        ):
             fail(f"Hermes allowlisted tool is missing from MCP: {tool_name}")
     if "task_link_pull_request" in allowlist:
         fail("GitHub publication management must remain outside the Hermes allowlist")

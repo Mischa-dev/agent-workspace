@@ -316,6 +316,7 @@ async fn pipeline<O: Operation>(
         tx: None,
         audit: None,
         replayed: false,
+        start_queued_runs: false,
     };
     let mut reservation = None;
     if let Some(key) = key.as_ref()
@@ -390,6 +391,9 @@ async fn pipeline<O: Operation>(
         tx.commit()
             .await
             .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+    }
+    if call.start_queued_runs {
+        crate::scheduler::kick(state.clone());
     }
     Ok(answer)
 }

@@ -29,13 +29,7 @@ const CREDENTIAL_LIFETIME_DAYS: i32 = 365;
 // Informational label; any client that speaks the MCP contract can connect.
 const RUNTIME_KIND: &str = "mcp";
 const RUNTIME_VERSION: &str = "1";
-const ALLOWED_SCOPES: [&str; 5] = [
-    "approval_respond",
-    "events",
-    "read",
-    "worker_request",
-    "write",
-];
+const ALLOWED_SCOPES: [&str; 4] = ["events", "read", "worker_request", "write"];
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -1643,17 +1637,12 @@ async fn cancel_pending_execution_requests(
     if request_ids.is_empty() {
         return Ok(());
     }
-    sqlx::query(
-        r#"
-        UPDATE agent_approvals
-        SET status = 'canceled'
-        WHERE external_execution_request_id = ANY($1) AND status = 'pending'
-        "#,
+    crate::requests::withdraw_about(
+        transaction,
+        crate::external_execution::REQUEST_SUBJECT,
+        &request_ids,
     )
-    .bind(&request_ids)
-    .execute(&mut **transaction)
     .await?;
-    crate::requests::legacy::request_approvals_written(&mut **transaction, &request_ids).await?;
     sqlx::query(
         r#"
         UPDATE external_execution_requests

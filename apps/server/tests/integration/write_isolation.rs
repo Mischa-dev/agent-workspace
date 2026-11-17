@@ -81,7 +81,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/account/connected-apps/{id}/revoke",
     "PUT /api/v1/account/default-workspace",
     "POST /api/v1/account/sessions/{session_id}/revoke",
-    "POST /api/v1/agent-approvals/{id}/respond",
     "POST /api/v1/agent-runs/{id}/acknowledge-failure",
     "POST /api/v1/agent-runs/{id}/interrupt",
     "POST /api/v1/agent-runs/{id}/retry",
@@ -458,7 +457,6 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "ai_analyze",
     "ai_suggestion_decide",
     "ai_summarize",
-    "approval_respond",
     "automation_write",
     "bug_report_link_write",
     "channel_create",
@@ -1900,14 +1898,10 @@ struct Spares {
     project_invitation: Uuid,
     /// An agent in the project to change, rotate and remove.
     agent_connection: Uuid,
-    /// Approvals runs are blocked on: one of the owner's runs', answered
-    /// over HTTP, and one of rook's, answered through MCP (where nobody
-    /// answers their own run's).
-    approvals: [Uuid; 2],
     /// Dismissed over HTTP and through MCP.
     suggestions: [Uuid; 2],
-    /// The owner's approval run, stopped through MCP once its approval is
-    /// answered, and a failed run in its own thread, retried after that.
+    /// The owner's run waiting on an approval, stopped through MCP (which
+    /// withdraws it), and a failed run in its own thread, retried after that.
     run_stop: Uuid,
     run_retry: Uuid,
     /// A launch queued for next year, cancelled through MCP.
@@ -2323,35 +2317,15 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .execute(pool)
     .await
     .expect("runs blocked");
-    let mut approvals = Vec::new();
-    for (run, requester) in [(runs[0], ax.owner), (runs[1], a.rook)] {
-        let approval = Uuid::now_v7();
-        sqlx::query(
-            r#"
-            INSERT INTO agent_approvals (
-                id, agent_run_id, requesting_actor_id, provider_request_id,
-                kind, summary, options, eligible_role, human_required
-            )
-            VALUES ($1, $2, $3, $4, 'approval', 'Net approval',
-                    '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-                    'any_authorized', false)
-            "#,
-        )
-        .bind(approval)
-        .bind(run)
-        .bind(requester)
-        .bind(format!("net-{approval}"))
-        .execute(pool)
-        .await
-        .expect("approval");
-        approvals.push(approval);
+    for (index, run) in runs.iter().enumerate() {
+        crate::support::requests::approval(pool, *run, &format!("net-{index}"), "Net approval")
+            .await;
     }
 
     // Run control through MCP: a failed run to retry, in its own thread, and
     // a launch queued for next year. The run stopped through MCP is the
-    // owner's approval run, after its approval is answered over HTTP: the
-    // stop makes room under the owner's cap of five runs at once through
-    // apps for the retry, which runs after it.
+    // owner's approval run: the stop makes room under the owner's cap of
+    // five runs at once through apps for the retry, which runs after it.
     let retry_thread = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -2569,7 +2543,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         bug_link,
         project_invitation,
         agent_connection,
-        approvals: [approvals[0], approvals[1]],
         suggestions: [suggestions[0], suggestions[1]],
         run_stop: runs[0],
         run_retry: retry_run,
@@ -3062,52 +3035,39 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
         .execute(pool)
         .await
         .expect("run blocked");
-        let approval = Uuid::now_v7();
-        sqlx::query(
-            r#"
-            INSERT INTO agent_approvals (
-                id, agent_run_id, requesting_actor_id, provider_request_id,
-                kind, summary, options, eligible_role, human_required
-            )
-            VALUES ($1, $2, $3, $4, 'approval', 'Unadmitted approval',
-                    '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-                    'any_authorized', false)
-            "#,
+        let approval = crate::support::requests::approval(
+            pool,
+            run,
+            &format!("unadmitted-{index}"),
+            "Unadmitted approval",
         )
-        .bind(approval)
-        .bind(run)
-        .bind(a.rook)
-        .bind(format!("unadmitted-{approval}"))
-        .execute(pool)
-        .await
-        .expect("approval");
+        .await;
         approvals.push((approval, run));
     }
     let reason = "This run uses a provider account that isn't its requester's";
 
     // Over HTTP, as the owner.
     let (approval, run) = approvals[0];
-    let (status, body) = send(
-        app,
+    let respond = |key: &str, option: &str| {
         a.browser.request(
             "POST",
-            &format!("/api/v1/agent-approvals/{approval}/respond"),
-            Some("unadmitted-http"),
-            json!({"decision": "approve"}),
-        ),
-    )
-    .await;
+            "/api/v2/ops/request_respond",
+            Some(key),
+            json!({"requestId": approval, "optionId": option}),
+        )
+    };
+    let (status, body) = send(app, respond("unadmitted-http", "approve")).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"]["code"], "run_not_admitted", "{body}");
+    assert_eq!(body["code"], "run_not_admitted", "{body}");
     assert!(
-        body["error"]["message"]
+        body["message"]
             .as_str()
             .is_some_and(|message| message.starts_with(reason)),
         "{body}"
     );
     let (approval_status, run_state) = sqlx::query_as::<_, (String, String)>(
-        "SELECT approval.status, run.state FROM agent_approvals approval \
-         JOIN agent_runs run ON run.id = approval.agent_run_id WHERE approval.id = $1",
+        "SELECT request.status, run.state FROM requests request \
+         JOIN agent_runs run ON run.id = request.run_id WHERE request.id = $1",
     )
     .bind(approval)
     .fetch_one(pool)
@@ -3115,45 +3075,33 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
     .expect("approval after");
     assert_eq!(
         (approval_status.as_str(), run_state.as_str()),
-        ("pending", "blocked"),
+        ("open", "blocked"),
         "nothing changes when the run can't carry on ({run})"
     );
     // Denying still works: an interrupted run needs no admission.
-    let (status, body) = send(
-        app,
-        a.browser.request(
-            "POST",
-            &format!("/api/v1/agent-approvals/{approval}/respond"),
-            Some("unadmitted-http-deny"),
-            json!({"decision": "deny"}),
-        ),
-    )
-    .await;
+    let (status, body) = send(app, respond("unadmitted-http-deny", "deny")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     // Through MCP, as the owner's connected app.
     let (approval, _) = approvals[1];
     let session = initialize(app, &a.app_token).await.expect("app MCP");
-    let version = version_now(pool, "agent_approvals", approval).await;
     let (_, body) = call_tool(
         app,
         &a.app_token,
         &session,
-        "approval_respond",
+        "request_respond",
         json!({
-            "approvalId": approval,
-            "expectedVersion": version,
-            "decision": "approve",
+            "requestId": approval,
+            "optionId": "approve",
             "clientRequestId": "unadmitted-mcp",
         }),
     )
     .await;
     let result = structured(&body);
     assert_eq!(result["outcome"], "conflict", "{body}");
-    assert_eq!(result["retryCategory"], "do_not_retry", "{body}");
-    assert_eq!(result["current"]["status"], "pending", "{body}");
+    assert_eq!(result["code"], "run_not_admitted", "{body}");
     assert!(
-        result["reason"]
+        result["message"]
             .as_str()
             .is_some_and(|message| message.starts_with(reason)),
         "{body}"
@@ -3675,12 +3623,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[id(sp.session, bx.session)],
             empty(),
         ),
-        // Runs and approvals
-        path_case(
-            "POST /api/v1/agent-approvals/{id}/respond",
-            &[id(sp.approvals[0], b.approval)],
-            json_body(json!({"decision": "approve"})),
-        ),
+        // Runs
         path_case(
             "POST /api/v1/agent-runs/{id}/acknowledge-failure",
             &[id(ax.failed_run, bx.failed_run)],
@@ -7287,21 +7230,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "launch_cancel",
             json!({"launchId": sp.launch}),
             vec![json!({"launchId": bx.launch})],
-        ),
-        mcp_case(
-            "approval_respond",
-            json!({
-                "approvalId": sp.approvals[1],
-                "expectedVersion": version("agent_approvals", sp.approvals[1]),
-                "decision": "approve",
-                "clientRequestId": "net-approval-own",
-            }),
-            vec![json!({
-                "approvalId": b.approval,
-                "expectedVersion": version("agent_approvals", b.approval),
-                "decision": "approve",
-                "clientRequestId": "net-approval-b",
-            })],
         ),
     ]
 }

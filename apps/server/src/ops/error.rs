@@ -288,6 +288,14 @@ impl From<AppError> for OpError {
                 message: Cow::Borrowed(message),
                 current: None,
             },
+            // A run that can't carry on (its admission refused): say why.
+            AppError::RunNotAdmitted { reason } => Self::Conflict {
+                reason: ConflictReason::State {
+                    code: "run_not_admitted",
+                },
+                message: Cow::Borrowed(reason),
+                current: None,
+            },
             AppError::VersionConflict {
                 current_version, ..
             } => Self::Conflict {

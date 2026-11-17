@@ -1,3 +1,4 @@
+import type { RequestView } from '../api/generated/operations'
 import type {
   ConversationCapabilities,
   ConversationTimelineEntry,
@@ -59,19 +60,11 @@ export type Run = {
     refreshPullRequest: boolean
   }
 }
-export type Approval = {
-  id: string
-  agentRunId: string
-  kind: 'approval' | 'question'
-  summary: string
-  options: Array<{ id: string; label: string }>
-  status: string
-  response: { decision?: string; answer?: string } | null
-  createdAt: string
-  capabilities: {
-    respond: boolean
-  }
-}
+/** A request a run in this thread raised, and whether you may answer it. */
+export type ThreadRequest = RequestView & { mayAnswer: boolean }
+
+/** An answer to a request: an option, words, or both. */
+export type RequestAnswer = { optionId?: string; text?: string }
 
 export type Timeline = {
   conversation: ConversationTimelinePage['conversation']
@@ -85,7 +78,7 @@ export type Timeline = {
   }
   activeRun: Run | null
   latestTerminalRun: Run | null
-  approvals: Approval[]
+  requests: ThreadRequest[]
   capabilities: ConversationCapabilities & { workerInvoke: boolean }
   replyRequests: ConversationTimelinePage['replyRequests']
 }

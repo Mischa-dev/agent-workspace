@@ -1,11 +1,13 @@
 import { type FormEvent, useMemo, useState } from 'react'
 
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { useInstantMutation } from '../app/mutations'
 import { isSafeMessageText } from '../conversations/messageContentModel'
 import type { ConversationTimelineEntry } from '../conversations/types'
-import type { Timeline } from './threadTypes'
+import { answerKey } from './threadTimeline'
+import type { RequestAnswer, Timeline } from './threadTypes'
 
 // What a run action failed to do, for its error toast.
 const ACTION_ERRORS: Record<string, string> = {
@@ -25,8 +27,7 @@ const post = (path: string, idempotencyKey: string, json: unknown = {}) =>
 const threadApi = {
   startRun: (threadId: string, prompt: string, key: string) =>
     post(`/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`, key, { prompt }),
-  respond: (approvalId: string, action: string, response: { decision: 'approve' | 'deny' } | { answer: string }) =>
-    post(`/api/v1/agent-approvals/${encodeURIComponent(approvalId)}/respond`, `approval-${approvalId}-${action}`, response),
+  respond: (requestId: string, answer: RequestAnswer) => callOp('request_respond', { requestId, ...answer }),
   interrupt: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/interrupt`, `interrupt-${runId}`),
   retry: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, `retry-${runId}`),
   publish: (projectId: string, runId: string, key: string) =>
@@ -112,22 +113,10 @@ export function useThreadRunActions({
     })
   }
 
-  const respond = (
-    approvalId: string,
-    response: { decision: 'approve' | 'deny' } | { answer: string },
-  ) => {
-    const approval = verifiedTimeline?.approvals.find(
-      (candidate) => candidate.id === approvalId,
-    )
-    if (
-      !approval ||
-      approval.status !== 'pending' ||
-      approval.capabilities.respond !== true
-    ) {
-      return
-    }
-    const kind = 'decision' in response ? response.decision : 'answer'
-    void perform(`${approvalId}:${kind}`, () => threadApi.respond(approvalId, kind, response))
+  const respond = (requestId: string, answer: RequestAnswer) => {
+    const request = verifiedTimeline?.requests.find((candidate) => candidate.id === requestId)
+    if (!request || request.status !== 'open' || !request.mayAnswer) return
+    void perform(answerKey(requestId, answer), () => threadApi.respond(requestId, answer))
   }
 
   const interrupt = () => {

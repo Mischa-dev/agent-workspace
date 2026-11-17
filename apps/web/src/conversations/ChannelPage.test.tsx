@@ -283,7 +283,7 @@ describe('M2 Channel workspace', () => {
             highestSequence: 0,
             readState: { highestSeenSequence: 0, version: 0 },
             activeRun: null,
-            approvals: [],
+            requests: [],
             capabilities: {
               view: true,
               sendMessage: true,

@@ -52,7 +52,7 @@ describe('App Thread runs, approvals and GitHub', () => {
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([path]) =>
-          String(path).includes('/agent-approvals/approval-1/respond'),
+          String(path).includes('/api/v2/ops/request_respond'),
         ),
       ).toBe(true)
     })
@@ -78,12 +78,14 @@ describe('App Thread runs, approvals and GitHub', () => {
             }
           : entry,
       ),
-      approvals: [
+      requests: [
         {
-          ...timeline.approvals[0],
-          kind: 'question' as const,
-          summary: 'What should the release be called?',
+          ...timeline.requests[0],
+          kind: 'question',
+          title: 'What should the release be called?',
           options: [],
+          allowText: true,
+          addressedRoles: [],
         },
       ],
     }
@@ -94,10 +96,10 @@ describe('App Thread runs, approvals and GitHub', () => {
       if (path.includes(`/conversations/${threadId}/timeline`)) {
         return jsonResponse(questionTimeline)
       }
-      if (path.includes('/agent-approvals/approval-1/respond')) {
+      if (path.includes('/api/v2/ops/request_respond')) {
         return jsonResponse({
-          ...questionTimeline.approvals[0],
-          status: 'resolved',
+          outcome: 'ok',
+          value: { ...questionTimeline.requests[0], status: 'answered' },
         })
       }
       return standardImplementation?.(input, init) ?? Promise.reject()
@@ -113,10 +115,10 @@ describe('App Thread runs, approvals and GitHub', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>
-        String(path).includes('/agent-approvals/approval-1/respond'),
+        String(path).includes('/api/v2/ops/request_respond'),
       )
       expect(request).toBeDefined()
-      expect(JSON.parse(String(request?.[1]?.body))).toEqual({ answer: 'Aurora' })
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({ requestId: 'approval-1', text: 'Aurora' })
     })
     expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
   })
@@ -137,7 +139,7 @@ describe('App Thread runs, approvals and GitHub', () => {
       ...timeline,
       activeRun: null,
       latestTerminalRun: terminalRun,
-      approvals: [],
+      requests: [],
       entries: [
         ...timeline.entries,
         {
@@ -223,7 +225,7 @@ describe('App Thread runs, approvals and GitHub', () => {
         state: 'completed',
         capabilities: { interrupt: false, retry: false, publish: true },
       },
-      approvals: [],
+      requests: [],
     }
     const fetchMock = installStandardApi()
     const standardImplementation = fetchMock.getMockImplementation()
@@ -292,7 +294,7 @@ describe('App Thread runs, approvals and GitHub', () => {
           createPullRequest: true,
         },
       },
-      approvals: [],
+      requests: [],
     }
     const fetchMock = installStandardApi()
     const standardImplementation = fetchMock.getMockImplementation()
@@ -368,7 +370,7 @@ describe('App Thread runs, approvals and GitHub', () => {
           refreshPullRequest: true,
         },
       },
-      approvals: [],
+      requests: [],
     }
     const fetchMock = installStandardApi()
     const standardImplementation = fetchMock.getMockImplementation()

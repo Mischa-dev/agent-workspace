@@ -28,7 +28,7 @@ export function SponsoredExecutionSettings({ projectId }: { projectId: string })
   }, [error])
   const response = useMutation({
     mutationFn: ({ request, decision }: DecisionInput) =>
-      respondToSponsoredExecution(request.approvalId, request.id, request.version, decision),
+      respondToSponsoredExecution(request.approvalId, decision),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.sponsoredExecutions(projectId) })
     },

@@ -11,22 +11,18 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::{
-        ApprovalCapabilities, ApprovalRow, ApprovalView, RunCapabilities, RunRow, RunView,
-    },
-    domain::{RunState, allocate_conversation_sequence, resume_answered_run},
+    conversations::{RunCapabilities, RunRow, RunView},
+    domain::{RunState, allocate_conversation_sequence},
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     message_content::MessageContent,
     outbox,
     policy::{
-        Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
-        MembershipRole, ProjectScope, Resource, RoleGrant, Subject, authorize,
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
+        authorize,
     },
     provider::run_config::RunConfig,
 };
-
-const ANY_AUTHORIZED_APPROVER: &str = "any_authorized";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -44,10 +40,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/agent-runs/{id}/acknowledge-failure",
             post(acknowledge_run_failure),
-        )
-        .route(
-            "/api/v1/agent-approvals/{id}/respond",
-            post(respond_to_approval),
         )
         .route("/api/v1/realtime", get(crate::realtime::websocket))
 }
@@ -931,13 +923,6 @@ pub(crate) async fn select_run_setup_for(
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ApprovalResponse {
-    pub(crate) decision: Option<String>,
-    pub(crate) answer: Option<String>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
 struct CommandReference {
     resource_id: Uuid,
 }
@@ -945,316 +930,6 @@ struct CommandReference {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EmptyCommand {}
-
-async fn respond_to_approval(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(approval_id): ApiPath<Uuid>,
-    ApiJson(response): ApiJson<ApprovalResponse>,
-) -> Result<Json<ApprovalView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if let Some(external_request_id) = sponsored_execution_request(&state, approval_id).await? {
-        return crate::external_execution::respond_to_sponsored_execution(
-            &state,
-            &headers,
-            &principal,
-            approval_id,
-            external_request_id,
-            response,
-        )
-        .await
-        .map(Json);
-    }
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    answer_approval(&state, &principal, approval_id, response, idempotency_key)
-        .await
-        .map(Json)
-}
-
-/// The external execution request an approval belongs to, if it is a
-/// sponsored execution (those are answered only in the app).
-pub(crate) async fn sponsored_execution_request(
-    state: &AppState,
-    approval_id: Uuid,
-) -> Result<Option<Uuid>, AppError> {
-    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT external_execution_request_id FROM agent_approvals WHERE id = $1",
-    )
-    .bind(approval_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
-    .flatten())
-}
-
-/// Approve, deny or answer a run's approval as `actor`: the browser's
-/// command, also used by a notification's Approve, Deny and Reply buttons.
-/// Checks the actor's current membership, the thread's visibility and the
-/// approval's policy every time.
-pub(crate) async fn answer_approval(
-    state: &AppState,
-    principal: &impl RunActor,
-    approval_id: Uuid,
-    response: ApprovalResponse,
-    idempotency_key: IdempotencyKey,
-) -> Result<ApprovalView, AppError> {
-    let request_hash = RequestHash::for_value(&response)?;
-
-    #[derive(FromRow)]
-    struct ApprovalContext {
-        run_id: Uuid,
-        conversation_id: Uuid,
-        project_id: Uuid,
-        repository_id: Uuid,
-        requesting_actor_id: Uuid,
-        eligible_role: String,
-        human_required: bool,
-        kind: String,
-        membership_role: String,
-        membership_role_permissions: Option<Vec<String>>,
-        membership_enabled: bool,
-        status: String,
-        responded_by_actor_id: Option<Uuid>,
-        current_response: Option<serde_json::Value>,
-    }
-
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let context = sqlx::query_as::<_, ApprovalContext>(
-        r#"
-        SELECT
-            aa.agent_run_id AS run_id,
-            ar.conversation_id,
-            c.project_id,
-            ar.repository_id,
-            aa.requesting_actor_id,
-            aa.eligible_role,
-            aa.human_required,
-            aa.kind,
-            pm.role AS membership_role,
-            workspace_role_permissions(pm.role_id) AS membership_role_permissions,
-            pm.enabled AS membership_enabled,
-            aa.status,
-            aa.responded_by_actor_id,
-            aa.response AS current_response
-        FROM agent_approvals aa
-        JOIN agent_runs ar ON ar.id = aa.agent_run_id
-        JOIN conversations c ON c.id = ar.conversation_id
-        JOIN projects p ON p.id = c.project_id
-        JOIN organization_memberships om
-          ON om.organization_id = p.organization_id
-         AND om.actor_id = $2
-         AND om.enabled
-        JOIN project_memberships pm
-          ON pm.project_id = c.project_id
-         AND pm.actor_id = $2
-        WHERE aa.id = $1
-          AND conversation_visible_to(ar.conversation_id, $2)
-        FOR UPDATE OF aa
-        FOR SHARE OF pm
-        "#,
-    )
-    .bind(approval_id)
-    .bind(principal.actor_id())
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("agent_approval"))?;
-    let approval_eligibility = if context.eligible_role == ANY_AUTHORIZED_APPROVER {
-        ApprovalEligibility::AnyAuthorizedMember
-    } else {
-        ApprovalEligibility::Role(
-            MembershipRole::parse(&context.eligible_role)
-                .ok_or(AppError::Internal("unknown Project membership role"))?,
-        )
-    };
-    authorize_project_action(
-        principal,
-        context.project_id,
-        &context.membership_role,
-        context.membership_role_permissions.as_deref(),
-        context.membership_enabled,
-        Action::ApprovalRespond,
-        Resource::Approval {
-            scope: ProjectScope::approval(
-                context.project_id,
-                context.conversation_id,
-                context.run_id,
-                context.repository_id,
-                approval_id,
-            ),
-            requirements: ApprovalRequirements {
-                requesting_actor_id: context.requesting_actor_id,
-                eligibility: approval_eligibility,
-                human_required: context.human_required,
-                separation_of_duty: false,
-            },
-        },
-    )?;
-
-    let (response_json, approved) = match context.kind.as_str() {
-        "approval" => {
-            if response.answer.is_some()
-                || !matches!(response.decision.as_deref(), Some("approve" | "deny"))
-            {
-                return Err(AppError::Invalid("unknown approval decision"));
-            }
-            let decision = response
-                .decision
-                .as_deref()
-                .ok_or(AppError::Invalid("approval decision is required"))?;
-            (
-                serde_json::json!({"decision": decision}),
-                decision == "approve",
-            )
-        }
-        "question" => {
-            if response.decision.is_some() {
-                return Err(AppError::Invalid(
-                    "question answer cannot include a decision",
-                ));
-            }
-            let answer = response
-                .answer
-                .as_deref()
-                .map(str::trim)
-                .filter(|answer| {
-                    (1..=4_000).contains(&answer.chars().count())
-                        && !answer.chars().any(|character| {
-                            character.is_control() && character != '\n' && character != '\t'
-                        })
-                })
-                .ok_or(AppError::Invalid("question answer is invalid"))?;
-            (serde_json::json!({"answer": answer}), true)
-        }
-        _ => return Err(AppError::Internal("unknown approval kind")),
-    };
-
-    let scope = idempotency::resource_bound_scope("approval", approval_id, "respond")?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id(),
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let reference: CommandReference = replay.decode()?;
-            if reference.resource_id != approval_id {
-                return Err(AppError::Internal(
-                    "approval idempotency reference mismatch",
-                ));
-            }
-            transaction.commit().await?;
-            return fetch_approval(state, approval_id, context.project_id).await;
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-
-    if context.status == "resolved" {
-        if context.responded_by_actor_id == Some(principal.actor_id())
-            && context.current_response == Some(response_json)
-        {
-            idempotency::complete(
-                &mut transaction,
-                &reservation,
-                StatusCode::OK,
-                &CommandReference {
-                    resource_id: approval_id,
-                },
-            )
-            .await?;
-            transaction.commit().await?;
-            return fetch_approval(state, approval_id, context.project_id).await;
-        }
-        return Err(AppError::Conflict(
-            "agent_approval",
-            "approval already resolved",
-        ));
-    }
-
-    sqlx::query(
-        r#"
-        UPDATE agent_approvals
-           SET status = 'resolved',
-               responded_by_actor_id = $2,
-               response = $3,
-               responded_at = now()
-         WHERE id = $1 AND status = 'pending'
-        "#,
-    )
-    .bind(approval_id)
-    .bind(principal.actor_id())
-    .bind(&response_json)
-    .execute(&mut *transaction)
-    .await?;
-    crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
-    let resolved_event = insert_significant_event(
-        &mut transaction,
-        context.run_id,
-        if context.kind == "question" {
-            "question_resolved"
-        } else {
-            "approval_resolved"
-        },
-        if context.kind == "question" {
-            "The question was answered."
-        } else {
-            "The approval was resolved."
-        },
-        serde_json::json!({
-            "approval_id": approval_id,
-            "resolution": if context.kind == "question" { "answered" } else if approved { "approved" } else { "denied" },
-            "responded_by_actor_id": principal.actor_id()
-        }),
-    )
-    .await?;
-    insert_event_entry(&mut transaction, context.conversation_id, resolved_event).await?;
-
-    if approved {
-        resume_answered_run(&mut transaction, context.run_id).await?;
-    } else {
-        crate::hosts::builtin::transition(
-            &mut transaction,
-            context.run_id,
-            RunState::Interrupted,
-            Some("The requested approval was denied."),
-        )
-        .await?;
-        retain_run_workspace(&mut transaction, context.run_id).await?;
-        crate::provider::idle_provider_session_for_terminal_run(&mut transaction, context.run_id)
-            .await?;
-        let interrupted_event = insert_significant_event(
-            &mut transaction,
-            context.run_id,
-            "run_interrupted",
-            "The run was interrupted after the approval was denied.",
-            serde_json::json!({}),
-        )
-        .await?;
-        insert_event_entry(&mut transaction, context.conversation_id, interrupted_event).await?;
-    }
-    crate::external_events::enqueue_external_approval_resolved(&mut transaction, approval_id)
-        .await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        context.project_id,
-        context.conversation_id,
-        context.run_id,
-    )
-    .await?;
-    idempotency::complete(
-        &mut transaction,
-        &reservation,
-        StatusCode::OK,
-        &CommandReference {
-            resource_id: approval_id,
-        },
-    )
-    .await?;
-    transaction.commit().await?;
-    fetch_approval(state, approval_id, context.project_id).await
-}
 
 async fn interrupt_agent_run(
     State(state): State<AppState>,
@@ -1407,13 +1082,6 @@ pub(crate) async fn interrupt_run_in(
     )
     .await?;
     insert_event_entry(&mut transaction, context.conversation_id, event_id).await?;
-    sqlx::query(
-        "UPDATE agent_approvals SET status = 'canceled' WHERE agent_run_id = $1 AND status = 'pending'",
-    )
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await?;
-    crate::requests::legacy::run_approvals_written(&mut *transaction, run_id).await?;
     outbox::enqueue_agent_run_updated(
         &mut transaction,
         context.project_id,
@@ -1586,45 +1254,6 @@ async fn fetch_run(
             create_pull_request: false,
             refresh_pull_request: false,
         },
-    })
-}
-
-pub(crate) async fn fetch_approval(
-    state: &AppState,
-    approval_id: Uuid,
-    project_id: Uuid,
-) -> Result<ApprovalView, AppError> {
-    let approval = sqlx::query_as::<_, ApprovalRow>(
-        r#"
-        SELECT
-            aa.id,
-            aa.agent_run_id,
-            aa.kind,
-            aa.summary,
-            aa.options,
-            aa.status,
-            aa.response,
-            aa.created_at::text AS created_at,
-            ar.repository_id,
-            aa.requesting_actor_id,
-            aa.eligible_role,
-            aa.human_required
-        FROM agent_approvals aa
-        JOIN agent_runs ar ON ar.id = aa.agent_run_id
-        JOIN conversations c
-          ON c.id = ar.conversation_id
-         AND c.project_id = $2
-        WHERE aa.id = $1
-        "#,
-    )
-    .bind(approval_id)
-    .bind(project_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
-    .ok_or(AppError::NotFound("agent_approval"))?;
-    Ok(ApprovalView {
-        approval,
-        capabilities: ApprovalCapabilities { respond: false },
     })
 }
 

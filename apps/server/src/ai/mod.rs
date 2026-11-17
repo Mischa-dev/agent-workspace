@@ -60,7 +60,6 @@ pub(crate) async fn notify(
         work_item_id: None,
         comment_id: None,
         agent_run_id: None,
-        approval_id: None,
         pull_request_id: None,
         detail: serde_json::json!({"title": title, "href": href}),
         group_key: format!("{kind}:{project_id}"),

@@ -28,8 +28,8 @@ use crate::{
         NewOutboxEvent, OutboxConversationKind, OutboxEventPayload, ReadStateUpdatedPayload,
     },
     policy::{
-        Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
-        MembershipRole, ProjectScope, Resource, RoleGrant, Subject, authorize,
+        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
+        authorize,
     },
     reactions::{self, ReactionView},
     replies::{self, ReplyRequestView},
@@ -494,7 +494,8 @@ struct TimelineResponse {
     read_state: ReadStateView,
     active_run: Option<RunView>,
     latest_terminal_run: Option<RunView>,
-    approvals: Vec<ApprovalView>,
+    /// What runs and people asked for here (approvals, questions).
+    requests: Vec<crate::requests::RequestForReader>,
     capabilities: ConversationCapabilities,
     reply_requests: Vec<ReplyRequestView>,
     agent_turns_remaining: Option<i32>,
@@ -555,40 +556,6 @@ pub(crate) struct RunCapabilities {
     pub(crate) publish: bool,
     pub(crate) create_pull_request: bool,
     pub(crate) refresh_pull_request: bool,
-}
-
-#[derive(Debug, FromRow, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ApprovalRow {
-    pub(crate) id: Uuid,
-    pub(crate) agent_run_id: Option<Uuid>,
-    pub(crate) kind: String,
-    pub(crate) summary: String,
-    pub(crate) options: serde_json::Value,
-    pub(crate) status: String,
-    pub(crate) response: Option<serde_json::Value>,
-    pub(crate) created_at: String,
-    #[serde(skip_serializing)]
-    pub(crate) repository_id: Uuid,
-    #[serde(skip_serializing)]
-    pub(crate) requesting_actor_id: Uuid,
-    #[serde(skip_serializing)]
-    pub(crate) eligible_role: String,
-    #[serde(skip_serializing)]
-    pub(crate) human_required: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ApprovalView {
-    #[serde(flatten)]
-    pub(crate) approval: ApprovalRow,
-    pub(crate) capabilities: ApprovalCapabilities,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ApprovalCapabilities {
-    pub(crate) respond: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -2681,7 +2648,7 @@ async fn conversation_timeline(
     if !sees_tasks {
         hide_work_item_details(&mut linked_work_items);
     }
-    let (active_run, latest_terminal_run, approvals) =
+    let (active_run, latest_terminal_run, requests) =
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
     let (reply_requests, remaining) =
@@ -2698,7 +2665,7 @@ async fn conversation_timeline(
         read_state,
         active_run,
         latest_terminal_run,
-        approvals,
+        requests,
         capabilities,
         reply_requests,
         agent_turns_remaining,
@@ -3455,12 +3422,10 @@ async fn project_conversation_sidebar(
                 {last_entry} AS entry_sequence,
                 EXISTS (
                     SELECT 1
-                    FROM agent_approvals approval
-                    WHERE approval.agent_run_id = run.id
-                      AND approval.status = 'pending'
-                      AND approval.eligible_role IN ($3, 'any_authorized')
-                      AND $3 IN ('owner', 'admin', 'member')
-                      AND (NOT approval.human_required OR $4 = 'human')
+                    FROM requests request
+                    WHERE request.run_id = run.id
+                      AND request.status = 'open'
+                      AND request_answerable_by(request.id, $2)
                 ) AS has_pending_response,
                 EXISTS (
                     SELECT 1
@@ -3472,18 +3437,16 @@ async fn project_conversation_sidebar(
         ) latest_run ON true
         WHERE thread.project_id = $1
           AND thread.kind = 'thread'
-          AND ($5 OR (thread.archived_at IS NULL AND parent.archived_at IS NULL))
+          AND ($3 OR (thread.archived_at IS NULL AND parent.archived_at IS NULL))
           AND conversation_visible_to(thread.id, $2)
         ORDER BY latest_activity_sequence DESC, thread.id DESC
-        LIMIT $6
+        LIMIT $4
         "#,
         last_entry = crate::runs::sql::last_entry_sequence("run.id"),
         newest_run = crate::runs::sql::newest_in("thread.id"),
     ))
     .bind(project_id)
     .bind(principal.actor_id)
-    .bind(&access.membership_role)
-    .bind(&principal.actor_kind)
     .bind(include_archived)
     .bind(MAX_THREADS_PER_SIDEBAR)
     .fetch_all(crate::db::scoped(&state.pool))
@@ -4411,7 +4374,14 @@ async fn fetch_run_projection(
     state: &AppState,
     principal: &AuthenticatedActor,
     conversation: &ConversationAccessRow,
-) -> Result<(Option<RunView>, Option<RunView>, Vec<ApprovalView>), AppError> {
+) -> Result<
+    (
+        Option<RunView>,
+        Option<RunView>,
+        Vec<crate::requests::RequestForReader>,
+    ),
+    AppError,
+> {
     if conversation.kind != "thread" {
         return Ok((None, None, Vec::new()));
     }
@@ -4463,31 +4433,17 @@ async fn fetch_run_projection(
         }
         _ => false,
     };
-    let approvals = sqlx::query_as::<_, ApprovalRow>(
-        r#"
-        SELECT
-            approval.id,
-            approval.agent_run_id,
-            approval.kind,
-            approval.summary,
-            approval.options,
-            approval.status,
-            approval.response,
-            approval.created_at::text AS created_at,
-            run.repository_id,
-            approval.requesting_actor_id,
-            approval.eligible_role,
-            approval.human_required
-        FROM agent_approvals approval
-        JOIN agent_runs run ON run.id = approval.agent_run_id
-        WHERE run.conversation_id = $1
-        ORDER BY approval.created_at, approval.id
-        LIMIT 200
-        "#,
-    )
-    .bind(conversation.id)
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?;
+    let requests = {
+        let caller = crate::access::Caller::person(
+            principal.actor_id,
+            parse_actor_kind(&principal.actor_kind)?,
+        );
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let requests =
+            crate::requests::in_conversation(&mut transaction, conversation.id, &caller).await?;
+        transaction.commit().await?;
+        requests
+    };
     let active_run = active_run.map(|run| {
         let scope = ProjectScope::run(
             conversation.project_id,
@@ -4600,64 +4556,7 @@ async fn fetch_run_projection(
             },
         }
     });
-    let subject = Subject::new(
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
-        true,
-        Some(Membership::project(
-            conversation.project_id,
-            RoleGrant::stored(
-                &conversation.membership_role,
-                conversation.membership_role_permissions.as_deref(),
-            )?,
-            conversation.membership_enabled,
-        )),
-        None,
-    );
-    let approvals = approvals
-        .into_iter()
-        .map(|approval| {
-            let agent_run_id = approval
-                .agent_run_id
-                .ok_or(AppError::Internal("run approval without Agent Run"))?;
-            let eligibility = if approval.eligible_role == "any_authorized" {
-                ApprovalEligibility::AnyAuthorizedMember
-            } else {
-                ApprovalEligibility::Role(
-                    MembershipRole::parse(&approval.eligible_role)
-                        .ok_or(AppError::Internal("stored membership role"))?,
-                )
-            };
-            let respond = approval.status == "pending"
-                && matches!(
-                    authorize(
-                        &subject,
-                        Action::ApprovalRespond,
-                        Resource::Approval {
-                            scope: ProjectScope::approval(
-                                conversation.project_id,
-                                conversation.id,
-                                agent_run_id,
-                                approval.repository_id,
-                                approval.id,
-                            ),
-                            requirements: ApprovalRequirements {
-                                requesting_actor_id: approval.requesting_actor_id,
-                                eligibility,
-                                human_required: approval.human_required,
-                                separation_of_duty: false,
-                            },
-                        },
-                    ),
-                    Decision::Allow
-                );
-            Ok(ApprovalView {
-                approval,
-                capabilities: ApprovalCapabilities { respond },
-            })
-        })
-        .collect::<Result<Vec<_>, AppError>>()?;
-    Ok((active_run, latest_terminal_run, approvals))
+    Ok((active_run, latest_terminal_run, requests))
 }
 
 pub(crate) async fn enqueue_event(

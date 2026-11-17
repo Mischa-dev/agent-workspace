@@ -1981,7 +1981,6 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
             work_item_id: None,
             comment_id: None,
             agent_run_id: None,
-            approval_id: None,
             pull_request_id: None,
             detail: json!({
                 "title": format!("Automation \u{201c}{}\u{201d} was turned off", rule.name),
@@ -2806,7 +2805,6 @@ async fn notify(
             work_item_id: context.work_item_id,
             comment_id: None,
             agent_run_id: context.agent_run_id,
-            approval_id: None,
             pull_request_id: context.pull_request_id,
             detail: json!({
                 "title": rendered.chars().take(200).collect::<String>(),
