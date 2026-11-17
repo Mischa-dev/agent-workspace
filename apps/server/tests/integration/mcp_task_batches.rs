@@ -483,7 +483,7 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
             json!({"projectId": "PLAN", "tasks": [{"title": "Long"}], "clientRequestId": "a".repeat(129)}),
         )
         .await,
-        "clientRequestId",
+        "requestId",
         "128",
     );
 }
@@ -904,7 +904,7 @@ async fn bulk_tools_check_access_for_every_task() {
         json!({"projectId": other, "clientRequestId": "n2", "tasks": [{"title": "x"}]}),
     )
     .await;
-    assert_eq!(elsewhere["outcome"], "forbidden", "{elsewhere}");
+    assert_eq!(elsewhere["outcome"], "not_found", "{elsewhere}");
     // An agent's own home is the Messages space, which holds no tasks.
     assert_invalid(
         &nyx_call(
@@ -913,7 +913,7 @@ async fn bulk_tools_check_access_for_every_task() {
         )
         .await,
         "projectId",
-        "Say which project",
+        "Say which space",
     );
 
     // Viewers and read-only apps change nothing, previews included.
@@ -939,7 +939,7 @@ async fn bulk_tools_check_access_for_every_task() {
     assert_eq!(version(&setup, plan_task).await, 1);
 
     // A person connected for their whole account names the project, and a
-    // batch stays in one project.
+    // batch stays in the space of its first task.
     assert_invalid(
         &call(
             "task_create_many",
@@ -947,7 +947,7 @@ async fn bulk_tools_check_access_for_every_task() {
         )
         .await,
         "projectId",
-        "Say which project",
+        "Say which space",
     );
     let mixed = call(
         "task_update_many",
@@ -956,8 +956,7 @@ async fn bulk_tools_check_access_for_every_task() {
     .await;
     assert_eq!(problems(&mixed), [(1, "taskIds".to_owned())]);
     assert!(
-        message(&mixed["details"]["current"]["problems"][0])
-            .contains("All tasks must be in one project; OTHER-1 is in OTHER."),
+        message(&mixed["details"]["current"]["problems"][0]).contains("OTHER-1 isn't in PLAN."),
         "{mixed}"
     );
     let named = call(

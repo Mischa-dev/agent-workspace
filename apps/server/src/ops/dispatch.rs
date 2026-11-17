@@ -182,9 +182,10 @@ async fn task_keys_to_ids(
             sqlx::query_as::<_, (Uuid, i32)>(
                 r#"
             SELECT found.id, min(found.preference) FROM (
-                -- The task with the key now; a moved original only for
-                -- someone who can't reach where it went (it is archived,
-                -- and says so).
+                -- The task with the key now or by an older key, alike (two
+                -- of them is ambiguous); a moved original only for someone
+                -- who can't reach where it went (it is archived, and says
+                -- so).
                 SELECT item.id,
                        CASE WHEN EXISTS (
                            SELECT 1 FROM work_item_key_aliases moved
@@ -196,7 +197,7 @@ async fn task_keys_to_ids(
                 WHERE upper(project.project_key) = upper($3) AND item.number = $4
                   AND project.archived_at IS NULL
                 UNION ALL
-                SELECT alias.work_item_id, 1, item.project_id
+                SELECT alias.work_item_id, 0, item.project_id
                 FROM work_item_key_aliases alias
                 JOIN task_rows item ON item.id = alias.work_item_id
                 WHERE upper(alias.project_key) = upper($3) AND alias.number = $4

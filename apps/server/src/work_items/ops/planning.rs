@@ -536,6 +536,14 @@ tool_op!(TaskCreateMany {
     output: CreateManyValue,
     run: |call, input| {
         let mut input = input;
+        // A retry without one would make every task twice.
+        if call.ctx.request_id.is_none() && !call.ctx.preview {
+            return Err(OpError::invalid(
+                "clientRequestId",
+                "Pass a clientRequestId, such as plan-import-2026-10-01, so a retry can't create \
+                 these tasks twice.",
+            ));
+        }
         input.preview = Some(call.ctx.preview);
         input.client_request_id = Some(command_request_id(call.ctx));
         let space = if input.project_id.is_none() {
