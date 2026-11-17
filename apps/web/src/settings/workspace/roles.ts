@@ -43,6 +43,7 @@ export const PERMISSION_KEYS = [
   'settings.manage',
   'modules.build',
   'modules.manage',
+  'workspace.delete',
 ] as const
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number]

@@ -80,6 +80,8 @@ export type InstallView = { id: string; installedAt: string; name: string; objec
 
 export type InstalledObject = { action: string; id: string; key: string; kind: string }
 
+export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
+
 export type LinkArgument = { targetId: string; targetKind: string }
 
 export type LinkView = { key?: string | null; projectId: string; projectName: string; targetId: string; targetKind: string; title: string; url: string }
@@ -410,6 +412,14 @@ export type WhiteboardUpdateElementsInput = { confirmDelete?: boolean | null; ex
 
 export type WhiteboardUpdateElementsOutput = { changed: string[]; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
 
+export type WorkspaceDeleteInput = { confirm: string }
+
+export type WorkspaceDeleteOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
+
+export type WorkspaceDeleteCancelInput = Record<string, never>
+
+export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
+
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
@@ -474,6 +484,8 @@ export type Operations = {
   whiteboard_link: { input: WhiteboardLinkInput; output: WhiteboardLinkOutput }
   whiteboard_update: { input: WhiteboardUpdateInput; output: WhiteboardUpdateOutput }
   whiteboard_update_elements: { input: WhiteboardUpdateElementsInput; output: WhiteboardUpdateElementsOutput }
+  workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
+  workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
 }
 
 export type OpName = keyof Operations

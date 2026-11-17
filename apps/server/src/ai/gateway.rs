@@ -181,7 +181,7 @@ pub fn offered_providers(environment: Environment) -> Vec<ProviderManifest> {
 /// Works out the provider, model, address and key for `scope`, or says
 /// what's missing.
 pub async fn resolve(state: &AppState, scope: Scope, tier: Tier) -> Result<ResolvedModel, AiError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let effective = settings::resolve(
         &mut connection,
         SettingsContext {
@@ -276,7 +276,7 @@ pub async fn resolve(state: &AppState, scope: Scope, tier: Tier) -> Result<Resol
 
 /// The workspace's monthly budget in whole dollars; 0 means no limit.
 pub async fn budget_usd(pool: &PgPool, organization_id: Uuid) -> Result<i64, AppError> {
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let effective = settings::resolve(
         &mut connection,
         SettingsContext {
@@ -296,15 +296,18 @@ pub async fn spent_this_month_micros(
     pool: &PgPool,
     organization_id: Uuid,
 ) -> Result<i64, AppError> {
-    Ok(sqlx::query_scalar::<_, i64>(
-        r#"
+    Ok(crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, i64>(
+            r#"
         SELECT COALESCE(sum(cost_micros), 0)::bigint FROM ai_usage
         WHERE organization_id = $1
           AND created_at >= (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
         "#,
-    )
-    .bind(organization_id)
-    .fetch_one(pool)
+        )
+        .bind(organization_id)
+        .fetch_one(connection)
+        .await
+    })
     .await?)
 }
 
@@ -315,18 +318,21 @@ async fn prices(
     organization_id: Uuid,
     resolved: &ResolvedModel,
 ) -> Result<Option<ModelPrices>, AppError> {
-    let rows = sqlx::query_as::<_, (Option<Value>, Option<Value>)>(
-        r#"
+    let rows = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, (Option<Value>, Option<Value>)>(
+            r#"
         SELECT overrides->'prices', provider_data->'prices'
         FROM harness_models
         WHERE organization_id = $1 AND model_id = $2
         ORDER BY edited_at DESC NULLS LAST
         LIMIT 5
         "#,
-    )
-    .bind(organization_id)
-    .bind(&resolved.model)
-    .fetch_all(pool)
+        )
+        .bind(organization_id)
+        .bind(&resolved.model)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     for (edited, reported) in rows {
         for candidate in [edited, reported].into_iter().flatten() {
@@ -436,34 +442,37 @@ struct UsageRow<'a> {
 }
 
 async fn record_usage(pool: &PgPool, row: UsageRow<'_>) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
+    crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(
+            r#"
         INSERT INTO ai_usage (
             id, organization_id, project_id, actor_id, prompt_id, prompt_version,
             provider, model, tier, input_tokens, output_tokens, cost_micros,
             outcome, error, latency_ms
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(row.scope.organization_id)
-    .bind(row.scope.project_id)
-    .bind(row.scope.actor_id)
-    .bind(row.prompt.id)
-    .bind(row.prompt.version)
-    .bind(row.resolved.manifest.id)
-    .bind(row.resolved.model.chars().take(200).collect::<String>())
-    .bind(row.tier.as_str())
-    .bind(row.input_tokens)
-    .bind(row.output_tokens)
-    .bind(row.cost)
-    .bind(row.outcome)
-    .bind(
-        row.error
-            .map(|error| error.chars().take(300).collect::<String>()),
-    )
-    .bind(i32::try_from(row.latency_ms).unwrap_or(i32::MAX))
-    .execute(pool)
+        )
+        .bind(Uuid::now_v7())
+        .bind(row.scope.organization_id)
+        .bind(row.scope.project_id)
+        .bind(row.scope.actor_id)
+        .bind(row.prompt.id)
+        .bind(row.prompt.version)
+        .bind(row.resolved.manifest.id)
+        .bind(row.resolved.model.chars().take(200).collect::<String>())
+        .bind(row.tier.as_str())
+        .bind(row.input_tokens)
+        .bind(row.output_tokens)
+        .bind(row.cost)
+        .bind(row.outcome)
+        .bind(
+            row.error
+                .map(|error| error.chars().take(300).collect::<String>()),
+        )
+        .bind(i32::try_from(row.latency_ms).unwrap_or(i32::MAX))
+        .execute(connection)
+        .await
+    })
     .await?;
     Ok(())
 }

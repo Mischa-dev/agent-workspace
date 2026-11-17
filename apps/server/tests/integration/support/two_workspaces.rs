@@ -110,6 +110,10 @@ pub(crate) struct World {
 pub(crate) struct TwoWorkspaces {
     pub(crate) app: axum::Router,
     pub(crate) pool: PgPool,
+    /// The state behind `app`, for tests that run a job's work directly.
+    pub(crate) state: AppState,
+    /// Where uploaded files' bytes live.
+    pub(crate) data_root: std::path::PathBuf,
     pub(crate) realtime: RealtimeHub,
     pub(crate) a: World,
     pub(crate) b: World,
@@ -265,13 +269,14 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     config.minimum_free_bytes = 0;
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     let realtime = RealtimeHub::new(8192);
-    let app = router(AppState {
+    let state = AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: realtime.clone(),
         supervisors: supervisors.clone(),
-    });
+    };
+    let app = router(state.clone());
 
     // Workspace A: the first owner, through the normal bootstrap.
     let a_owner = bootstrap_admin(
@@ -311,6 +316,8 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     Some(TwoWorkspaces {
         app,
         pool,
+        state,
+        data_root: data_root.clone(),
         realtime,
         a,
         b,

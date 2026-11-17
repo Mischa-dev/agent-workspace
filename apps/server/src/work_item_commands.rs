@@ -384,14 +384,25 @@ pub async fn lock_membership(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<ProjectMembership>, AppError> {
-    Ok(sqlx::query_as::<_, ProjectMembership>(concat!(
+    let membership = sqlx::query_as::<_, ProjectMembership>(concat!(
         membership_select!(),
         "FOR UPDATE OF project, membership\n        FOR SHARE OF organization_membership, actor"
     ))
     .bind(project_id)
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
-    .await?)
+    .await?;
+    // H1.24: every task write locks its membership here first, from any
+    // edge, so a suspended or deleting workspace refuses them all here.
+    if membership.is_some() {
+        crate::workspace::lifecycle::ensure_open_for_space(
+            &mut *transaction,
+            project_id,
+            "task_write",
+        )
+        .await?;
+    }
+    Ok(membership)
 }
 
 /// `lock_membership` without its locks, for a check that writes nothing

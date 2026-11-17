@@ -108,25 +108,29 @@ pub async fn thread(
     conversation_id: Uuid,
     since: Option<DateTime<Utc>>,
 ) -> Result<Summary, SummaryRefusal> {
-    let Some(title) = sqlx::query_scalar::<_, String>(
-        r#"
+    let Some(title) = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, String>(
+            r#"
         SELECT conversation.name FROM conversations conversation
         WHERE conversation.id = $1 AND conversation.project_id = $2
           AND conversation_visible_to(conversation.id, $3)
           AND actor_can_access_project($3, $4, conversation.project_id)
         "#,
-    )
-    .bind(conversation_id)
-    .bind(project_id)
-    .bind(actor_id)
-    .bind(connection_id)
-    .fetch_optional(&state.pool)
+        )
+        .bind(conversation_id)
+        .bind(project_id)
+        .bind(actor_id)
+        .bind(connection_id)
+        .fetch_optional(connection)
+        .await
+    })
     .await?
     else {
         return Err(SummaryRefusal::NotFound);
     };
-    let entries = sqlx::query_as::<_, Entry>(
-        r#"
+    let entries = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, Entry>(
+            r#"
         SELECT COALESCE(membership.display_name, 'Someone') AS author,
                message.created_at AS at,
                left(message.plain_text, $4) AS text
@@ -141,12 +145,14 @@ pub async fn thread(
         ORDER BY message.created_at DESC
         LIMIT $3
         "#,
-    )
-    .bind(conversation_id)
-    .bind(since)
-    .bind(MAX_ENTRIES)
-    .bind(ENTRY_CHARS)
-    .fetch_all(&state.pool)
+        )
+        .bind(conversation_id)
+        .bind(since)
+        .bind(MAX_ENTRIES)
+        .bind(ENTRY_CHARS)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     summarize(
         state,
@@ -171,26 +177,30 @@ pub async fn task(
     connection_id: Option<Uuid>,
     task_id: Uuid,
 ) -> Result<Summary, SummaryRefusal> {
-    let Some((key, title, description)) = sqlx::query_as::<_, (String, String, String)>(
-        r#"
+    let Some((key, title, description)) = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (String, String, String)>(
+            r#"
         SELECT project.project_key || '-' || item.number, item.title, left(item.description, 3000)
         FROM task_rows item
         JOIN projects project ON project.id = item.project_id
         WHERE item.id = $1 AND item.project_id = $2
           AND actor_can_access_project($3, $4, item.project_id)
         "#,
-    )
-    .bind(task_id)
-    .bind(project_id)
-    .bind(actor_id)
-    .bind(connection_id)
-    .fetch_optional(&state.pool)
+        )
+        .bind(task_id)
+        .bind(project_id)
+        .bind(actor_id)
+        .bind(connection_id)
+        .fetch_optional(connection)
+        .await
+    })
     .await?
     else {
         return Err(SummaryRefusal::NotFound);
     };
-    let mut entries = sqlx::query_as::<_, Entry>(
-        r#"
+    let mut entries = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, Entry>(
+            r#"
         SELECT author, at, text FROM (
             SELECT COALESCE(membership.display_name, 'Someone') AS author,
                    activity.created_at AS at, activity.summary AS text
@@ -212,12 +222,14 @@ pub async fn task(
         ORDER BY at DESC
         LIMIT $3
         "#,
-    )
-    .bind(project_id)
-    .bind(task_id)
-    .bind(MAX_ENTRIES)
-    .bind(ENTRY_CHARS)
-    .fetch_all(&state.pool)
+        )
+        .bind(project_id)
+        .bind(task_id)
+        .bind(MAX_ENTRIES)
+        .bind(ENTRY_CHARS)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     if !description.trim().is_empty() {
         entries.push(Entry {

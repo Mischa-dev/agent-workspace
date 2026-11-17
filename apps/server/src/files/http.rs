@@ -191,6 +191,14 @@ async fn remove(
     )
     .await?;
     let mut transaction = state.pool.begin().await?;
+    // H1.24: the route layer refuses a closed workspace; this holds it open
+    // until the removal commits.
+    crate::workspace::lifecycle::hold_open_for_space(
+        &mut transaction,
+        row.project_id,
+        "file_remove",
+    )
+    .await?;
     let may_edit_task = match (row.attached_at.as_ref(), row.work_item_id) {
         (Some(_), Some(work_item_id)) => {
             authorize_task_change(&mut transaction, &principal, row.project_id, work_item_id)
