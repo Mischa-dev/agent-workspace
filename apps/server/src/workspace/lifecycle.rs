@@ -908,9 +908,10 @@ async fn remove_bytes(
     for repository in repositories {
         crate::git_runtime::remove_repository_data(&state.config.data_root, *repository).await?;
     }
-    crate::files::store::FileStore::from_config(&state.config)
-        .delete_workspace(workspace)
-        .await
+    for store in crate::files::store::FileStore::all(&state.config) {
+        store.delete_workspace(workspace).await?;
+    }
+    Ok(())
 }
 
 /// Retire the agent and app accounts the workspace owns: disabled, with no

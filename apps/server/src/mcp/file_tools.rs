@@ -291,6 +291,13 @@ pub(super) struct FileReadValue {
     /// Why the content isn't included.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// For a file too large to include: a link that downloads it, with no
+    /// credential, until `downloadExpiresAt` (15 minutes). It stops working
+    /// sooner if the file is removed or you lose access to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_expires_at: Option<String>,
 }
 
 pub(super) async fn file_read(
@@ -312,12 +319,17 @@ pub(super) async fn file_read(
         Err(AppError::NotFound(_)) => return read_result(ToolResult::not_found("That file"), None),
         Err(error) => return read_result(ToolResult::from_error(error, "file_read"), None),
     };
-    let store = FileStore::from_config(&state.config);
+    let store = match FileStore::named(&state.config, &row.store_id) {
+        Ok(store) => store,
+        Err(error) => return read_result(ToolResult::from_error(error, "file_read"), None),
+    };
     let mut value = FileReadValue {
         file: FileSummary::from(&row),
         text: None,
         data_base64: None,
         note: None,
+        download_url: None,
+        download_expires_at: None,
     };
     // An image is shown to the agent as an image: the original when it's
     // small enough, else its preview.
@@ -343,8 +355,26 @@ pub(super) async fn file_read(
         };
     }
     if row.byte_size > MCP_FILE_BYTES as i64 {
-        value.note =
-            Some("The file is larger than 4 MiB; open it in the app to download it.".to_owned());
+        match files::links::link(
+            state,
+            reader(principal),
+            row.id,
+            files::links::Variant::Original,
+            files::links::DEFAULT_TTL,
+        ) {
+            Ok((url, expires)) => {
+                value.note =
+                    Some("The file is larger than 4 MiB; download it from downloadUrl.".to_owned());
+                value.download_url = Some(url);
+                value.download_expires_at =
+                    Some(expires.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+            }
+            Err(_) => {
+                value.note = Some(
+                    "The file is larger than 4 MiB; open it in the app to download it.".to_owned(),
+                );
+            }
+        }
         return read_result(ToolResult::ok(value), None);
     }
     match store

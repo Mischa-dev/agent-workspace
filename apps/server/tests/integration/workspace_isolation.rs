@@ -100,6 +100,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
     "/api/v1/files/{id}/content",
+    "/api/v1/files/links/{token}",
     "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
     "/api/v1/inbox",
@@ -1796,6 +1797,14 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         "/api/v1/files/{id}/content",
         [files(a, "/content"), files(a, "/content?download=1")].concat(),
         files(b, "/content"),
+        vec![],
+    ));
+    // A signed link is its own credential (K5.12): A's owner's link to A's
+    // file opens; one made for A's owner naming B's file never does.
+    cases.push(case(
+        "/api/v1/files/links/{token}",
+        vec![a.file_link.clone()],
+        vec![a.foreign_file_link.clone()],
         vec![],
     ));
     cases.push(case(

@@ -19,6 +19,7 @@ use agent_workspace_server::{
     realtime::RealtimeHub,
     router,
     secrets::FileKeyring,
+    test_support::file_link,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -101,6 +102,10 @@ pub(crate) struct World {
     pub(crate) task_file: Uuid,
     /// The link preview `file_message` shows, made ready by the test.
     pub(crate) link_preview: Uuid,
+    /// A signed link to `file` for this workspace's owner (K5.12), and one
+    /// for the same owner to the other workspace's file.
+    pub(crate) file_link: String,
+    pub(crate) foreign_file_link: String,
 }
 
 /// The app on a fresh schema with workspaces A and B built, signed in as
@@ -297,8 +302,23 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     let b_organization = second_workspace_owner(&pool).await;
     let b_browser = login_as(&app, &format!("owner-{MARKER}")).await;
 
-    let a = build_workspace(&app, &pool, "A", "", a_owner.organization_id, a_browser).await;
-    let b = build_workspace(&app, &pool, "B", MARKER, b_organization, b_browser).await;
+    let mut a = build_workspace(&app, &pool, "A", "", a_owner.organization_id, a_browser).await;
+    let mut b = build_workspace(&app, &pool, "B", MARKER, b_organization, b_browser).await;
+    let uploader = |file: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>("SELECT uploaded_by_actor_id FROM files WHERE id = $1")
+                .bind(file)
+                .fetch_one(&pool)
+                .await
+                .expect("uploader")
+        }
+    };
+    let (a_owner_id, b_owner_id) = (uploader(a.file).await, uploader(b.file).await);
+    a.file_link = file_link(&state, a_owner_id, a.file);
+    a.foreign_file_link = file_link(&state, a_owner_id, b.file);
+    b.file_link = file_link(&state, b_owner_id, b.file);
+    b.foreign_file_link = file_link(&state, b_owner_id, a.file);
     // The link previews' images, as the fetch job would have stored them.
     for world in [&a, &b] {
         let folder = data_root
@@ -1682,6 +1702,8 @@ async fn build_workspace(
         file_message,
         task_file,
         link_preview,
+        file_link: String::new(),
+        foreign_file_link: String::new(),
     }
 }
 

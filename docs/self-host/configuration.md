@@ -52,6 +52,14 @@ variable that is set still wins.
 | `AGENT_WORKSPACE_DATA_ROOT` | `.agent-workspace` | Where uploaded files, artifacts and other data on disk live. |
 | `AGENT_WORKSPACE_DATA_QUOTA_BYTES` | `21474836480` | The most the data root may hold (at least 1 GiB). |
 | `AGENT_WORKSPACE_MINIMUM_FREE_BYTES` | `5368709120` | Free disk the server keeps; uploads are refused below it (at least 1 GiB). |
+| `AGENT_WORKSPACE_FILE_STORE` | `local` | Where new uploads go: `local` (under the data root) or `object` (the S3-compatible store below). Files already stored stay where they are and are still served. |
+| `AGENT_WORKSPACE_S3_ENDPOINT` | none | An S3-compatible store's address, such as `https://s3.us-east-1.amazonaws.com` or a MinIO server's. Set it with the bucket and both key paths, or none of them. |
+| `AGENT_WORKSPACE_S3_BUCKET` | none | The bucket files go in. |
+| `AGENT_WORKSPACE_S3_REGION` | `us-east-1` | The bucket's region (`auto` for stores that ignore it). |
+| `AGENT_WORKSPACE_S3_PREFIX` | none | A folder inside the bucket every key goes under. |
+| `AGENT_WORKSPACE_S3_PATH_STYLE` | `false` | `true` for stores that want `endpoint/bucket/key` addresses (MinIO and most self-hosted ones). |
+| `AGENT_WORKSPACE_S3_ACCESS_KEY_ID_PATH` | none | An owner-only file holding the access key id. |
+| `AGENT_WORKSPACE_S3_SECRET_ACCESS_KEY_PATH` | none | An owner-only file holding the secret access key. |
 | `AGENT_WORKSPACE_SECRETS_KEY_PATH` | none (development: a keyring under `.agent-workspace-secrets/`) | The keyring that seals stored credentials: an owner-only file outside the data root, the web root and any Git work tree. If it names a file that doesn't exist yet in an existing directory, the server creates the keyring there on first start and logs the path (never the key). Back it up apart from database dumps. |
 
 ## Background work and limits

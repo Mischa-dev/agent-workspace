@@ -1,8 +1,10 @@
 //! Where file bytes live. One interface, so the store can change without
-//! touching anything that uses it: local disk under the data root today, an
-//! S3-compatible object store later (add a variant here and a setting in
-//! `config`). Keys are opaque, made only of the workspace and file IDs, and
-//! never contain a machine path.
+//! touching anything that uses it: local disk under the data root, or an
+//! S3-compatible object store (K5.12, `object`). New uploads go to the
+//! primary store (`AGENT_WORKSPACE_FILE_STORE`); each file row names the
+//! store its bytes are in (`files.store_id`), and reads follow it. Keys are
+//! opaque, made only of the workspace and file IDs, and never contain a
+//! machine path.
 
 use std::{
     io::ErrorKind,
@@ -22,7 +24,13 @@ const LOCAL_FOLDER: &str = "files";
 #[derive(Clone, Debug)]
 pub enum FileStore {
     Local(LocalDisk),
+    Object(super::object::ObjectBucket),
 }
+
+/// The local store's id in `files.store_id`.
+pub const LOCAL: &str = "local";
+/// The S3-compatible store's.
+pub const OBJECT: &str = "object";
 
 /// Files on this machine's disk, under `<data root>/files`.
 #[derive(Clone, Debug)]
@@ -45,17 +53,70 @@ pub struct StoredBytes {
 }
 
 impl FileStore {
+    /// Where new uploads go.
     pub fn from_config(config: &AppConfig) -> Self {
+        match (config.file_store.as_str(), &config.object_store) {
+            (OBJECT, Some(object)) => {
+                Self::Object(super::object::ObjectBucket::new(object.clone()))
+            }
+            _ => Self::local(config),
+        }
+    }
+
+    fn local(config: &AppConfig) -> Self {
         Self::Local(LocalDisk {
             root: config.data_root.join(LOCAL_FOLDER),
         })
+    }
+
+    /// The store a file row names.
+    pub fn named(config: &AppConfig, id: &str) -> Result<Self, AppError> {
+        match (id, &config.object_store) {
+            (LOCAL, _) => Ok(Self::local(config)),
+            (OBJECT, Some(object)) => Ok(Self::Object(super::object::ObjectBucket::new(
+                object.clone(),
+            ))),
+            _ => Err(AppError::Internal("a file's store isn't configured")),
+        }
+    }
+
+    /// Every store this server is configured with.
+    pub fn all(config: &AppConfig) -> Vec<Self> {
+        let mut stores = vec![Self::local(config)];
+        if let Some(object) = &config.object_store {
+            stores.push(Self::Object(super::object::ObjectBucket::new(
+                object.clone(),
+            )));
+        }
+        stores
     }
 
     /// The store's name, kept with each file (`files.store_id`) so files
     /// can move between stores (K5.13).
     pub fn id(&self) -> &'static str {
         match self {
-            Self::Local(_) => "local",
+            Self::Local(_) => LOCAL,
+            Self::Object(_) => OBJECT,
+        }
+    }
+
+    /// A link the store itself serves the key from, for `ttl`; None for
+    /// disk, which the app serves.
+    pub fn presign_get(
+        &self,
+        key: &str,
+        ttl: std::time::Duration,
+        content_type: &str,
+        disposition: &str,
+    ) -> Result<Option<url::Url>, AppError> {
+        if !valid_key(key) {
+            return Err(AppError::Internal("invalid file store key"));
+        }
+        match self {
+            Self::Local(_) => Ok(None),
+            Self::Object(bucket) => bucket
+                .presign_get(key, ttl, content_type, disposition)
+                .map(Some),
         }
     }
 
@@ -73,6 +134,10 @@ impl FileStore {
     {
         match self {
             Self::Local(disk) => disk.put_stream(key, chunks, limit).await,
+            Self::Object(bucket) => {
+                valid(key)?;
+                bucket.put_stream(key, chunks, limit).await
+            }
         }
     }
 
@@ -80,18 +145,30 @@ impl FileStore {
     pub async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), AppError> {
         match self {
             Self::Local(disk) => disk.put(key, bytes).await,
+            Self::Object(bucket) => {
+                valid(key)?;
+                bucket.put(key, bytes).await
+            }
         }
     }
 
     pub async fn get(&self, key: &str) -> Result<StoredBytes, AppError> {
         match self {
             Self::Local(disk) => disk.get(key).await,
+            Self::Object(bucket) => {
+                valid(key)?;
+                bucket.get(key).await
+            }
         }
     }
 
     pub async fn read_all(&self, key: &str, maximum: u64) -> Result<Vec<u8>, AppError> {
         match self {
             Self::Local(disk) => disk.read_all(key, maximum).await,
+            Self::Object(bucket) => {
+                valid(key)?;
+                bucket.read_all(key, maximum).await
+            }
         }
     }
 
@@ -99,6 +176,10 @@ impl FileStore {
     pub async fn delete(&self, key: &str) -> Result<(), AppError> {
         match self {
             Self::Local(disk) => disk.delete(key).await,
+            Self::Object(bucket) => {
+                valid(key)?;
+                bucket.delete(key).await
+            }
         }
     }
 
@@ -114,7 +195,19 @@ impl FileStore {
                     Err(_) => Err(AppError::Internal("workspace files could not be deleted")),
                 }
             }
+            Self::Object(bucket) => bucket
+                .delete_prefix(&format!("{}/", workspace.simple()))
+                .await
+                .map_err(|_| AppError::Internal("workspace files could not be deleted")),
         }
+    }
+}
+
+fn valid(key: &str) -> Result<(), AppError> {
+    if valid_key(key) {
+        Ok(())
+    } else {
+        Err(AppError::Internal("invalid file store key"))
     }
 }
 

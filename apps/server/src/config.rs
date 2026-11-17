@@ -71,6 +71,22 @@ impl fmt::Debug for SecretString {
     }
 }
 
+/// An S3-compatible store (K5.12). The endpoint is the operator's, never a
+/// workspace's; the access keys are read from owner-only files.
+#[derive(Clone, Debug)]
+pub struct ObjectStoreConfig {
+    pub endpoint: url::Url,
+    pub bucket: String,
+    pub region: String,
+    /// Put before every key, ending in `/`, or empty.
+    pub prefix: String,
+    /// `endpoint/bucket/key` rather than `bucket.endpoint/key` (MinIO and
+    /// most self-hosted stores).
+    pub path_style: bool,
+    pub access_key_id_path: PathBuf,
+    pub secret_access_key_path: PathBuf,
+}
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub environment: Environment,
@@ -139,6 +155,12 @@ pub struct AppConfig {
     pub push_contact: Option<String>,
     /// The bearer token `/metrics` requires (O2), as an owner-only file.
     pub metrics_token_path: Option<PathBuf>,
+    /// Where new uploads are stored (K5.12): `local` (the data root, the
+    /// default) or `object` (`AGENT_WORKSPACE_FILE_STORE`). Files already
+    /// stored stay where their row says.
+    pub file_store: String,
+    /// The S3-compatible store (`AGENT_WORKSPACE_S3_*`), when one is set.
+    pub object_store: Option<ObjectStoreConfig>,
     /// Background jobs run at once in this process (F9).
     pub job_concurrency: usize,
     /// Lets workspaces point their model provider (`ai.base_url`) and mail
@@ -583,6 +605,25 @@ impl AppConfig {
         }
         let metrics_token_path =
             optional_secret_path(values, "METRICS_TOKEN_PATH", &data_root, &web_root, 4096)?;
+        let object_store = object_store(values, &data_root, &web_root)?;
+        let file_store = optional(values, "FILE_STORE", "local");
+        match file_store.as_str() {
+            "local" => {}
+            "object" if object_store.is_some() => {}
+            "object" => {
+                return Err(ConfigError::Invalid {
+                    key: format!("{PREFIX}FILE_STORE"),
+                    reason: "object needs AGENT_WORKSPACE_S3_ENDPOINT, _BUCKET and both key paths"
+                        .into(),
+                });
+            }
+            _ => {
+                return Err(ConfigError::Invalid {
+                    key: format!("{PREFIX}FILE_STORE"),
+                    reason: "use local or object".into(),
+                });
+            }
+        }
         let job_concurrency = parse(values, "JOB_CONCURRENCY", "4")?;
         if !(1..=64).contains(&job_concurrency) {
             return Err(ConfigError::Invalid {
@@ -732,6 +773,8 @@ impl AppConfig {
             secrets_key_path,
             push_contact,
             metrics_token_path,
+            file_store,
+            object_store,
             job_concurrency,
             allow_private_addresses,
             operator_logins,
@@ -951,6 +994,100 @@ fn github_connect_config(
         app_slug: slug,
         client_id,
         client_secret_path,
+    }))
+}
+
+/// The S3-compatible store's settings, all or none.
+fn object_store(
+    values: &BTreeMap<String, String>,
+    data_root: &Path,
+    web_root: &Path,
+) -> Result<Option<ObjectStoreConfig>, ConfigError> {
+    let invalid = |key: &str, reason: &str| ConfigError::Invalid {
+        key: format!("{PREFIX}{key}"),
+        reason: reason.into(),
+    };
+    let endpoint = optional(values, "S3_ENDPOINT", "");
+    let bucket = optional(values, "S3_BUCKET", "");
+    let access_key_id_path =
+        optional_secret_path(values, "S3_ACCESS_KEY_ID_PATH", data_root, web_root, 4096)?;
+    let secret_access_key_path = optional_secret_path(
+        values,
+        "S3_SECRET_ACCESS_KEY_PATH",
+        data_root,
+        web_root,
+        4096,
+    )?;
+    if endpoint.is_empty()
+        && bucket.is_empty()
+        && access_key_id_path.is_none()
+        && secret_access_key_path.is_none()
+    {
+        return Ok(None);
+    }
+    let endpoint = url::Url::parse(&endpoint)
+        .ok()
+        .filter(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && url.path() == "/"
+        })
+        .ok_or_else(|| invalid("S3_ENDPOINT", "an http or https address with no path"))?;
+    if !(3..=63).contains(&bucket.len())
+        || !bucket.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+        })
+    {
+        return Err(invalid(
+            "S3_BUCKET",
+            "3 to 63 lowercase letters, digits, dots or dashes",
+        ));
+    }
+    let region = optional(values, "S3_REGION", "us-east-1");
+    if !(1..=32).contains(&region.len())
+        || !region
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(invalid("S3_REGION", "lowercase letters, digits and dashes"));
+    }
+    let prefix = optional(values, "S3_PREFIX", "");
+    let prefix = prefix.trim_matches('/');
+    if prefix.len() > 64
+        || !prefix.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'/' | b'-')
+        })
+        || prefix.contains("//")
+    {
+        return Err(invalid(
+            "S3_PREFIX",
+            "lowercase letters, digits, dashes and slashes",
+        ));
+    }
+    let (Some(access_key_id_path), Some(secret_access_key_path)) =
+        (access_key_id_path, secret_access_key_path)
+    else {
+        return Err(invalid(
+            "S3_ACCESS_KEY_ID_PATH",
+            "set both S3_ACCESS_KEY_ID_PATH and S3_SECRET_ACCESS_KEY_PATH",
+        ));
+    };
+    Ok(Some(ObjectStoreConfig {
+        endpoint,
+        bucket,
+        region,
+        prefix: if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{prefix}/")
+        },
+        path_style: parse(values, "S3_PATH_STYLE", "false")?,
+        access_key_id_path,
+        secret_access_key_path,
     }))
 }
 

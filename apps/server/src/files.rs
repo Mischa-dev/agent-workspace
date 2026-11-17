@@ -19,6 +19,8 @@
 
 pub mod http;
 pub mod image;
+pub mod links;
+pub mod object;
 pub mod store;
 
 use std::collections::BTreeMap;
@@ -86,6 +88,8 @@ pub(crate) struct FileRow {
     pub(crate) thumbnail_key: Option<String>,
     pub(crate) attached_at: Option<String>,
     pub(crate) created_at: String,
+    /// Which store holds the bytes (`store::LOCAL`, `store::OBJECT`).
+    pub(crate) store_id: String,
 }
 
 impl FileRow {
@@ -112,12 +116,13 @@ const FILE_COLUMNS: &str = r#"
     file.id, file.project_id, file.work_item_id, file.comment_id,
     file.uploaded_by_actor_id, file.name, file.content_type, file.byte_size,
     file.storage_key, file.image_width, file.image_height, file.thumbnail_key,
-    file.attached_at::text AS attached_at, file.created_at::text AS created_at
+    file.attached_at::text AS attached_at, file.created_at::text AS created_at,
+    file.store_id
 "#;
 
 /// Who is reading: a browser session, or an MCP caller (an agent through its
 /// connection, or a person through an app they connected).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Reader {
     Browser {
         actor_id: Uuid,
@@ -332,7 +337,7 @@ pub(crate) async fn upload_limit(
         .min(MAX_UPLOAD_BYTES))
 }
 
-async fn organization_of(
+pub(crate) async fn organization_of(
     executor: impl sqlx::PgExecutor<'_>,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
@@ -772,7 +777,9 @@ async fn insert_file(
 /// Takes away the bytes [`store_prepared`] stored, when the transaction
 /// that held its row didn't commit.
 pub(crate) async fn discard_stored(state: &AppState, row: &FileRow) {
-    let store = FileStore::from_config(&state.config);
+    let Ok(store) = FileStore::named(&state.config, &row.store_id) else {
+        return;
+    };
     let keys = std::iter::once(row.storage_key.as_str())
         .chain(row.thumbnail_key.as_deref())
         .collect::<Vec<_>>();
@@ -1147,9 +1154,9 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
     .bind(UNSENT_HOURS)
     .execute(crate::db::scoped(&state.pool))
     .await?;
-    let removed = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
+    let removed = sqlx::query_as::<_, (Uuid, String, Option<String>, String)>(
         r#"
-        SELECT id, storage_key, thumbnail_key FROM files
+        SELECT id, storage_key, thumbnail_key, store_id FROM files
         WHERE removed_at IS NOT NULL AND blob_deleted_at IS NULL
         ORDER BY removed_at
         LIMIT $1
@@ -1158,15 +1165,22 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
     .bind(CLEANUP_BATCH)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let store = FileStore::from_config(&state.config);
     let mut deleted = 0;
-    for (id, key, thumbnail_key) in removed {
+    for (id, key, thumbnail_key, store_id) in removed {
         // One file the store can't delete mustn't stop every later one: it
         // stays in the batch and is tried again next time.
         let mut failed = false;
-        for key in std::iter::once(key).chain(thumbnail_key) {
-            if let Err(error) = store.delete(&key).await {
-                tracing::warn!(file_id = %id, category = error.log_category(), "file bytes not deleted");
+        match FileStore::named(&state.config, &store_id) {
+            Ok(store) => {
+                for key in std::iter::once(key).chain(thumbnail_key) {
+                    if let Err(error) = store.delete(&key).await {
+                        tracing::warn!(file_id = %id, category = error.log_category(), "file bytes not deleted");
+                        failed = true;
+                    }
+                }
+            }
+            Err(_) => {
+                tracing::warn!(file_id = %id, "file bytes are in a store this server doesn't have");
                 failed = true;
             }
         }
@@ -1179,8 +1193,10 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
             .await?;
         deleted += 1;
     }
-    deleted += sweep_pending_objects(state, &store).await?;
-    deleted += crate::link_previews::cleanup(state, &store).await?;
+    for store in FileStore::all(&state.config) {
+        deleted += sweep_pending_objects(state, &store).await?;
+    }
+    deleted += crate::link_previews::cleanup(state).await?;
     Ok(deleted)
 }
 
@@ -1257,6 +1273,7 @@ mod tests {
             thumbnail_key: None,
             attached_at: None,
             created_at: String::new(),
+            store_id: store::LOCAL.to_owned(),
         };
         for active in [
             "text/html",

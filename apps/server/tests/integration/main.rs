@@ -45,6 +45,7 @@ mod direct_conversations;
 mod domain_events;
 mod event_log;
 mod export_declarations;
+mod files_links;
 mod github_task_keys;
 mod harness_support;
 mod history_seam;
