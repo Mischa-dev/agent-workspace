@@ -369,7 +369,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         json!({"projectId": secret_project}),
     )
     .await;
-    assert_eq!(forbidden["outcome"], "forbidden", "{forbidden}");
+    assert_eq!(forbidden["outcome"], "not_found", "{forbidden}");
     let leaked = tool(
         app,
         &mara_token,

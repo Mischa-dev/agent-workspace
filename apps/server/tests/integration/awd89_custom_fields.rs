@@ -1329,7 +1329,7 @@ async fn bulk_tools_set_fields_on_every_task_or_none() {
         ]}),
     )
     .await;
-    assert_eq!(refused["outcome"], "rejected", "{refused}");
+    assert_eq!(refused["code"], "rejected", "{refused}");
     assert!(values().await.is_empty());
     let made = owner(
         "task_create_many",
@@ -1355,7 +1355,7 @@ async fn bulk_tools_set_fields_on_every_task_or_none() {
                "fields": {"Risk": "High", "Points": "lots"}, "clientRequestId": "bulk-set-bad"}),
     )
     .await;
-    assert_eq!(refused["outcome"], "rejected", "{refused}");
+    assert_eq!(refused["code"], "rejected", "{refused}");
     assert_eq!(
         values().await.iter().map(|task| task.1).collect::<Vec<_>>(),
         versions,
@@ -1749,8 +1749,11 @@ async fn bulk_field_changes_hold_task_by_task() {
                "fields": {"Areas": ["X", "Y"]}, "clientRequestId": "per-task-archived"}),
     )
     .await;
-    assert_eq!(refused["outcome"], "rejected", "{refused}");
-    assert_eq!(refused["problems"][0]["task"], "WORK-2", "{refused}");
+    assert_eq!(refused["code"], "rejected", "{refused}");
+    assert_eq!(
+        refused["details"]["current"]["problems"][0]["task"], "WORK-2",
+        "{refused}"
+    );
     assert_eq!(snapshot().await, before);
     let (status, body) = send(
         app,

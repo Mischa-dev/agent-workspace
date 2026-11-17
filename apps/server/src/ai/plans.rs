@@ -1554,8 +1554,16 @@ async fn update_existing(
     let Some(current) = lock_work_item(transaction, actor.project_id, work_item_id).await? else {
         return Ok(Ok(()));
     };
+    // A task matched by its title keeps it as written; only a draft that
+    // names the task by key renames it.
     let title = task.title.trim();
-    let title = (!title.is_empty() && title != current.title.trim()).then_some(title);
+    let title = (task
+        .key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty())
+        && !title.is_empty()
+        && title != current.title.trim())
+    .then_some(title);
     let description = task.description.trim();
     let description = (!description.is_empty() && description != current.description.trim())
         .then_some(description);

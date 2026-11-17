@@ -673,7 +673,7 @@ async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
             }
             arguments
         },
-        adapt_out: |_, value| json!({ "echo": { "words": value["text"] } }),
+        adapt_out: |_, value, _| json!({ "echo": { "words": value["text"] } }),
         sunset: Some("2027-06-01"),
     });
     scratch_table(&setup.pool).await;

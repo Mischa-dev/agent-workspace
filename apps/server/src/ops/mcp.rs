@@ -194,7 +194,8 @@ pub async fn call(
     // The old tool answered with its value alone, so an alias does too; a
     // refusal keeps the envelope. Either way `_meta` says what to use.
     let answer = if envelope["outcome"] == "ok" {
-        (old.adapt_out)(name, envelope["value"].take())
+        let replayed = envelope["replayed"].as_bool().unwrap_or(false);
+        (old.adapt_out)(name, envelope["value"].take(), replayed)
     } else {
         envelope
     };

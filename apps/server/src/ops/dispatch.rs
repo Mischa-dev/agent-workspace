@@ -179,18 +179,22 @@ async fn task_keys_to_ids(
         let caller = &request.caller;
         let workspace = request.workspace;
         let found = crate::db::scoped_one(&state.pool, async |connection| {
-            sqlx::query_scalar::<_, Uuid>(
+            sqlx::query_as::<_, (Uuid, i32)>(
                 r#"
-            SELECT found.id FROM (
-                SELECT item.id, 0 AS preference, item.project_id
+            SELECT found.id, min(found.preference) FROM (
+                -- The task with the key now; a moved original only for
+                -- someone who can't reach where it went (it is archived,
+                -- and says so).
+                SELECT item.id,
+                       CASE WHEN EXISTS (
+                           SELECT 1 FROM work_item_key_aliases moved
+                           WHERE moved.source_work_item_id = item.id
+                       ) THEN 2 ELSE 0 END AS preference,
+                       item.project_id
                 FROM task_rows item
                 JOIN projects project ON project.id = item.project_id
                 WHERE upper(project.project_key) = upper($3) AND item.number = $4
                   AND project.archived_at IS NULL
-                  AND NOT EXISTS (
-                      SELECT 1 FROM work_item_key_aliases moved
-                      WHERE moved.source_work_item_id = item.id
-                  )
                 UNION ALL
                 SELECT alias.work_item_id, 1, item.project_id
                 FROM work_item_key_aliases alias
@@ -207,7 +211,7 @@ async fn task_keys_to_ids(
               AND ($6::uuid IS NULL OR project.organization_id = $6)
             GROUP BY found.id
             ORDER BY min(found.preference)
-            LIMIT 2
+            LIMIT 3
             "#,
             )
             .bind(caller.account_id)
@@ -221,6 +225,13 @@ async fn task_keys_to_ids(
         })
         .await
         .map_err(|error: sqlx::Error| OpError::logged("task key", &error.into()))?;
+        // The best match only: two tasks tie only across workspaces.
+        let best = found.first().map(|(_, preference)| *preference);
+        let found = found
+            .into_iter()
+            .filter(|(_, preference)| Some(*preference) == best)
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
         match found.as_slice() {
             [id] => {
                 if let Some(slot) = input.pointer_mut(field) {
@@ -564,7 +575,7 @@ async fn old_check<O: Operation>(
     writes: bool,
     module: &'static str,
 ) -> Result<(), OpError> {
-    module_gate(connection, caller, target, located, module).await?;
+    module_gate(connection, caller, target, located, module, O::NAME).await?;
     access_shim::check(
         connection,
         caller,
@@ -644,13 +655,16 @@ fn denied_error<O: Operation>(
     }
 }
 
-/// The operation's module must be on where it acts.
+/// The operation's module must be on where it acts, or another module that
+/// also serves the operation (`ModuleFilter::AlsoServes`, such as forms'
+/// links under Collections); the operation keeps to that module's part.
 async fn module_gate(
     connection: &mut sqlx::PgConnection,
     caller: &Caller,
     target: &Target,
     located: &target::Located,
     module: &'static str,
+    operation: &str,
 ) -> Result<(), OpError> {
     let Some(manifest) = crate::modules::manifest::get(module) else {
         return Ok(());
@@ -667,15 +681,22 @@ async fn module_gate(
                 .await?,
         ),
     };
-    if modules.is_some_and(|modules| !modules.contains(module)) {
-        return Err(OpError::Denied {
-            reason: DenyReason::ModuleOff {
-                module: manifest.id.clone(),
-            },
-            message: format!("{} is turned off here.", manifest.name).into(),
-        });
+    let Some(modules) = modules else {
+        return Ok(());
+    };
+    if modules.contains(module)
+        || crate::modules::registry::Registry::global()
+            .also_serving(operation)
+            .any(|also| modules.contains(also))
+    {
+        return Ok(());
     }
-    Ok(())
+    Err(OpError::Denied {
+        reason: DenyReason::ModuleOff {
+            module: manifest.id.clone(),
+        },
+        message: format!("{} is turned off here.", manifest.name).into(),
+    })
 }
 
 /// Begin a call's transaction narrowed to the call's workspace

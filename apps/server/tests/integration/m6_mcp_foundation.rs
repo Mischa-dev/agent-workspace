@@ -1817,7 +1817,8 @@ async fn call_tool(
 }
 
 async fn protocol_json(response: axum::response::Response) -> Value {
-    let body = to_bytes(response.into_body(), 1_000_000)
+    // tools/list lists every operation's schema; it passed 1 MB with K2.14.
+    let body = to_bytes(response.into_body(), 4_000_000)
         .await
         .expect("read MCP response");
     let text = String::from_utf8(body.to_vec()).expect("MCP response UTF-8");

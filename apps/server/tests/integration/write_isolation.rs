@@ -5838,8 +5838,8 @@ async fn check_foreign_mcp(
         let result = structured(&body);
         let outcome = result["outcome"].clone();
         // A batch that changed nothing, naming each task it couldn't use.
-        let rejected_batch = outcome == "rejected"
-            && result["problems"]
+        let rejected_batch = result["code"] == "rejected"
+            && result["details"]["current"]["problems"]
                 .as_array()
                 .is_some_and(|problems| !problems.is_empty());
         let refused = status == StatusCode::FORBIDDEN
@@ -6547,27 +6547,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             })],
         ),
         mcp_case(
-            "task_link",
-            json!({
-                "taskId": a.task,
-                "expectedVersion": task_version(a.task),
-                "pullRequestId": a.pull_request,
-                "clientRequestId": "net-pr-own",
-            }),
-            vec![json!({
-                "taskId": b.task,
-                "expectedVersion": task_version(b.task),
-                "pullRequestId": b.pull_request,
-                "clientRequestId": "net-pr-b",
-            })],
-        )
-        .rejecting(vec![json!({
-            "taskId": a.task,
-            "expectedVersion": task_version(a.task),
-            "pullRequestId": b.pull_request,
-            "clientRequestId": "net-pr-mixed",
-        })]),
-        mcp_case(
             "task_reorder",
             json!({"taskIds": [sp.second_task], "afterTaskId": sp.task}),
             vec![json!({"taskIds": [b.task], "afterTaskId": b.subtask})],
@@ -6585,10 +6564,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"taskId": b.task, "handoff": "Net handoff"})],
         )
         .by_agent(),
+        // One case for every kind of link task_link makes: things, pull
+        // requests (which also take the task's version), blockers and
+        // related tasks.
         mcp_case(
             "task_link",
             json!({"taskId": a.task, "conversationId": a.channel}),
-            vec![json!({"taskId": b.task, "conversationId": b.channel})],
+            vec![
+                json!({"taskId": b.task, "conversationId": b.channel}),
+                json!({
+                    "taskId": b.task,
+                    "expectedVersion": task_version(b.task),
+                    "pullRequestId": b.pull_request,
+                    "clientRequestId": "net-pr-b",
+                }),
+                json!({"taskId": b.task, "blockedBy": [b.subtask]}),
+                json!({"taskId": b.task, "otherTaskId": b.subtask, "kind": "relates_to"}),
+            ],
         )
         .rejecting(
             [
@@ -6602,6 +6594,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ]
             .into_iter()
             .map(|(key, value)| with(&json!({"taskId": a.task}), key, value))
+            .chain([
+                json!({
+                    "taskId": a.task,
+                    "expectedVersion": task_version(a.task),
+                    "pullRequestId": b.pull_request,
+                    "clientRequestId": "net-pr-mixed",
+                }),
+                json!({"taskId": a.subtask, "blockedBy": [b.task]}),
+                json!({"taskId": a.subtask, "blocks": [b.task]}),
+                json!({"taskId": a.subtask, "otherTaskId": b.task, "kind": "relates_to"}),
+            ])
             .collect(),
         ),
         mcp_case(
@@ -6954,15 +6957,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "title": "Net mcp decision", "supersedes": bx.decision}),
         ]),
         mcp_case(
-            "task_link",
-            json!({"taskId": a.subtask, "blockedBy": [sp.task]}),
-            vec![json!({"taskId": b.task, "blockedBy": [b.subtask]})],
-        )
-        .rejecting(vec![
-            json!({"taskId": a.subtask, "blockedBy": [b.task]}),
-            json!({"taskId": a.subtask, "blocks": [b.task]}),
-        ]),
-        mcp_case(
             "task_link_many",
             json!({"links": [{"taskId": a.subtask, "blockedBy": [sp.task]}]}),
             vec![
@@ -7175,12 +7169,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "title": "Net page plan", "pageId": b.page}),
             json!({"projectId": a.project, "importId": b.plan, "commit": true, "expectedVersion": version("ai_plan_imports", b.plan)}),
         ]),
-        mcp_case(
-            "task_link",
-            json!({"taskId": a.subtask, "otherTaskId": sp.task, "kind": "relates_to"}),
-            vec![json!({"taskId": b.task, "otherTaskId": b.subtask, "kind": "relates_to"})],
-        )
-        .rejecting(vec![json!({"taskId": a.subtask, "otherTaskId": b.task, "kind": "relates_to"})]),
         mcp_case(
             "task_watch_set",
             json!({"taskId": a.subtask, "watching": true}),

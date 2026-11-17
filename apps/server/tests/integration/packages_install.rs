@@ -251,7 +251,10 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
         json!({"package": bugs(true), "target": {"spaceId": "WORK"}}),
     )
     .await;
-    assert_eq!(by_key["value"]["planHash"], preview["value"]["planHash"], "{by_key}");
+    assert_eq!(
+        by_key["value"]["planHash"], preview["value"]["planHash"],
+        "{by_key}"
+    );
     let refused = tool(
         &world,
         "rook",

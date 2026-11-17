@@ -33,7 +33,8 @@ pub struct Alias {
     /// The old arguments as the canonical operation's input.
     pub adapt_in: fn(JsonObject) -> JsonObject,
     /// The canonical operation's value in the old result shape.
-    pub adapt_out: fn(&str, Value) -> Value,
+    /// Takes the canonical name, the value and whether the answer was a replay.
+    pub adapt_out: fn(&str, Value, bool) -> Value,
     /// When it stops being served, once set (a `YYYY-MM-DD` date).
     pub sunset: Option<&'static str>,
 }
@@ -42,13 +43,13 @@ fn same_in(arguments: JsonObject) -> JsonObject {
     arguments
 }
 
-fn same_out(_canonical: &str, value: Value) -> Value {
+fn same_out(_canonical: &str, value: Value, _replayed: bool) -> Value {
     value
 }
 
 /// Tools that already answered in the `{outcome, value}` envelope (A1.3's
 /// run tools) keep it.
-fn enveloped(_canonical: &str, value: Value) -> Value {
+fn enveloped(_canonical: &str, value: Value, _replayed: bool) -> Value {
     serde_json::json!({ "outcome": "ok", "value": value })
 }
 
@@ -76,7 +77,7 @@ fn mark_ready_in(arguments: JsonObject) -> JsonObject {
 }
 
 /// The old task write answer: the write's fields with `"outcome": "applied"`.
-fn task_written(_canonical: &str, mut value: Value) -> Value {
+fn task_written(_canonical: &str, mut value: Value, _replayed: bool) -> Value {
     if let Some(object) = value.as_object_mut() {
         object.insert("outcome".to_owned(), Value::String("applied".to_owned()));
     }
@@ -140,7 +141,7 @@ fn link_pull_request_in(arguments: JsonObject) -> JsonObject {
 }
 
 /// `task_link_pull_request` answered a task write (`"outcome": "applied"`).
-fn link_pull_request_out(_canonical: &str, value: Value) -> Value {
+fn link_pull_request_out(_canonical: &str, value: Value, replayed: bool) -> Value {
     let changed = value["changed"].as_bool().unwrap_or(false);
     serde_json::json!({
         "outcome": "applied",
@@ -148,7 +149,7 @@ fn link_pull_request_out(_canonical: &str, value: Value) -> Value {
         "version": value["version"],
         "changedFields": if changed { vec!["pullRequests"] } else { Vec::new() },
         "resultId": value["targetId"],
-        "idempotentReplay": false,
+        "idempotentReplay": replayed,
         "key": value["key"],
         "url": value["taskUrl"],
     })
@@ -361,7 +362,7 @@ mod tests {
                 }
                 arguments
             },
-            adapt_out: |_, value| serde_json::json!({ "thing": { "name": value["title"] } }),
+            adapt_out: |_, value, _| serde_json::json!({ "thing": { "name": value["title"] } }),
             sunset: Some("2027-06-01"),
         };
         let mut old = JsonObject::new();
@@ -371,6 +372,7 @@ mod tests {
         let answered = (alias.adapt_out)(
             "thing_create",
             serde_json::json!({ "id": "t-1", "title": "Kept" }),
+            false,
         );
         assert_eq!(
             serde_json::to_string(&answered).expect("JSON"),
