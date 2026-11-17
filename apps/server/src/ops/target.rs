@@ -105,6 +105,35 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = collection.project_id \
          WHERE collection.id = $1 AND $2::uuid IS NOT NULL",
     ),
+    // Any thing by id alone (K3.19), from the registry: a conversation or
+    // anything that follows one (a message, a decision from it, a file in
+    // it) only when the viewer may see that conversation. Those are checked
+    // against their own row's conversation, not the registry's
+    // `access_parent_id`, which is empty until the conversation itself is
+    // registered (a backfill still running). The operation then checks the
+    // thing through its kind's own resolver. A workspace board has no space.
+    (
+        "thing",
+        "SELECT thing.workspace_id, thing.space_id FROM things thing \
+         WHERE thing.id = $1 AND thing.deleted_at IS NULL AND $2::uuid IS NOT NULL \
+           AND (thing.kind NOT IN ('channel', 'thread', 'conversation') \
+                OR conversation_visible_to(thing.id, $2)) \
+           AND (thing.kind <> 'message' OR EXISTS ( \
+                SELECT 1 FROM messages message WHERE message.id = thing.id \
+                  AND conversation_visible_to(message.conversation_id, $2))) \
+           AND (thing.kind <> 'decision' OR EXISTS ( \
+                SELECT 1 FROM project_decisions decision WHERE decision.id = thing.id \
+                  AND (decision.source_conversation_id IS NULL \
+                       OR conversation_visible_to(decision.source_conversation_id, $2)))) \
+           AND (thing.kind <> 'file' OR EXISTS ( \
+                SELECT 1 FROM files file WHERE file.id = thing.id \
+                  AND (file.conversation_id IS NULL \
+                       OR conversation_visible_to(file.conversation_id, $2)))) \
+           AND (thing.access_parent_id IS NULL \
+                OR NOT EXISTS (SELECT 1 FROM conversations parent \
+                               WHERE parent.id = thing.access_parent_id) \
+                OR conversation_visible_to(thing.access_parent_id, $2))",
+    ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
     // C1.3: things with a discussion, by the same rule their comments follow.
@@ -131,6 +160,13 @@ const KINDS: &[(&str, &str)] = &[
         "SELECT project.organization_id, project.id FROM collection_records record \
          JOIN projects project ON project.id = record.project_id \
          WHERE record.id = $1 AND subject_visible_to('record', record.id, $2)",
+    ),
+    // A1.8: a request goes by request_visible_to, which holds its
+    // conversation's and run's visibility.
+    (
+        "request",
+        "SELECT request.workspace_id, request.space_id FROM requests request \
+         WHERE request.id = $1 AND request_visible_to(request.id, $2)",
     ),
 ];
 
@@ -198,6 +234,8 @@ async fn thing(
     let Some((_, sql)) = KINDS.iter().find(|(known, _)| *known == kind) else {
         return Err(OpError::Unavailable);
     };
+    // Only a registry thing (a workspace board) or a workspace-level
+    // request may come back without a space.
     let row = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(sql)
         .bind(id)
         .bind(viewer)
@@ -231,6 +269,7 @@ fn what_of(kind: &str) -> &'static str {
         "sheet" => "That sheet",
         "whiteboard" => "That whiteboard",
         "record" => "That record",
+        "request" => "That request",
         _ => "That",
     }
 }

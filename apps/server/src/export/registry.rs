@@ -158,12 +158,30 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "runtime state of this server (queues, leases, retries)",
             ),
             (
+                "event_staging",
+                "the server's event log on its way in; what happened is carried by the rows it describes",
+            ),
+            (
+                "events",
+                "the server's event log (K3.2): history of this server, not state to move; the rows it describes are exported",
+            ),
+            ("events_default", "a partition of the server's event log"),
+            ("events_p0", "a partition of the server's event log"),
+            (
                 "bug_report_links",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
                 "link_previews",
                 "a cache or index derived from other rows, rebuilt on import",
+            ),
+            (
+                "links",
+                "a cache or index derived from other rows, rebuilt on import (K3.12 mirrors the stores that hold links until K3.13)",
+            ),
+            (
+                "things",
+                "a cache or index derived from other rows, rebuilt on import (the registry's backfill, K3.10)",
             ),
             (
                 "workspace_slugs",
@@ -192,10 +210,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "mcp_oauth_refresh_tokens",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
-            ),
-            (
-                "outbox_events",
-                "runtime state of this server (queues, leases, retries)",
             ),
             (
                 "secrets",
@@ -1295,19 +1309,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
-                kind: "person_questions",
-                table: "person_questions",
-                references: &[
-                    ("project_id", "projects"),
-                    ("asked_by_actor_id", "actors"),
-                    ("person_actor_id", "actors"),
-                    ("conversation_id", "conversations"),
-                    ("work_item_id", "work_items"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
                 kind: "saved_items",
                 table: "saved_items",
                 references: &[
@@ -1719,6 +1720,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a machine or session on this server; set up again after import",
             ),
             (
+                "host_commands",
+                "requests to a host for runs in flight; a run that moves ends rather than resumes",
+            ),
+            (
                 "provider_accounts",
                 "a connection to an outside service, reconnected after import (needs/connections.jsonl)",
             ),
@@ -1729,6 +1734,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "provider_sessions",
                 "a machine or session on this server; set up again after import",
+            ),
+            (
+                "run_credentials",
+                "short-lived credentials, kept as digests, that end with their run",
             ),
             (
                 "repository_workspaces",

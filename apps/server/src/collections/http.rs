@@ -218,7 +218,7 @@ async fn start_write<T: Serialize>(
     scope: String,
     request: &T,
 ) -> Result<Started, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     let key = IdempotencyKey::from_headers(headers)?;
     let request_hash = RequestHash::for_value(request)?;
     let mut transaction = state.pool.begin().await?;

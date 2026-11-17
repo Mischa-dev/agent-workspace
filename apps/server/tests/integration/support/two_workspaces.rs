@@ -194,7 +194,7 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root.join("profiles").to_string_lossy().into_owned(),
         ),
         (
@@ -1045,6 +1045,9 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("approval");
+    agent_workspace_server::requests::legacy::approval_written(pool, approval)
+        .await
+        .expect("the approval's request");
 
     // W12: what the run did and cost, an agent profile made from a
     // template, and a harness the workspace registered (a connected runner).

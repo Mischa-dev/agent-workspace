@@ -456,7 +456,7 @@ async fn the_run_cap_counts_every_active_run_and_holds_a_lock() {
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root.join("codex").to_string_lossy().into_owned(),
         ),
         (

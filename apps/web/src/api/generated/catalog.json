@@ -20,6 +20,20 @@
     "destructive": false,
     "emits": [],
     "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "agent_usage_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List usage by agent"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
     "kind": "describe",
     "long": false,
     "module": "collections",
@@ -198,6 +212,51 @@
     "title": "Preview a formula"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "history_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List history"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.version_restored",
+      "whiteboard.version_restored"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "history_restore",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Restore a version"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "history_show",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Show a version"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -367,6 +426,96 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "request.cancelled"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "request_cancel",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Withdraw a request"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "request.raised"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "request_create",
+    "permission": "requests.raise",
+    "preview": false,
+    "proposable": false,
+    "title": "Ask someone something"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "runs",
+    "name": "request_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read a request"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "request_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List requests"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "request.answered"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "runs",
+    "name": "request_respond",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Answer a request"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "run_activity_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List a run's activities"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "run.activity"
     ],
     "idempotent": true,
@@ -410,6 +559,20 @@
     "preview": false,
     "proposable": false,
     "title": "Open a run"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "runs",
+    "name": "run_detail_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "View a run"
   },
   {
     "automation": true,

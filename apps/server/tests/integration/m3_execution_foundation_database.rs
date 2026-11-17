@@ -143,7 +143,7 @@ async fn pre_m3_upgrade_repair_handles_only_the_known_relative_seed_paths() {
             relative_data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             relative_codex_root.to_string_lossy().into_owned(),
         ),
     ]))
@@ -407,7 +407,7 @@ fn development_config(database_url: &str, temporary_root: &TempDir) -> AppConfig
             temporary_root.path().to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             temporary_root
                 .path()
                 .join("codex-profiles")

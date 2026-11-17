@@ -15,13 +15,14 @@ use agent_workspace_server::{
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
     domain::RunState,
+    events,
     git_runtime::expected_repository_mirror_path,
     jobs::{self, WorkerOptions},
     launch,
     outbox::{self, AgentRunUpdatedPayload, OutboxEventPayload},
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
-    realtime::{RealtimeHub, publish_ready_outbox_batch},
+    realtime::RealtimeHub,
     router,
     secrets::{self, FileKeyring},
     seed::dev_seed,
@@ -86,7 +87,7 @@ async fn pump(state: &AppState) {
         worker_id: "w14-test".to_owned(),
     };
     for _ in 0..10 {
-        let published = publish_ready_outbox_batch(&state.pool, &state.realtime, "w14-test")
+        let published = agent_workspace_server::events::catch_up(&state.pool)
             .await
             .expect("publish outbox");
         let ran = jobs::run_due(state, &registry, &options)
@@ -174,7 +175,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root
                 .join("codex/profiles")
                 .to_string_lossy()
@@ -574,7 +575,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     .await;
     assert_eq!(fix.0, StatusCode::CREATED, "{}", fix.1);
     let fix_task = uuid_field(&fix.2, "id");
-    seed_failing_pull_request(
+    let failing = seed_failing_pull_request(
         &pool,
         seed.project_id,
         seed.repository_id,
@@ -582,17 +583,8 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         seed.human_actor_id,
     )
     .await;
-    // The checks result reaches the task as a change, as GitHub sync does.
-    let touched = send(
-        &application,
-        owner,
-        "PATCH",
-        &format!("{project}/work-items/{fix_task}"),
-        "touch-fix",
-        json!({"expectedVersion": fix.2["version"], "priority": "high"}),
-    )
-    .await;
-    assert_eq!(touched.0, StatusCode::OK, "{}", touched.1);
+    // GitHub sync writes the checks result as the pull request's own fact.
+    checks_failed(&pool, seed.project_id, failing, fix_task).await;
     pump(&state).await;
     let (source, launch_state) = sqlx::query_as::<_, (String, String)>(
         "SELECT source, state FROM launches WHERE work_item_id = $1",
@@ -636,16 +628,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         "{prompt}"
     );
     // The same failure seen again doesn't launch twice.
-    let touched_again = send(
-        &application,
-        owner,
-        "PATCH",
-        &format!("{project}/work-items/{fix_task}"),
-        "touch-fix-again",
-        json!({"expectedVersion": touched.2["version"], "priority": "urgent"}),
-    )
-    .await;
-    assert_eq!(touched_again.0, StatusCode::OK, "{}", touched_again.1);
+    checks_failed(&pool, seed.project_id, failing, fix_task).await;
     pump(&state).await;
     let launches =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM launches WHERE work_item_id = $1")
@@ -1377,6 +1360,29 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop schema");
+}
+
+/// The fact GitHub sync writes when a linked pull request's checks fail.
+async fn checks_failed(pool: &PgPool, project_id: Uuid, pull_request: Uuid, work_item: Uuid) {
+    let mut transaction = pool.begin().await.expect("transaction");
+    events::emit(
+        &mut transaction,
+        events::NewEvent::thing(
+            &events::catalog::PULL_REQUEST_CHECKS_FAILED,
+            project_id,
+            "pull_request",
+            pull_request,
+        )
+        .payload(json!({
+            "state": "failure",
+            "headSha": "b".repeat(40),
+            "workItemId": work_item,
+            "agentRunId": null,
+        })),
+    )
+    .await
+    .expect("checks failed");
+    transaction.commit().await.expect("commit");
 }
 
 /// A pull request linked to the task, with failing checks.

@@ -53,7 +53,7 @@ pub(super) async fn run_steps(
     let Some(run_id) = parse_id(&arguments.run_id) else {
         return ToolResult::invalid("runId", "Pass the run's ID.");
     };
-    let detail = match crate::run_views::run_detail(state, principal.actor_id, run_id).await {
+    let detail = match crate::runs::views::run_detail(state, principal.actor_id, run_id).await {
         // The middleware scoped the call to the run's project and checked
         // the caller's access there; a run elsewhere is not found.
         Ok(detail) if detail.run.project_id == principal.project_id => detail,
@@ -61,7 +61,7 @@ pub(super) async fn run_steps(
         Err(error) => return ToolResult::from_error(error, "run_steps"),
     };
     let diff = if arguments.include_diff {
-        match crate::run_views::run_diff(state, principal.actor_id, run_id).await {
+        match crate::runs::views::run_diff(state, principal.actor_id, run_id).await {
             Ok(diff) => serde_json::to_value(diff).ok(),
             Err(error) => return ToolResult::from_error(error, "run_steps"),
         }
@@ -122,14 +122,14 @@ pub(super) async fn run_usage(
             Ok(off) => off,
             Err(error) => return ToolResult::from_error(error, "run_usage"),
         };
-    let query = crate::run_views::UsageQuery {
+    let query = crate::runs::views::UsageQuery {
         organization_id: None,
         project_id: project_is_chosen(principal).then_some(principal.project_id),
         group_by: arguments.group_by,
         days: arguments.days,
         without_projects,
     };
-    match crate::run_views::usage_report(state, principal.actor_id, &query).await {
+    match crate::runs::views::usage_report(state, principal.actor_id, &query).await {
         Ok(report) => match serde_json::to_value(report) {
             Ok(usage) => ToolResult::ok(RunUsageValue { usage }),
             Err(_) => ToolResult::from_error(AppError::Internal("serialize usage"), "run_usage"),

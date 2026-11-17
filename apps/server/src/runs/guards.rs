@@ -15,54 +15,27 @@ use std::{collections::BTreeMap, path::Path};
 /// Files outside `src/runs/` with SQL on the run tables, and the slice
 /// that moves each into the run service.
 const LEGACY_RUN_SQL: &[(&str, &str)] = &[
-    ("account.rs", "A1.6"),
-    ("agent_profiles.rs", "A1.6"),
     ("api.rs", "A1.14"),
-    ("automations.rs", "A1.6"),
-    ("conversations.rs", "A1.6"),
-    ("domain.rs", "A1.14"),
-    ("events.rs", "A1.6"),
-    ("external_events.rs", "A1.6"),
-    ("external_execution.rs", "A1.10"),
-    ("github.rs", "A1.19"),
-    ("home.rs", "A1.6"),
-    ("launch.rs", "A1.13"),
-    ("mcp.rs", "A1.6"),
+    ("conversations.rs", "A1.8"),
+    ("external_events.rs", "A1.8"),
+    ("github.rs", "A1.17"),
+    ("mcp.rs", "A1.8"),
     ("mcp/approvals.rs", "A1.8"),
-    ("mcp/code.rs", "A1.19"),
-    ("mcp/runs.rs", "A1.6"),
-    ("mcp/talk.rs", "A1.6"),
-    ("metrics.rs", "A1.6"),
-    ("notifications.rs", "A1.6"),
-    ("onboarding.rs", "A1.6"),
-    ("outbox.rs", "A1.6"),
+    ("mcp/code.rs", "A1.17"),
+    ("notifications.rs", "A1.8"),
     ("provider.rs", "A1.17"),
     ("recovery.rs", "A1.17"),
-    ("retention.rs", "A1.6"),
     ("run_log.rs", "A1.14"),
-    ("run_views.rs", "A1.6"),
     ("scheduler.rs", "A1.17"),
-    ("usage/history.rs", "A1.15"),
-    ("webhooks.rs", "A1.6"),
-    ("work_items.rs", "A1.6"),
+    ("usage/history.rs", "A1.17"),
 ];
 
 /// Files that still spell out the built-in host's active states, and the
 /// slice that replaces each list with `RunState`.
 const LEGACY_STATE_LISTS: &[(&str, &str)] = &[
-    ("account.rs", "A1.6"),
-    ("agent_profiles.rs", "A1.6"),
-    ("api.rs", "A1.14"),
-    ("conversations.rs", "A1.6"),
-    ("domain.rs", "A1.14"),
-    ("external_execution.rs", "A1.10"),
-    ("github.rs", "A1.19"),
-    ("home.rs", "A1.6"),
-    ("launch.rs", "A1.13"),
-    ("metrics.rs", "A1.6"),
+    ("github.rs", "A1.17"),
     ("provider.rs", "A1.17"),
     ("recovery.rs", "A1.17"),
-    ("retention.rs", "A1.6"),
     ("scheduler.rs", "A1.17"),
 ];
 
@@ -182,8 +155,13 @@ fn g1_run_sql_lives_in_the_run_service() {
     check(
         "G1",
         LEGACY_RUN_SQL,
-        // structure_guards.rs names the tables as the patterns it counts.
-        |name| name.starts_with("runs/") || name == "structure_guards.rs",
+        // structure_guards.rs names the tables as the patterns it counts;
+        // the built-in host keeps its detail rows until it leaves (A1.17).
+        |name| {
+            name.starts_with("runs/")
+                || name.starts_with("hosts/builtin/")
+                || name == "structure_guards.rs"
+        },
         touches_run_tables,
     );
 }
@@ -193,7 +171,12 @@ fn g4_active_states_are_listed_once() {
     check(
         "G4",
         LEGACY_STATE_LISTS,
-        |name| name == "runs/state.rs" || name == "runs/guards.rs" || name == "structure_guards.rs",
+        |name| {
+            name == "runs/state.rs"
+                || name == "runs/guards.rs"
+                || name == "structure_guards.rs"
+                || name.starts_with("hosts/builtin/")
+        },
         lists_states,
     );
 }

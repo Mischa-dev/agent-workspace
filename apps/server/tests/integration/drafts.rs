@@ -6,6 +6,7 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use super::support::{
+    NOTICES,
     app::{send, tool},
     world::WorldBuilder,
 };
@@ -57,6 +58,16 @@ async fn drafts_follow_their_writer_and_stay_theirs() {
     assert_eq!(saved["outcome"], "ok", "{saved}");
     assert_eq!(saved["value"]["draft"]["draft"]["text"], "Half a thought");
     assert_eq!(saved["value"]["keptNewer"], false);
+    // The writer's other devices hear of it: their id only.
+    let announced = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {NOTICES} notice WHERE event_type = 'message_draft.changed' \
+         AND payload->>'actorId' = $1",
+    ))
+    .bind(world.owner.actor.to_string())
+    .fetch_one(world.pool())
+    .await
+    .expect("events");
+    assert!(announced >= 1, "the draft is announced");
 
     // A slower device that started before it saves: the newer draft stays,
     // and the slower one is the copy.
@@ -77,6 +88,20 @@ async fn drafts_follow_their_writer_and_stay_theirs() {
     assert_eq!(
         stale["value"]["draft"]["previous"]["text"],
         "An older thought"
+    );
+    // So does a clear from before it (an older device sending its text).
+    let stale_clear = tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "message_draft_set",
+        json!({"conversationId": channel, "savedAt": "2020-01-01T00:00:01Z"}),
+    )
+    .await;
+    assert_eq!(stale_clear["value"]["keptNewer"], true, "{stale_clear}");
+    assert_eq!(
+        stale_clear["value"]["draft"]["draft"]["text"],
+        "Half a thought"
     );
     let listed = tool(
         app,
@@ -105,6 +130,20 @@ async fn drafts_follow_their_writer_and_stay_theirs() {
     .await;
     assert_eq!(theirs["value"]["drafts"], json!([]), "{theirs}");
     assert!(!theirs.to_string().contains("thought"), "{theirs}");
+    // An agent keeps its own drafts where its connection reaches.
+    let agent_saved = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "message_draft_set",
+        json!({"conversationId": channel, "draft": {"text": "Rook's note"}}),
+    )
+    .await;
+    assert_eq!(agent_saved["outcome"], "ok", "{agent_saved}");
+    assert_eq!(
+        agent_saved["value"]["draft"]["draft"]["text"], "Rook's note",
+        "{agent_saved}"
+    );
     let dm = &world.conversations["lena+mara"];
     let refused = tool(
         app,

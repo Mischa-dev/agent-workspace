@@ -1,9 +1,9 @@
 //! Notifications for people (roadmap N1) and the inbox they fill (N2).
 //!
-//! Notifications are written by the outbox publisher: once an event has been
-//! broadcast, `fan_out` runs in the same transaction that marks it published,
-//! so they need no job queue and a failed write retries with the event. Each
-//! source occurrence (one @mention, one assignment, one failed run) carries a
+//! Notifications are written by the `notifications` consumer of the event
+//! log (K3.9): `fan_out` runs in the transaction that advances its cursor,
+//! so they need no job queue and a failed batch retries with its events.
+//! Each source occurrence (one @mention, one assignment, one failed run) carries a
 //! dedupe key and is applied once per recipient, which makes redelivery safe.
 //! Repeats in the same group (more mentions in one channel, a run moving from
 //! waiting to finished) collapse into the one open row for that group, which
@@ -59,8 +59,11 @@ pub mod kind {
     pub const COMMENT_MENTION: &str = "comment_mention";
     pub const ASSIGNED: &str = "assigned";
     pub const APPROVAL_REQUESTED: &str = "approval_requested";
-    /// Someone (usually an agent) asked you something on an inbox card (AWD-62).
-    pub const QUESTION_ASKED: &str = "question_asked";
+    /// Someone asked you, or a role you hold, something: a question, an
+    /// approval or a proposal (A1.8).
+    pub const REQUEST_RAISED: &str = "request_raised";
+    /// A request you raised was answered or ran out of time (A1.8).
+    pub const REQUEST_ANSWERED: &str = "request_answered";
     pub const RUN_WAITING: &str = "run_waiting";
     pub const RUN_COMPLETED: &str = "run_completed";
     pub const RUN_FAILED: &str = "run_failed";
@@ -418,9 +421,45 @@ pub async fn deliver(
     Ok(true)
 }
 
-/// Turns one published outbox event into notifications. Called by the
-/// outbox publisher inside the transaction that marks the event published.
-/// Returns how many people were notified.
+/// The `notifications` consumer: every change notice in the log, turned
+/// into notifications in the transaction that moves its cursor.
+pub struct Notifier;
+
+/// The notifier's cursor.
+pub const NOTIFIER: &str = "notifications";
+
+#[async_trait::async_trait]
+impl crate::events::Consumer for Notifier {
+    fn name(&self) -> &'static str {
+        NOTIFIER
+    }
+
+    /// From the log's start, so nothing written before its first round is
+    /// missed; deliveries dedupe on their keys.
+    fn starts_at_head(&self) -> bool {
+        false
+    }
+
+    async fn handle(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        batch: &[crate::events::LoggedEvent],
+    ) -> Result<(), crate::events::ConsumerError> {
+        for event in batch {
+            let (Some(notice), Some(project_id)) = (&event.legacy_type, event.space_id) else {
+                continue;
+            };
+            let Ok(payload) = OutboxEventPayload::from_json(notice, event.payload.clone()) else {
+                continue;
+            };
+            fan_out(transaction, event.id, project_id, &payload).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Turns one change notice into notifications, in the notifier's
+/// transaction. Returns how many people were notified.
 pub async fn fan_out(
     transaction: &mut Transaction<'_, Postgres>,
     event_id: Uuid,
@@ -914,6 +953,8 @@ async fn thing_comments(
         WHERE candidate.actor_id <> $3
           AND actor_can_access_project(candidate.actor_id, NULL, $5)
           AND conversation_visible_to($6, candidate.actor_id)
+          -- Muting the thing's comments, or the thread, quiets it.
+          AND conversation_notification_level(candidate.actor_id, $6) <> 'nothing'
           AND NOT EXISTS (
               SELECT 1 FROM message_mentions mention
               WHERE mention.message_id = $4 AND mention.actor_id = candidate.actor_id
@@ -938,7 +979,8 @@ async fn thing_comments(
                 kind::THING_COMMENT,
                 "conversation",
                 conversation_id,
-                format!("comments:{comments_id}"),
+                // One per place: the stream, or each thread on its own.
+                format!("comments:{conversation_id}"),
                 format!("message:{message_id}"),
             );
             notification.actor_id = Some(author);
@@ -1171,23 +1213,23 @@ async fn work_item_changes(
             SELECT comment.id AS comment_id, comment.author_actor_id,
                    mention.actor_id AS recipient_actor_id, false AS reply,
                    comment.project_id
-            FROM outbox_events event
+            FROM events event
             JOIN work_item_comments comment
-              ON comment.project_id = event.project_id
+              ON comment.project_id = event.space_id
              AND comment.work_item_id = $3
              -- A new comment, or an edit (it can add mentions; people already
              -- told about this comment aren't told again).
              AND (comment.created_at = event.created_at OR comment.edited_at = event.created_at)
              AND comment.removed_at IS NULL
             JOIN work_item_comment_mentions mention ON mention.comment_id = comment.id
-            WHERE event.event_id = $1 AND event.project_id = $2
+            WHERE event.id = $1 AND event.space_id = $2
             UNION ALL
             -- A new reply tells whoever wrote the comment it answers.
             SELECT comment.id, comment.author_actor_id, quoted.author_actor_id, true,
                    comment.project_id
-            FROM outbox_events event
+            FROM events event
             JOIN work_item_comments comment
-              ON comment.project_id = event.project_id
+              ON comment.project_id = event.space_id
              AND comment.work_item_id = $3
              AND comment.created_at = event.created_at
              AND comment.removed_at IS NULL
@@ -1195,7 +1237,7 @@ async fn work_item_changes(
               ON quoted.project_id = comment.project_id
              AND quoted.work_item_id = comment.work_item_id
              AND quoted.id = comment.reply_to_comment_id
-            WHERE event.event_id = $1 AND event.project_id = $2
+            WHERE event.id = $1 AND event.space_id = $2
         ) told
         WHERE recipient_actor_id <> author_actor_id
           AND actor_can_access_project(recipient_actor_id, NULL, project_id)
@@ -1230,14 +1272,14 @@ async fn work_item_changes(
         r#"
         SELECT activity.id AS activity_id, activity.actor_id,
                item.assignee_actor_id
-        FROM outbox_events event
+        FROM events event
         JOIN work_item_activity activity
-          ON activity.project_id = event.project_id
+          ON activity.project_id = event.space_id
          AND activity.work_item_id = $3
          AND activity.created_at = event.created_at
         JOIN task_rows item
           ON item.project_id = activity.project_id AND item.id = activity.work_item_id
-        WHERE event.event_id = $1 AND event.project_id = $2
+        WHERE event.id = $1 AND event.space_id = $2
           AND (
               activity.kind = 'work_item_created'
               OR (activity.kind = 'work_item_updated'
@@ -1277,22 +1319,22 @@ async fn work_item_changes(
             SELECT activity.id AS change_id, activity.actor_id, NULL::uuid AS comment_id,
                    replace(activity.kind, 'work_item_', '') AS change,
                    activity.project_id, activity.work_item_id
-            FROM outbox_events event
+            FROM events event
             JOIN work_item_activity activity
-              ON activity.project_id = event.project_id
+              ON activity.project_id = event.space_id
              AND activity.work_item_id = $3
              AND activity.created_at = event.created_at
-            WHERE event.event_id = $1 AND event.project_id = $2
+            WHERE event.id = $1 AND event.space_id = $2
             UNION ALL
             SELECT comment.id, comment.author_actor_id, comment.id, 'commented',
                    comment.project_id, comment.work_item_id
-            FROM outbox_events event
+            FROM events event
             JOIN work_item_comments comment
-              ON comment.project_id = event.project_id
+              ON comment.project_id = event.space_id
              AND comment.work_item_id = $3
              AND comment.created_at = event.created_at
              AND comment.removed_at IS NULL
-            WHERE event.event_id = $1 AND event.project_id = $2
+            WHERE event.id = $1 AND event.space_id = $2
         )
         SELECT change.change_id, change.actor_id, change.comment_id, change.change,
                watcher.actor_id AS recipient_actor_id
@@ -1337,14 +1379,6 @@ async fn work_item_changes(
 }
 
 #[derive(FromRow)]
-struct RunRow {
-    project_id: Uuid,
-    conversation_id: Uuid,
-    requesting_actor_id: Uuid,
-    requester_reachable: bool,
-}
-
-#[derive(FromRow)]
 struct ApproverRow {
     approval_id: Uuid,
     actor_id: Uuid,
@@ -1361,21 +1395,7 @@ async fn run_notifications(
         RunState::Failed | RunState::Interrupted => kind::RUN_FAILED,
         _ => return Ok(Vec::new()),
     };
-    let Some(run) = sqlx::query_as::<_, RunRow>(
-        r#"
-        SELECT conversation.project_id, run.conversation_id, run.requesting_actor_id,
-               actor_can_access_project(run.requesting_actor_id, NULL, conversation.project_id)
-               AND conversation_visible_to(run.conversation_id, run.requesting_actor_id)
-                   AS requester_reachable
-        FROM agent_runs run
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        WHERE run.id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    else {
+    let Some(run) = crate::runs::reads::notify_context(transaction, run_id).await? else {
         return Ok(Vec::new());
     };
     let group_key = format!("run:{run_id}");
@@ -1491,19 +1511,23 @@ async fn pull_request_notifications(
 ) -> Result<Vec<NewNotification>, AppError> {
     let rows = match source {
         PullRequestSource::Run(run_id) => {
+            let Some(owner) = crate::runs::reads::requester(&mut **transaction, run_id).await?
+            else {
+                return Ok(Vec::new());
+            };
             sqlx::query_as::<_, PullRequestRow>(
                 r#"
                 SELECT DISTINCT pr.id, pr.head_sha, pr.checks_state,
-                       run.requesting_actor_id AS owner_actor_id
+                       $3::uuid AS owner_actor_id
                 FROM github_pull_request_workspace_links link
                 JOIN github_pull_requests pr
                   ON pr.project_id = link.project_id AND pr.id = link.github_pull_request_id
-                JOIN agent_runs run ON run.id = link.agent_run_id
                 WHERE link.project_id = $1 AND link.agent_run_id = $2 AND pr.state = 'open'
                 "#,
             )
             .bind(project_id)
             .bind(run_id)
+            .bind(owner)
             .fetch_all(&mut **transaction)
             .await?
         }
@@ -1676,10 +1700,10 @@ pub struct NotificationView {
     /// A capacity alert's suggested batch, which Launch starts in one tap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch: Option<BatchAction>,
-    /// Set when the notification is a question someone asked you (AWD-62):
-    /// its options, and your answer once you've given it.
+    /// Set when the notification is about a request (A1.8): what it asks,
+    /// its options, and its answer once given.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub question: Option<crate::questions::QuestionView>,
+    pub request: Option<crate::requests::RequestCard>,
     /// The conversation a Reply from the notification posts in (mentions).
     #[serde(skip)]
     pub reply_conversation_id: Option<Uuid>,
@@ -1783,17 +1807,19 @@ struct NotificationRow {
     pull_request_number: Option<i64>,
     pull_request_title: Option<String>,
     pull_request_url: Option<String>,
-    question_status: Option<String>,
-    question_text: Option<String>,
-    question_options: Option<serde_json::Value>,
-    question_answer_option_id: Option<String>,
-    question_answer_text: Option<String>,
-    question_answered_at: Option<String>,
+    request_kind: Option<String>,
+    request_status: Option<String>,
+    request_title: Option<String>,
+    request_options: Option<serde_json::Value>,
+    request_allow_text: Option<bool>,
+    request_answer: Option<serde_json::Value>,
+    request_answered_at: Option<String>,
 }
 
 fn list_sql(view_condition: &str, extra: &str) -> String {
     // AWD-75: nothing from a module that's switched off.
     let switches = crate::modules::state::notification_switches_sql();
+    let run_join = crate::runs::sql::builtin_run_and_worker_join("n.agent_run_id");
     format!(
         r#"
         SELECT n.id, n.kind, n.subject_kind, n.subject_id, n.project_id,
@@ -1836,12 +1862,11 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                approval.options AS approval_options,
                pr.pull_request_number, pr.title AS pull_request_title,
                pr.html_url AS pull_request_url,
-               question.status AS question_status, question.question AS question_text,
-               question.options AS question_options,
-               question.answer_option_id AS question_answer_option_id,
-               question.answer_text AS question_answer_text,
-               to_char(question.answered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-                   AS question_answered_at
+               request.kind AS request_kind, request.status AS request_status,
+               request.title AS request_title, request.options AS request_options,
+               request.allow_text AS request_allow_text, request.answer AS request_answer,
+               to_char(request.answered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                   AS request_answered_at
         FROM notifications n
         JOIN projects project ON project.id = n.project_id
         LEFT JOIN project_memberships actor_member
@@ -1858,15 +1883,14 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
          AND page_comment.id = (n.detail->>'pageCommentId')::uuid
          AND page_comment.deleted_at IS NULL
         LEFT JOIN task_rows item ON item.id = n.work_item_id
-        LEFT JOIN agent_runs run ON run.id = n.agent_run_id
-        LEFT JOIN execution_workers run_worker ON run_worker.id = run.execution_worker_id
+        {run_join}
         LEFT JOIN project_memberships run_agent
           ON run_agent.project_id = n.project_id AND run_agent.actor_id = run_worker.actor_id
         LEFT JOIN agent_approvals approval ON approval.id = n.approval_id
         LEFT JOIN github_pull_requests pr ON pr.id = n.pull_request_id
-        LEFT JOIN person_questions question
-          ON n.subject_kind = 'question' AND question.id = n.subject_id
-         AND question.person_actor_id = n.recipient_actor_id
+        LEFT JOIN requests request
+          ON n.subject_kind = 'request' AND request.id = n.subject_id
+         AND request_visible_to(request.id, n.recipient_actor_id)
         WHERE n.recipient_actor_id = $1
           AND {view_condition}
           AND ($2::text[] IS NULL OR n.kind = ANY($2))
@@ -2170,13 +2194,29 @@ fn view(row: NotificationRow) -> NotificationView {
             ),
             row.approval_summary.clone(),
         ),
-        kind::QUESTION_ASKED => (
-            match (&row.conversation_id, &row.work_item_key) {
-                (Some(_), _) => format!("{who} has a question for you in {place}"),
-                (None, Some(key)) => format!("{who} has a question for you on {key}"),
-                _ => format!("{who} has a question for you"),
+        kind::REQUEST_RAISED => (
+            {
+                let what = match row.request_kind.as_deref() {
+                    Some("approval") => "needs your approval",
+                    Some("proposal") => "has a proposal for you",
+                    _ => "has a question for you",
+                };
+                match (&row.conversation_id, &row.work_item_key) {
+                    (Some(_), _) => format!("{who} {what} in {place}"),
+                    (None, Some(key)) => format!("{who} {what} on {key}"),
+                    _ => format!("{who} {what}"),
+                }
             },
-            row.question_text
+            row.request_title
+                .as_deref()
+                .map(|text| text.chars().take(PREVIEW_CHARACTERS as usize).collect()),
+        ),
+        kind::REQUEST_ANSWERED => (
+            match row.request_status.as_deref() {
+                Some("expired") => format!("Nobody answered your request in {place} in time"),
+                _ => format!("{who} answered your request in {place}"),
+            },
+            row.request_title
                 .as_deref()
                 .map(|text| text.chars().take(PREVIEW_CHARACTERS as usize).collect()),
         ),
@@ -2291,30 +2331,26 @@ fn view(row: NotificationRow) -> NotificationView {
         }),
         _ => None,
     };
-    let question = match (row.question_status.clone(), row.question_text.clone()) {
-        (Some(status), Some(text)) => {
-            let options: Vec<crate::questions::QuestionOption> = row
-                .question_options
-                .clone()
-                .and_then(|options| serde_json::from_value(options).ok())
-                .unwrap_or_default();
-            let answer = (status == "answered").then(|| crate::questions::AnswerView {
-                label: row.question_answer_option_id.as_ref().and_then(|picked| {
-                    options
-                        .iter()
-                        .find(|option| &option.id == picked)
-                        .map(|option| option.label.clone())
-                }),
-                option_id: row.question_answer_option_id.clone(),
-                text: row.question_answer_text.clone(),
-            });
-            Some(crate::questions::QuestionView {
+    let request = match (
+        row.request_kind.clone(),
+        row.request_status.clone(),
+        row.request_title.clone(),
+    ) {
+        (Some(kind), Some(status), Some(title)) => {
+            let options = crate::requests::options_of(
+                row.request_options
+                    .as_ref()
+                    .unwrap_or(&serde_json::Value::Null),
+            );
+            Some(crate::requests::RequestCard {
                 id: row.subject_id,
+                kind,
                 status,
-                question: text,
+                title,
+                answer: crate::requests::answer_of(row.request_answer.as_ref(), &options),
                 options,
-                answer,
-                answered_at: row.question_answered_at.clone(),
+                allow_text: row.request_allow_text.unwrap_or(false),
+                answered_at: row.request_answered_at.clone(),
             })
         }
         _ => None,
@@ -2396,7 +2432,7 @@ fn view(row: NotificationRow) -> NotificationView {
         created_at: row.created_at,
         href,
         approval,
-        question,
+        request,
         launch_href,
         batch,
         reply_conversation_id,
@@ -2607,7 +2643,7 @@ async fn update_http(
     principal: AuthenticatedActor,
     ApiJson(request): ApiJson<UpdateRequest>,
 ) -> Result<Json<UpdateResult>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let selection = match (request.ids, request.all) {
         (Some(ids), None | Some(false)) => {
             if request.project_id.is_some() {

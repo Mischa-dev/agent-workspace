@@ -50,6 +50,12 @@ pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
             FROM runs candidate
             CROSS JOIN LATERAL (
                 SELECT CASE
+                         -- A1.12: a run on a host that went offline isn't
+                         -- heard from, however recently it reported.
+                         WHEN candidate.host_id IS NOT NULL AND EXISTS (
+                                SELECT 1 FROM hosts host
+                                WHERE host.id = candidate.host_id AND host.status = 'offline')
+                           THEN 'not_responding'
                          WHEN now() - COALESCE(candidate.last_report_at, candidate.created_at)
                               >= make_interval(secs => candidate.report_interval_seconds * 3)
                            THEN 'not_responding'
@@ -161,6 +167,8 @@ pub async fn settle(pool: &PgPool) -> Result<usize, AppError> {
         SELECT run.id FROM runs run
         WHERE run.state = $1
           AND run.cancel_requested_at < now() - make_interval(secs => $2)
+          -- A run on a host ends when its host confirms the stop (A1.12).
+          AND run.host_id IS NULL
           AND NOT EXISTS (SELECT 1 FROM agent_runs builtin WHERE builtin.id = run.id)
         ORDER BY run.cancel_requested_at
         LIMIT $3
@@ -240,4 +248,89 @@ pub async fn renew_for_host(
         }
     }
     Ok(renewed.len() as u64)
+}
+
+/// How many heartbeats in a row may leave out a run its host had taken
+/// before the host is taken not to know it any more (A1.12).
+pub const MISSED_BEATS: i16 = 3;
+
+/// A1.12: a heartbeat lists every run its host still does. A run on the host
+/// that it had taken (accepted onwards) and leaves out counts a missed beat;
+/// after [`MISSED_BEATS`] in a row it ends `interrupted`. A listed run starts
+/// counting again. Returns the runs that ended.
+pub async fn host_beat(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    host_id: uuid::Uuid,
+    listed: &[uuid::Uuid],
+) -> Result<Vec<uuid::Uuid>, AppError> {
+    sqlx::query(
+        "UPDATE runs SET host_missed_beats = 0 WHERE host_id = $1 AND id = ANY($2) AND host_missed_beats > 0",
+    )
+    .bind(host_id)
+    .bind(listed)
+    .execute(&mut **transaction)
+    .await?;
+    let taken = [
+        RunState::Accepted,
+        RunState::Working,
+        RunState::Waiting,
+        RunState::CancelRequested,
+    ]
+    .map(RunState::as_str);
+    let forgotten = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        r#"
+        UPDATE runs run SET host_missed_beats = run.host_missed_beats + 1
+         WHERE run.host_id = $1 AND NOT (run.id = ANY($2)) AND run.state = ANY($3)
+           AND NOT EXISTS (SELECT 1 FROM agent_runs builtin WHERE builtin.id = run.id)
+        RETURNING CASE WHEN run.host_missed_beats >= $4 THEN run.id END
+        "#,
+    )
+    .bind(host_id)
+    .bind(listed)
+    .bind(&taken[..])
+    .bind(MISSED_BEATS)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let forgotten = forgotten.into_iter().flatten().collect::<Vec<_>>();
+    if forgotten.is_empty() {
+        return Ok(forgotten);
+    }
+    super::ops::host_forgot(transaction, host_id, &forgotten).await
+}
+
+/// A1.12: runs a heartbeat lists whose start was uncertain did start: they
+/// are `accepted`. Returns how many moved.
+pub async fn host_confirms_start(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    host_id: uuid::Uuid,
+    listed: &[(uuid::Uuid, Option<String>)],
+) -> Result<usize, AppError> {
+    let ids = listed.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    let uncertain = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM runs WHERE host_id = $1 AND id = ANY($2) AND state = $3",
+    )
+    .bind(host_id)
+    .bind(&ids)
+    .bind(RunState::StartUncertain.as_str())
+    .fetch_all(&mut **transaction)
+    .await?;
+    for run_id in &uncertain {
+        let host_run_ref = listed
+            .iter()
+            .find(|(id, _)| id == run_id)
+            .and_then(|(_, reference)| reference.clone());
+        super::ops::host_answered(
+            transaction,
+            *run_id,
+            host_id,
+            super::ops::HostAnswer::Accepted { host_run_ref },
+        )
+        .await
+        .map_err(|error| match error {
+            super::ops::RunOpError::App(error) => error,
+            _ => AppError::Internal("host start confirmation"),
+        })?;
+        crate::hosts::commands::start_confirmed(transaction, *run_id).await?;
+    }
+    Ok(uncertain.len())
 }

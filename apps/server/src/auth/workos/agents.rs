@@ -363,7 +363,7 @@ async fn attach(
     ApiPath((project, connection)): ApiPath<(Uuid, Uuid)>,
     ApiJson(input): ApiJson<Attach>,
 ) -> Result<Json<BindingView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let config = config(&state)?;
     domain(config)?;
     let mut tx = state.pool.begin().await?;
@@ -566,7 +566,7 @@ async fn revoke(
     principal: AuthenticatedActor,
     ApiPath((project, connection, binding)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut tx = state.pool.begin().await?;
     crate::external_agents::authorize_identity_binding(&mut tx, &principal, project, connection)
         .await?;
@@ -610,13 +610,16 @@ async fn mint(
 ) -> Result<Response, AppError> {
     let config = config(&state)?;
     domain(config)?;
-    state.rate_limits.check_mcp_auth(
-        input
-            .refresh_token
-            .as_deref()
-            .or_else(|| exact_bearer_token(&headers))
-            .unwrap_or("invalid"),
-    )?;
+    state
+        .rate_limits
+        .check_mcp_auth(
+            input
+                .refresh_token
+                .as_deref()
+                .or_else(|| exact_bearer_token(&headers))
+                .unwrap_or("invalid"),
+        )
+        .await?;
     let (blueprint, body) = if let Some(refresh) = input.refresh_token {
         let blueprint = input
             .blueprint_id
@@ -853,7 +856,7 @@ mod tests {
                 root.path().join("data").to_string_lossy().into_owned(),
             ),
             (
-                "AGENT_WORKSPACE_CODEX_HOME_ROOT".into(),
+                "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".into(),
                 root.path()
                     .join("data/codex/profiles")
                     .to_string_lossy()

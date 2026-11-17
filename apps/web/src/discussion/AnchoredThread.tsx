@@ -6,9 +6,8 @@ import { queryKeys } from '../api/queryKeys'
 import { searchMentionableActors } from '../conversations/api'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
-import { TimelineEntries } from '../conversations/Timeline'
-import { useConversationTimeline } from '../conversations/useConversationTimeline'
-import { Button, ErrorState, MessageSkeleton } from '../ui'
+import { Button } from '../ui'
+import { DiscussionEntries } from './DiscussionEntries'
 import '../styles/conversation.css'
 
 export type AnchoredThreadProps = {
@@ -23,6 +22,8 @@ export type AnchoredThreadProps = {
   anchor: unknown
   /** Whether new comments are taken (not when the thing is archived). */
   acceptsComments: boolean
+  /** The first comment started a thread here: the page follows it by its id from now on. */
+  onStarted?: (threadId: string) => void
 }
 
 /**
@@ -30,10 +31,9 @@ export type AnchoredThreadProps = {
  * it, such as a cell, and a composer. The first comment starts the thread
  * there; later ones reply in it.
  */
-export default function AnchoredThread({ acceptsComments, anchor, kind, spaceId, thingId, thread, viewerId }: AnchoredThreadProps) {
+export default function AnchoredThread({ acceptsComments, anchor, kind, onStarted, spaceId, thingId, thread, viewerId }: AnchoredThreadProps) {
   const queryClient = useQueryClient()
   const thing = { kind, id: thingId }
-  const timeline = useConversationTimeline(spaceId, thread?.id ?? '')
 
   const refresh = async () => {
     await invalidateOps(queryClient, ['comment_list'])
@@ -41,7 +41,7 @@ export default function AnchoredThread({ acceptsComments, anchor, kind, spaceId,
   }
 
   const submit = async (submission: ComposerSubmission) => {
-    await callOp(
+    const posted = await callOp(
       'comment_create',
       {
         thing,
@@ -51,6 +51,7 @@ export default function AnchoredThread({ acceptsComments, anchor, kind, spaceId,
       },
       { requestId: submission.idempotencyKey },
     )
+    if (!thread && posted.threadId) onStarted?.(posted.threadId)
     await refresh()
   }
 
@@ -63,11 +64,7 @@ export default function AnchoredThread({ acceptsComments, anchor, kind, spaceId,
   const resolved = thread?.status.toLowerCase() === 'resolved'
   return (
     <section aria-label="Comments here" className="aw-thingcomments">
-      {thread && timeline.isPending ? <MessageSkeleton label="Loading comments" rows={2} /> : null}
-      {thread && timeline.isError ? (
-        <ErrorState error={timeline.error} onRetry={() => void timeline.refetch()} title="Comments didn’t load" />
-      ) : null}
-      {thread && timeline.data ? <TimelineEntries conversationId={thread.id} entries={timeline.data.entries} viewerId={viewerId} /> : null}
+      {thread ? <DiscussionEntries conversationId={thread.id} spaceId={spaceId} viewerId={viewerId} /> : null}
       {!thread ? <p className="aw-thingcomments__empty">No comments here yet.</p> : null}
       {acceptsComments ? (
         <StructuredComposer

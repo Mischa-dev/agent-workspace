@@ -248,6 +248,44 @@ async fn load(
     .await?)
 }
 
+/// A1.12: a run's state and whether it is still going, for the host
+/// command channel.
+pub async fn state_of<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    run_id: Uuid,
+) -> Result<Option<(String, bool)>, AppError> {
+    Ok(sqlx::query_as::<_, (String, bool)>(
+        "SELECT state, finished_at IS NULL FROM runs WHERE id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(executor)
+    .await?)
+}
+
+/// The run, locked for a change.
+pub async fn locked(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<Option<RunRow>, AppError> {
+    load(transaction, run_id).await
+}
+
+/// A1.12: the host, asked, doesn't know a start it may not have had; the
+/// run stays `start_uncertain` for a person to decide, and says so.
+pub async fn start_unknown_to_host(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE runs SET status_line = 'The host doesn''t know this run.' WHERE id = $1 AND state = $2",
+    )
+    .bind(run_id)
+    .bind(RunState::StartUncertain.as_str())
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 /// A run the reporter may write: its own, with no built-in detail row (the
 /// built-in host reports through `agent_runs` until A1.14), where it still
 /// sees the conversation and belongs to the space. Locked for the change.
@@ -291,6 +329,35 @@ pub async fn open(
     transaction: &mut Transaction<'_, Postgres>,
     reporter: Reporter,
     input: RunOpen,
+) -> Result<Opened, RunOpError> {
+    open_with(transaction, reporter, input, false).await
+}
+
+/// A1.12: open a run Workspace will hand to the agent's host, `queued`
+/// until it is dispatched. The same checks as the agent opening it itself:
+/// the agent must be in the space and see the conversation.
+pub async fn open_queued(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    input: RunOpen,
+) -> Result<Opened, RunOpError> {
+    open_with(
+        transaction,
+        Reporter::Account { account_id },
+        RunOpen {
+            initial: RunState::Queued,
+            ..input
+        },
+        true,
+    )
+    .await
+}
+
+async fn open_with(
+    transaction: &mut Transaction<'_, Postgres>,
+    reporter: Reporter,
+    input: RunOpen,
+    queued: bool,
 ) -> Result<Opened, RunOpError> {
     let account_id = reporter.account_id();
     let client_run_id = match input.client_run_id.as_deref().map(str::trim) {
@@ -361,7 +428,9 @@ pub async fn open(
             "settings is a JSON object of at most 16 KiB.",
         ));
     }
-    if !matches!(input.initial, RunState::Working | RunState::Accepted) {
+    if !(matches!(input.initial, RunState::Working | RunState::Accepted)
+        || (queued && input.initial == RunState::Queued))
+    {
         return Err(refused("state", "A run opens working or accepted."));
     }
 
@@ -505,7 +574,7 @@ pub async fn open(
         )
         SELECT $1, project.organization_id, project.id, $3, $4, $5, $6, $7, $8, $9, $10,
                $11, $12, $13, $14, $15, $16, now(), CASE WHEN $18 THEN 1 ELSE 0 END, $17,
-               now(), CASE WHEN $18 THEN now() END
+               CASE WHEN $14 <> 'queued' THEN now() END, CASE WHEN $18 THEN now() END
         FROM projects project
         WHERE project.id = $2
         RETURNING {RUN_COLUMNS}
@@ -618,8 +687,10 @@ async fn save_state(
     reported: bool,
 ) -> Result<RunRow, AppError> {
     if next.is_terminal() && run.run_state().is_ok_and(|current| !current.is_terminal()) {
-        // What a finished run still asked for is withdrawn.
+        // What a finished run still asked for is withdrawn, and the
+        // credentials minted for it stop working (A1.12).
         requests::withdraw_for_run(transaction, run.id).await?;
+        super::credentials::revoke_for_run(transaction, run.id).await?;
     }
     Ok(sqlx::query_as::<_, RunRow>(&format!(
         r#"
@@ -807,6 +878,30 @@ pub async fn append(
     let mut state = run.run_state()?;
     let mut open = requests::open_count(transaction, run.id).await?;
     let mut seq = run.activity_seq;
+    // A1.12: a run marked as never started that its host reports on did
+    // start after all. It is working again, and its log says so.
+    let revived = state == RunState::Failed
+        && run.host_id.is_some()
+        && run.failure_reason.as_deref() == Some(MARKED_NOT_STARTED);
+    let mut batch = batch;
+    if revived {
+        state = RunState::Working;
+        batch.insert(
+            0,
+            NewActivity {
+                client_id: format!("late_start:{}", run.id),
+                kind: "custom".to_owned(),
+                occurred_at: Utc::now(),
+                step_ref: None,
+                parent_ref: None,
+                summary: Some(
+                    "The host reported on this run after it was marked as not started: it started after all."
+                        .to_owned(),
+                ),
+                payload: serde_json::json!({"name": "late_start"}),
+            },
+        );
+    }
     let mut accepted = 0;
     let mut duplicates = 0;
     let mut over_limit = 0;
@@ -889,7 +984,8 @@ pub async fn append(
     let saved = save_state(transaction, &run, state, true).await?;
     let saved = sqlx::query_as::<_, RunRow>(&format!(
         r#"
-        UPDATE runs run SET activity_seq = $2, gap_count = run.gap_count + $3
+        UPDATE runs run SET activity_seq = $2, gap_count = run.gap_count + $3,
+               failure_reason = CASE WHEN $4 THEN NULL ELSE run.failure_reason END
         WHERE run.id = $1
         RETURNING {RUN_COLUMNS}
         "#
@@ -897,6 +993,7 @@ pub async fn append(
     .bind(saved.id)
     .bind(seq)
     .bind(gaps)
+    .bind(revived)
     .fetch_one(&mut **transaction)
     .await?;
     if accepted > 0 {
@@ -1029,11 +1126,47 @@ pub async fn add_results(
             payload: Value::Object(payload),
         });
     }
+    let reported_pull_requests = batch
+        .iter()
+        .filter(|activity| activity.payload["kind"] == "pull_request")
+        .filter_map(|activity| activity.payload["url"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
     let appended = append(transaction, reporter, run_id, batch).await?;
     if appended.accepted > 0 {
         emit(transaction, &appended.run, "result_added").await?;
     }
+    // A1.19: a reported pull request the space already has follows the
+    // run's thread and task; one it picks up later is tied then.
+    for url in &reported_pull_requests {
+        crate::code_host::pull_requests::link_reported(transaction, &appended.run, url).await?;
+    }
     Ok((appended.run, appended.accepted))
+}
+
+/// Runs in a space that reported the pull request at `url` as a result.
+pub async fn reporting_pull_request(
+    transaction: &mut Transaction<'_, Postgres>,
+    space_id: Uuid,
+    url: &str,
+) -> Result<Vec<RunRow>, AppError> {
+    Ok(sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        SELECT {RUN_COLUMNS} FROM runs run
+        WHERE run.space_id = $1
+          AND EXISTS (
+              SELECT 1 FROM run_activities result
+              WHERE result.run_id = run.id AND result.kind = 'result'
+                AND result.payload ->> 'kind' = 'pull_request'
+                AND lower(result.payload ->> 'url') = lower($2)
+          )
+        ORDER BY run.created_at, run.id
+        LIMIT 50
+        "#
+    ))
+    .bind(space_id)
+    .bind(url)
+    .fetch_all(&mut **transaction)
+    .await?)
 }
 
 /// Usage as a reporter says it: for one of its runs, or for a time window.
@@ -1272,7 +1405,7 @@ pub async fn request_cancel(
     .bind(saved.id)
     .bind(by)
     // The status line holds 200 characters; the prefix comes out of them.
-    .bind(reason.map(|reason| {
+    .bind(reason.as_deref().map(|reason| {
         format!("Stop asked: {reason}")
             .chars()
             .take(MAX_LINE_CHARS)
@@ -1298,6 +1431,10 @@ pub async fn request_cancel(
             "You were asked to stop this run.",
         )
         .await?;
+        // A run on a host is stopped by its host, which confirms (A1.12).
+        if saved.host_id.is_some() {
+            crate::hosts::commands::cancel_run(transaction, &saved, by, reason.as_deref()).await?;
+        }
     }
     Ok(saved)
 }
@@ -1342,6 +1479,10 @@ pub async fn notify_agent(
     Ok(())
 }
 
+/// Why a run marked as never started failed; a later report from its host
+/// revives it (A1.12).
+pub const MARKED_NOT_STARTED: &str = "Marked as not started";
+
 /// Mark a run whose start is uncertain as never started.
 pub async fn mark_not_started(
     transaction: &mut Transaction<'_, Postgres>,
@@ -1358,11 +1499,14 @@ pub async fn mark_not_started(
     }
     let saved = save_state(transaction, &run, RunState::Failed, false).await?;
     let saved = sqlx::query_as::<_, RunRow>(&format!(
-        "UPDATE runs run SET failure_reason = 'Marked as not started' WHERE run.id = $1 RETURNING {RUN_COLUMNS}"
+        "UPDATE runs run SET failure_reason = $2 WHERE run.id = $1 RETURNING {RUN_COLUMNS}"
     ))
     .bind(saved.id)
+    .bind(MARKED_NOT_STARTED)
     .fetch_one(&mut **transaction)
     .await?;
+    // Its start is offered no more (A1.12); a late report still revives it.
+    crate::hosts::commands::close_start(transaction, saved.id).await?;
     emit(transaction, &saved, "finished").await?;
     Ok(saved)
 }
@@ -1419,6 +1563,244 @@ pub async fn end_by_service(
     Ok(Some(saved))
 }
 
+/// What a host said about a run it was asked to start, or to stop (A1.12).
+#[derive(Clone, Debug)]
+pub enum HostAnswer {
+    /// It started the run (or had started it): `accepted`.
+    Accepted { host_run_ref: Option<String> },
+    /// It won't run it: `refused`.
+    Refused { message: String },
+    /// It doesn't know whether it started it: `start_uncertain`.
+    Uncertain { message: String },
+    /// It stopped the run it was asked to stop: `cancelled`.
+    Stopped,
+}
+
+/// A queued run is handed to its host: it is `starting` there until the
+/// host answers.
+pub async fn dispatched(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    host_id: Uuid,
+) -> Result<RunRow, RunOpError> {
+    let run = load(transaction, run_id)
+        .await?
+        .ok_or(RunOpError::NotFound)?;
+    let next = reduce(run.run_state()?, RunEvent::Update(RunState::Starting))
+        .map_err(|_| RunOpError::Conflict("Only a queued run can be started.".to_owned()))?;
+    let saved = save_state(transaction, &run, next, false).await?;
+    let saved = sqlx::query_as::<_, RunRow>(&format!(
+        "UPDATE runs run SET host_id = $2 WHERE run.id = $1 RETURNING {RUN_COLUMNS}"
+    ))
+    .bind(saved.id)
+    .bind(host_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    emit(transaction, &saved, "state_changed").await?;
+    Ok(saved)
+}
+
+/// What a host's answer does to the run it is about. An answer the run has
+/// moved past (it is already working, or ended) changes nothing.
+pub async fn host_answered(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    host_id: Uuid,
+    answer: HostAnswer,
+) -> Result<RunRow, RunOpError> {
+    let run = load(transaction, run_id)
+        .await?
+        .ok_or(RunOpError::NotFound)?;
+    if run.host_id != Some(host_id) {
+        return Err(RunOpError::NotFound);
+    }
+    let current = run.run_state()?;
+    let (target, line, host_run_ref) = match answer {
+        HostAnswer::Accepted { host_run_ref } => (RunState::Accepted, None, host_run_ref),
+        HostAnswer::Refused { message } => (RunState::Refused, Some(message), None),
+        HostAnswer::Uncertain { message } => (RunState::StartUncertain, Some(message), None),
+        HostAnswer::Stopped => (RunState::Cancelled, None, None),
+    };
+    let next = match reduce(current, RunEvent::Update(target)) {
+        Ok(next) => next,
+        // Already further along (an accepted run reports working; a re-offer
+        // answered after the run ended): nothing to change but its reference.
+        Err(_) => current,
+    };
+    let saved = if next == current {
+        run
+    } else {
+        save_state(transaction, &run, next, false).await?
+    };
+    let saved = sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        UPDATE runs run
+           SET host_run_ref = COALESCE($2, run.host_run_ref),
+               accepted_at = CASE WHEN $3 = 'accepted' THEN COALESCE(run.accepted_at, now())
+                                  ELSE run.accepted_at END,
+               failure_reason = CASE WHEN $3 = 'refused' THEN $4 ELSE run.failure_reason END,
+               -- An accepted start clears what was said while it was in doubt.
+               status_line = CASE WHEN $3 = 'start_uncertain' THEN $4
+                                  WHEN $3 = 'accepted' THEN NULL
+                                  ELSE run.status_line END
+         WHERE run.id = $1
+        RETURNING {RUN_COLUMNS}
+        "#
+    ))
+    .bind(saved.id)
+    .bind(host_run_ref.as_deref().map(crate::run_log::redact))
+    .bind(if next == current { "" } else { next.as_str() })
+    .bind(line.map(|line| line.chars().take(MAX_LINE_CHARS).collect::<String>()))
+    .fetch_one(&mut **transaction)
+    .await?;
+    if next != current {
+        emit(
+            transaction,
+            &saved,
+            if next.is_terminal() {
+                "finished"
+            } else {
+                "state_changed"
+            },
+        )
+        .await?;
+    }
+    Ok(saved)
+}
+
+/// A1.8: one of a run's requests was answered or ran out (`by` answered
+/// it, or the run's own account when it expired). The run's log says so,
+/// and a run that waits on nothing else works again. A finished run is
+/// left as it is. Returns the run when it changed.
+pub async fn request_settled(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    request_id: Uuid,
+    by: Uuid,
+    summary: &str,
+) -> Result<Option<RunRow>, RunOpError> {
+    let Some(run) = load(transaction, run_id).await? else {
+        return Ok(None);
+    };
+    let state = run.run_state()?;
+    if state.is_terminal() {
+        return Ok(None);
+    }
+    let open = requests::open_count(transaction, run.id).await?;
+    let activity = activities::clean(
+        NewActivity {
+            client_id: format!("request_settled:{request_id}"),
+            kind: "interrupt_resolved".to_owned(),
+            occurred_at: Utc::now(),
+            step_ref: None,
+            parent_ref: None,
+            summary: Some(summary.to_owned()),
+            payload: serde_json::json!({"requestId": request_id}),
+        },
+        open,
+    )?;
+    if !insert_activity_row(transaction, &run, run.activity_seq + 1, &activity, by).await? {
+        return Ok(None);
+    }
+    let next = reduce(state, RunEvent::Activity(activity.effect)).unwrap_or(state);
+    let saved = save_state(transaction, &run, next, false).await?;
+    let saved = sqlx::query_as::<_, RunRow>(&format!(
+        "UPDATE runs run SET activity_seq = run.activity_seq + 1 WHERE run.id = $1 RETURNING {RUN_COLUMNS}"
+    ))
+    .bind(saved.id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    emit(transaction, &saved, "activity").await?;
+    Ok(Some(saved))
+}
+
+/// A host acknowledged a start after a person marked its run as not started:
+/// the run started after all. It is `accepted` again, and its log says so.
+/// A run in any other state is left as it is.
+pub async fn revive_late_start(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    host_id: Uuid,
+    host_run_ref: Option<String>,
+) -> Result<RunRow, RunOpError> {
+    let run = load(transaction, run_id)
+        .await?
+        .ok_or(RunOpError::NotFound)?;
+    if run.host_id != Some(host_id)
+        || run.run_state()? != RunState::Failed
+        || run.failure_reason.as_deref() != Some(MARKED_NOT_STARTED)
+    {
+        return Ok(run);
+    }
+    let note = activities::clean(
+        NewActivity {
+            client_id: format!("late_start:{}", run.id),
+            kind: "custom".to_owned(),
+            occurred_at: Utc::now(),
+            step_ref: None,
+            parent_ref: None,
+            summary: Some(
+                "The host confirmed this run after it was marked as not started: it started after all."
+                    .to_owned(),
+            ),
+            payload: serde_json::json!({"name": "late_start"}),
+        },
+        0,
+    )?;
+    let seq = run.activity_seq
+        + i64::from(
+            insert_activity_row(
+                transaction,
+                &run,
+                run.activity_seq + 1,
+                &note,
+                run.account_id,
+            )
+            .await?,
+        );
+    let saved = save_state(transaction, &run, RunState::Accepted, true).await?;
+    let saved = sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        UPDATE runs run
+           SET failure_reason = NULL, activity_seq = $2,
+               host_run_ref = COALESCE($3, run.host_run_ref),
+               accepted_at = COALESCE(run.accepted_at, now())
+         WHERE run.id = $1
+        RETURNING {RUN_COLUMNS}
+        "#
+    ))
+    .bind(saved.id)
+    .bind(seq)
+    .bind(host_run_ref.as_deref().map(crate::run_log::redact))
+    .fetch_one(&mut **transaction)
+    .await?;
+    emit(transaction, &saved, "state_changed").await?;
+    Ok(saved)
+}
+
+/// A host's heartbeats left these runs out three times in a row: the host no
+/// longer knows them, and they end `interrupted`. Returns those it changed.
+pub async fn host_forgot(
+    transaction: &mut Transaction<'_, Postgres>,
+    host_id: Uuid,
+    run_ids: &[Uuid],
+) -> Result<Vec<Uuid>, AppError> {
+    let runs = sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        SELECT {RUN_COLUMNS} FROM runs run
+        WHERE run.host_id = $1 AND run.id = ANY($2)
+          AND NOT EXISTS (SELECT 1 FROM agent_runs builtin WHERE builtin.id = run.id)
+        ORDER BY run.id
+        FOR UPDATE
+        "#
+    ))
+    .bind(host_id)
+    .bind(run_ids)
+    .fetch_all(&mut **transaction)
+    .await?;
+    interrupt(transaction, runs, "The host no longer knows this run.").await
+}
+
 /// A host can no longer report these runs: it was unlinked, retired the
 /// agent, or the agent was unbound from it (A1.11). Every active run on the
 /// host (for one agent, when named) without a built-in detail row becomes
@@ -1449,6 +1831,15 @@ pub async fn host_lost(
     .bind(&active)
     .fetch_all(&mut **transaction)
     .await?;
+    interrupt(transaction, runs, reason).await
+}
+
+/// End each run `interrupted` with `reason`, unless it already ended.
+async fn interrupt(
+    transaction: &mut Transaction<'_, Postgres>,
+    runs: Vec<RunRow>,
+    reason: &str,
+) -> Result<Vec<Uuid>, AppError> {
     let mut changed = Vec::with_capacity(runs.len());
     for run in runs {
         let Ok(current) = run.run_state() else {

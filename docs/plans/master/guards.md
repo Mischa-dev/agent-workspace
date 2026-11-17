@@ -24,7 +24,7 @@ the last column are not separate guards: those slices point here and extend this
 | `conversation_inserts`, `message_inserts`, `task_core_updates`, `direct_tool_calls` | 4 | P0.26 | C1.2 (threads only in `conversations/threads.rs`), K2.6 (`call_tool_direct`) | C1 guards 1, 2; K2 guard 3 |
 | `task_view_code` | 4 | T1.1 | T1.39 | T1 guard 1 |
 | `process_state`, `background_spawns` | 5 | P0.26 | K5.1 (adds `broadcast::channel`, `tokio::fs`, reason and bound per entry) | K5 guard 2 (`process_local.rs`) |
-| `session_advisory_locks`, `pooler_safe_sql` | 14 | K5.2 (phase 1, ruling R24) | K5 | K5 guard 3; R24 rule 3 |
+| `session_advisory_locks`, `pooler_safe_sql`, `listen_outside_wake`, `transactions_across_calls` | 14 | K5.17 (planned for K5.2; built with K5.17's transaction scan) | K5; A2 for the WorkOS agent binding (`auth/workos/agents.rs`, 3) | K5 guard 3; R24 rule 3 |
 | `nothing_per_workspace` (10,000 idle workspaces) | 14 | H1 (its R24 slice) | H1 | R24 rule 6 |
 | `link_tables`, `comment_tables` | 6 | P0.26 | K3.21, C1.3 | K3 guard 4; C1 guard 2 |
 | `conversation_listings` | 7 | P0.0 | K4.3 (adds the direct scope: no membership row may reference it), then K1.20 | C1 guard 3; C2 "listing lint"; K4 G2 |
@@ -72,5 +72,6 @@ are gated or exempt with a reason (P0.7).
 | `personal_hosts` (no tailnet address or home path outside docs/history) | `tools/ci/test_personal_hosts.py` | P0.33 |
 | runner SDK tests run in CI | `tools/ci/checks.sh` steps "runner SDK tests" | P0.34 |
 | `notification_detail_text` | `apps/server/src/structure_guards.rs` | P0.36 |
+| `session_advisory_locks`, `pooler_safe_sql`, `listen_outside_wake`, `transactions_across_calls`; the cluster suite under `AGENT_WORKSPACE_TEST_POOLER=1` | `apps/server/src/structure_guards.rs`, `tests/integration/cluster.rs` | K5.17 |
 | `rust_role_checks`, `access_bypasses`, `account_kind_strings`; access allowances name their removing slice | `apps/server/src/structure_guards.rs`, `structure_guards/removals.json` | K1.1 |
 | account routes walked or excused (`ACCOUNT_ROUTES_EXCUSED` only shrinks) | `privacy_inside_workspace.rs` `every_account_route_is_walked_or_excused` | P0.38 |

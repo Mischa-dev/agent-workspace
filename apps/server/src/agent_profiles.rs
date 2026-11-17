@@ -35,8 +35,6 @@ use crate::{
 };
 
 const MAX_PROFILES_PER_PROJECT: i64 = 40;
-const ACTIVE_RUN_STATES: &str =
-    "('created', 'queued', 'starting', 'working', 'blocked', 'recovering')";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -558,7 +556,7 @@ async fn manage(
     principal: &AuthenticatedActor,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     if principal.actor_kind != "human" {
         return Err(AppError::Forbidden);
     }
@@ -958,21 +956,15 @@ pub(crate) async fn remove_in(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("agent_profile"))?;
-    let (running, used) = sqlx::query_as::<_, (bool, bool)>(&format!(
-        r#"
-        SELECT
-            EXISTS (
-                SELECT 1 FROM agent_runs
-                WHERE execution_worker_id = $1 AND state IN {ACTIVE_RUN_STATES}
-            ),
-            EXISTS (SELECT 1 FROM agent_runs WHERE execution_worker_id = $1)
-                OR EXISTS (SELECT 1 FROM launches WHERE agent_profile_id = $2)
-        "#
-    ))
-    .bind(worker_id)
-    .bind(profile_id)
-    .fetch_one(&mut **transaction)
-    .await?;
+    let (running, ran) =
+        crate::hosts::builtin::capacity::worker_runs(&mut **transaction, worker_id).await?;
+    let used = ran
+        || sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM launches WHERE agent_profile_id = $1)",
+        )
+        .bind(profile_id)
+        .fetch_one(&mut **transaction)
+        .await?;
     if running {
         return Err(AppError::Conflict(
             "agent_profile",
@@ -1239,11 +1231,7 @@ pub async fn presence(
         ),
         work AS (
             -- A harness agent's runs: blocked ones first, they wait for you.
-            SELECT worker.actor_id, run.conversation_id, run.id AS run_id,
-                   run.state = 'blocked' AS waiting, COALESCE(run.started_at, run.created_at) AS since
-            FROM agent_runs run
-            JOIN execution_workers worker ON worker.id = run.execution_worker_id
-            WHERE worker.project_id = $1 AND run.state IN {ACTIVE_RUN_STATES}
+            {builtin_work}
             UNION ALL
             -- An external agent's claimed requests.
             SELECT request.agent_actor_id, COALESCE(request.thread_id, request.conversation_id),
@@ -1303,7 +1291,8 @@ pub async fn presence(
         WHERE profile.id IS NULL OR profile.enabled
         ORDER BY (ranked.actor_id IS NULL), member.name, member.actor_id
         LIMIT 200
-        "#
+        "#,
+        builtin_work = crate::hosts::builtin::capacity::working_workers(),
     ))
     .bind(project_id)
     .bind(viewer)

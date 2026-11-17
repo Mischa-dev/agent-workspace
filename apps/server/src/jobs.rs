@@ -289,6 +289,9 @@ struct Recurring {
 pub struct JobRegistry {
     handlers: HashMap<&'static str, Registration>,
     recurring: Vec<Recurring>,
+    /// Kinds only the built-in host's lease holder runs (K5.3): work on
+    /// this machine's disk or child processes.
+    host_kinds: Vec<&'static str>,
 }
 
 impl JobRegistry {
@@ -328,6 +331,21 @@ impl JobRegistry {
     /// Also run `kind`, which must be registered, every `interval`. The
     /// queue holds at most one of it at a time, so restarts and several
     /// servers don't multiply it.
+    /// Run `kind` jobs only on the instance holding the built-in host's
+    /// lease; ordinary workers leave them.
+    pub fn register_host<F, Fut>(&mut self, kind: &'static str, handler: F) -> &mut Self
+    where
+        F: Fn(JobContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), JobError>> + Send + 'static,
+    {
+        self.host_kinds.push(kind);
+        self.register(kind, handler)
+    }
+
+    pub fn host_kinds(&self) -> &[&'static str] {
+        &self.host_kinds
+    }
+
     pub fn every(&mut self, kind: &'static str, interval: Duration) -> &mut Self {
         assert!(
             self.handlers.contains_key(kind),
@@ -352,6 +370,8 @@ pub fn default_registry() -> JobRegistry {
     crate::ai::register_jobs(&mut registry);
     crate::launch::register_jobs(&mut registry);
     crate::runs::register_jobs(&mut registry);
+    crate::requests::register_jobs(&mut registry);
+    crate::hosts::commands::register_jobs(&mut registry);
     crate::work_items::templates::register_jobs(&mut registry);
     crate::work_items::imports::register_jobs(&mut registry);
     crate::collections::computed::register_jobs(&mut registry);
@@ -373,11 +393,15 @@ pub fn default_registry() -> JobRegistry {
     crate::drafts::register_jobs(&mut registry);
     crate::scheduled_messages::register_jobs(&mut registry);
     crate::password_reset::register_jobs(&mut registry);
+    crate::limits::register_jobs(&mut registry);
     crate::events::register_jobs(&mut registry);
     crate::webhooks::register_jobs(&mut registry);
     crate::automations::register_jobs(&mut registry);
     crate::files::register_jobs(&mut registry);
     crate::link_previews::register_jobs(&mut registry);
+    crate::things::backfill::register_jobs(&mut registry);
+    crate::links::register_jobs(&mut registry);
+    crate::repositories::register_jobs(&mut registry);
     crate::tenancy::backfill::register_jobs(&mut registry);
     registry
 }
@@ -418,9 +442,11 @@ pub async fn run_workers(
     options: WorkerOptions,
     mut shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
+    // Host kinds wait for the built-in host's holder (`run_due_host`).
     let kinds = registry
         .kinds()
         .into_iter()
+        .filter(|kind| !registry.host_kinds.contains(kind))
         .map(str::to_owned)
         .collect::<Vec<_>>();
     let mut running = JoinSet::new();
@@ -450,7 +476,7 @@ pub async fn run_workers(
                         let registry = Arc::clone(&registry);
                         let lease = options.lease;
                         running.spawn(async move {
-                            execute(&state, &registry, job, lease).await;
+                            execute(&state, &registry, job, lease, None).await;
                         });
                     }
                 }
@@ -490,9 +516,37 @@ pub async fn run_due(
         let Some(job) = jobs.into_iter().next() else {
             return Ok(count);
         };
-        execute(state, registry, job, options.lease).await;
+        execute(state, registry, job, options.lease, None).await;
         count += 1;
     }
+}
+
+/// Run the host kinds that are due, one at a time, while `lease` (the
+/// built-in host's) is held; how many ran.
+pub async fn run_due_host(
+    state: &AppState,
+    registry: &JobRegistry,
+    lease: &crate::cluster::Lease,
+) -> Result<usize, AppError> {
+    let kinds = registry
+        .host_kinds
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect::<Vec<_>>();
+    if kinds.is_empty() {
+        return Ok(0);
+    }
+    let options = WorkerOptions::default();
+    let mut count = 0;
+    while !lease.lost.is_cancelled() {
+        let jobs = claim(&state.pool, &kinds, 1, &options).await?;
+        let Some(job) = jobs.into_iter().next() else {
+            break;
+        };
+        execute(state, registry, job, options.lease, Some(&lease.lost)).await;
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// Make sure each recurring system job has its next run queued.
@@ -595,7 +649,16 @@ async fn claim(
     .await
 }
 
-async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Duration) {
+/// `stop`, when given, ends the handler as if it lost its own lease: a host
+/// job stops when this instance loses the built-in host's lease, so the old
+/// holder never records a result after a successor took over.
+async fn execute(
+    state: &AppState,
+    registry: &JobRegistry,
+    job: Job,
+    lease: Duration,
+    stop: Option<&tokio_util::sync::CancellationToken>,
+) {
     let Some(registration) = registry.handlers.get(job.kind.as_str()) else {
         return;
     };
@@ -644,6 +707,12 @@ async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Dura
             result.unwrap_or_else(|_| Err(JobError::retry("The job ran out of time.")))
         }
         () = renewals => Err(JobError::retry("The job lost its lease.")),
+        () = async {
+            match stop {
+                Some(stop) => stop.cancelled().await,
+                None => std::future::pending().await,
+            }
+        } => Err(JobError::retry("This server lost the built-in host.")),
     };
     metrics::observe_job(&kind, started.elapsed(), result.is_ok());
     if let Err(error) = finish(&state.pool, &job, result).await {

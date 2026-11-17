@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use agent_workspace_server::statuses;
 
-use super::support::{app::tool, world::WorldBuilder};
+use super::support::{NOTICES, app::tool, world::WorldBuilder};
 
 #[tokio::test]
 async fn statuses_show_where_they_belong_and_clear_themselves() {
@@ -53,11 +53,11 @@ async fn statuses_show_where_they_belong_and_clear_themselves() {
     assert_eq!(line["outcome"], "ok", "{line}");
     assert_eq!(line["value"]["accountId"], rook.actor.to_string(), "{line}");
     // Other tabs and agents hear of each change, in the spaces it shows in.
-    let announced = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events \
-         WHERE event_type = 'account.status.changed' AND resource_id = ANY($1)",
-    )
-    .bind(vec![owner, rook.actor])
+    let announced = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {NOTICES} notice \
+         WHERE event_type = 'account.status.changed' AND payload->>'accountId' = ANY($1)",
+    ))
+    .bind(vec![owner.to_string(), rook.actor.to_string()])
     .fetch_one(pool)
     .await
     .expect("events");
@@ -134,7 +134,25 @@ async fn statuses_show_where_they_belong_and_clear_themselves() {
         .expect("shown here");
     assert!(here.is_empty(), "{here:?}");
     drop(connection);
+    let announced_before = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {NOTICES} notice WHERE event_type = 'account.status.changed' \
+         AND payload->>'accountId' = $1",
+    ))
+    .bind(owner.to_string())
+    .fetch_one(pool)
+    .await
+    .expect("events");
     assert!(statuses::clear_due(pool, 500).await.expect("clear due") >= 1);
+    // Screens that show it hear it went, as they do for an explicit clear.
+    let announced_after = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {NOTICES} notice WHERE event_type = 'account.status.changed' \
+         AND payload->>'accountId' = $1",
+    ))
+    .bind(owner.to_string())
+    .fetch_one(pool)
+    .await
+    .expect("events");
+    assert!(announced_after > announced_before, "the clear is announced");
     let left =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM account_statuses WHERE account_id = $1")
             .bind(owner)

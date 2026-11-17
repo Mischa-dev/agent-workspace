@@ -212,8 +212,8 @@ AGENT_WORKSPACE_DATA_ROOT=/var/lib/agent-workspace
 AGENT_WORKSPACE_DATA_QUOTA_BYTES=21474836480
 AGENT_WORKSPACE_MINIMUM_FREE_BYTES=5368709120
 AGENT_WORKSPACE_CODEX_BINARY=/opt/agent-workspace/bin/codex
-AGENT_WORKSPACE_CODEX_HOME_ROOT=/var/lib/agent-workspace/codex/profiles
-AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT=1
+AGENT_WORKSPACE_PROVIDER_HOME_ROOT=/var/lib/agent-workspace/codex/profiles
+AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT=1
 AGENT_WORKSPACE_CODEX_MAX_LINE_BYTES=1048576
 AGENT_WORKSPACE_CODEX_MAX_STDERR_BYTES=262144
 AGENT_WORKSPACE_CODEX_MAX_BUFFERED_EVENTS=64
@@ -258,6 +258,20 @@ sign-in limits per sender address use it. Unset, the server reads no address
 from requests and has no per-address limits, only per-name, per-token and
 shared ones; set it only when every request reaches the server through that
 proxy, or callers could name any address they like.
+
+Request limits (sign-in, resets, writes, MCP requests and the rest) are
+counted in PostgreSQL, in the unlogged table `rate_limit_counters`, so every
+server process spends from the same budgets and a restart or deploy doesn't
+reset them; a database crash or failover does. If the counters can't be
+reached, security limits (sign-in, resets, tokens) refuse and throughput
+limits allow, and both log a warning.
+
+The server works through a transaction-mode connection pooler (such as
+PgBouncer in transaction mode) in front of PostgreSQL: it sets nothing on a
+session and holds no session locks. Behind one, set
+`AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE=0`, and point
+`AGENT_WORKSPACE_DATABASE_LISTEN_URL` straight at PostgreSQL (or set it to
+`off` to run on polls alone), since a pooler can't hold a `LISTEN`.
 
 GitHub App settings are optional and must be installed as separate owner-only
 files before adding their paths to this environment. Never print those files.

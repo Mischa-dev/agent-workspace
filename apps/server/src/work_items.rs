@@ -1107,7 +1107,7 @@ async fn update_work_item(
     ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(mut request): ApiJson<UpdateWorkItemRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let fields = planning_field_changes(&request)?;
     let labels_change = !request.add_label_ids.is_empty() || !request.remove_label_ids.is_empty();
     if request.expected_version < 1
@@ -1353,7 +1353,7 @@ async fn set_work_item_archived(
     request: WorkItemVersionRequest,
     archived: bool,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     if request.expected_version < 1 {
         return Err(AppError::Validation("expectedVersion"));
     }
@@ -1467,7 +1467,7 @@ async fn work_with_worker(
     ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(mut request): ApiJson<WorkWithWorkerRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     request.prompt = normalize_worker_prompt(&request.prompt)?;
     if request.expected_version < 1 {
         return Err(AppError::Validation("expectedVersion"));
@@ -1650,18 +1650,21 @@ async fn work_with_worker(
         "Work Item {work_item_key} ({work_item_id}).\n\nUser instructions:\n{}",
         request.prompt
     );
-    let (_, Json(run)) = crate::api::start_agent_run(
-        State(state.clone()),
-        headers,
-        principal.clone(),
-        ApiPath(thread_id),
-        ApiJson(crate::api::StartRunRequest {
+    // The same creation path as every other start (A1.10), not the HTTP
+    // handler: the run is admitted, capped and given defaults by one rule.
+    let (_, run) = crate::api::start_run_in(
+        &state,
+        &principal,
+        None,
+        thread_id,
+        crate::api::StartRunRequest {
             prompt: provider_prompt,
             repository_id: Some(repository_id),
             config: None,
             provider_account_id: None,
             agent_profile_id: None,
-        }),
+        },
+        IdempotencyKey::from_headers(&headers),
     )
     .await?;
     let response = WorkWithWorkerResponse { thread_id, run };
@@ -1748,7 +1751,7 @@ async fn change_work_item_thread_link(
     request: EmptyLinkRequest,
     linked: bool,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     let key = IdempotencyKey::from_headers(headers)?;
     let scope = resource_bound_scope(
         "work_items",
@@ -1905,7 +1908,7 @@ async fn change_work_item_repository_link(
     desired_role: Option<String>,
     action: &'static str,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     let key = IdempotencyKey::from_headers(headers)?;
     let scope = resource_bound_scope("work_items", work_item_id, action)?;
     let request_hash = RequestHash::for_value(&(repository_id, expected_version, &desired_role))?;
@@ -2048,7 +2051,7 @@ async fn change_work_item_pull_request_link(
     expected_version: i64,
     linked: bool,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal)?;
+    require_authenticated_write(state, headers, principal).await?;
     let key = IdempotencyKey::from_headers(headers)?;
     let scope = resource_bound_scope(
         "work_items",
@@ -2168,7 +2171,8 @@ async fn search_assignable_actors(
 ) -> Result<Json<AssigneeSearchResponse>, AppError> {
     state
         .rate_limits
-        .check_expensive_read(principal.session_id)?;
+        .check_expensive_read(principal.session_id)
+        .await?;
     let membership = project_membership(&state.pool, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -2274,7 +2278,8 @@ async fn search_work_item_references(
 ) -> Result<Json<WorkItemReferenceSearchResponse>, AppError> {
     state
         .rate_limits
-        .check_expensive_read(principal.session_id)?;
+        .check_expensive_read(principal.session_id)
+        .await?;
     let membership = project_membership(&state.pool, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -2321,7 +2326,7 @@ async fn move_work_item(
     ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<MoveWorkItemRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let placement = match (request.target_position, request.before_id, request.after_id) {
         (Some(position), None, None) if (1..=10_000).contains(&position) => BoardPlacement::Index(
             usize::try_from(position - 1).map_err(|_| AppError::Validation("targetPosition"))?,
@@ -2464,7 +2469,7 @@ async fn create_work_item(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(mut request): ApiJson<CreateWorkItemRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     request.title = normalize_title(&request.title)?;
     request.description = normalize_description(&request.description)?;
     validate_priority(&request.priority)?;
@@ -2648,7 +2653,7 @@ async fn create_acceptance_criterion(
     ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(mut request): ApiJson<CreateCriterionRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     request.text = normalize_criterion_text(&request.text)?;
     if request.expected_version < 1 {
         return Err(AppError::Validation("expectedVersion"));
@@ -2747,7 +2752,7 @@ async fn update_acceptance_criterion(
     ApiPath((project_id, work_item_id, criterion_id)): ApiPath<(Uuid, Uuid, Uuid)>,
     ApiJson(mut request): ApiJson<UpdateCriterionRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.expected_version < 1
         || (request.text.is_none() && request.position.is_none() && request.completed.is_none())
     {
@@ -2858,7 +2863,7 @@ async fn remove_acceptance_criterion(
     ApiPath((project_id, work_item_id, criterion_id)): ApiPath<(Uuid, Uuid, Uuid)>,
     ApiJson(request): ApiJson<RemoveCriterionRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if request.expected_version < 1 {
         return Err(AppError::Validation("expectedVersion"));
     }
@@ -3000,7 +3005,7 @@ async fn create_work_item_comment(
     ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<CreateCommentRequest>,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("work_items", work_item_id, "comment_create")?;
@@ -4059,7 +4064,9 @@ const WORK_ITEM_SELECT: &str = concat!(
                     'parentChannelId', channel.id,
                     'parentChannelName', channel.name,
                     'archivedAt', thread.archived_at::text,
-                    'newestRunState', newest_run.state,
+                    'newestRunState', "#,
+    crate::runs::sql::newest_state_in_thread!(),
+    r#",
                     'href', '/projects/' || item.project_id || '/threads/' || thread.id
                 ) ORDER BY link.created_at, thread.id
             )
@@ -4068,14 +4075,6 @@ const WORK_ITEM_SELECT: &str = concat!(
               ON thread.project_id = link.project_id AND thread.id = link.conversation_id
             JOIN conversations channel
               ON channel.project_id = thread.project_id AND channel.id = thread.parent_channel_id
-            LEFT JOIN LATERAL (
-                SELECT run.state
-                FROM agent_runs run
-                WHERE run.project_id = thread.project_id
-                  AND run.conversation_id = thread.id
-                ORDER BY run.created_at DESC, run.id DESC
-                LIMIT 1
-            ) newest_run ON true
             WHERE link.project_id = item.project_id AND link.work_item_id = item.id
               AND conversation_visible_to(thread.id, $3)
         ), '[]'::jsonb) AS linked_threads,

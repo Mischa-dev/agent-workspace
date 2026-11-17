@@ -11,6 +11,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::support::{
+    NOTICES,
     app::{send, tool},
     world::WorldBuilder,
 };
@@ -40,9 +41,9 @@ async fn assert_made_once(pool: &PgPool, thread: &str, creator: Uuid, path: &str
     .await
     .expect("read state");
     assert_eq!(read_states, 1, "{path}: the creator's read state");
-    let events = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events WHERE event_type = 'conversation.created' AND resource_id = $1",
-    )
+    let events = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {NOTICES} notice WHERE event_type = 'conversation.created' AND resource_id = $1",
+    ))
     .bind(thread)
     .fetch_one(pool)
     .await

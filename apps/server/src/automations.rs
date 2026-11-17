@@ -2586,13 +2586,11 @@ async fn run_action(
                 // A pull request with no task: start a run in the thread of
                 // the run that opened it.
                 if let (Some(run_id), Some(prompt)) = (context.agent_run_id, prompt) {
-                    let (conversation_id, repository_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
-                        "SELECT conversation_id, repository_id FROM agent_runs WHERE id = $1",
-                    )
-                    .bind(run_id)
-                    .fetch_one(crate::db::scoped(&state.pool))
-                    .await
-                    .map_err(|error| database(error.into()))?;
+                    let (conversation_id, repository_id) =
+                        crate::runs::reads::thread_and_repository(&state.pool, run_id)
+                            .await
+                            .map_err(database)?
+                            .ok_or_else(|| database(AppError::NotFound("agent_run")))?;
                     let (_, started) = crate::api::start_run_in(
                         state,
                         &caller,
@@ -2857,7 +2855,7 @@ async fn create_route(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreateRule>,
 ) -> Result<(StatusCode, Json<RuleView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok((
         StatusCode::CREATED,
@@ -2872,7 +2870,7 @@ async fn update_route(
     ApiPath((project_id, rule_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<UpdateRule>,
 ) -> Result<Json<RuleView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok(Json(
         update(&state, &caller, project_id, rule_id, request).await?,
@@ -2885,7 +2883,7 @@ async fn delete_route(
     principal: AuthenticatedActor,
     ApiPath((project_id, rule_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     delete(&state, &caller, project_id, rule_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -2898,7 +2896,7 @@ async fn run_now_route(
     ApiPath((project_id, rule_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<RunNow>,
 ) -> Result<Json<RunView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
     Ok(Json(
         run_now(&state, &caller, project_id, rule_id, request).await?,

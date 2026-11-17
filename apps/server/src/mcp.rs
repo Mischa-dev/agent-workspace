@@ -99,7 +99,6 @@ mod page_discussion;
 mod planning;
 mod project_template_tools;
 mod publish_tools;
-mod question_tools;
 mod reactions;
 mod reads;
 mod replies;
@@ -1163,63 +1162,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Ask one person in a project something, on a card in their inbox: the question, up to 4 answers to pick from (they can always type their own), and optionally the conversation or task it's about. Use it when you need a person's call to go on, instead of a message they might miss. When they answer, your connection gets a question.answered event; read the answer with question_list.",
-        annotations(
-            title = "Ask a person",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn ask_person(
-        &self,
-        Parameters(arguments): Parameters<question_tools::AskPersonArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<question_tools::AskPersonValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(question_tools::ask_person(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "List questions you asked people with ask_person (role asked, the default), with their answers once given, or questions others asked you (role for_me). Filter by status (pending, answered) or one questionId.",
-        annotations(
-            title = "List questions",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn question_list(
-        &self,
-        Parameters(arguments): Parameters<question_tools::QuestionListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<question_tools::QuestionListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(question_tools::question_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Answer a question someone asked you (question_list role for_me lists them): pick an option by its id, type an answer, or both. An answer is final, and goes back to whoever asked.",
-        annotations(
-            title = "Answer a question",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn question_answer(
-        &self,
-        Parameters(arguments): Parameters<question_tools::QuestionAnswerArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<question_tools::QuestionAnswerValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(question_tools::question_answer(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Schedule a message to send later (sendAt, RFC 3339, up to a year ahead), as you. When it sends, it's checked as if you sent it then: you must still be able to post there, and its mentions and reply rules apply then. Change or cancel it with scheduled_message_update; list them with later_list view scheduled.",
         annotations(
             title = "Schedule message",
@@ -2135,7 +2077,7 @@ impl McpServer {
     // -- Search and memory ---------------------------------------------------
 
     #[tool(
-        description = "Open any thing (a task, page, decision, whiteboard, thread, channel, conversation or project) with its title, status, owner and link, and its links read both ways: part of, blocks and blocked by, about and referenced in, related to, duplicates. Only things you can see, from modules that are on.",
+        description = "Open any thing (a task, page, decision, whiteboard, sheet, thread, channel, conversation, project, collection or record) by its ID alone, with its title, status, owner, version and link, and its links read both ways: part of, blocks and blocked by, about and referenced in, related to, duplicates. Only things you can see, from modules that are on.",
         annotations(title = "Open a thing", read_only_hint = true, open_world_hint = false)
     )]
     async fn thing_open(
@@ -3689,7 +3631,7 @@ impl McpServer {
     async fn standup_prompt(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
             Role::User,
-            "In Agent Workspace, write my standup. Use task_list (updatedSince: 24h) for what moved, run_list for Codex runs, pull_request_list (needsMe) for PRs waiting on me, and briefing for what needs me. Three short sections: Done, Next, Blocked. Keys and links only, no filler.",
+            "In Agent Workspace, write my standup. Use task_list (updatedSince: 24h) for what moved, run_list for agent runs, pull_request_list (needsMe) for PRs waiting on me, and briefing for what needs me. Three short sections: Done, Next, Blocked. Keys and links only, no filler.",
         )]
     }
 
@@ -4416,19 +4358,28 @@ async fn authenticate_mcp(
     // body read counts toward it, as it does for the client waiting.
     let started = std::time::Instant::now();
     let authentication_key = exact_bearer_token(request.headers()).unwrap_or("invalid");
-    if let Err(error) = state.rate_limits.check_mcp_auth(authentication_key) {
+    if let Err(error) = state.rate_limits.check_mcp_auth(authentication_key).await {
         return error.into_response();
     }
     let resolved = resolve_bearer_principal(&state, request.headers()).await;
     match &resolved {
-        Ok(Some(_)) => state.rate_limits.note_mcp_auth_success(authentication_key),
-        Ok(None) => state.rate_limits.note_mcp_auth_failure(),
+        Ok(Some(_)) => {
+            state
+                .rate_limits
+                .note_mcp_auth_success(authentication_key)
+                .await
+        }
+        Ok(None) => state.rate_limits.note_mcp_auth_failure().await,
         Err(_) => {}
     }
     match resolved {
         Ok(Some(mut principal)) => {
             let mut handshake = None;
-            if let Err(error) = state.rate_limits.check_mcp_request(principal.credential_id) {
+            if let Err(error) = state
+                .rate_limits
+                .check_mcp_request(principal.credential_id)
+                .await
+            {
                 return error.into_response();
             }
             // The alias path names a workspace the credential must reach.
@@ -4931,6 +4882,30 @@ pub(crate) async fn resolve_bearer_principal(
     if token.starts_with("aw_oauth_") {
         return oauth::resolve_access_token(state, token).await;
     }
+    // A1.12: a host's short-lived credential for one run's agent, in the
+    // run's space (interim until K1.24).
+    if token.starts_with(crate::runs::credentials::TOKEN_PREFIX) {
+        let Some(holder) = crate::runs::credentials::resolve(&state.pool, token).await? else {
+            return Ok(None);
+        };
+        let Ok(actor_kind) = parse_mcp_actor_kind(&holder.account_kind) else {
+            return Ok(None);
+        };
+        return Ok(Some(McpPrincipal {
+            credential_id: holder.credential_id,
+            mcp_credential_id: None,
+            oauth_grant_id: None,
+            actor_id: holder.account_id,
+            actor_kind,
+            project_id: holder.space_id,
+            external_agent_connection_id: holder.connection_id,
+            client_name: holder.host_name,
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            authentication_class: "run_credential",
+            account_wide: false,
+            project_explicit: false,
+        }));
+    }
     let Some(prefix) = token.get(..TOKEN_PREFIX_LENGTH) else {
         return Ok(None);
     };
@@ -5406,6 +5381,7 @@ async fn validate_issue_command(
                             | Permission::DirectoryView
                             | Permission::RunsReport
                             | Permission::RequestsRaise
+                            | Permission::RequestsAnswer
                     )
                 })
             }))
@@ -5977,11 +5953,6 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
 ];
 
 const OTHER_SCOPES: &[(&str, &str)] = &[
-    // A question names its project only to who asked it and who it asks.
-    (
-        "questionId",
-        "SELECT project_id FROM person_questions WHERE id = $1 AND (asked_by_actor_id = $2 OR person_actor_id = $2)",
-    ),
     // A reply request names its project only to someone it's for, as the
     // reply tools check: the agent it asks, or a person who can see the
     // conversation (who may stop it). Anyone else, like a missing one, gets

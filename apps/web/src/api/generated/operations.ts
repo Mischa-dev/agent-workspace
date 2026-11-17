@@ -18,6 +18,12 @@ export type Envelope<T> =
   | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }
   | OpError
 
+export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
+
+export type AgentUsageLine = { accountId: string; cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; handle?: string | null; inputTokens: number; name?: string | null; outputTokens: number; runs: number }
+
+export type AudienceInput = { accounts?: string[]; roles?: string[] }
+
 export type ButtonStepView = { arguments: Record<string, unknown>; operation: string; title: string }
 
 export type ButtonView = { label: string; steps: ButtonStepView[] }
@@ -36,11 +42,17 @@ export type DraftView = { conversationId: string; conversationKind: string; conv
 
 export type FollowedThreadView = { id: string; lastActivityAt: string; messageCount: number; name: string; originMessageId?: string | null; outcome?: string | null; parentId: string; parentKind: string; parentName?: string | null; spaceId: string; spaceName: string; status: string; unread: boolean }
 
+export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
+
+export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
+
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
 export type HostOwnerChoice = "person" | "workspace"
 
 export type HostView = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
+
+export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
 
 export type OwnerView = { id: string; kind: string; name: string }
 
@@ -56,7 +68,19 @@ export type PreviewRecord = { number: number; title: string }
 
 export type Publisher = { name: string; url?: string | null }
 
+export type PullRequest = { baseRef: string; checksState: string; draft: boolean; headRef: string; id: string; mergedAt?: string | null; number: number; repository: string; repositoryId: string; reviewState: string; spaceId: string; state: string; title: string; updatedAt: string; url: string }
+
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
+
+export type RequestAnswerView = { label?: string | null; optionId?: string | null; text?: string | null }
+
+export type RequestLine = { answeredAt?: string | null; conversationId?: string | null; createdAt: string; id: string; kind: string; status: string; title: string }
+
+export type RequestOption = { id: string; label: string; style?: string | null }
+
+export type RequestOptionInput = { id: string; label: string; style?: string | null }
+
+export type RequestView = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
 
 export type Requires = { contract?: string | null; modules?: string[] }
 
@@ -76,11 +100,17 @@ export type SubjectKind = "page" | "sheet" | "whiteboard" | "record" | "task"
 
 export type ThingInput = { id: string; kind: SubjectKind }
 
+export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
+
 export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName?: string | null; title: string }
 
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type AgentUsageListInput = { days?: number | null }
+
+export type AgentUsageListOutput = { accounts: AgentUsageLine[]; days: number; notTiedToARun: UnattributedUsageLine[] }
 
 export type ButtonGetInput = { collection: string; field: string }
 
@@ -130,6 +160,18 @@ export type FormulaPreviewInput = { collection: string; field?: string | null; f
 
 export type FormulaPreviewOutput = { problem?: string | null; record?: PreviewRecord | null; result?: ResultType | null; value?: unknown }
 
+export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
+
+export type HistoryListOutput = { caps: HistoryCaps; entries: HistoryEntry[]; kind: string }
+
+export type HistoryRestoreInput = { expectedVersion: number; thing: string; version: number }
+
+export type HistoryRestoreOutput = { kind: string; restored: number; version: number }
+
+export type HistoryShowInput = { thing: string; version: number }
+
+export type HistoryShowOutput = { content: unknown; kind: string; version: number }
+
 export type HostAgentBindInput = { accountId: string; hostAgentRef: string; hostId: string }
 
 export type HostAgentBindOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
@@ -174,6 +216,30 @@ export type PageTemplateListInput = { spaceId: string }
 
 export type PageTemplateListOutput = { templates: PageTemplateView[] }
 
+export type RequestCancelInput = { requestId: string }
+
+export type RequestCancelOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
+
+export type RequestCreateInput = { allowText?: boolean | null; audience: AudienceInput; conversationId?: string | null; detail?: string | null; expiresInSeconds?: number | null; kind?: string | null; onExpiry?: string | null; options?: RequestOptionInput[]; spaceId?: string | null; taskId?: string | null; title: string }
+
+export type RequestCreateOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
+
+export type RequestGetInput = { requestId: string }
+
+export type RequestGetOutput = { mayAnswer: boolean; request: RequestView }
+
+export type RequestListInput = { limit?: number | null; role?: string | null; spaceId?: string | null; status?: string | null }
+
+export type RequestListOutput = { requests: RequestView[] }
+
+export type RequestRespondInput = { optionId?: string | null; requestId: string; text?: string | null }
+
+export type RequestRespondOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
+
+export type RunActivityListInput = { afterSeq?: number | null; limit?: number | null; runId: string }
+
+export type RunActivityListOutput = { activities: ActivityLine[]; nextAfterSeq?: number | null }
+
 export type RunActivityReportInput = { activities: RunActivityInput[]; runId: string }
 
 export type RunActivityReportOutput = { accepted: number; duplicates: number; lastSeq: number; overLimit?: number; requests?: RaisedRequestOutput[]; state: string; version: number }
@@ -185,6 +251,10 @@ export type RunCancelOutput = { idempotentReplay?: boolean; run: RunRecord }
 export type RunCreateInput = { cause: RunCauseInput; clientRunId?: string | null; parentRunId?: string | null; reportIntervalSeconds?: number | null; settings?: unknown; spaceId: string; state?: string | null; title: string }
 
 export type RunCreateOutput = { created: boolean; run: RunRecord }
+
+export type RunDetailGetInput = { runId: string }
+
+export type RunDetailGetOutput = { activities: ActivityLine[]; agentActorId: string; agentName: string; backend?: string | null; branch?: string | null; builtin: boolean; cachedInputTokens: number; causeKind: string; causeRef?: string | null; conversationId?: string | null; cost?: number | null; costConfidence?: string | null; createdAt: string; currency?: string | null; externalUrl?: string | null; failureReason?: string | null; finishedAt?: string | null; gapCount: number; harness?: string | null; harnessName?: string | null; hiddenActivities: number; hostId?: string | null; hostName?: string | null; id: string; inputTokens: number; lastReportAt?: string | null; liveness: string; model?: string | null; organizationId: string; outcomeSummary?: string | null; outputTokens: number; plan?: unknown; projectId?: string | null; projectKey?: string | null; projectName?: string | null; pullRequestNumber?: number | null; pullRequestState?: string | null; pullRequestUrl?: string | null; pullRequests: PullRequest[]; requestedByActorId?: string | null; requestedByName?: string | null; requests: RequestLine[]; results: unknown[]; startedAt?: string | null; state: string; statusLine?: string | null; taskId?: string | null; taskKey?: string | null; taskTitle?: string | null; threadName?: string | null; title: string; updatedAt: string; usageByModel: ModelUsageLine[]; waitingOnRequestId?: string | null; waitingOnTitle?: string | null }
 
 export type RunMarkNotStartedInput = { runId: string }
 
@@ -224,6 +294,7 @@ export type WhiteboardTemplateListOutput = { templates: WhiteboardTemplateView[]
 
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   button_get: { input: ButtonGetInput; output: ButtonGetOutput }
   button_press: { input: ButtonPressInput; output: ButtonPressOutput }
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
@@ -236,6 +307,9 @@ export type Operations = {
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
+  history_list: { input: HistoryListInput; output: HistoryListOutput }
+  history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
+  history_show: { input: HistoryShowInput; output: HistoryShowOutput }
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
   host_agent_unbind: { input: HostAgentUnbindInput; output: HostAgentUnbindOutput }
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
@@ -247,9 +321,16 @@ export type Operations = {
   notification_keyword_set: { input: NotificationKeywordSetInput; output: NotificationKeywordSetOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
+  request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
+  request_create: { input: RequestCreateInput; output: RequestCreateOutput }
+  request_get: { input: RequestGetInput; output: RequestGetOutput }
+  request_list: { input: RequestListInput; output: RequestListOutput }
+  request_respond: { input: RequestRespondInput; output: RequestRespondOutput }
+  run_activity_list: { input: RunActivityListInput; output: RunActivityListOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }
   run_create: { input: RunCreateInput; output: RunCreateOutput }
+  run_detail_get: { input: RunDetailGetInput; output: RunDetailGetOutput }
   run_mark_not_started: { input: RunMarkNotStartedInput; output: RunMarkNotStartedOutput }
   run_result_report: { input: RunResultReportInput; output: RunResultReportOutput }
   run_update: { input: RunUpdateInput; output: RunUpdateOutput }

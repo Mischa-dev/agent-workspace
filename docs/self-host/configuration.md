@@ -48,6 +48,8 @@ variable that is set still wins.
 | --- | --- | --- |
 | `AGENT_WORKSPACE_DATABASE_URL` | required | The PostgreSQL connection URL. Secret: prefer `AGENT_WORKSPACE_DATABASE_URL_FILE`. |
 | `AGENT_WORKSPACE_DATABASE_MAX_CONNECTIONS` | `5` | Connections in the server's pool. |
+| `AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE` | `100` | Prepared statements each pooled connection keeps. Set `0` when the database URL goes through a transaction-mode pooler, which can't keep a connection's statements between transactions. |
+| `AGENT_WORKSPACE_DATABASE_LISTEN_URL` | the database URL | Where the one listening connection (outside the pool) goes for wakes and live frames. Point it straight at PostgreSQL when the main URL goes through a transaction-mode pooler. `off` runs on polls alone: live updates and lease hand-overs then take up to a second longer, and live text, sign-outs and module switches reach only the server they happen on. |
 | `AGENT_WORKSPACE_DATA_ROOT` | `.agent-workspace` | Where uploaded files, artifacts and other data on disk live. |
 | `AGENT_WORKSPACE_DATA_QUOTA_BYTES` | `21474836480` | The most the data root may hold (at least 1 GiB). |
 | `AGENT_WORKSPACE_MINIMUM_FREE_BYTES` | `5368709120` | Free disk the server keeps; uploads are refused below it (at least 1 GiB). |
@@ -58,6 +60,8 @@ variable that is set still wins.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AGENT_WORKSPACE_JOB_CONCURRENCY` | `4` | Background jobs run at once in this process (1 to 64). |
+| `AGENT_WORKSPACE_LEASE_SECONDS` | `15` | How long a server's hold on single-holder work (the built-in host, the event router) lasts unless renewed (2 to 300). A server that stops without letting go hands its work on after this long. |
+| `AGENT_WORKSPACE_INSTANCE_LABEL` | none | A name for this server process when several share one database, shown with its instances (at most 80 characters). |
 | `AGENT_WORKSPACE_LINK_PREVIEWS` | `true` | Whether this server fetches previews of links people post. Off, no workspace gets them, whatever its own setting says. |
 | `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES` | `false` | Lets workspaces point their model provider and mail server at private, loopback and tailnet addresses, and mail at any port. Turn it on only for a local model or mail relay. |
 | `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS` | none | Comma-separated exact origins (such as `http://wake.internal:8732` for a listener on a private network) that agent wakeups and webhooks may reach over http or on a private address. Every other webhook must be public https. |
@@ -102,8 +106,8 @@ container image does not need them.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AGENT_WORKSPACE_CODEX_BINARY` | `codex` | The Codex command line. |
-| `AGENT_WORKSPACE_CODEX_HOME_ROOT` | `<data root>/codex/profiles` | Where harness account homes live; must be inside the data root. |
-| `AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT` | `1` | Harness processes at once (1 to 16). |
+| `AGENT_WORKSPACE_PROVIDER_HOME_ROOT` | `<data root>/codex/profiles` | Where harness account homes live; must be inside the data root. |
+| `AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT` | `1` | Harness processes at once (1 to 16). |
 | `AGENT_WORKSPACE_CODEX_MAX_LINE_BYTES` | `1048576` | The longest line read from a harness. |
 | `AGENT_WORKSPACE_CODEX_MAX_STDERR_BYTES` | `262144` | Error output kept from a harness. |
 | `AGENT_WORKSPACE_CODEX_MAX_BUFFERED_EVENTS` | `64` | Events buffered from a harness. |

@@ -429,7 +429,7 @@ async fn create(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreateRequest>,
 ) -> Result<axum::response::Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     crate::settings::authorize_workspace_manage(&state.pool, &principal, organization_id).await?;
     let name = valid_name(&request.name)?;
     let now = Utc::now();
@@ -563,7 +563,7 @@ async fn update(
     ApiPath((organization_id, harness_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<UpdateRequest>,
 ) -> Result<axum::response::Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     crate::settings::authorize_workspace_manage(&state.pool, &principal, organization_id).await?;
     let mut row = load(&state, organization_id, harness_id).await?;
     if row.version != request.version {
@@ -649,7 +649,7 @@ async fn remove(
     principal: AuthenticatedActor,
     ApiPath((organization_id, harness_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     crate::settings::authorize_workspace_manage(&state.pool, &principal, organization_id).await?;
     let row = load(&state, organization_id, harness_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;

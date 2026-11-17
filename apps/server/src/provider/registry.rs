@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -107,6 +107,32 @@ struct RegistryInner {
     route_all_to_demo: bool,
     shutdown: Arc<ShutdownSignal>,
     ceremonies: Mutex<HashMap<Uuid, LoginCeremony>>,
+    /// This instance among the others (K5.3): local turns run only on the
+    /// holder of the built-in host's lease. Unset in tests that build a
+    /// state without a server.
+    cluster: std::sync::OnceLock<crate::cluster::Cluster>,
+    /// Turns this process is driving, so losing the built-in host's lease
+    /// can wait for them to stop before anyone else recovers them.
+    active_turns: AtomicUsize,
+    turns_idle: Notify,
+}
+
+/// How long losing the built-in host's lease waits for this process's turns
+/// to stop.
+const LOCAL_TURNS_STOP_WAIT: Duration = Duration::from_secs(10);
+
+/// One turn this process drives ([`SupervisorRegistry::turn_started`]);
+/// dropping it says the turn has stopped.
+pub struct ActiveTurn {
+    inner: Arc<RegistryInner>,
+}
+
+impl Drop for ActiveTurn {
+    fn drop(&mut self) {
+        if self.inner.active_turns.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.inner.turns_idle.notify_waiters();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -205,6 +231,9 @@ impl SupervisorRegistry {
                 codex_cloud,
                 shutdown,
                 ceremonies: Mutex::new(HashMap::new()),
+                cluster: std::sync::OnceLock::new(),
+                active_turns: AtomicUsize::new(0),
+                turns_idle: Notify::new(),
             }),
         })
     }
@@ -313,6 +342,16 @@ impl SupervisorRegistry {
         let _ = self.inner.host.set(host);
     }
 
+    /// The instance whose lease decides where local turns run (K5.3). Set
+    /// once when the server starts.
+    pub fn set_cluster(&self, cluster: crate::cluster::Cluster) {
+        let _ = self.inner.cluster.set(cluster);
+    }
+
+    pub fn cluster(&self) -> Option<&crate::cluster::Cluster> {
+        self.inner.cluster.get()
+    }
+
     /// The host cell registered adapters share with the built-in ones.
     pub(crate) fn host_cell(&self) -> HostCell {
         Arc::clone(&self.inner.host)
@@ -398,6 +437,15 @@ impl SupervisorRegistry {
 
     pub async fn shutdown_all(&self) {
         self.request_shutdown();
+        self.stop_local_turns().await;
+    }
+
+    /// Stop every turn running here, as when this instance loses the
+    /// built-in host's lease: nobody may recover them while they run. Each
+    /// turn watches the lease itself ([`Self::host_lease_lost`]) and stops
+    /// its session; this stops what the adapters hold and then waits, for a
+    /// while, until every turn has.
+    pub async fn stop_local_turns(&self) {
         let custom = self
             .custom_read()
             .values()
@@ -405,6 +453,48 @@ impl SupervisorRegistry {
             .collect::<Vec<_>>();
         for adapter in self.inner.adapters.values().chain(custom.iter()) {
             adapter.shutdown_all().await;
+        }
+        let stopped = tokio::time::timeout(LOCAL_TURNS_STOP_WAIT, async {
+            loop {
+                let idle = self.inner.turns_idle.notified();
+                if self.inner.active_turns.load(Ordering::Acquire) == 0 {
+                    return;
+                }
+                idle.await;
+            }
+        })
+        .await;
+        if stopped.is_err() {
+            tracing::warn!(
+                turns = self.inner.active_turns.load(Ordering::Acquire),
+                "local turns still running after the stop wait"
+            );
+        }
+    }
+
+    /// Count a turn this process drives until the returned guard drops.
+    pub fn turn_started(&self) -> ActiveTurn {
+        self.inner.active_turns.fetch_add(1, Ordering::AcqRel);
+        ActiveTurn {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
+    /// Cancelled when this process doesn't hold, or loses, the built-in
+    /// host's lease (K5.3): a turn driven here must then stop, since the next
+    /// holder recovers it. Without a cluster (tests of the queue alone) it is
+    /// never cancelled.
+    pub fn host_lease_lost(&self) -> tokio_util::sync::CancellationToken {
+        let Some(cluster) = self.cluster() else {
+            return tokio_util::sync::CancellationToken::new();
+        };
+        match cluster.held_lease(&crate::cluster::LeaseName::BuiltinHost) {
+            Some(lease) => lease.lost.clone(),
+            None => {
+                let lost = tokio_util::sync::CancellationToken::new();
+                lost.cancel();
+                lost
+            }
         }
     }
 

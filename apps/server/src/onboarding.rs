@@ -204,17 +204,12 @@ async fn project_steps(
     .await?;
     let launched = exists(
         pool,
-        r#"
-        SELECT 1 FROM launches WHERE project_id = $1 AND requested_by_actor_id = $2
-        UNION ALL
-        SELECT 1 FROM agent_runs run
-        JOIN conversations thread ON thread.id = run.conversation_id
-        WHERE thread.project_id = $1 AND run.requesting_actor_id = $2
-        "#,
+        "SELECT 1 FROM launches WHERE project_id = $1 AND requested_by_actor_id = $2",
         project_id,
         actor_id,
     )
-    .await?;
+    .await?
+        || crate::runs::reads::requested_any_in_space(pool, project_id, actor_id).await?;
     Ok([
         ("github", github),
         ("repository", repository),
@@ -346,7 +341,7 @@ async fn update_http(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateRequest>,
 ) -> Result<Json<Onboarding>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let actor_id = principal.actor_id;
     membership(&state.pool, organization_id, actor_id).await?;
     if let Some(project_id) = request.project_id {

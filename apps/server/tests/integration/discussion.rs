@@ -388,6 +388,41 @@ async fn things_have_discussions_as_visible_as_they_are() {
             .is_some_and(|href| href.starts_with(&format!("/projects/{work}/sheets/{sheet}"))),
         "Lena commented before, so Rook's answer tells her: {inbox}"
     );
+
+    // Muting the sheet's comments quiets them for Lena.
+    sqlx::query(
+        "INSERT INTO conversation_notification_levels (project_id, actor_id, conversation_id, level) \
+         SELECT project_id, $1, id, 'nothing' FROM conversations WHERE id = $2::uuid",
+    )
+    .bind(lena.actor)
+    .bind(&comments)
+    .execute(pool)
+    .await
+    .expect("lena mutes");
+    let told_before = thing_comments_for(pool, lena.actor).await;
+    let muted = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "comment_create",
+        json!({"thing": {"kind": "sheet", "id": sheet}, "text": "Deposit is two months."}),
+    )
+    .await;
+    assert_eq!(muted["outcome"], "ok", "{muted}");
+    drain_outbox(&world.state).await;
+    assert_eq!(thing_comments_for(pool, lena.actor).await, told_before);
+}
+
+async fn thing_comments_for(pool: &sqlx::PgPool, actor: Uuid) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notification_occurrences occurrence \
+         JOIN notifications notification ON notification.id = occurrence.notification_id \
+         WHERE notification.kind = 'thing_comment' AND occurrence.recipient_actor_id = $1",
+    )
+    .bind(actor)
+    .fetch_one(pool)
+    .await
+    .expect("thing comments")
 }
 
 async fn mentioned_events(pool: &sqlx::PgPool, connection: Uuid) -> Vec<(String, Uuid, String)> {

@@ -1,12 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use agent_workspace_server::{
-    AppState,
-    config::AppConfig,
-    outbox,
-    rate_limit::RateLimiters,
-    realtime::{RealtimeHub, outbox_worker_id, run_outbox_publisher},
-    router,
+    AppState, config::AppConfig, outbox, rate_limit::RateLimiters, realtime::RealtimeHub, router,
 };
 use futures_util::StreamExt;
 use http::{
@@ -18,7 +13,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{Executor, PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{oneshot, watch},
+    sync::oneshot,
     time::{sleep, timeout},
 };
 use tokio_tungstenite::{
@@ -90,13 +85,7 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
             .await
             .expect("serve loopback application");
     });
-    let (outbox_shutdown_sender, outbox_shutdown_receiver) = watch::channel(false);
-    let outbox_publisher = tokio::spawn(run_outbox_publisher(
-        pool.clone(),
-        realtime,
-        outbox_worker_id(),
-        outbox_shutdown_receiver,
-    ));
+    let (stop_log, log) = crate::support::live::follow_log(&pool, &realtime, None).await;
 
     let base_url = format!("http://{address}");
     let websocket_url = format!("ws://{address}/api/v1/realtime");
@@ -150,15 +139,16 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
         1,
     );
     assert_eq!(
-        sqlx::query_scalar::<_, i64>(
+        sqlx::query_scalar::<_, i64>(&format!(
             r#"
             SELECT count(*)
-            FROM outbox_events
+            FROM {n} outbox
             WHERE event_type = 'conversation.read_state.updated'
               AND resource_id = $1
               AND payload->>'highestSeenSequence' = '1'
             "#,
-        )
+            n = crate::support::NOTICES
+        ),)
         .bind(fixture.actor_b.actor_id)
         .fetch_one(&pool)
         .await
@@ -317,15 +307,16 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
     )
     .await;
     assert_eq!(
-        sqlx::query_scalar::<_, i64>(
+        sqlx::query_scalar::<_, i64>(&format!(
             r#"
             SELECT count(*)
-            FROM outbox_events
+            FROM {n} outbox
             WHERE event_type = 'conversation.read_state.updated'
               AND resource_id = $1
               AND payload->>'highestSeenSequence' = '3'
             "#,
-        )
+            n = crate::support::NOTICES
+        ),)
         .bind(fixture.actor_a.actor_id)
         .fetch_one(&pool)
         .await
@@ -472,12 +463,8 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
     assert_socket_closed(&mut reconnected_actor_a, "revoked browser session").await;
 
     let _ = resumed_actor_b.close(None).await;
-    let _ = outbox_shutdown_sender.send(true);
-    timeout(Duration::from_secs(3), outbox_publisher)
-        .await
-        .expect("outbox publisher shutdown deadline")
-        .expect("outbox publisher task")
-        .expect("outbox publisher result");
+    let _ = stop_log.send(true);
+    let _ = log.await;
     let _ = server_shutdown_sender.send(());
     timeout(Duration::from_secs(3), server)
         .await
@@ -664,13 +651,12 @@ async fn assert_socket_closed(socket: &mut TestSocket, description: &str) {
 async fn wait_until_published(pool: &PgPool, event_id: Uuid) {
     timeout(Duration::from_secs(3), async {
         loop {
-            let published = sqlx::query_scalar::<_, bool>(
-                "SELECT published_at IS NOT NULL FROM outbox_events WHERE event_id = $1",
-            )
-            .bind(event_id)
-            .fetch_one(pool)
-            .await
-            .expect("read outbox publication state");
+            let published =
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM events WHERE id = $1)")
+                    .bind(event_id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("read the log");
             if published {
                 break;
             }
@@ -678,7 +664,7 @@ async fn wait_until_published(pool: &PgPool, event_id: Uuid) {
         }
     })
     .await
-    .expect("outbox publication deadline");
+    .expect("log position deadline");
 }
 
 async fn append_message_with_outbox(

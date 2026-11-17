@@ -4,8 +4,9 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
-    domain::{RunState, transition_run},
+    domain::RunState,
     external_events::{enqueue_external_approval_requested, enqueue_external_event},
+    hosts::builtin::transition as transition_run,
     mcp::MCP_PATH,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
@@ -1707,7 +1708,7 @@ fn test_config(database_url: &str, root: &std::path::Path) -> AppConfig {
             root.join("data").to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             root.join("data/codex/profiles")
                 .to_string_lossy()
                 .into_owned(),
@@ -2694,4 +2695,181 @@ async fn workos_link_start_requires_csrf_and_callback_is_bound_to_the_browser() 
     agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("account fixture operation");
+}
+
+/// A1.10: a sponsored run is created by the same rule as every other start,
+/// so the project's run settings reach it (it used to take only the
+/// sponsor's account defaults).
+#[tokio::test]
+async fn a_sponsored_run_gets_the_projects_run_settings() {
+    let Some((database_url, administrative_pool)) = integration_pool().await else {
+        return;
+    };
+    let schema = format!("m9_sponsored_defaults_{}", Uuid::now_v7().simple());
+    administrative_pool
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create sponsored defaults schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("run sponsored defaults migrations");
+    let temporary = tempfile::tempdir().expect("temporary sponsored defaults root");
+    let config = test_config(&database_url, temporary.path());
+    let seed = dev_seed(&pool, &config)
+        .await
+        .expect("seed sponsored defaults fixture");
+    bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: LOGIN.to_owned(),
+            display_name: "M9 Owner".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.human_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap sponsored defaults owner");
+    let supervisors = SupervisorRegistry::new(&config).expect("sponsored defaults supervisors");
+    let state = AppState {
+        config: Arc::new(config),
+        pool: pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(16),
+        supervisors,
+    };
+    let application = router(state.clone());
+    let cookie = login(&application).await;
+    let csrf = csrf_from_cookie(&cookie);
+
+    let created = application
+        .clone()
+        .oneshot(write_request(
+            "POST",
+            &format!("/api/v1/projects/{}/external-agents", seed.project_id),
+            &cookie,
+            &csrf,
+            json!({
+                "connectionName":"Hermes defaults",
+                "displayName":"Hermes defaults teammate",
+                "handle":"hermes_defaults",
+                "role":"member",
+                "scopes":["read","write","events","approval_respond","worker_request"]
+            }),
+        ))
+        .await
+        .expect("create connection response");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = response_json(created).await;
+    let token = created["oneTimeCredential"]["token"]
+        .as_str()
+        .expect("one-time token")
+        .to_owned();
+    sqlx::query(
+        "UPDATE execution_profiles SET status = 'available', account_state = 'authenticated' WHERE id = $1",
+    )
+    .bind(seed.execution_profile_id)
+    .execute(&pool)
+    .await
+    .expect("prepare sponsor Execution Profile");
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("prepare sponsored repository");
+    // The harness offers one model that can think low or hard; the
+    // project asks every run to think hard.
+    sqlx::query(
+        r#"
+        INSERT INTO harness_models (id, organization_id, adapter_kind, model_id, provider_data)
+        SELECT gen_random_uuid(), $1, account.adapter_kind, 'model-a',
+               '{"id": "model-a", "displayName": "Model A", "isDefault": true,
+                 "reasoningLevels": ["low", "high"], "defaultReasoning": "low"}'::jsonb
+        FROM execution_profiles profile
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
+        WHERE profile.id = $2
+        "#,
+    )
+    .bind(seed.organization_id)
+    .bind(seed.execution_profile_id)
+    .execute(&pool)
+    .await
+    .expect("a model in the catalog");
+    sqlx::query(
+        r#"
+        INSERT INTO settings (id, organization_id, scope, project_id, key, value)
+        VALUES (gen_random_uuid(), $1, 'project', $2, 'run.reasoning', '"high"'::jsonb)
+        "#,
+    )
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .execute(&pool)
+    .await
+    .expect("project run setting");
+
+    let session_id = initialize_mcp(&application, &token).await;
+    let requested = call_mcp_tool(
+        &application,
+        &token,
+        &session_id,
+        "run_request",
+        json!({
+            "conversationId":seed.thread_id.to_string(),
+            "repositoryId":seed.repository_id.to_string(),
+            "sponsorActorId":seed.human_actor_id.to_string(),
+            "prompt":"Make one bounded sponsored change.",
+            "clientRequestId":"defaults-sponsored-run"
+        }),
+    )
+    .await;
+    assert_eq!(requested["outcome"], "requested", "{requested}");
+    let approval_id = requested["approvalId"]
+        .as_str()
+        .expect("approval id")
+        .parse::<Uuid>()
+        .expect("approval UUID");
+    let approved = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            &format!("/api/v1/agent-approvals/{approval_id}/respond"),
+            &cookie,
+            &csrf,
+            "defaults-sponsored-approval",
+            json!({"decision":"approve"}),
+        ))
+        .await
+        .expect("approval response");
+    assert_eq!(approved.status(), StatusCode::OK);
+    let approved = response_json(approved).await;
+    let run_id = approved["agentRunId"]
+        .as_str()
+        .expect("sponsored Agent Run id")
+        .parse::<Uuid>()
+        .expect("sponsored Agent Run UUID");
+    let (reasoning, mirrored) = sqlx::query_as::<_, (Option<String>, bool)>(
+        r#"
+        SELECT run.config->>'reasoning',
+               EXISTS (SELECT 1 FROM runs WHERE runs.id = run.id)
+        FROM agent_runs run WHERE run.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the sponsored run's settings");
+    assert_eq!(reasoning.as_deref(), Some("high"));
+    assert!(mirrored, "the sponsored run has its run record");
+
+    state.supervisors.shutdown_all().await;
+    pool.close().await;
+    agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
+        .await
+        .expect("drop sponsored defaults schema");
 }

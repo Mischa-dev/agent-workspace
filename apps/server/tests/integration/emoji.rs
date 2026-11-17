@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use super::support::{
+    NOTICES,
     app::{send, tool},
     world::WorldBuilder,
 };
@@ -74,10 +75,10 @@ async fn any_emoji_and_the_workspaces_own() {
     assert_eq!(added["outcome"], "ok", "{added}");
     let parrot = added["value"]["id"].as_str().expect("id").to_owned();
     // Open pickers hear of it, in the workspace's spaces.
-    let announced = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events WHERE event_type = 'custom_emoji.changed' \
+    let announced = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {NOTICES} notice WHERE event_type = 'custom_emoji.changed' \
          AND payload->>'emojiId' = $1",
-    )
+    ))
     .bind(&parrot)
     .fetch_one(world.pool())
     .await

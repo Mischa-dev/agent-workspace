@@ -300,7 +300,10 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
     })
     .await?
     .ok_or(AppError::NotFound("notification_action"))?;
-    state.rate_limits.check_authenticated_write(token.id)?;
+    state
+        .rate_limits
+        .check_authenticated_write(token.id)
+        .await?;
     if !token
         .actions
         .iter()

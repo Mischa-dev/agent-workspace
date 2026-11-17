@@ -129,8 +129,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
             // A message may have added or dropped a link: "Referenced in" lists refetch.
             isThingReferencesKey(query.queryKey) ||
             // A comment or a resolved thread changes the open things' discussion
-            // summaries (cell marks, thread counts); only mounted ones refetch.
-            (query.queryKey[0] === 'op' && query.queryKey[2] === 'comment_list' && query.getObserversCount() > 0),
+            // summaries (cell marks, thread counts) and the followed-threads
+            // list (order, unread, status); only mounted ones refetch.
+            (query.queryKey[0] === 'op' &&
+              (query.queryKey[2] === 'comment_list' || query.queryKey[2] === 'thread_followed_list') &&
+              query.getObserversCount() > 0),
         })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)
@@ -338,6 +341,20 @@ export function useRealtimeConnection(): RealtimeContextValue {
             // A workspace's own emoji changed: its pickers read the list again.
             const workspaceId = typeof envelope.payload?.workspaceId === 'string' ? envelope.payload.workspaceId : null
             void queryClient.invalidateQueries({ queryKey: workspaceId ? queryKeys.customEmojiOf(workspaceId) : queryKeys.customEmoji })
+            return
+          }
+          if (envelope.type === 'message_draft.changed') {
+            // One of your drafts was saved or cleared on another device.
+            void queryClient.invalidateQueries({
+              predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'message_draft_list',
+            })
+            return
+          }
+          if (envelope.type === 'notification_keywords.changed') {
+            // Your keyword alerts changed on another device.
+            void queryClient.invalidateQueries({
+              predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'notification_keyword_list',
+            })
             return
           }
           if (envelope.type === 'account.status.changed') {

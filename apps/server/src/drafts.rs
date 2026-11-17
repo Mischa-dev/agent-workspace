@@ -78,28 +78,85 @@ pub struct Saved {
 pub async fn save(
     transaction: &mut Transaction<'_, Postgres>,
     account_id: Uuid,
+    reach: Reach,
     conversation_id: Uuid,
     draft: Option<&Value>,
     saved_at: Option<DateTime<Utc>>,
 ) -> Result<Saved, AppError> {
+    // The writer's other devices hear of it (their id only) and read again.
+    let space_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        -- visibility: the caller checked the conversation is readable.
+        SELECT project_id FROM conversations WHERE id = $1
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    crate::outbox::enqueue_typed(
+        transaction,
+        space_id,
+        crate::outbox::OutboxEventPayload::MessageDraftChanged(
+            crate::outbox::MessageDraftChangedPayload {
+                actor_id: account_id,
+            },
+        ),
+    )
+    .await?;
     let Some(draft) = draft else {
-        sqlx::query("DELETE FROM message_drafts WHERE account_id = $1 AND conversation_id = $2")
-            .bind(account_id)
-            .bind(conversation_id)
-            .execute(&mut **transaction)
-            .await?;
+        // A clear dated before a draft another device saved since leaves
+        // that draft alone, as an older save would.
+        sqlx::query(
+            "DELETE FROM message_drafts WHERE account_id = $1 AND conversation_id = $2 \
+             AND updated_at <= LEAST(COALESCE($3::timestamptz, now()), now())",
+        )
+        .bind(account_id)
+        .bind(conversation_id)
+        .bind(saved_at)
+        .execute(&mut **transaction)
+        .await?;
+        // The conversation was checked against the caller already.
+        let kept = listed(transaction, account_id, reach, None, Some(conversation_id))
+            .await?
+            .into_iter()
+            .next();
         return Ok(Saved {
-            view: None,
-            kept_newer: false,
+            kept_newer: kept.is_some(),
+            view: kept,
         });
     };
+    // One statement, so two devices saving at once can't both miss the
+    // other's row: a draft already newer than this one stays, and this one
+    // becomes its recoverable copy.
     let newer = sqlx::query_scalar::<_, bool>(
         r#"
-        UPDATE message_drafts
-        SET previous_content = $3, previous_updated_at = now()
-        WHERE account_id = $1 AND conversation_id = $2
-          AND $4::timestamptz IS NOT NULL AND updated_at > $4
-        RETURNING true
+        INSERT INTO message_drafts (
+            workspace_id, space_id, account_id, conversation_id, content, updated_at
+        )
+        -- visibility: the caller checked the conversation is readable.
+        -- A draft is dated by when its device saved it (never later than
+        -- now), so saves compare in one time domain.
+        SELECT project.organization_id, project.id, $1, conversation.id, $3,
+               LEAST(COALESCE($4::timestamptz, now()), now())
+        FROM conversations conversation
+        JOIN projects project ON project.id = conversation.project_id
+        WHERE conversation.id = $2
+        ON CONFLICT (account_id, conversation_id) DO UPDATE
+        SET previous_content = CASE
+                WHEN message_drafts.updated_at > EXCLUDED.updated_at THEN EXCLUDED.content
+                WHEN message_drafts.content = EXCLUDED.content
+                THEN message_drafts.previous_content
+                ELSE message_drafts.content END,
+            previous_updated_at = CASE
+                WHEN message_drafts.updated_at > EXCLUDED.updated_at THEN now()
+                WHEN message_drafts.content = EXCLUDED.content
+                THEN message_drafts.previous_updated_at
+                ELSE message_drafts.updated_at END,
+            content = CASE
+                WHEN message_drafts.updated_at > EXCLUDED.updated_at THEN message_drafts.content
+                ELSE EXCLUDED.content END,
+            updated_at = GREATEST(message_drafts.updated_at, EXCLUDED.updated_at)
+        RETURNING updated_at > LEAST(COALESCE($4::timestamptz, now()), now())
         "#,
     )
     .bind(account_id)
@@ -109,51 +166,11 @@ pub async fn save(
     .fetch_optional(&mut **transaction)
     .await?
     .unwrap_or(false);
-    if !newer {
-        sqlx::query(
-            r#"
-            INSERT INTO message_drafts (
-                workspace_id, space_id, account_id, conversation_id, content, updated_at
-            )
-            -- visibility: the caller checked the conversation is readable.
-            -- A draft is dated by when its device saved it (never later than
-            -- now), so saves compare in one time domain.
-            SELECT project.organization_id, project.id, $1, conversation.id, $3,
-                   LEAST(COALESCE($4::timestamptz, now()), now())
-            FROM conversations conversation
-            JOIN projects project ON project.id = conversation.project_id
-            WHERE conversation.id = $2
-            ON CONFLICT (account_id, conversation_id) DO UPDATE
-            SET previous_content = CASE
-                    WHEN message_drafts.content = EXCLUDED.content
-                    THEN message_drafts.previous_content
-                    ELSE message_drafts.content END,
-                previous_updated_at = CASE
-                    WHEN message_drafts.content = EXCLUDED.content
-                    THEN message_drafts.previous_updated_at
-                    ELSE message_drafts.updated_at END,
-                content = EXCLUDED.content,
-                updated_at = EXCLUDED.updated_at
-            "#,
-        )
-        .bind(account_id)
-        .bind(conversation_id)
-        .bind(draft)
-        .bind(saved_at)
-        .execute(&mut **transaction)
-        .await?;
-    }
     // The conversation was checked against the caller already.
-    let view = listed(
-        transaction,
-        account_id,
-        Reach::default(),
-        None,
-        Some(conversation_id),
-    )
-    .await?
-    .into_iter()
-    .next();
+    let view = listed(transaction, account_id, reach, None, Some(conversation_id))
+        .await?
+        .into_iter()
+        .next();
     Ok(Saved {
         view,
         kept_newer: newer,

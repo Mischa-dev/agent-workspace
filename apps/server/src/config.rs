@@ -91,7 +91,17 @@ pub struct AppConfig {
     /// from `/client-config`.
     pub live_origin: Option<String>,
     pub database_url: SecretString,
+    /// The session connection the wake listener uses (K5.4): the main URL
+    /// unless `AGENT_WORKSPACE_DATABASE_LISTEN_URL` names another (straight
+    /// at PostgreSQL when the main URL goes through a transaction pooler).
+    /// None when it is `off`: the instance runs on its polls alone.
+    pub database_listen_url: Option<SecretString>,
     pub database_max_connections: u32,
+    /// Prepared statements each connection keeps
+    /// (`AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE`, default 100). 0 when the
+    /// database URL goes through a transaction-mode pooler, which can't keep
+    /// a connection's statements between transactions (ruling R24).
+    pub database_statement_cache: usize,
     pub data_root: PathBuf,
     pub data_quota_bytes: u64,
     pub minimum_free_bytes: u64,
@@ -158,6 +168,12 @@ pub struct AppConfig {
     /// Cloudflare). Unset, nothing is read from the request for the
     /// caller's address and there are no per-address limits.
     pub client_address_header: Option<String>,
+    /// The operator's name for this instance (K5.2), shown with the
+    /// server's instances; never taken from the machine.
+    pub instance_label: Option<String>,
+    /// How long a lease lives unless renewed (K5.2): renewed every third,
+    /// given up by its holder after two thirds.
+    pub lease_ttl: Duration,
     /// How each access area decides while it moves onto `access` (K1 §4.3):
     /// `AGENT_WORKSPACE_ACCESS_<AREA>=old|compare|new`, each area's default
     /// from `access::compare::AREAS`.
@@ -381,12 +397,14 @@ impl AppConfig {
         let codex_binary = PathBuf::from(optional(values, "CODEX_BINARY", "codex"));
         // Harness account homes live in the data root unless placed elsewhere
         // inside it.
+        let home_root_key = "PROVIDER_HOME_ROOT";
         let codex_home_root = PathBuf::from(optional(
             values,
-            "CODEX_HOME_ROOT",
+            home_root_key,
             &data_root.join("codex/profiles").to_string_lossy(),
         ));
-        let codex_host_concurrency_limit = parse(values, "CODEX_HOST_CONCURRENCY_LIMIT", "1")?;
+        let concurrency_key = "HARNESS_HOST_CONCURRENCY_LIMIT";
+        let codex_host_concurrency_limit = parse(values, concurrency_key, "1")?;
         let codex_max_line_bytes = parse(values, "CODEX_MAX_LINE_BYTES", "1048576")?;
         let codex_max_stderr_bytes = parse(values, "CODEX_MAX_STDERR_BYTES", "262144")?;
         let codex_max_buffered_events = parse(values, "CODEX_MAX_BUFFERED_EVENTS", "64")?;
@@ -462,7 +480,7 @@ impl AppConfig {
         }
         if !(1..=16).contains(&codex_host_concurrency_limit) {
             return Err(ConfigError::Invalid {
-                key: format!("{PREFIX}CODEX_HOST_CONCURRENCY_LIMIT"),
+                key: format!("{PREFIX}{concurrency_key}"),
                 reason: "must be between 1 and 16".into(),
             });
         }
@@ -511,7 +529,7 @@ impl AppConfig {
             .is_err()
         {
             return Err(ConfigError::Invalid {
-                key: format!("{PREFIX}CODEX_HOME_ROOT"),
+                key: format!("{PREFIX}{home_root_key}"),
                 reason: format!("must be a folder inside {PREFIX}DATA_ROOT"),
             });
         }
@@ -582,6 +600,31 @@ impl AppConfig {
             }
         }
         let client_address_header = client_address_header(values)?;
+        let instance_label = Some(optional(values, "INSTANCE_LABEL", "").trim().to_owned())
+            .filter(|label| !label.is_empty());
+        if instance_label
+            .as_deref()
+            .is_some_and(|label| label.chars().count() > 80 || label.chars().any(char::is_control))
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}INSTANCE_LABEL"),
+                reason: "use at most 80 characters".into(),
+            });
+        }
+        let database_statement_cache = parse::<usize>(values, "DATABASE_STATEMENT_CACHE", "100")?;
+        if database_statement_cache > 10_000 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DATABASE_STATEMENT_CACHE"),
+                reason: "must be between 0 and 10000".into(),
+            });
+        }
+        let lease_seconds = parse::<u64>(values, "LEASE_SECONDS", "15")?;
+        if !(2..=300).contains(&lease_seconds) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}LEASE_SECONDS"),
+                reason: "must be between 2 and 300".into(),
+            });
+        }
         let access_modes = access_modes(values)?;
         Ok(Self {
             environment,
@@ -590,9 +633,17 @@ impl AppConfig {
             allowed_origins,
             webhook_trusted_origins,
             public_origin,
+            database_listen_url: crate::realtime::wake::listen_url(
+                values
+                    .get(&format!("{PREFIX}DATABASE_LISTEN_URL"))
+                    .map(String::as_str),
+                &database_url,
+            )
+            .map(SecretString::new),
             live_origin,
             database_url: SecretString::new(database_url),
             database_max_connections,
+            database_statement_cache,
             data_root,
             data_quota_bytes,
             minimum_free_bytes,
@@ -623,6 +674,8 @@ impl AppConfig {
             link_previews,
             secrets_key_missing,
             client_address_header,
+            instance_label,
+            lease_ttl: Duration::from_secs(lease_seconds),
             access_modes,
         })
     }
@@ -1409,21 +1462,41 @@ mod tests {
     }
 
     #[test]
+    fn harness_concurrency_is_bounded() {
+        let mut values = base_values();
+        values.insert(
+            format!("{PREFIX}HARNESS_HOST_CONCURRENCY_LIMIT"),
+            "5".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("in range");
+        assert_eq!(config.codex_host_concurrency_limit, 5);
+        values.insert(
+            format!("{PREFIX}HARNESS_HOST_CONCURRENCY_LIMIT"),
+            "40".to_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("out of range");
+        assert!(
+            error.to_string().contains("HARNESS_HOST_CONCURRENCY_LIMIT"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn harness_account_homes_must_sit_inside_the_data_root() {
         let mut values = base_values();
         values.insert(format!("{PREFIX}DATA_ROOT"), "/srv/aw/data".to_owned());
         values.insert(
-            format!("{PREFIX}CODEX_HOME_ROOT"),
+            format!("{PREFIX}PROVIDER_HOME_ROOT"),
             "/srv/aw/codex".to_owned(),
         );
         let error = AppConfig::from_values(&values).expect_err("home root outside the data root");
-        assert!(error.to_string().contains("CODEX_HOME_ROOT"), "{error}");
+        assert!(error.to_string().contains("PROVIDER_HOME_ROOT"), "{error}");
         values.insert(
-            format!("{PREFIX}CODEX_HOME_ROOT"),
+            format!("{PREFIX}PROVIDER_HOME_ROOT"),
             "/srv/aw/data/codex/profiles".to_owned(),
         );
         AppConfig::from_values(&values).expect("home root inside the data root");
-        values.remove(&format!("{PREFIX}CODEX_HOME_ROOT"));
+        values.remove(&format!("{PREFIX}PROVIDER_HOME_ROOT"));
         let config = AppConfig::from_values(&values).expect("default home root");
         assert_eq!(
             config.codex_home_root,
@@ -1739,13 +1812,13 @@ mod tests {
     fn codex_supervisor_limits_are_bounded() {
         let mut values = base_values();
         values.insert(
-            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
             "0".to_owned(),
         );
         assert!(AppConfig::from_values(&values).is_err());
 
         values.insert(
-            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
             "1".to_owned(),
         );
         values.insert(

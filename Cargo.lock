@@ -23,9 +23,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-workspace-host-protocol"
+version = "0.0.1"
+dependencies = [
+ "base64 0.22.1",
+ "hmac",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "uuid",
+]
+
+[[package]]
 name = "agent-workspace-server"
 version = "0.0.1"
 dependencies = [
+ "agent-workspace-host-protocol",
  "anyhow",
  "argon2",
  "async-trait",

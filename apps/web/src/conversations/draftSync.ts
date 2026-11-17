@@ -13,6 +13,8 @@ import type { ConversationActor, ConversationWorkItemChip } from './types'
 export type SyncedDraft = { text: string; mentions: ConversationActor[]; workItems: ConversationWorkItemChip[] }
 
 const SAVE_AFTER_MS = 2_000
+/** A draft this browser kept may be on the server too: not known to be empty there. */
+const MAYBE_SAVED = '\u0000maybe-saved'
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Whether a composer's draft key is a conversation's, which the server keeps. */
@@ -38,8 +40,10 @@ export function useDraftSync(draftKey: string | undefined, draft: SyncedDraft, s
   // What the server holds, and what it will hold once the saves sent so
   // far land: an empty box clears a draft whose first save is still on
   // its way. Saves go one after another, so a clear never lands first.
-  const synced = useRef<string | null>(null)
-  const sent = useRef<string | null>(null)
+  // A box that opened with this browser's own draft may have a server copy
+  // from an earlier visit, so erasing or sending it clears there too.
+  const synced = useRef<string | null>(startedEmpty ? null : MAYBE_SAVED)
+  const sent = useRef<string | null>(startedEmpty ? null : MAYBE_SAVED)
   const queue = useRef<Promise<unknown>>(Promise.resolve())
   const typedAt = useRef(0)
   const restoreRef = useRef(restore)
@@ -53,7 +57,8 @@ export function useDraftSync(draftKey: string | undefined, draft: SyncedDraft, s
     void callOp('message_draft_list', { conversationId: draftKey })
       .then((output) => {
         const found = output.drafts[0]?.draft
-        if (cancelled || !isDraft(found)) return
+        // Typed (or sent) before the answer came: what's in the box now wins.
+        if (cancelled || typedAt.current !== 0 || !isDraft(found)) return
         synced.current = JSON.stringify(draftToSave({ text: found.text, mentions: found.mentions ?? [], workItems: found.workItems ?? [] }) ?? null)
         sent.current = synced.current
         restoreRef.current({ text: found.text, mentions: found.mentions ?? [], workItems: found.workItems ?? [] })

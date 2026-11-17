@@ -1226,7 +1226,7 @@ async fn edit_message(
     ApiPath((conversation_id, message_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<EditMessageRequest>,
 ) -> Result<(StatusCode, Json<MessageEditResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
     let request_hash = edit_request_hash(&content, request.expected_revision)?;
@@ -1317,7 +1317,7 @@ async fn remove_message(
     principal: AuthenticatedActor,
     ApiPath((conversation_id, message_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<MessageRemoveResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let actor = browser_actor(&principal);
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let locked = lock_message_for_change(

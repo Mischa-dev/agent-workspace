@@ -14,6 +14,7 @@ axum = { version = "0.8.7", features = ["json", "ws"] }
 base64 = "0.22.1"
 command-fds = { version = "0.3.3", features = ["tokio"] }
 codex-bridge-spike = { version = "0.0.1", path = "../../tools/codex-bridge-spike" }
+agent-workspace-host-protocol = { version = "0.0.1", path = "../../crates/host-protocol" }
 chrono = "0.4.45"
 crc32fast = "1.5.2"
 dotenvy = "0.15.7"

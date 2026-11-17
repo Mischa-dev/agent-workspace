@@ -101,7 +101,9 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   // thread about the selected cell or range.
   const showComments = useProjectExperience(projectId).shows('thing.comments')
   const comments = useQuery({ ...opQuery('comment_list', { thing: { kind: 'sheet', id: sheetId } }), enabled: showComments })
-  const [commenting, setCommenting] = useState<{ anchor: SheetAnchor; label: string } | null>(null)
+  // The open discussion: by its thread's id once it has one, since rows and
+  // columns moving around it move its anchor.
+  const [commenting, setCommenting] = useState<{ anchor: SheetAnchor; label: string; threadId?: string } | null>(null)
 
   if (sheet.isPending) {
     return (
@@ -148,14 +150,21 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const marks = tab && comments.data ? commentedCells(comments.data.threads, tab.id) : undefined
   const focusThread = marks?.get(cellKey(selection.focus.row, selection.focus.column))
   const commentingStart = commenting ? (commenting.anchor.kind === 'cell' ? [commenting.anchor.row, commenting.anchor.column] : commenting.anchor.from) : null
-  const commentingThread =
-    commenting && commentingStart && comments.data ? threadAt(comments.data.threads, commenting.anchor.tabId, commentingStart[0] + 1, commentingStart[1] + 1) : null
+  const commentingThread = !commenting || !comments.data
+    ? null
+    : commenting.threadId
+      ? (comments.data.threads.find((thread) => thread.id === commenting.threadId) ?? null)
+      : commentingStart
+        ? threadAt(comments.data.threads, commenting.anchor.tabId, commentingStart[0] + 1, commentingStart[1] + 1)
+        : null
   const openComments = () => {
     if (!tab) return
     const box = bounds(selection)
     const single = box.top === box.bottom && box.left === box.right
+    const found = comments.data ? threadAt(comments.data.threads, tab.id, box.top, box.left) : null
     setCommenting({
       anchor: selectionAnchor(selection, tab.id),
+      threadId: found?.id,
       label: single ? cellName({ row: box.top, column: box.left }) : `${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`,
     })
   }
@@ -551,10 +560,11 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
             acceptsComments={comments.data.acceptsComments}
             anchor={commenting.anchor}
             kind="sheet"
+            onStarted={(threadId) => setCommenting((open) => (open ? { ...open, threadId } : open))}
             spaceId={comments.data.spaceId ?? projectId}
             thingId={sheetId}
             thread={commentingThread}
-            viewerId={user.id}
+            viewerId={user.actorId}
           />
         </SidePanel>
       ) : null}

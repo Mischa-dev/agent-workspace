@@ -167,6 +167,17 @@ function ServerDetails({ status }: { status: ServerStatus }) {
           ]}
         />
       </Section>
+      {status.eventLog ? (
+        <Section id="server-events-heading" title="Event log">
+          <DetailList
+            items={[
+              { label: 'Waiting for a position', value: String(status.eventLog.waiting) },
+              ...(status.eventLog.waiting > 0 ? [{ label: 'Oldest waiting', value: waitedFor(status.eventLog.oldestWaitingSeconds) }] : []),
+              { label: 'Set aside after failing', value: String(status.eventLog.parked) },
+            ]}
+          />
+        </Section>
+      ) : null}
     </>
   )
 }

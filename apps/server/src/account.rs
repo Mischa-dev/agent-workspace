@@ -307,20 +307,15 @@ fn account_select(filter: &str) -> String {
                account.run_defaults, account.last_health_at::text AS last_health_at,
                account.last_failure_category, account.version,
                profile.id AS profile_id, profile.preferred,
-               (
-                   SELECT count(*) FROM agent_runs run
-                   JOIN execution_profiles run_profile
-                     ON run_profile.id = run.execution_profile_id
-                   WHERE run_profile.provider_account_id = account.id
-                     AND run.state IN ('starting', 'working', 'blocked', 'recovering')
-               ) AS active_runs
+               {active_runs} AS active_runs
         FROM provider_accounts account
         LEFT JOIN execution_profiles profile
           ON profile.provider_account_id = account.id AND profile.project_id = $1
         WHERE {filter}
         ORDER BY account.created_at, account.id
         LIMIT {MAX_ACCOUNTS_PER_OWNER}
-        "#
+        "#,
+        active_runs = crate::hosts::builtin::capacity::running_on_account("account.id"),
     )
 }
 
@@ -379,7 +374,7 @@ async fn create_account(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<ProviderAccountView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
     let manifest = state
@@ -529,7 +524,7 @@ async fn update_account(
     ApiPath((project_id, account_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<UpdateAccountRequest>,
 ) -> Result<Json<ProviderAccountView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
@@ -653,26 +648,15 @@ async fn delete_account(
     headers: HeaderMap,
     ApiPath((project_id, account_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<RemovedAccount>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("SELECT 1 FROM provider_accounts WHERE id = $1 FOR UPDATE")
         .bind(account_id)
         .execute(&mut *transaction)
         .await?;
-    let running = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM agent_runs run
-            JOIN execution_profiles profile ON profile.id = run.execution_profile_id
-            WHERE profile.provider_account_id = $1
-              AND run.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        )
-        "#,
-    )
-    .bind(account_id)
-    .fetch_one(&mut *transaction)
-    .await?;
+    let running =
+        crate::hosts::builtin::capacity::account_in_use(&mut *transaction, account_id).await?;
     if running {
         return Err(AppError::Conflict(
             "provider_account",
@@ -778,7 +762,7 @@ async fn use_account(
     ApiPath((project_id, account_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<ProviderAccountView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     // The project is part of the request, so reusing a key for another
     // project is refused rather than replayed.
@@ -974,7 +958,7 @@ async fn account_browser_login(
     ApiPath((project_id, account_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<LoginCeremonyView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
     start_login(
         &state,
@@ -994,7 +978,7 @@ async fn account_device_code_login(
     ApiPath((project_id, account_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<LoginCeremonyView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
     start_login(
         &state,
@@ -1015,7 +999,7 @@ async fn account_api_key_login(
     ApiJson(mut request): ApiJson<ApiKeyRequest>,
 ) -> Result<Json<LoginCeremonyView>, AppError> {
     let result = async {
-        require_authenticated_write(&state, &headers, &principal)?;
+        require_authenticated_write(&state, &headers, &principal).await?;
         let access = require_account_owner(&state, &principal, project_id, account_id).await?;
         start_login(
             &state,
@@ -1039,7 +1023,7 @@ async fn account_cancel_login(
     ApiPath((project_id, account_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<AccountStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     IdempotencyKey::from_headers(&headers)?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
     cancel_login(&state, &principal, access).await
@@ -1052,7 +1036,7 @@ async fn account_logout(
     ApiPath((project_id, account_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<AccountStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     IdempotencyKey::from_headers(&headers)?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
     logout(&state, access).await
@@ -1065,7 +1049,7 @@ async fn profile_browser_login(
     ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<LoginCeremonyView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let access = require_profile_owner(&state, &principal, project_id, profile_id).await?;
     start_login(
         &state,
@@ -1085,7 +1069,7 @@ async fn profile_device_code_login(
     ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<LoginCeremonyView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let access = require_profile_owner(&state, &principal, project_id, profile_id).await?;
     start_login(
         &state,
@@ -1106,7 +1090,7 @@ async fn profile_api_key_login(
     ApiJson(mut request): ApiJson<ApiKeyRequest>,
 ) -> Result<Json<LoginCeremonyView>, AppError> {
     let result = async {
-        require_authenticated_write(&state, &headers, &principal)?;
+        require_authenticated_write(&state, &headers, &principal).await?;
         let access = require_profile_owner(&state, &principal, project_id, profile_id).await?;
         start_login(
             &state,
@@ -1130,7 +1114,7 @@ async fn profile_cancel_login(
     ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<AccountStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     IdempotencyKey::from_headers(&headers)?;
     let access = require_profile_owner(&state, &principal, project_id, profile_id).await?;
     cancel_login(&state, &principal, access).await
@@ -1143,7 +1127,7 @@ async fn profile_logout(
     ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<AccountStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     IdempotencyKey::from_headers(&headers)?;
     let access = require_profile_owner(&state, &principal, project_id, profile_id).await?;
     logout(&state, access).await

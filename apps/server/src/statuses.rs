@@ -287,26 +287,52 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
 }
 
 /// Removes statuses whose time to clear has come (the `status.clear_due`
-/// job). Returns how many went.
+/// job), telling the screens that show them in the same transaction, as an
+/// explicit clear does. Returns how many went.
 pub async fn clear_due(pool: &sqlx::PgPool, limit: i64) -> Result<u64, AppError> {
-    let cleared = crate::db::scoped_one(pool, async |connection| {
-        sqlx::query(
-            r#"
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    let cleared = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        r#"
         DELETE FROM account_statuses
         WHERE id IN (
             SELECT id FROM account_statuses
             WHERE clear_at IS NOT NULL AND clear_at <= now()
             ORDER BY clear_at
             LIMIT $1
+            FOR UPDATE SKIP LOCKED
         )
+        RETURNING account_id, workspace_id
         "#,
-        )
-        .bind(limit)
-        .execute(&mut *connection)
-        .await
-    })
+    )
+    .bind(limit)
+    .fetch_all(&mut *transaction)
     .await?;
-    Ok(cleared.rows_affected())
+    for (account_id, workspace_id) in &cleared {
+        // A status shown everywhere was shown in each of its workspaces.
+        let workspaces = match workspace_id {
+            Some(workspace_id) => vec![*workspace_id],
+            None => {
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT organization_id FROM organization_memberships \
+                     WHERE actor_id = $1 AND enabled ORDER BY organization_id LIMIT 50",
+                )
+                .bind(account_id)
+                .fetch_all(&mut *transaction)
+                .await?
+            }
+        };
+        for workspace in workspaces {
+            announce(
+                &mut transaction,
+                *account_id,
+                workspace,
+                workspace_id.is_some(),
+            )
+            .await?;
+        }
+    }
+    transaction.commit().await?;
+    Ok(cleared.len() as u64)
 }
 
 #[cfg(test)]
