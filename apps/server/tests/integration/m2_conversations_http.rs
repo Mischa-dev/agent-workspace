@@ -706,14 +706,15 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
             .expect("count idempotent Messages"),
         4
     );
-    let outbox_counts = sqlx::query_as::<_, (String, i64)>(
+    let outbox_counts = sqlx::query_as::<_, (String, i64)>(&format!(
         r#"
         SELECT event_type, count(*)
-        FROM outbox_events
+        FROM {n} outbox
         WHERE project_id = $1
         GROUP BY event_type
         "#,
-    )
+        n = crate::support::NOTICES
+    ))
     .bind(project_id)
     .fetch_all(&pool)
     .await

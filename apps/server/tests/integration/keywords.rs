@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::support::{
+    NOTICES,
     app::{Browser, send},
     callers::drain_outbox,
     world::WorldBuilder,
@@ -91,10 +92,10 @@ async fn keywords_reach_only_people_who_can_read_and_listen() {
     .await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
     // Their other devices hear of it: their id only.
-    let announced = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events WHERE event_type = 'notification_keywords.changed' \
+    let announced = sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*) FROM {NOTICES} notice WHERE event_type = 'notification_keywords.changed' \
          AND payload = jsonb_build_object('actorId', $1::text)",
-    )
+    ))
     .bind(mara.actor.to_string())
     .fetch_one(pool)
     .await

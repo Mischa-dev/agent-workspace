@@ -1,8 +1,8 @@
-//! The outbox's events, mirrored into the log (K3.2, K3 4.3 step 1). Every
-//! `outbox::enqueue` stages the same event (same id) in the log, so every
-//! outbox writer is in the log from the first slice. The log's type is the
-//! catalogue's name; the outbox's name stays as `legacy_type`, which the
-//! web's realtime envelope reads until W1 moves to catalogue names.
+//! Change notices in the log: `outbox::enqueue` stages each typed notice
+//! here as a catalogue event. The log's type is the catalogue's name; the
+//! notice's own name stays as `legacy_type`, which the web's protocol-1
+//! frame reads until the web moves to catalogue names, and which the
+//! notifier decodes the payload by.
 
 use serde_json::json;
 use sqlx::{Postgres, Transaction};
@@ -11,8 +11,8 @@ use uuid::Uuid;
 use super::{Audience, NewEvent, catalog};
 use crate::{error::AppError, outbox::OutboxEventPayload};
 
-/// Stage the log's copy of one outbox event.
-pub async fn mirror(
+/// Stage one notice as an event in the change's transaction.
+pub async fn stage(
     transaction: &mut Transaction<'_, Postgres>,
     event_id: Uuid,
     project_id: Uuid,
@@ -20,6 +20,13 @@ pub async fn mirror(
     payload_json: &serde_json::Value,
 ) -> Result<Uuid, AppError> {
     use OutboxEventPayload as P;
+    // A task's notice is the task's own fact (K3.7): created, or changed
+    // with what changed, from the activity this transaction wrote for it.
+    // A move or a comment alone stays the board's placement signal.
+    let task = match payload {
+        P::WorkItemUpdated(p) => Some(task_change(transaction, project_id, p.work_item_id).await?),
+        _ => None,
+    };
     let conversation = |id: Uuid| Audience::ConversationOf(id);
     // (type, thing kind, thing id, access thing, audience, version, actor)
     let (ty, kind, id, access, audience, version, actor): (
@@ -117,7 +124,11 @@ pub async fn mirror(
             None,
         ),
         P::AgentRunUpdated(p) => (
-            &catalog::RUN_UPDATED,
+            if p.state.is_some_and(|state| state.is_terminal()) {
+                &catalog::RUN_FINISHED
+            } else {
+                &catalog::RUN_UPDATED
+            },
             "run",
             p.agent_run_id,
             Some(p.conversation_id),
@@ -140,13 +151,14 @@ pub async fn mirror(
             None,
         ),
         P::WorkItemUpdated(p) => (
-            &catalog::TASK_PLACEMENT_CHANGED,
+            task.as_ref()
+                .map_or(&catalog::TASK_PLACEMENT_CHANGED, |(ty, _, _)| *ty),
             "task",
             p.work_item_id,
             None,
             Audience::Space,
             Some(p.version),
-            None,
+            task.as_ref().and_then(|(_, _, actor)| *actor),
         ),
         P::ProjectMembershipUpdated(p) => (
             &catalog::SPACE_MEMBER_CHANGED,
@@ -275,6 +287,10 @@ pub async fn mirror(
     } else {
         json!({})
     };
+    let changes = task
+        .as_ref()
+        .map(|(_, changes, _)| changes.iter().map(String::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
     super::emit(
         transaction,
         NewEvent {
@@ -285,7 +301,7 @@ pub async fn mirror(
             thing,
             access_thing: access,
             version,
-            changes: &[],
+            changes: &changes,
             audience,
             payload: payload_json,
             actor,
@@ -293,4 +309,51 @@ pub async fn mirror(
         },
     )
     .await
+}
+
+/// What this transaction did to a task, from the activity it wrote: the
+/// task's created or changed fact with the keys of what changed, or the
+/// placement signal when it wrote no activity (a move, a comment). The
+/// activity's actor is who acted when the edge didn't say.
+async fn task_change(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<(&'static super::EventType, Vec<String>, Option<Uuid>), AppError> {
+    let activities = sqlx::query_as::<_, (String, Option<serde_json::Value>, Uuid)>(
+        "SELECT kind, payload -> 'changedFields', actor_id FROM work_item_activity \
+         WHERE project_id = $1 AND work_item_id = $2 AND created_at = now() ORDER BY id",
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let actor = activities.first().map(|(_, _, actor)| *actor);
+    if activities
+        .iter()
+        .any(|(kind, _, _)| kind == "work_item_created")
+    {
+        return Ok((&catalog::TASK_CREATED, Vec::new(), actor));
+    }
+    if activities.is_empty() {
+        return Ok((&catalog::TASK_PLACEMENT_CHANGED, Vec::new(), None));
+    }
+    let mut changed = activities
+        .iter()
+        .filter_map(|(_, fields, _)| fields.as_ref().and_then(serde_json::Value::as_array))
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    for (kind, _, _) in &activities {
+        match kind.as_str() {
+            "work_item_archived" => changed.push("archived".to_owned()),
+            "work_item_restored" => changed.push("restored".to_owned()),
+            _ => {}
+        }
+    }
+    changed.sort();
+    changed.dedup();
+    changed.truncate(64);
+    Ok((&catalog::TASK_UPDATED, changed, actor))
 }

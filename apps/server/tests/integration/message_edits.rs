@@ -1130,13 +1130,14 @@ async fn removed_message_text_vanishes_everywhere() {
     }
 
     // Events say what changed, never the text.
-    let events = sqlx::query_scalar::<_, Value>(
+    let events = sqlx::query_scalar::<_, Value>(&format!(
         r#"
-        SELECT payload FROM outbox_events
+        SELECT payload FROM {n} outbox
         WHERE event_type = 'conversation.message.updated' AND resource_id = $1
         ORDER BY event_cursor
         "#,
-    )
+        n = crate::support::NOTICES
+    ))
     .bind(message.parse::<Uuid>().expect("message"))
     .fetch_all(&setup.pool)
     .await
@@ -1156,7 +1157,8 @@ async fn removed_message_text_vanishes_everywhere() {
         "messages",
         "message_revisions",
         "idempotency_keys",
-        "outbox_events",
+        "events",
+        "event_staging",
         "audit_events",
         "external_agent_events",
         "reply_requests",
@@ -1230,7 +1232,10 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
     assert_eq!(stale["error"]["code"], "version_conflict", "{stale}");
     let events_before = count(
         &setup.pool,
-        "SELECT count(*) FROM outbox_events WHERE resource_id = $1",
+        &format!(
+            "SELECT count(*) FROM {n} outbox WHERE resource_id = $1",
+            n = crate::support::NOTICES
+        ),
         &patted,
     )
     .await;
@@ -1249,7 +1254,10 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
     assert_eq!(
         count(
             &setup.pool,
-            "SELECT count(*) FROM outbox_events WHERE resource_id = $1",
+            &format!(
+                "SELECT count(*) FROM {n} outbox WHERE resource_id = $1",
+                n = crate::support::NOTICES
+            ),
             &patted
         )
         .await,
@@ -1824,7 +1832,10 @@ async fn edits_keep_every_revision_and_projections_follow() {
     assert_eq!(texts.len(), 3, "{history}");
     assert!(texts[1].ends_with("instead") && texts[2].starts_with("back to"));
     let payload = sqlx::query_scalar::<_, Value>(
-        "SELECT payload FROM outbox_events WHERE event_type = 'conversation.message.updated' AND resource_id = $1::uuid ORDER BY event_cursor DESC LIMIT 1",
+        &format!(
+"SELECT payload FROM {n} outbox WHERE event_type = 'conversation.message.updated' AND resource_id = $1::uuid ORDER BY event_cursor DESC LIMIT 1",
+ n = crate::support::NOTICES
+),
     )
     .bind(&message)
     .fetch_one(&setup.pool)
