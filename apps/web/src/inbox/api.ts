@@ -54,6 +54,8 @@ export type InboxNotification = {
   /** Capacity alerts: the suggested batch, which Launch starts in one tap. */
   batch: { accountId: string; size: number; windowKey: string | null } | null
   request: InboxRequest | null
+  /** Whether it asks something of you or is for your information (from the server). */
+  attention: 'needs_you' | 'fyi'
 }
 
 export type InboxPage = {
@@ -152,6 +154,7 @@ export function normalizeNotification(value: unknown): InboxNotification | null 
     launchHref: inAppPath(text(record.launchHref)),
     batch: normalizeBatch(record.batch),
     request: normalizeRequest(record.request),
+    attention: record.attention === 'needs_you' ? 'needs_you' : 'fyi',
   }
 }
 
@@ -345,31 +348,12 @@ export function groupBySubject(notifications: InboxNotification[]) {
 }
 
 /**
- * Kinds that ask something of you: someone mentioned or messaged you, gave
- * you a task or a review, a request or a waiting run is yours to answer,
- * or something of yours failed. Everything else is for your information.
+ * Whether a notification asks something of you; the server decides by its
+ * kind (C2.4), and a request someone already answered no longer does.
  */
-const NEEDS_YOU_KINDS = new Set([
-  'mention',
-  'comment_mention',
-  'conversation_message',
-  'direct_message',
-  'assigned',
-  'request_raised',
-  'review_requested',
-  'run_waiting',
-  'run_failed',
-  'checks_failed',
-  'scheduled_send_failed',
-  'reminder',
-  'connection_problem',
-  'budget_warning',
-])
-
-/** Whether a notification asks something of you; a request someone already answered no longer does. */
 export function needsYou(notification: InboxNotification) {
   if (notification.request && notification.request.status !== 'open') return false
-  return NEEDS_YOU_KINDS.has(notification.kind)
+  return notification.attention === 'needs_you'
 }
 
 export type InboxSection = {

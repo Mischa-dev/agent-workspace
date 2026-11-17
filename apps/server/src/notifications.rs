@@ -103,6 +103,55 @@ pub mod kind {
     pub const THING_UPDATE: &str = "thing_update";
     /// T1.29: a public form you made reached its daily limit and paused.
     pub const FORM_PAUSED: &str = "form_paused";
+
+    /// Kinds that ask something of you (C2.4): someone mentioned or
+    /// messaged you, gave you a task or a review, a request or a waiting run
+    /// is yours to answer, or something of yours failed. Everything else is
+    /// for your information.
+    pub const NEEDS_YOU: &[&str] = &[
+        MENTION,
+        COMMENT_MENTION,
+        CONVERSATION_MESSAGE,
+        DIRECT_MESSAGE,
+        ASSIGNED,
+        REQUEST_RAISED,
+        REVIEW_REQUESTED,
+        RUN_WAITING,
+        RUN_FAILED,
+        CHECKS_FAILED,
+        SCHEDULED_SEND_FAILED,
+        REMINDER,
+        CONNECTION_PROBLEM,
+        BUDGET_WARNING,
+    ];
+}
+
+/// Whether a notification needs you or is for your information (C2.4).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Attention {
+    NeedsYou,
+    Fyi,
+}
+
+impl Attention {
+    /// A request someone already answered no longer needs you.
+    pub fn of(kind: &str, request_status: Option<&str>) -> Self {
+        if kind::NEEDS_YOU.contains(&kind) && request_status.is_none_or(|status| status == "open") {
+            Self::NeedsYou
+        } else {
+            Self::Fyi
+        }
+    }
+}
+
+/// The same rule in SQL, over `n` with the kinds bound at `$needs`.
+fn needs_you_sql(needs: &str) -> String {
+    format!(
+        "(n.kind = ANY({needs}::text[]) AND NOT (n.subject_kind = 'request' AND EXISTS (\
+            SELECT 1 FROM requests answered \
+            WHERE answered.id = n.subject_id AND answered.status <> 'open')))"
+    )
 }
 
 /// Groups of kinds people filter the inbox by.
@@ -1668,6 +1717,8 @@ pub struct NotificationView {
     /// its options, and its answer once given.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<crate::requests::RequestCard>,
+    /// Whether it asks something of you or is for your information.
+    pub attention: Attention,
     /// The conversation a Reply from the notification posts in (mentions).
     #[serde(skip)]
     pub reply_conversation_id: Option<Uuid>,
@@ -1980,6 +2031,49 @@ pub async fn unread_count(
     .bind(within)
     .fetch_one(crate::db::scoped(pool))
     .await?)
+}
+
+/// What the badges show (C2.4): the places that need you (a conversation,
+/// task, pull request or other subject with an unread needs-you
+/// notification, each counted once), and how many unread notifications are
+/// only for your information.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attentions {
+    pub unread_count: i64,
+    pub needs_you_conversations: i64,
+    pub fyi_unread: i64,
+}
+
+pub async fn attentions(pool: &PgPool, viewer: Uuid) -> Result<Attentions, AppError> {
+    // AWD-75: nothing from a module that's switched off.
+    let switches = crate::modules::state::notification_switches_sql();
+    let (unread_count, needs_you_conversations, fyi_unread) =
+        sqlx::query_as::<_, (i64, i64, i64)>(&format!(
+            r#"
+            SELECT count(*),
+                   count(DISTINCT COALESCE(n.conversation_id, n.work_item_id,
+                                           n.pull_request_id, n.subject_id))
+                       FILTER (WHERE {needs}),
+                   count(*) FILTER (WHERE NOT {needs})
+            FROM notifications n
+            WHERE n.recipient_actor_id = $1
+              AND {view}
+              AND {VISIBLE}
+              AND {switches}
+            "#,
+            needs = needs_you_sql("$2"),
+            view = View::Unread.condition(),
+        ))
+        .bind(viewer)
+        .bind(kind::NEEDS_YOU)
+        .fetch_one(crate::db::scoped(pool))
+        .await?;
+    Ok(Attentions {
+        unread_count,
+        needs_you_conversations,
+        fyi_unread,
+    })
 }
 
 /// Unread notifications per project: the project's attention count.
@@ -2339,7 +2433,9 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
     } else {
         subject_title
     };
+    let attention = Attention::of(&row.kind, row.request_status.as_deref());
     NotificationView {
+        attention,
         id: row.id,
         kind: row.kind,
         project_id: row.project_id,
@@ -2546,19 +2642,12 @@ async fn list_http(
     Ok(Json(page))
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SummaryResponse {
-    unread_count: i64,
-}
-
+/// The inbox's unread count and what the badges show (C2.4).
 async fn summary_http(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
-) -> Result<Json<SummaryResponse>, AppError> {
-    Ok(Json(SummaryResponse {
-        unread_count: unread_count(&state.pool, principal.actor_id, None).await?,
-    }))
+) -> Result<Json<Attentions>, AppError> {
+    Ok(Json(attentions(&state.pool, principal.actor_id).await?))
 }
 
 #[derive(Debug, Deserialize)]
