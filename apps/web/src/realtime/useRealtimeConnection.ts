@@ -334,6 +334,12 @@ export function useRealtimeConnection(): RealtimeContextValue {
             return
           }
           if (modulesChanged(queryClient, envelope)) return
+          if (envelope.type === 'account.status.changed') {
+            // Someone's status changed: the names that show it read it again.
+            // The key is `statusKeys.all`, spelled out so status code stays out of this chunk.
+            void queryClient.invalidateQueries({ queryKey: ['statuses'] })
+            return
+          }
           if (
             envelope.type === 'whiteboard.updated' ||
             envelope.type === 'page.updated' ||

@@ -35,7 +35,12 @@ function isDraft(value: unknown): value is SyncedDraft {
  * the server's draft when this browser had none.
  */
 export function useDraftSync(draftKey: string | undefined, draft: SyncedDraft, startedEmpty: boolean, restore: (draft: SyncedDraft) => void) {
+  // What the server holds, and what it will hold once the saves sent so
+  // far land: an empty box clears a draft whose first save is still on
+  // its way. Saves go one after another, so a clear never lands first.
   const synced = useRef<string | null>(null)
+  const sent = useRef<string | null>(null)
+  const queue = useRef<Promise<unknown>>(Promise.resolve())
   const typedAt = useRef(0)
   const restoreRef = useRef(restore)
   useEffect(() => {
@@ -50,6 +55,7 @@ export function useDraftSync(draftKey: string | undefined, draft: SyncedDraft, s
         const found = output.drafts[0]?.draft
         if (cancelled || !isDraft(found)) return
         synced.current = JSON.stringify(draftToSave({ text: found.text, mentions: found.mentions ?? [], workItems: found.workItems ?? [] }) ?? null)
+        sent.current = synced.current
         restoreRef.current({ text: found.text, mentions: found.mentions ?? [], workItems: found.workItems ?? [] })
       })
       .catch(() => undefined)
@@ -66,18 +72,20 @@ export function useDraftSync(draftKey: string | undefined, draft: SyncedDraft, s
     const toSave = draftToSave({ text, mentions, workItems })
     const serialized = JSON.stringify(toSave ?? null)
     // Nothing kept and nothing to keep: no call.
-    if (serialized === synced.current || (synced.current === null && !toSave)) return
+    if (serialized === sent.current || (sent.current === null && !toSave)) return
     typedAt.current = Date.now()
     const timer = window.setTimeout(() => {
-      void callOp(
-        'message_draft_set',
-        { conversationId: draftKey, ...(toSave ? { draft: toSave } : {}), savedAt: new Date(typedAt.current).toISOString() },
-        { requestId: newRequestId() },
-      )
+      sent.current = serialized
+      const savedAt = new Date(typedAt.current).toISOString()
+      queue.current = queue.current
+        .then(() => callOp('message_draft_set', { conversationId: draftKey, ...(toSave ? { draft: toSave } : {}), savedAt }, { requestId: newRequestId() }))
         .then(() => {
           synced.current = serialized
         })
-        .catch(() => undefined)
+        .catch(() => {
+          // Tried again on the next change.
+          if (sent.current === serialized) sent.current = synced.current
+        })
     }, SAVE_AFTER_MS)
     return () => window.clearTimeout(timer)
   }, [draftKey, text, mentions, workItems])
