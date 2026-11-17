@@ -18,22 +18,22 @@ const LEGACY_RUN_SQL: &[(&str, &str)] = &[
     ("api.rs", "A1.14"),
     ("conversations.rs", "A1.8"),
     ("external_events.rs", "A1.8"),
-    ("github.rs", "A1.19"),
+    ("github.rs", "A1.17"),
     ("mcp.rs", "A1.8"),
     ("mcp/approvals.rs", "A1.8"),
-    ("mcp/code.rs", "A1.19"),
+    ("mcp/code.rs", "A1.17"),
     ("notifications.rs", "A1.8"),
     ("provider.rs", "A1.17"),
     ("recovery.rs", "A1.17"),
     ("run_log.rs", "A1.14"),
     ("scheduler.rs", "A1.17"),
-    ("usage/history.rs", "A1.15"),
+    ("usage/history.rs", "A1.17"),
 ];
 
 /// Files that still spell out the built-in host's active states, and the
 /// slice that replaces each list with `RunState`.
 const LEGACY_STATE_LISTS: &[(&str, &str)] = &[
-    ("github.rs", "A1.19"),
+    ("github.rs", "A1.17"),
     ("provider.rs", "A1.17"),
     ("recovery.rs", "A1.17"),
     ("scheduler.rs", "A1.17"),

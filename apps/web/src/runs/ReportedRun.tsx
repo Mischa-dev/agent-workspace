@@ -21,6 +21,15 @@ import {
   runTitle,
 } from './runModel'
 
+const CHECKS: Record<string, string> = { success: 'checks passed', failure: 'checks failing', pending: 'checks running' }
+const REVIEW: Record<string, string> = { approved: 'approved', changes_requested: 'changes requested', pending: 'waiting for review' }
+
+/** "Open · checks passing · approved"; states nobody knows yet are left out. */
+function pullRequestLine(pullRequest: RunView['pullRequests'][number]) {
+  const state = pullRequest.draft ? 'Draft' : pullRequest.state.charAt(0).toUpperCase() + pullRequest.state.slice(1)
+  return [state, CHECKS[pullRequest.checksState], REVIEW[pullRequest.reviewState]].filter(Boolean).join(' · ')
+}
+
 const STOP_TITLE: Partial<Record<RunView['state'], string>> = {
   failed: 'The run failed.',
   refused: 'The host refused the run.',
@@ -172,6 +181,20 @@ export function ReportedRun({ now, onRefresh, run, usage }: { now: number; onRef
                 ) : (
                   request.title
                 )}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+      {run.pullRequests.length ? (
+        <Section id="run-pull-requests" title="Pull requests">
+          <ul className="aw-runs__results">
+            {run.pullRequests.map((pullRequest) => (
+              <li key={pullRequest.id}>
+                <a href={pullRequest.url} rel="noreferrer" target="_blank">
+                  {pullRequest.repository}#{pullRequest.number} {pullRequest.title}
+                </a>{' '}
+                <span className="aw-runs__quiet">{pullRequestLine(pullRequest)}</span>
               </li>
             ))}
           </ul>

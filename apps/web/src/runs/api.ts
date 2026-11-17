@@ -1,5 +1,5 @@
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, type OpOutput } from '../api/ops'
 
 /**
  * A run's state. The run record's states (A1) first; the built-in host's
@@ -170,6 +170,8 @@ export type RunView = RunLine & {
   hiddenActivities: number
   requests: RunRequest[]
   results: RunResult[]
+  /** Pull requests it opened or reported that the space has, with their checks. */
+  pullRequests: OpOutput<'run_detail_get'>['pullRequests']
   usageByModel: ModelUsageLine[]
 }
 

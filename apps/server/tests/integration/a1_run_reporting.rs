@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::{
     agent_interface::{connect_app, create_agent, initialize, send, tool},
     mcp_admin::{create_project, setup},
+    mcp_task_board::{insert_repository, seed_pull_request},
     mcp_tasks::add_member,
 };
 
@@ -635,7 +636,10 @@ async fn usage_reported_for_a_window_is_split_across_the_runs_going_then() {
     assert_eq!(first_pass.len(), 2, "{first_pass:?}");
     assert_eq!((first_pass[0].0, first_pass[0].1, first_pass[0].2), (first, 1000, 200));
     assert_eq!((first_pass[1].0, first_pass[1].1, first_pass[1].2), (second, 500, 100));
-    assert!((first_pass[0].3.expect("cost") - 0.6).abs() < 1e-9);
+    // The test's clock and the database's differ by a few milliseconds.
+    assert!((first_pass[0].3.expect("cost") - 0.6).abs() < 1e-4, "{first_pass:?}");
+    let total_cost: f64 = first_pass.iter().filter_map(|share| share.3).sum();
+    assert!((total_cost - 0.9).abs() < 1e-9, "the shares add up to the report");
     assert!(first_pass.iter().all(|share| share.4 == "estimated"));
     let unattributed = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM usage_reports WHERE report_key = 'w-2' AND attributed_at IS NULL",
@@ -691,4 +695,152 @@ async fn usage_reported_for_a_window_is_split_across_the_runs_going_then() {
     assert_eq!(line["runs"], 2);
     assert_eq!(line["confidence"], "estimated");
     assert_eq!(listed["value"]["notTiedToARun"][0]["inputTokens"], 70);
+}
+
+#[tokio::test]
+async fn a_pull_request_a_run_reports_follows_its_task_and_shows_its_checks() {
+    let Some(setup) = setup("a1_reported_pull_requests").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = work.parse::<Uuid>().expect("space");
+    let (_fixer, token) = create_agent(app, &setup.browser, &work, "Fixer", "fixer").await;
+    let session = initialize(app, &token).await.expect("Fixer MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let token = token.clone();
+        let session = session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let repository = insert_repository(&setup, &work, "acme/widgets", true, true, None).await;
+    let (known, known_url) = seed_pull_request(&setup, &work, repository, 7).await;
+    sqlx::query("UPDATE github_pull_requests SET checks_state = 'success' WHERE id = $1")
+        .bind(known)
+        .execute(&setup.pool)
+        .await
+        .expect("checks");
+    let made = call(
+        "task_create",
+        json!({"projectId": "WORK", "title": "Offline mode", "clientRequestId": "offline"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "applied", "{made}");
+    let number = made["key"]
+        .as_str()
+        .and_then(|key| key.rsplit('-').next())
+        .and_then(|number| number.parse::<i64>().ok())
+        .expect("key");
+    let task = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM work_items WHERE project_id = $1 AND number = $2",
+    )
+    .bind(space)
+    .bind(number)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("task");
+    let opened = call(
+        "run_open",
+        json!({"projectId": "WORK", "title": "Offline mode",
+               "cause": {"kind": "task", "taskId": task.to_string()}}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let run = opened["value"]["run"]["runId"].as_str().expect("run").to_owned();
+
+    // One the space already has is tied to the run's task at once, the way
+    // a pull request the built-in host opened is (address case aside).
+    let unknown_url = "https://github.com/acme/widgets/pull/8";
+    let reported = call(
+        "run_result",
+        json!({"runId": run, "results": [
+            {"kind": "pull_request", "url": known_url.replace("acme", "ACME"), "title": "Offline mode"},
+            {"kind": "pull_request", "url": unknown_url}]}),
+    )
+    .await;
+    assert_eq!(reported["outcome"], "ok", "{reported}");
+    let links = || async {
+        sqlx::query_as::<_, (Uuid, String, bool)>(
+            "SELECT github_pull_request_id, source, confirmed FROM github_pull_request_work_item_links WHERE work_item_id = $1 ORDER BY created_at",
+        )
+        .bind(task)
+        .fetch_all(&setup.pool)
+        .await
+        .expect("links")
+    };
+    assert_eq!(links().await, vec![(known, "run_artifact".to_owned(), true)]);
+
+    // The run view shows it with its checks.
+    let workspace = setup.organization_id;
+    let browser = &setup.browser;
+    let view = |run: String| async move {
+        let (status, viewed) = send(
+            app,
+            browser.request(
+                "POST",
+                &format!("/api/v2/w/{workspace}/ops/run_detail_get"),
+                None,
+                json!({"runId": run}),
+            ),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{viewed}");
+        viewed["value"]["pullRequests"].as_array().expect("pull requests").clone()
+    };
+    let shown = view(run.clone()).await;
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!(shown[0]["number"], 7);
+    assert_eq!(shown[0]["checksState"], "success");
+    assert_eq!(shown[0]["repository"], "acme/widgets");
+
+    // The one the space hasn't seen yet is picked up even though its branch
+    // names no task, and tied to the run when it is.
+    let picked = |number: i64| {
+        let pool = setup.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("SELECT github_job_reported_by_run($1, $2, $3)")
+                .bind(space)
+                .bind(repository)
+                .bind(json!({"number": number.to_string()}))
+                .fetch_one(&pool)
+                .await
+                .expect("reported")
+        }
+    };
+    assert!(picked(8).await);
+    assert!(!picked(9).await, "nobody reported #9");
+    let later = Uuid::now_v7();
+    let later_url = unknown_url.to_owned();
+    sqlx::query(
+        r#"
+        INSERT INTO github_pull_requests (
+            id, project_id, repository_id, github_installation_id, github_repository_id,
+            pull_request_number, node_id, html_url, head_ref, head_sha, base_ref, title,
+            author_login, draft, state, external_created_at, external_updated_at
+        )
+        SELECT $1, project_id, repository_id, github_installation_id, github_repository_id,
+               8, 'PR_' || $1::text, $2, 'offline', head_sha, base_ref, 'Offline, part 2',
+               author_login, false, 'open', now(), now()
+        FROM github_pull_requests WHERE id = $3
+        "#,
+    )
+    .bind(later)
+    .bind(&later_url)
+    .bind(known)
+    .execute(&setup.pool)
+    .await
+    .expect("picked up");
+    let mut transaction = setup.pool.begin().await.expect("begin");
+    let tied = agent_workspace_server::code_host::pull_requests::link_runs_reporting(
+        &mut transaction,
+        space,
+        later,
+        &later_url,
+    )
+    .await
+    .expect("tie");
+    transaction.commit().await.expect("commit");
+    assert_eq!(tied, 1);
+    let linked = links().await.into_iter().map(|link| link.0).collect::<Vec<_>>();
+    assert_eq!(linked, vec![known, later]);
+    assert_eq!(view(run).await.len(), 2);
 }

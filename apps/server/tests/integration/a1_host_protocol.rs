@@ -16,6 +16,7 @@ use uuid::Uuid;
 use super::{
     agent_interface::{Browser, connect_app, create_agent, initialize, send, tool},
     mcp_admin::{create_project, setup},
+    support::app::last_tool,
     message_edits::add_person,
 };
 
@@ -1027,7 +1028,7 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     .await;
     assert_eq!(started["outcome"], "ok", "{started}");
     assert_eq!(run_state(&setup.pool, run).await, "working");
-    let done = tool(
+    let done = last_tool(
         app,
         &token,
         &session,
@@ -1161,7 +1162,7 @@ async fn a_start_nobody_confirmed_is_never_run_twice_and_a_person_decides() {
         .ack(&start_id, json!({"outcome": "accepted", "hostRunRef": reference}))
         .await;
     assert_eq!(status, StatusCode::OK, "{late}");
-    assert_eq!(late["runState"], "working");
+    assert_eq!(late["runState"], "accepted");
     let (reason, revived_ref) = sqlx::query_as::<_, (Option<String>, Option<String>)>(
         "SELECT failure_reason, host_run_ref FROM runs WHERE id = $1",
     )

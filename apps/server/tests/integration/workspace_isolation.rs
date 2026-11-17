@@ -239,6 +239,16 @@ const HTTP_ROUTES: &[&str] = &[
 /// sign-in plumbing, so the guard only looks under `/api/v1`.)
 const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
     (
+        "/api/v1/host/commands",
+        "a host's own command queue (A1.12), signed in with the host's key, never a \
+         person's session; it lists only that host's commands; covered in a1_host_protocol",
+    ),
+    (
+        "/api/v1/host/commands/{command_id}",
+        "one of a host's own commands (A1.12), by the host's key; another host's command \
+         is not found; covered in a1_host_protocol",
+    ),
+    (
         "/api/v1/realtime",
         "WebSocket upgrade; covered by the realtime part of the fixture test, which \
          subscribes as A and checks no B event arrives",
@@ -1982,6 +1992,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "run_list",
     "run_steps",
     "run_usage",
+    "agent_usage_list",
     "search",
     "settings_get",
     "skill_get",
@@ -2544,6 +2555,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![json!({"projectId": b.project})],
             vec![],
+        ),
+        // A1.15: usage by agent, only from runs in spaces the caller opens.
+        case(
+            "agent_usage_list",
+            vec![json!({})],
+            vec![],
+            vec![json!({"days": 400})],
         ),
         case(
             "repository_list",

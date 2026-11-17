@@ -417,6 +417,9 @@ pub struct RunView {
     pub requests: Vec<RequestLine>,
     /// What it produced: links, pull requests, pages, files, commits.
     pub results: Vec<Value>,
+    /// The pull requests it opened or reported that the space has, with
+    /// their checks and reviews, newest first.
+    pub pull_requests: Vec<crate::code_host::pull_requests::PullRequest>,
     pub usage_by_model: Vec<ModelUsageLine>,
 }
 
@@ -508,6 +511,19 @@ pub async fn view(
     .bind(run_id)
     .fetch_all(&mut *connection)
     .await?;
+    let reported = results
+        .iter()
+        .filter(|result| result["kind"] == "pull_request")
+        .filter_map(|result| result["url"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    let pull_requests = crate::code_host::pull_requests::for_run(
+        &mut *connection,
+        viewer,
+        run_id,
+        line.project_id,
+        &reported,
+    )
+    .await?;
     let requests = sqlx::query_as::<_, RequestLine>(
         r#"
         SELECT request.id, request.kind, request.title, request.status,
@@ -551,6 +567,7 @@ pub async fn view(
         activities,
         requests,
         results,
+        pull_requests,
         usage_by_model,
     }))
 }
@@ -582,8 +599,9 @@ impl Operation for RunDetailGet {
     const TITLE: &'static str = "View a run";
     const DESCRIPTION: &'static str = "One run as its page shows it, whoever runs it: state, \
         whether it is still reporting, what it waits on, its plan, its latest activities \
-        (oldest first; run_activity_list reads the rest), the requests it raised, its results and \
-        its tokens and cost per model, each exact or estimated.";
+        (oldest first; run_activity_list reads the rest), the requests it raised, its results, \
+        the pull requests it opened or reported with their checks, and its tokens and cost \
+        per model, each exact or estimated.";
 
     type Input = RunViewInput;
     type Output = RunView;

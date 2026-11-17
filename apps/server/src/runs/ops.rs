@@ -1126,11 +1126,47 @@ pub async fn add_results(
             payload: Value::Object(payload),
         });
     }
+    let reported_pull_requests = batch
+        .iter()
+        .filter(|activity| activity.payload["kind"] == "pull_request")
+        .filter_map(|activity| activity.payload["url"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
     let appended = append(transaction, reporter, run_id, batch).await?;
     if appended.accepted > 0 {
         emit(transaction, &appended.run, "result_added").await?;
     }
+    // A1.19: a reported pull request the space already has follows the
+    // run's thread and task; one it picks up later is tied then.
+    for url in &reported_pull_requests {
+        crate::code_host::pull_requests::link_reported(transaction, &appended.run, url).await?;
+    }
     Ok((appended.run, appended.accepted))
+}
+
+/// Runs in a space that reported the pull request at `url` as a result.
+pub async fn reporting_pull_request(
+    transaction: &mut Transaction<'_, Postgres>,
+    space_id: Uuid,
+    url: &str,
+) -> Result<Vec<RunRow>, AppError> {
+    Ok(sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        SELECT {RUN_COLUMNS} FROM runs run
+        WHERE run.space_id = $1
+          AND EXISTS (
+              SELECT 1 FROM run_activities result
+              WHERE result.run_id = run.id AND result.kind = 'result'
+                AND result.payload ->> 'kind' = 'pull_request'
+                AND lower(result.payload ->> 'url') = lower($2)
+          )
+        ORDER BY run.created_at, run.id
+        LIMIT 50
+        "#
+    ))
+    .bind(space_id)
+    .bind(url)
+    .fetch_all(&mut **transaction)
+    .await?)
 }
 
 /// Usage as a reporter says it: for one of its runs, or for a time window.
@@ -1603,7 +1639,10 @@ pub async fn host_answered(
                accepted_at = CASE WHEN $3 = 'accepted' THEN COALESCE(run.accepted_at, now())
                                   ELSE run.accepted_at END,
                failure_reason = CASE WHEN $3 = 'refused' THEN $4 ELSE run.failure_reason END,
-               status_line = CASE WHEN $3 = 'start_uncertain' THEN $4 ELSE run.status_line END
+               -- An accepted start clears what was said while it was in doubt.
+               status_line = CASE WHEN $3 = 'start_uncertain' THEN $4
+                                  WHEN $3 = 'accepted' THEN NULL
+                                  ELSE run.status_line END
          WHERE run.id = $1
         RETURNING {RUN_COLUMNS}
         "#

@@ -2816,7 +2816,10 @@ async fn claim_pull_request_sync_job(
               AND job.attempts < job.max_attempts
               -- A pull request that names one of the project's tasks is
               -- picked up first (claim_pull_request_adoption_job).
-              AND NOT (job.kind = 'pull_request_sync' AND github_job_names_open_task(job.project_id, job.payload))
+              -- So is one a run reported (A1.19).
+              AND NOT (job.kind = 'pull_request_sync' AND (
+                  github_job_names_open_task(job.project_id, job.payload)
+                  OR github_job_reported_by_run(job.project_id, job.repository_id, job.payload)))
               AND NOT EXISTS (
                   SELECT 1
                   FROM github_pull_requests pull_request
@@ -3721,7 +3724,8 @@ async fn claim_pull_request_adoption_job(
           AND job.attempts < job.max_attempts
           AND (job.payload ->> 'number') ~ '^[1-9][0-9]{0,17}$'
           AND char_length(COALESCE(job.payload ->> 'node_id', '')) BETWEEN 1 AND 256
-          AND github_job_names_open_task(job.project_id, job.payload)
+          AND (github_job_names_open_task(job.project_id, job.payload)
+               OR github_job_reported_by_run(job.project_id, job.repository_id, job.payload))
           AND NOT EXISTS (
               SELECT 1
               FROM github_pull_requests pull_request
@@ -3935,6 +3939,13 @@ async fn process_pull_request_adoption_job(
             pull_request_id,
             &pull_request,
             job.integration_actor_id,
+        )
+        .await?;
+        crate::code_host::pull_requests::link_runs_reporting(
+            &mut transaction,
+            job.project_id,
+            pull_request_id,
+            &pull_request.html_url,
         )
         .await?;
         sqlx::query(
