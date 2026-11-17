@@ -1793,6 +1793,14 @@ pub(crate) async fn append_message_command_with(
         require_conversation_kind(&conversation, expected_kind)?;
     }
     require_active_conversation(&conversation)?;
+    // H1.24: a suspended or deleting workspace takes no new messages, from
+    // any edge.
+    crate::workspace::lifecycle::ensure_open_for_space(
+        &mut transaction,
+        conversation.project_id,
+        "message_send",
+    )
+    .await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
         actor.actor_id,

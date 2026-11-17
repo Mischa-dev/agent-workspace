@@ -105,6 +105,7 @@ pub async fn consume(
     token.zeroize();
     let Some((prefix, digest)) = result else {
         state.rate_limits.check_invitation("invalid").await?;
+        state.rate_limits.note_invitation_failure().await;
         return Err(AppError::NotFound(resource));
     };
     state.rate_limits.check_invitation(&prefix).await?;

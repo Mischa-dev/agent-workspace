@@ -579,13 +579,12 @@ pub async fn create(
         Source::Structured { plan } => ("structured", Err(plan)),
         Source::Text { text } => ("text", Ok(text)),
         Source::Page { page_id } => {
-            let Some(body) = sqlx::query_scalar::<_, String>(
+            let Some(body) = crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_scalar::<_, String>(
                 "SELECT body FROM project_pages WHERE id = $1 AND project_id = $2 AND archived_at IS NULL",
             )
             .bind(page_id)
             .bind(actor.project_id)
-            .fetch_optional(&state.pool)
-            .await?
+            .fetch_optional(connection).await }).await?
             else {
                 return Ok(Err(CreateRefusal::NotFound("That page wasn't found.")));
             };
@@ -610,7 +609,7 @@ pub async fn create(
         if !problems.is_empty() {
             return Ok(Err(CreateRefusal::Invalid(problems.join(" "))));
         }
-        sqlx::query(
+        crate::db::scoped_one(&state.pool, async |connection| { sqlx::query(
             r#"
             INSERT INTO ai_plan_imports (id, organization_id, project_id, created_by_actor_id, title, source_kind, state, draft)
             VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7)
@@ -623,8 +622,7 @@ pub async fn create(
         .bind(title)
         .bind(if kind == "page" { "page" } else { "structured" })
         .bind(sqlx::types::Json(&draft))
-        .execute(&state.pool)
-        .await?;
+        .execute(connection).await }).await?;
     } else {
         let text = text.unwrap_or_default();
         let length = text.trim().chars().count();
@@ -641,7 +639,7 @@ pub async fn create(
         if let Err(error) = gateway::resolve(state, scope, Tier::Deep).await {
             return Ok(Err(CreateRefusal::Ai(error)));
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         sqlx::query(
             r#"
             INSERT INTO ai_plan_imports (id, organization_id, project_id, created_by_actor_id, title, source_kind, state, source_text)
@@ -680,23 +678,21 @@ pub async fn get(
     project_id: Uuid,
     id: Uuid,
 ) -> Result<Option<ImportView>, AppError> {
-    Ok(sqlx::query_as::<_, ImportView>(&format!(
+    Ok(crate::db::scoped_one(pool, async |connection| { sqlx::query_as::<_, ImportView>(&format!(
         "SELECT {IMPORT_COLUMNS} FROM ai_plan_imports import WHERE import.id = $1 AND import.project_id = $2"
     ))
     .bind(id)
     .bind(project_id)
-    .fetch_optional(pool)
-    .await?)
+    .fetch_optional(connection).await }).await?)
 }
 
 /// The project's imports, newest first, without their drafts' tasks.
 pub async fn list(pool: &PgPool, project_id: Uuid) -> Result<Vec<ImportView>, AppError> {
-    let mut imports = sqlx::query_as::<_, ImportView>(&format!(
+    let mut imports = crate::db::scoped_one(pool, async |connection| { sqlx::query_as::<_, ImportView>(&format!(
         "SELECT {IMPORT_COLUMNS} FROM ai_plan_imports import WHERE import.project_id = $1 ORDER BY import.created_at DESC LIMIT 50"
     ))
     .bind(project_id)
-    .fetch_all(pool)
-    .await?;
+    .fetch_all(connection).await }).await?;
     for import in &mut imports {
         import.draft = Draft::default();
     }
@@ -762,7 +758,7 @@ pub async fn update_draft(
             "Give the plan a title of 1 to 200 characters.".to_owned(),
         ])));
     }
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let Some((state, version)) = lock_import(&mut transaction, project_id, id).await? else {
         return Ok(Err(EditRefusal::NotFound));
     };
@@ -798,7 +794,7 @@ pub async fn commit(
     expected_version: i64,
     actor_id: Uuid,
 ) -> Result<Result<(), EditRefusal>, AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let Some((state, version)) = lock_import(&mut transaction, project_id, id).await? else {
         return Ok(Err(EditRefusal::NotFound));
     };
@@ -882,13 +878,12 @@ struct ImportPayload {
 }
 
 async fn fail(pool: &PgPool, id: Uuid, message: &str) -> Result<(), AppError> {
-    sqlx::query(
+    crate::db::scoped_one(pool, async |connection| { sqlx::query(
         "UPDATE ai_plan_imports SET state = 'failed', error = left($2, 500), source_text = NULL, updated_at = now() WHERE id = $1",
     )
     .bind(id)
     .bind(message)
-    .execute(pool)
-    .await?;
+    .execute(connection).await }).await?;
     Ok(())
 }
 
@@ -905,12 +900,11 @@ struct Drafting {
 async fn draft_job(context: JobContext) -> Result<(), JobError> {
     let payload: ImportPayload = context.job.payload_as()?;
     let state = &context.state;
-    let Some(import) = sqlx::query_as::<_, Drafting>(
+    let Some(import) = crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_as::<_, Drafting>(
         "SELECT organization_id, project_id, created_by_actor_id, title, source_text, state FROM ai_plan_imports WHERE id = $1",
     )
     .bind(payload.import_id)
-    .fetch_optional(&state.pool)
-    .await?
+    .fetch_optional(connection).await }).await?
     else {
         return Ok(());
     };
@@ -920,17 +914,20 @@ async fn draft_job(context: JobContext) -> Result<(), JobError> {
     let last_attempt = context.job.attempts >= context.job.max_attempts;
     match draft_from_text(state, &import).await {
         Ok(draft) => {
-            sqlx::query(
-                r#"
+            crate::db::scoped_one(&state.pool, async |connection| {
+                sqlx::query(
+                    r#"
                 UPDATE ai_plan_imports
                 SET draft = $2, state = 'draft', source_text = NULL, error = NULL,
                     version = version + 1, updated_at = now()
                 WHERE id = $1 AND state = 'drafting'
                 "#,
-            )
-            .bind(payload.import_id)
-            .bind(sqlx::types::Json(&draft))
-            .execute(&state.pool)
+                )
+                .bind(payload.import_id)
+                .bind(sqlx::types::Json(&draft))
+                .execute(connection)
+                .await
+            })
             .await?;
             Ok(())
         }
@@ -1014,15 +1011,18 @@ async fn commit_job(context: JobContext) -> Result<(), JobError> {
 
 /// Tells the person who committed a plan that it was created, or stopped.
 async fn announce(pool: &PgPool, import_id: Uuid) -> Result<(), AppError> {
-    let Some((project_id, actor_id, title, state)) = sqlx::query_as::<
+    let Some((project_id, actor_id, title, state)) =
+        crate::db::scoped_one(pool, async |connection| {
+            sqlx::query_as::<
         _,
         (Uuid, Option<Uuid>, String, String),
     >(
         "SELECT project_id, committed_by_actor_id, title, state FROM ai_plan_imports WHERE id = $1",
     )
     .bind(import_id)
-    .fetch_optional(pool)
-    .await?
+    .fetch_optional(connection).await
+        })
+        .await?
     else {
         return Ok(());
     };
@@ -1072,21 +1072,24 @@ struct Committing {
 /// limit as it is now, so narrowing the app stops the rest of the plan;
 /// tasks earlier steps made are kept.
 pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
-    let through_app = sqlx::query_as::<_, (Uuid, bool)>(
-        r#"
+    let through_app = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, (Uuid, bool)>(
+            r#"
         SELECT plan.committed_by_actor_id, plan.made_through_app
         FROM ai_plan_imports plan
         JOIN actors actor ON actor.id = plan.committed_by_actor_id AND actor.kind = 'human'
         WHERE plan.id = $1
         "#,
-    )
-    .bind(import_id)
-    .fetch_optional(pool)
+        )
+        .bind(import_id)
+        .fetch_optional(connection)
+        .await
+    })
     .await?
     .filter(|(_, through_app)| *through_app);
     let limits = match through_app {
         Some((actor_id, _)) => {
-            let mut connection = pool.acquire().await?;
+            let mut connection = crate::db::scoped_tx(pool).await?;
             Some(
                 crate::roles::app_access(&mut connection, actor_id)
                     .await?
@@ -1099,19 +1102,24 @@ pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, Ap
 }
 
 async fn commit_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
-    let project_id =
+    let project_id = crate::db::scoped_one(pool, async |connection| {
         sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM ai_plan_imports WHERE id = $1")
             .bind(import_id)
-            .fetch_optional(pool)
-            .await?;
+            .fetch_optional(connection)
+            .await
+    })
+    .await?;
     let Some(project_id) = project_id else {
         return Ok(Step::Done);
     };
-    let committing = sqlx::query_as::<_, Committing>(
-        "SELECT state, committed_by_actor_id, draft FROM ai_plan_imports WHERE id = $1",
-    )
-    .bind(import_id)
-    .fetch_one(pool)
+    let committing = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, Committing>(
+            "SELECT state, committed_by_actor_id, draft FROM ai_plan_imports WHERE id = $1",
+        )
+        .bind(import_id)
+        .fetch_one(connection)
+        .await
+    })
     .await?;
     if committing.state != "committing" {
         return Ok(Step::Done);
@@ -1124,7 +1132,7 @@ async fn commit_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
             "The person who committed the plan can no longer change tasks here.".to_owned(),
         ));
     };
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     // Everything below acts as the committer, so stop if they lost the
     // project or the right to change tasks (principle 9).
     let Some(membership) = lock_membership(&mut transaction, actor_id, project_id).await? else {

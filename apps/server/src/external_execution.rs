@@ -837,6 +837,13 @@ async fn launch_sponsored_run(
     context: &impl SponsoredRunContext,
     external_request_id: Uuid,
 ) -> Result<Uuid, AppError> {
+    // H1.24: no run starts in a suspended or deleting workspace.
+    crate::workspace::lifecycle::hold_open_for_space(
+        &mut *transaction,
+        context.project_id(),
+        "run_start",
+    )
+    .await?;
     // Approvals come from the browser and phone, not an app: no cap, as for
     // a start there.
     crate::hosts::builtin::admit(transaction, context.conversation_id(), None).await?;

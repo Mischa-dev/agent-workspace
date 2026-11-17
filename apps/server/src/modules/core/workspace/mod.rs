@@ -19,5 +19,6 @@ impl CoreModule for Module {
         module.routes(crate::accounts::claims::router);
         module.operations(crate::spaces::invite_links::register_ops);
         module.routes(crate::spaces::invite_links::router);
+        module.operations(crate::workspace::ops::register_ops);
     }
 }

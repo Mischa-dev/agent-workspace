@@ -330,13 +330,6 @@ pub async fn bootstrap_admin(
                         .await?
                 }
             };
-            let organization_id = Uuid::now_v7();
-            sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
-                .bind(organization_id)
-                .bind(organization_name)
-                .bind(organization_slug)
-                .execute(&mut *transaction)
-                .await?;
             // One way to create a person (K1.29).
             let person = crate::accounts::create_person(
                 &mut transaction,
@@ -349,6 +342,19 @@ pub async fn bootstrap_admin(
                 },
             )
             .await?;
+            let organization_id = crate::workspace::lifecycle::create(
+                &mut transaction,
+                person.account_id,
+                crate::workspace::lifecycle::NewWorkspace {
+                    name: organization_name.clone(),
+                    slug: Some(organization_slug),
+                },
+            )
+            .await
+            .map_err(|error| match error {
+                AppError::Database(error) => BootstrapError::Database(error),
+                other => BootstrapError::Application(other),
+            })?;
             (person.account_id, organization_id, Some(person.user_id))
         }
     };

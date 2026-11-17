@@ -3904,6 +3904,41 @@ fn module_refusal(tool: &str, module: &str) -> rmcp::model::CallToolResponse {
     }
 }
 
+/// A call into a suspended workspace (or one being deleted), in the shape
+/// `refusal` uses, with the code operations answer with.
+fn suspended_refusal(tool: &str) -> rmcp::model::CallToolResponse {
+    let message = "This workspace is suspended or being deleted, so it can't be used. Its owners can see why in its settings.".to_owned();
+    match refusal(tool, message) {
+        rmcp::model::CallToolResponse::Complete(mut result) => {
+            if let Some(structured) = result.structured_content.as_mut() {
+                structured["retryCategory"] = serde_json::json!("do_not_retry");
+                structured["code"] = serde_json::json!("workspace_suspended");
+            }
+            rmcp::model::CallToolResponse::Complete(result)
+        }
+        other => other,
+    }
+}
+
+/// A call refused because the workspace's agents and apps together used up
+/// their calls for the minute (H1.1).
+fn workspace_busy_refusal(tool: &str, retry_after_seconds: u64) -> rmcp::model::CallToolResponse {
+    let message = format!(
+        "This workspace's agents and apps have made too many calls this minute. Try again in {retry_after_seconds} seconds."
+    );
+    match refusal(tool, message) {
+        rmcp::model::CallToolResponse::Complete(mut result) => {
+            if let Some(structured) = result.structured_content.as_mut() {
+                structured["retryCategory"] = serde_json::json!("wait");
+                structured["retryAfterSeconds"] = serde_json::json!(retry_after_seconds);
+                structured["code"] = serde_json::json!("rate_limited");
+            }
+            rmcp::model::CallToolResponse::Complete(result)
+        }
+        other => other,
+    }
+}
+
 /// Whether a tool shows in the caller's list.
 fn tool_listed(name: &str, reach: PermissionSet) -> bool {
     tool_permissions::reachable(name, reach)
@@ -4068,6 +4103,54 @@ async fn run_tool(
                     "Couldn't check your access just now. Try again.".to_owned(),
                 ));
             }
+        }
+    }
+    // H1.24: a call into a suspended workspace, or one being deleted, is
+    // refused. A list spanning every workspace of an account-wide app isn't
+    // a call into one; its writes are refused where they land (task writes
+    // in `work_item_commands::lock_membership`, messages in the send
+    // pipeline, new projects in `projects::insert_new_project`, operations
+    // in the dispatcher).
+    if principal.project_explicit || !principal.account_wide {
+        let open = match crate::db::scoped_one(&server.state.pool, async |connection| {
+            crate::workspace::lifecycle::ensure_open_for_space(
+                connection,
+                principal.project_id,
+                &request.name,
+            )
+            .await
+        })
+        .await
+        {
+            Ok(workspace) => {
+                // H1.1: the workspace's agents and apps share one budget.
+                if let Some(workspace) = workspace
+                    && let Err(AppError::RateLimited {
+                        retry_after_seconds,
+                    }) = server
+                        .state
+                        .rate_limits
+                        .check_workspace_call(workspace)
+                        .await
+                {
+                    return Ok(workspace_busy_refusal(&request.name, retry_after_seconds));
+                }
+                true
+            }
+            Err(AppError::WorkspaceSuspended) => false,
+            Err(error) => {
+                tracing::error!(
+                    category = error.log_category(),
+                    "MCP workspace lifecycle lookup failed"
+                );
+                return Ok(refusal(
+                    &request.name,
+                    "Couldn't check your access just now. Try again.".to_owned(),
+                ));
+            }
+        };
+        if !open {
+            return Ok(suspended_refusal(&request.name));
         }
     }
     let call = McpServer::tools().call(rmcp::handler::server::tool::ToolCallContext::new(

@@ -601,6 +601,32 @@
         ],
         "type": "object"
       },
+      "Lifecycle": {
+        "description": "Where a workspace is in its life.",
+        "oneOf": [
+          {
+            "enum": [
+              "active"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "importing",
+            "description": "Being filled by an import (H1.10).",
+            "type": "string"
+          },
+          {
+            "const": "suspended",
+            "description": "Stopped by the server's operators or staff.",
+            "type": "string"
+          },
+          {
+            "const": "deleting",
+            "description": "An owner asked to delete it; it goes at `delete_after`.",
+            "type": "string"
+          }
+        ]
+      },
       "ModelUsageLine": {
         "description": "Tokens and cost for one model.",
         "properties": {
@@ -12043,6 +12069,531 @@
           "runs"
         ],
         "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/workspace_delete": {
+      "post": {
+        "description": "Schedule this whole workspace for deletion: its spaces, conversations, tasks, pages, files and runs. Nothing changes for 14 days, during which workspace_delete_cancel keeps it; until then everything but cancelling is refused with workspace_suspended. Accounts stay; the agent and app accounts the workspace owns are retired. Pass the workspace's address as confirm. Needs \"Delete the workspace\" where it acts.",
+        "operationId": "workspace_delete",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "confirm": {
+                    "description": "The workspace's address (its slug), typed out to confirm.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "confirm"
+                ],
+                "title": "WorkspaceDeleteInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "deleteAfter": {
+                              "description": "When the workspace and everything in it goes for good.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lifecycle": {
+                              "$ref": "#/components/schemas/Lifecycle",
+                              "description": "`active`, or `deleting` while the deletion is scheduled."
+                            },
+                            "ownedAccounts": {
+                              "description": "Agent and app accounts the workspace owns: they are retired with it\n(credentials revoked, memberships in other workspaces ended).",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "lifecycle",
+                            "ownedAccounts"
+                          ],
+                          "title": "WorkspaceLifecycleOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "deleteAfter": {
+                              "description": "When the workspace and everything in it goes for good.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lifecycle": {
+                              "$ref": "#/components/schemas/Lifecycle",
+                              "description": "`active`, or `deleting` while the deletion is scheduled."
+                            },
+                            "ownedAccounts": {
+                              "description": "Agent and app accounts the workspace owns: they are retired with it\n(credentials revoked, memberships in other workspaces ended).",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "lifecycle",
+                            "ownedAccounts"
+                          ],
+                          "title": "WorkspaceLifecycleOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Delete workspace",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/workspace_delete_cancel": {
+      "post": {
+        "description": "Cancel a scheduled deletion of this workspace, within its 14 days. Everything works again at once. Needs \"Delete the workspace\" where it acts.",
+        "operationId": "workspace_delete_cancel",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "WorkspaceDeleteCancelInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "deleteAfter": {
+                              "description": "When the workspace and everything in it goes for good.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lifecycle": {
+                              "$ref": "#/components/schemas/Lifecycle",
+                              "description": "`active`, or `deleting` while the deletion is scheduled."
+                            },
+                            "ownedAccounts": {
+                              "description": "Agent and app accounts the workspace owns: they are retired with it\n(credentials revoked, memberships in other workspaces ended).",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "lifecycle",
+                            "ownedAccounts"
+                          ],
+                          "title": "WorkspaceLifecycleOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "deleteAfter": {
+                              "description": "When the workspace and everything in it goes for good.",
+                              "format": "date-time",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lifecycle": {
+                              "$ref": "#/components/schemas/Lifecycle",
+                              "description": "`active`, or `deleting` while the deletion is scheduled."
+                            },
+                            "ownedAccounts": {
+                              "description": "Agent and app accounts the workspace owns: they are retired with it\n(credentials revoked, memberships in other workspaces ended).",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "lifecycle",
+                            "ownedAccounts"
+                          ],
+                          "title": "WorkspaceLifecycleOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Keep workspace",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
       }
     }
   },

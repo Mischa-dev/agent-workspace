@@ -27,6 +27,8 @@ use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+pub mod lifecycle;
+pub mod ops;
 pub mod slug;
 
 use crate::{
@@ -269,6 +271,8 @@ struct WorkspaceRow {
     agent_count: i64,
     project_count: i64,
     owner_count: i64,
+    lifecycle: String,
+    delete_after: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +289,10 @@ struct WorkspaceView {
     people_count: i64,
     agent_count: i64,
     project_count: i64,
+    /// `active`, `importing`, `suspended` or `deleting` (H1.24).
+    lifecycle: String,
+    /// When a deleting workspace goes for good.
+    delete_after: Option<DateTime<Utc>>,
     capabilities: WorkspaceCapabilities,
 }
 
@@ -296,6 +304,9 @@ struct WorkspaceCapabilities {
     transfer_ownership: bool,
     leave: bool,
     view_audit_log: bool,
+    /// Holds "Delete the workspace" (H1.24): may schedule its deletion, or
+    /// keep it.
+    delete: bool,
 }
 
 fn role_name(role: WorkspaceRole) -> &'static str {
@@ -306,9 +317,12 @@ fn role_name(role: WorkspaceRole) -> &'static str {
     }
 }
 
+/// The workspace as `actor` sees it, holding `role`. Every handler that
+/// returns a workspace view goes through here, so its capabilities agree.
 async fn load_workspace(
     connection: &mut sqlx::PgConnection,
     organization_id: Uuid,
+    actor_id: Uuid,
     role: WorkspaceRole,
 ) -> Result<WorkspaceView, AppError> {
     let row = sqlx::query_as::<_, WorkspaceRow>(
@@ -332,7 +346,8 @@ async fn load_workspace(
                    AND project.archived_at IS NULL AND project.kind NOT IN ('direct', 'workspace')) AS project_count,
                (SELECT count(*) FROM organization_memberships membership
                  WHERE membership.organization_id = organization.id AND membership.enabled
-                   AND membership.role = 'owner') AS owner_count
+                   AND membership.role = 'owner') AS owner_count,
+               organization.lifecycle, organization.delete_after
         FROM organizations organization
         WHERE organization.id = $1
         "#,
@@ -341,6 +356,10 @@ async fn load_workspace(
     .fetch_optional(&mut *connection)
     .await?
     .ok_or(AppError::NotFound("workspace"))?;
+    let delete = crate::roles::standing(&mut *connection, organization_id, actor_id)
+        .await?
+        .permissions
+        .contains(crate::policy::Permission::WorkspaceDelete);
     Ok(WorkspaceView {
         id: row.id,
         name: row.name,
@@ -352,12 +371,15 @@ async fn load_workspace(
         people_count: row.people_count,
         agent_count: row.agent_count,
         project_count: row.project_count,
+        lifecycle: row.lifecycle,
+        delete_after: row.delete_after,
         capabilities: WorkspaceCapabilities {
             rename: role.manages(),
             manage_members: role.manages(),
             transfer_ownership: role == WorkspaceRole::Owner,
             leave: role != WorkspaceRole::Owner || row.owner_count > 1,
             view_audit_log: role.manages(),
+            delete,
         },
     })
 }
@@ -369,9 +391,8 @@ async fn read_workspace(
 ) -> Result<Json<WorkspaceView>, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let role = caller_role(&mut connection, &principal, organization_id, false).await?;
-    Ok(Json(
-        load_workspace(&mut connection, organization_id, role).await?,
-    ))
+    let view = load_workspace(&mut connection, organization_id, principal.actor_id, role).await?;
+    Ok(Json(view))
 }
 
 #[derive(Debug, Deserialize)]
@@ -426,7 +447,7 @@ async fn rename_workspace(
         )
         .await?;
     }
-    let view = load_workspace(&mut transaction, organization_id, role).await?;
+    let view = load_workspace(&mut transaction, organization_id, principal.actor_id, role).await?;
     transaction.commit().await?;
     Ok(Json(view))
 }
@@ -1006,7 +1027,13 @@ async fn transfer_ownership(
         serde_json::json!({ "previousRole": target.role }),
     )
     .await?;
-    let view = load_workspace(&mut transaction, organization_id, WorkspaceRole::Admin).await?;
+    let view = load_workspace(
+        &mut transaction,
+        organization_id,
+        principal.actor_id,
+        WorkspaceRole::Admin,
+    )
+    .await?;
     transaction.commit().await?;
     Ok(Json(view))
 }
@@ -1549,7 +1576,11 @@ async fn resolve_invitation(
     require_allowed_origin(&state.config, &headers)?;
     let (prefix, digest) = consume_token(&mut token, &state).await?;
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    let row = find_invitation(&mut connection, &prefix, &digest, false).await?;
+    let found = find_invitation(&mut connection, &prefix, &digest, false).await;
+    let (row, _connection) = state
+        .rate_limits
+        .release_on_link_miss(connection, found)
+        .await?;
     Ok(Json(ResolvedInvitation {
         organization_name: row.organization_name,
         role: row.role,
@@ -1692,7 +1723,11 @@ async fn accept_new_user(
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = find_invitation(&mut transaction, &prefix, &digest, true).await?;
+    let found = find_invitation(&mut transaction, &prefix, &digest, true).await;
+    let (invitation, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     let crate::accounts::Person {
         account_id: actor_id,
         user_id,
@@ -1764,7 +1799,11 @@ async fn accept_existing_user(
     let (prefix, digest) = consume_token(&mut token, &state).await?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = find_invitation(&mut transaction, &prefix, &digest, true).await?;
+    let found = find_invitation(&mut transaction, &prefix, &digest, true).await;
+    let (invitation, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     let epoch = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT user_account.authentication_epoch

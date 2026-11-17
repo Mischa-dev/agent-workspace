@@ -168,7 +168,7 @@ async fn read_modules(
     principal: AuthenticatedActor,
     ApiPath(organization_id): ApiPath<Uuid>,
 ) -> Result<Json<ModulesResponse>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     Ok(Json(
         view(&mut connection, &principal, organization_id).await?,
     ))
@@ -198,7 +198,7 @@ async fn change_modules(
     ApiJson(request): ApiJson<ChangeRequest>,
 ) -> Result<Json<ModulesResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let metadata = change_modules_in(
         &mut transaction,
         principal.actor_id,
@@ -426,7 +426,7 @@ async fn open(
     let projects = crate::search::browser_projects(&state.pool, principal.actor_id).await?;
     let task_projects =
         crate::search::projects_showing_tasks(&state.pool, principal.actor_id, &projects).await?;
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let modules = state::anywhere(&mut connection, principal.actor_id).await?;
     let workspaces = state::by_workspace(&mut connection, principal.actor_id).await?;
     let viewer = things::Viewer {

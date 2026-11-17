@@ -72,6 +72,7 @@ export const PERMISSION_KEYS = [
   'agents.create',
   'webhooks.manage',
   'automations.manage',
+  'workspace.delete',
 ] as const
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number]

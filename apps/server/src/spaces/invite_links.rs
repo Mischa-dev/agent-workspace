@@ -592,7 +592,11 @@ async fn resolve(
     require_allowed_origin(&state.config, &headers)?;
     let (prefix, digest) = engine::consume(&mut token, Family::Link, &state, RESOURCE).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (link, role, _) = find(&mut transaction, &prefix, &digest, false).await?;
+    let found = find(&mut transaction, &prefix, &digest, false).await;
+    let ((link, role, _), transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     transaction.commit().await?;
     Ok(Json(ResolvedLink {
         organization_name: link.workspace_name,
@@ -716,7 +720,11 @@ async fn accept_new(
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (link, role, custom) = find(&mut transaction, &prefix, &digest, true).await?;
+    let found = find(&mut transaction, &prefix, &digest, true).await;
+    let ((link, role, custom), mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     let crate::accounts::Person {
         account_id,
         user_id,
@@ -790,7 +798,11 @@ async fn accept_existing(
     let (prefix, digest) = engine::consume(&mut token, Family::Link, &state, RESOURCE).await?;
     let handle = crate::workspace::normalize_handle(&request.handle)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (link, role, custom) = find(&mut transaction, &prefix, &digest, true).await?;
+    let found = find(&mut transaction, &prefix, &digest, true).await;
+    let ((link, role, custom), mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     let epoch = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT user_account.authentication_epoch

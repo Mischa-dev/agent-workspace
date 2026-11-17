@@ -66,6 +66,21 @@ impl FileStore {
             Self::Local(disk) => disk.delete(key).await,
         }
     }
+
+    /// Deletes every key of a workspace (keys start with its id, H1.24).
+    /// Deleting a workspace with nothing stored succeeds.
+    pub async fn delete_workspace(&self, workspace: uuid::Uuid) -> Result<(), AppError> {
+        match self {
+            Self::Local(disk) => {
+                let folder = disk.root.join(workspace.simple().to_string());
+                match tokio::fs::remove_dir_all(&folder).await {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                    Err(_) => Err(AppError::Internal("workspace files could not be deleted")),
+                }
+            }
+        }
+    }
 }
 
 /// Keys are written by the server alone; this refuses anything that could

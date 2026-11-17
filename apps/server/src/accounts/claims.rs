@@ -281,7 +281,7 @@ async fn accept_claim(
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let claim = sqlx::query_as::<_, ClaimRow>(
+    let found = sqlx::query_as::<_, ClaimRow>(
         r#"
         SELECT claim.id, claim.workspace_id, claim.account_id, claim.token_digest,
                user_account.id AS user_id, user_account.display_name
@@ -299,9 +299,16 @@ async fn accept_claim(
     )
     .bind(&prefix)
     .fetch_optional(&mut *transaction)
-    .await?
-    .filter(|row| engine::digest_matches(&row.token_digest, &digest))
-    .ok_or(AppError::NotFound("account_claim"))?;
+    .await
+    .map_err(AppError::from)
+    .and_then(|row| {
+        row.filter(|row| engine::digest_matches(&row.token_digest, &digest))
+            .ok_or(AppError::NotFound("account_claim"))
+    });
+    let (claim, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     sqlx::query(
         "UPDATE users SET login_name = $2, claimed_at = now(), updated_at = now() WHERE id = $1",
     )

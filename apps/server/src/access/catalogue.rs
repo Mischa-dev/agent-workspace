@@ -112,6 +112,8 @@ pub enum Permission {
     AgentsCreate,
     WebhooksManage,
     AutomationsManage,
+    // H1.24: deleting the whole workspace.
+    WorkspaceDelete,
 }
 
 /// Where a permission is checked: in a project (by the role someone has
@@ -197,7 +199,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 65] = [
+pub const PERMISSIONS: [PermissionInfo; 66] = [
     on(
         "space",
         Level::See,
@@ -913,6 +915,17 @@ pub const PERMISSIONS: [PermissionInfo; 65] = [
         "See and change every automation rule, not only their own.",
         PermissionScope::Project,
         MANAGERS,
+    ),
+    // H1.24: deleting the whole workspace, after a 14-day grace period
+    // anyone holding it can cancel.
+    permission(
+        Permission::WorkspaceDelete,
+        "workspace.delete",
+        "settings",
+        "Delete the workspace",
+        "Schedule the whole workspace for deletion, or cancel that within 14 days.",
+        PermissionScope::Workspace,
+        OWNERS,
     ),
 ];
 

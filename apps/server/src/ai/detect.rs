@@ -156,7 +156,7 @@ pub async fn request(
     actor_id: Option<Uuid>,
     task_ids: Vec<Uuid>,
 ) -> Result<Uuid, AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     if mode != Mode::Triage
         && let Some(existing) = sqlx::query_scalar::<_, Uuid>(
             r#"
@@ -214,16 +214,19 @@ pub async fn request(
     if enqueued == Enqueued::Duplicate {
         // A job without a run row: the earlier run is still going.
         transaction.rollback().await?;
-        return Ok(sqlx::query_scalar::<_, Uuid>(
-            r#"
+        return Ok(crate::db::scoped_one(pool, async |connection| {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
             SELECT id FROM ai_runs
             WHERE project_id = $1 AND kind = $2 AND state IN ('queued', 'running')
             ORDER BY created_at DESC LIMIT 1
             "#,
-        )
-        .bind(project_id)
-        .bind(mode.as_str())
-        .fetch_optional(pool)
+            )
+            .bind(project_id)
+            .bind(mode.as_str())
+            .fetch_optional(connection)
+            .await
+        })
         .await?
         .unwrap_or(run_id));
     }
@@ -238,8 +241,9 @@ pub async fn recent_runs(
     reader: Uuid,
     limit: i64,
 ) -> Result<Vec<RunView>, AppError> {
-    Ok(sqlx::query_as::<_, RunView>(
-        r#"
+    Ok(crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, RunView>(
+            r#"
         SELECT id, kind, state, tasks_considered, suggestions_created, suggestions_applied,
                error, created_at, finished_at,
                requested_by_actor_id IS NOT DISTINCT FROM $2 AS mine
@@ -250,11 +254,13 @@ pub async fn recent_runs(
         ORDER BY created_at DESC
         LIMIT $3
         "#,
-    )
-    .bind(project_id)
-    .bind(reader)
-    .bind(limit.clamp(1, 50))
-    .fetch_all(pool)
+        )
+        .bind(project_id)
+        .bind(reader)
+        .bind(limit.clamp(1, 50))
+        .fetch_all(connection)
+        .await
+    })
     .await?)
 }
 
@@ -268,7 +274,7 @@ async fn background_enabled(
     organization_id: Uuid,
     project_id: Uuid,
 ) -> Result<bool, AppError> {
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let effective = settings::resolve(
         &mut connection,
         SettingsContext {
@@ -286,11 +292,15 @@ async fn background_enabled(
 /// Queues an edit run for every project with tasks changed since its last
 /// run.
 pub async fn sweep(state: &AppState) -> Result<usize, AppError> {
-    let projects = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
+    let projects = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (Uuid, Uuid)>(
+            r#"
         SELECT project.id, project.organization_id
         FROM projects project
         LEFT JOIN ai_project_scans scan ON scan.project_id = project.id
+        JOIN organizations workspace
+          ON workspace.id = project.organization_id
+         AND workspace.lifecycle NOT IN ('suspended', 'deleting')
         WHERE project.kind = 'standard' AND project.archived_at IS NULL
           AND EXISTS (
               SELECT 1 FROM task_rows item
@@ -300,8 +310,10 @@ pub async fn sweep(state: &AppState) -> Result<usize, AppError> {
         ORDER BY scan.last_scan_at NULLS FIRST
         LIMIT 200
         "#,
-    )
-    .fetch_all(&state.pool)
+        )
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     let mut queued = 0;
     for (project_id, organization_id) in projects {
@@ -323,11 +335,15 @@ pub async fn sweep(state: &AppState) -> Result<usize, AppError> {
 
 /// Queues the nightly run for every project that hasn't had one for a day.
 pub async fn nightly(state: &AppState) -> Result<usize, AppError> {
-    let projects = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
+    let projects = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (Uuid, Uuid)>(
+            r#"
         SELECT project.id, project.organization_id
         FROM projects project
         LEFT JOIN ai_project_scans scan ON scan.project_id = project.id
+        JOIN organizations workspace
+          ON workspace.id = project.organization_id
+         AND workspace.lifecycle NOT IN ('suspended', 'deleting')
         WHERE project.kind = 'standard' AND project.archived_at IS NULL
           AND COALESCE(scan.last_nightly_at, '-infinity'::timestamptz) < now() - interval '20 hours'
           AND EXISTS (
@@ -337,8 +353,10 @@ pub async fn nightly(state: &AppState) -> Result<usize, AppError> {
         ORDER BY scan.last_nightly_at NULLS FIRST
         LIMIT 200
         "#,
-    )
-    .fetch_all(&state.pool)
+        )
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     let mut queued = 0;
     for (project_id, organization_id) in projects {
@@ -375,15 +393,18 @@ async fn detect_job(context: JobContext) -> Result<(), JobError> {
 }
 
 async fn finish_failed(pool: &PgPool, run_id: Uuid, message: &str) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
+    crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(
+            r#"
         UPDATE ai_runs SET state = 'failed', error = left($2, 500), finished_at = now()
         WHERE id = $1
         "#,
-    )
-    .bind(run_id)
-    .bind(message)
-    .execute(pool)
+        )
+        .bind(run_id)
+        .bind(message)
+        .execute(connection)
+        .await
+    })
     .await?;
     Ok(())
 }
@@ -394,6 +415,8 @@ struct ProjectRow {
     project_key: String,
     standard: bool,
     archived: bool,
+    /// The workspace is suspended or being deleted (H1.24).
+    closed: bool,
     last_scan_at: Option<DateTime<Utc>>,
 }
 
@@ -465,25 +488,29 @@ struct Found {
 /// person (not configured, over budget) end the run as failed.
 async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
     let started = Utc::now();
-    sqlx::query(
+    crate::db::scoped_one(&state.pool, async |connection| { sqlx::query(
         "UPDATE ai_runs SET state = 'running', started_at = COALESCE(started_at, now()) WHERE id = $1",
     )
     .bind(payload.run_id)
-    .execute(&state.pool)
-    .await?;
-    let Some(project) = sqlx::query_as::<_, ProjectRow>(
-        r#"
+    .execute(connection).await }).await?;
+    let Some(project) = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, ProjectRow>(
+            r#"
         SELECT project.organization_id, project.project_key,
                project.kind = 'standard' AS standard,
                project.archived_at IS NOT NULL AS archived,
+               workspace.lifecycle IN ('suspended', 'deleting') AS closed,
                scan.last_scan_at
         FROM projects project
+        JOIN organizations workspace ON workspace.id = project.organization_id
         LEFT JOIN ai_project_scans scan ON scan.project_id = project.id
         WHERE project.id = $1
         "#,
-    )
-    .bind(payload.project_id)
-    .fetch_optional(&state.pool)
+        )
+        .bind(payload.project_id)
+        .fetch_optional(connection)
+        .await
+    })
     .await?
     else {
         return Err(AiError::NotConfigured(
@@ -493,6 +520,12 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
     if !project.standard || project.archived {
         return Err(AiError::NotConfigured(
             "AI planning runs only in open projects.".to_owned(),
+        ));
+    }
+    // Nothing is read or sent for a suspended or closing workspace.
+    if project.closed {
+        return Err(AiError::NotConfigured(
+            "This workspace is suspended or being deleted.".to_owned(),
         ));
     }
     // A person's run stops if they lost the project (principle 9).
@@ -524,19 +557,22 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
         }
     }
     let applied = auto_apply(state, &project, payload.project_id, &created).await?;
-    sqlx::query(
-        r#"
+    crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query(
+            r#"
         UPDATE ai_runs
         SET state = 'succeeded', finished_at = now(), error = NULL,
             tasks_considered = $2, suggestions_created = $3, suggestions_applied = $4
         WHERE id = $1
         "#,
-    )
-    .bind(payload.run_id)
-    .bind(i32::try_from(found.tasks_considered).unwrap_or(i32::MAX))
-    .bind(i32::try_from(created.len()).unwrap_or(i32::MAX))
-    .bind(i32::try_from(applied).unwrap_or(i32::MAX))
-    .execute(&state.pool)
+        )
+        .bind(payload.run_id)
+        .bind(i32::try_from(found.tasks_considered).unwrap_or(i32::MAX))
+        .bind(i32::try_from(created.len()).unwrap_or(i32::MAX))
+        .bind(i32::try_from(applied).unwrap_or(i32::MAX))
+        .execute(connection)
+        .await
+    })
     .await?;
     if let Some(actor_id) = payload.actor_id
         && !created.is_empty()
@@ -559,7 +595,7 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
     // Background runs move the project's mark; a person's run doesn't, as
     // it read with that person's eyes.
     if payload.actor_id.is_none() && payload.mode != Mode::Triage {
-        sqlx::query(
+        crate::db::scoped_one(&state.pool, async |connection| { sqlx::query(
             r#"
             INSERT INTO ai_project_scans (project_id, organization_id, last_scan_at, last_nightly_at)
             VALUES ($1, $2, $3, CASE WHEN $4 THEN $3 END)
@@ -573,8 +609,7 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
         .bind(project.organization_id)
         .bind(started)
         .bind(payload.mode == Mode::Nightly)
-        .execute(&state.pool)
-        .await?;
+        .execute(connection).await }).await?;
     }
     Ok(())
 }
@@ -587,8 +622,9 @@ pub(crate) async fn actor_can_access(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        r#"
+    Ok(crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, bool>(
+            r#"
         SELECT CASE WHEN actor.kind = 'external_agent' THEN EXISTS (
                    SELECT 1 FROM external_agent_connections connection
                    WHERE connection.actor_id = actor.id
@@ -596,10 +632,12 @@ pub(crate) async fn actor_can_access(
                ) ELSE actor_can_access_project(actor.id, NULL, $2) END
         FROM actors actor WHERE actor.id = $1
         "#,
-    )
-    .bind(actor_id)
-    .bind(project_id)
-    .fetch_optional(pool)
+        )
+        .bind(actor_id)
+        .bind(project_id)
+        .fetch_optional(connection)
+        .await
+    })
     .await?
     .unwrap_or(false))
 }
@@ -726,18 +764,21 @@ impl RunContext<'_> {
 
     async fn find(&self) -> Result<Found, AiError> {
         let pool = &self.state.pool;
-        let tasks = sqlx::query_as::<_, TaskRow>(&format!(
-            r#"
+        let tasks = crate::db::scoped_one(pool, async |connection| {
+            sqlx::query_as::<_, TaskRow>(&format!(
+                r#"
             SELECT {TASK_COLUMNS}
             {TASK_FROM}
             WHERE item.project_id = $1 AND item.archived_at IS NULL
             ORDER BY (status.semantic_category IN ('completed', 'canceled')), item.updated_at DESC
             LIMIT $2
             "#
-        ))
-        .bind(self.payload.project_id)
-        .bind(MAX_TASKS)
-        .fetch_all(pool)
+            ))
+            .bind(self.payload.project_id)
+            .bind(MAX_TASKS)
+            .fetch_all(connection)
+            .await
+        })
         .await?;
         let since = match self.payload.mode {
             Mode::Edit => Some(
@@ -797,8 +838,9 @@ impl RunContext<'_> {
 
     /// Pairs already linked or already suggested (in any state but stale).
     async fn known_pairs(&self) -> Result<HashSet<(Uuid, Uuid)>, AppError> {
-        let rows = sqlx::query_as::<_, (Uuid, Uuid)>(
-            r#"
+        let rows = crate::db::scoped_one(&self.state.pool, async |connection| {
+            sqlx::query_as::<_, (Uuid, Uuid)>(
+                r#"
             SELECT blocking_work_item_id, blocked_work_item_id FROM work_item_dependencies
             WHERE project_id = $1 OR blocking_project_id = $1
             UNION ALL
@@ -811,9 +853,11 @@ impl RunContext<'_> {
             SELECT work_item_id, other_work_item_id FROM ai_suggestions
             WHERE project_id = $1 AND other_work_item_id IS NOT NULL AND status <> 'stale'
             "#,
-        )
-        .bind(self.payload.project_id)
-        .fetch_all(&self.state.pool)
+            )
+            .bind(self.payload.project_id)
+            .fetch_all(connection)
+            .await
+        })
         .await?;
         Ok(rows.into_iter().map(|(a, b)| ordered(a, b)).collect())
     }
@@ -935,8 +979,9 @@ impl RunContext<'_> {
             .iter()
             .map(|(_, key)| key.clone())
             .collect::<Vec<_>>();
-        let others = sqlx::query_as::<_, TaskRow>(&format!(
-            r#"
+        let others = crate::db::scoped_one(&self.state.pool, async |connection| {
+            sqlx::query_as::<_, TaskRow>(&format!(
+                r#"
             SELECT {TASK_COLUMNS}
             {TASK_FROM}
             WHERE project.organization_id = $1 AND project.id <> $2
@@ -945,12 +990,14 @@ impl RunContext<'_> {
               AND project.project_key || '-' || item.number = ANY($3)
               AND actor_can_access_project($4, NULL, project.id)
             "#
-        ))
-        .bind(self.project.organization_id)
-        .bind(self.payload.project_id)
-        .bind(&keys)
-        .bind(actor_id)
-        .fetch_all(&self.state.pool)
+            ))
+            .bind(self.project.organization_id)
+            .bind(self.payload.project_id)
+            .bind(&keys)
+            .bind(actor_id)
+            .fetch_all(connection)
+            .await
+        })
         .await?;
         let known = self.known_pairs().await?;
         let offset = tasks.len();
@@ -1069,7 +1116,7 @@ impl RunContext<'_> {
         let since = since.unwrap_or_else(|| Utc::now() - chrono::Duration::days(14));
         // With no person behind the run, only conversations every member can
         // see (viewer NULL). A person's run reads what they can see.
-        let messages = sqlx::query_as::<_, MessageRow>(
+        let messages = crate::db::scoped_one(&self.state.pool, async |connection| { sqlx::query_as::<_, MessageRow>(
             r#"
             SELECT message.id, message.conversation_id, conversation.name AS conversation,
                    COALESCE(membership.display_name, 'Someone') AS author,
@@ -1105,8 +1152,7 @@ impl RunContext<'_> {
         .bind(WAITING_PATTERN)
         .bind(self.payload.actor_id)
         .bind(MAX_MESSAGES)
-        .fetch_all(&self.state.pool)
-        .await?;
+        .fetch_all(connection).await }).await?;
         if messages.is_empty() {
             return Ok(());
         }
@@ -1248,18 +1294,16 @@ impl RunContext<'_> {
         if targets.is_empty() {
             return Ok(());
         }
-        let labels = sqlx::query_as::<_, (Uuid, String)>(
+        let labels = crate::db::scoped_one(&self.state.pool, async |connection| { sqlx::query_as::<_, (Uuid, String)>(
             "SELECT id, name FROM project_labels WHERE project_id = $1 AND archived_at IS NULL ORDER BY name LIMIT 200",
         )
         .bind(self.payload.project_id)
-        .fetch_all(&self.state.pool)
-        .await?;
-        let types = sqlx::query_as::<_, (Uuid, String)>(
+        .fetch_all(connection).await }).await?;
+        let types = crate::db::scoped_one(&self.state.pool, async |connection| { sqlx::query_as::<_, (Uuid, String)>(
             "SELECT id, name FROM work_item_types WHERE project_id = $1 AND enabled ORDER BY position",
         )
         .bind(self.payload.project_id)
-        .fetch_all(&self.state.pool)
-        .await?;
+        .fetch_all(connection).await }).await?;
         let by_key = tasks
             .iter()
             .map(|task| (task.key.as_str(), task))
@@ -1482,7 +1526,7 @@ async fn auto_apply_actor(
     organization_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<(Uuid, f32)>, AppError> {
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let effective = settings::resolve(
         &mut connection,
         SettingsContext {
@@ -1521,11 +1565,14 @@ pub async fn background_actor(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<CommandActor>, AppError> {
-    let Some(kind) = sqlx::query_scalar::<_, String>(
-        "SELECT kind FROM actors WHERE id = $1 AND status = 'active'",
-    )
-    .bind(actor_id)
-    .fetch_optional(pool)
+    let Some(kind) = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, String>(
+            "SELECT kind FROM actors WHERE id = $1 AND status = 'active'",
+        )
+        .bind(actor_id)
+        .fetch_optional(connection)
+        .await
+    })
     .await?
     else {
         return Ok(None);
@@ -1577,7 +1624,7 @@ async fn auto_apply(
         if audience.is_some() || confidence < threshold {
             continue;
         }
-        let mut transaction = state.pool.begin().await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         match suggestions::accept(&mut transaction, &actor, reader, suggestion_id, "applied")
             .await?
         {

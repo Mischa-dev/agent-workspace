@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1
+#
+# The server image (H1.13): agent-workspace-server, the built web app and
+# the notices, on a small runtime as a non-root user. Build from the
+# repository root:
+#
+#   docker build -f deploy/container/Containerfile -t agent-workspace .
+#
+# It runs `agent-workspace-server` with no arguments, which migrates and
+# serves. Until the host program is its own image (A1.17), runs use the
+# built-in host inside the server.
+
+ARG RUST_VERSION=1.97.1
+ARG NODE_VERSION=24.22.1
+
+FROM docker.io/library/node:${NODE_VERSION}-bookworm-slim AS web
+WORKDIR /src
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable
+COPY . .
+RUN pnpm install --frozen-lockfile && pnpm build
+
+FROM docker.io/library/rust:${RUST_VERSION}-bookworm AS server
+WORKDIR /src
+ARG AGENT_WORKSPACE_BUILD_COMMIT=dev
+ENV AGENT_WORKSPACE_BUILD_COMMIT=${AGENT_WORKSPACE_BUILD_COMMIT} \
+    CARGO_PROFILE_RELEASE_DEBUG=0
+COPY . .
+RUN cargo build --locked --release -p agent-workspace-server \
+ && deploy/container/third-party-notices.sh > /src/THIRD-PARTY-NOTICES
+
+FROM docker.io/library/debian:bookworm-slim
+# git: the code module mirrors repositories until A1 moves that out.
+# postgresql-client 18: backups and restores of the database next door.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg git \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/postgresql.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-18 \
+ && apt-get purge -y curl gnupg \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
+RUN useradd --system --uid 10001 --user-group --home-dir /var/lib/agent-workspace agent-workspace \
+ && install -d -o agent-workspace -g agent-workspace -m 0700 \
+      /var/lib/agent-workspace /var/lib/agent-workspace-keys
+COPY --from=server /src/target/release/agent-workspace-server /usr/local/bin/agent-workspace-server
+COPY --from=web /src/apps/web/dist /app/web
+COPY NOTICE /app/NOTICE
+COPY --from=server /src/THIRD-PARTY-NOTICES /app/THIRD-PARTY-NOTICES
+ENV AGENT_WORKSPACE_ENV=production \
+    AGENT_WORKSPACE_SERVER_ADDR=0.0.0.0:3100 \
+    AGENT_WORKSPACE_WEB_ROOT=/app/web \
+    AGENT_WORKSPACE_DATA_ROOT=/var/lib/agent-workspace \
+    AGENT_WORKSPACE_SECRETS_KEY_PATH=/var/lib/agent-workspace-keys/keyring
+USER agent-workspace
+WORKDIR /var/lib/agent-workspace
+EXPOSE 3100
+HEALTHCHECK --interval=10s --timeout=6s --start-period=120s --retries=3 \
+  CMD ["agent-workspace-server", "health"]
+CMD ["agent-workspace-server"]
