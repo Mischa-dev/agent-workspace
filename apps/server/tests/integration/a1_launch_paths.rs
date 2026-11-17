@@ -98,8 +98,8 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
                 json!({"projectId": "WORK", "title": title, "clientRequestId": key}),
             )
             .await;
-            assert_eq!(made["outcome"], "applied", "{made}");
-            made["key"].as_str().expect("key").to_owned()
+            assert_eq!(made["outcome"], "ok", "{made}");
+            made["value"]["key"].as_str().expect("key").to_owned()
         }
     };
     let launch = |key: String, client: &'static str| {
@@ -444,17 +444,17 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
     .await;
     assert_eq!(halt["outcome"], "ok", "{halt}");
     assert_eq!(halt["value"]["run"]["state"], "cancel_requested", "{halt}");
-    let (request_status, heard) = sqlx::query_as::<_, (String, i64)>(
-        r#"
-        SELECT (SELECT status FROM reply_requests WHERE id = $1),
-               (SELECT count(*) FROM external_agent_events
-                WHERE kind = 'reply.cancelled' AND resource_id = $1)
-        "#,
-    )
-    .bind(halted_request)
-    .fetch_one(pool)
-    .await
-    .expect("request");
+    let request_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM reply_requests WHERE id = $1")
+            .bind(halted_request)
+            .fetch_one(pool)
+            .await
+            .expect("request");
+    let heard = crate::support::addressed_events(pool, runner)
+        .await
+        .iter()
+        .filter(|(kind, thing)| kind == "reply.cancelled" && *thing == Some(halted_request))
+        .count();
     assert_eq!(request_status, "cancelled");
     assert!(heard >= 1, "the runner hears reply.cancelled");
     let late = runner_call(

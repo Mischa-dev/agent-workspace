@@ -34,7 +34,7 @@ use super::{
     message_edits::{say, text},
     support::{
         app::{Browser, connect_app, initialize, send},
-        callers::{Agent, Call, Caller, ConnectedApp, Person},
+        callers::{Agent, Call, Caller, ConnectedApp, Person, drain_outbox},
         two_workspaces::{
             TwoWorkspaces, World, add_person, login_as, string_at, two_workspaces, upload,
         },
@@ -168,7 +168,7 @@ async fn members_never_read_what_they_are_not_in() {
         json!({"projectId": "WORK", "title": format!("The {TASK} migration"), "clientRequestId": "quokka-task"}),
     )
     .await;
-    let task_key = string_at(&task, "/key");
+    let task_key = string_at(&task, "/value/key");
     owner_call(
         "task_comment",
         json!({"workItemId": task_key, "update": format!("{TASK} is half done"), "clientRequestId": "quokka-comment"}),
@@ -242,7 +242,7 @@ async fn members_never_read_what_they_are_not_in() {
         timeline.to_ascii_lowercase().contains(PRIVATE),
         "owner's DM: {timeline}"
     );
-    let task_id = string_at(&task, "/workItemId");
+    let task_id = string_at(&task, "/value/workItemId");
     let task_uri = format!("/api/v1/projects/{}/work-items/{task_id}", a.project);
     let (status, item) = get_text(app, &a.browser, &task_uri).await;
     assert!(
@@ -1240,73 +1240,322 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
     world.finish().await;
 }
 
-/// K3.26: only someone who may manage automations makes or deletes an
-/// incoming hook; a member sees the space's hooks but never a secret.
+/// Comment writes (C1.3) keep to what the writer may see inside the
+/// workspace: a member who isn't in a DM can't quote its messages in a
+/// comment, and a role without `tasks.view` can't comment on a task or
+/// settle a discussion on one, though a sheet it may edit takes its
+/// comments.
 #[tokio::test]
-async fn incoming_hooks_need_automations_manage_and_never_show_a_secret() {
+async fn comment_writes_keep_to_what_the_writer_may_see() {
     let Some(world) = super::support::world::WorldBuilder::default()
         .project("WORK")
         .person("lena", "member")
-        .build("privacy_incoming_hooks")
+        .person("mara", "member")
+        .person("omar", "member")
+        .person("nate", "member")
+        .connected_app("Phone")
+        .custom_role(
+            "No tasks",
+            &[
+                "projects.view",
+                "sheets.edit",
+                "channels.post",
+                "directory.view",
+            ],
+        )
+        .dm("lena", "mara")
+        .build("privacy_comment_writes")
         .await
     else {
         return;
     };
-    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
-    let space = world.projects["WORK"].clone();
-    let (status, made) = send(
-        &world.app,
-        world.owner.browser.request(
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = world.project("WORK").to_owned();
+    let phone = &world.apps["Phone"];
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
             "POST",
-            &route("incoming_hook_create"),
-            Some("hook-1"),
-            json!({ "spaceId": space, "name": "Alerts" }),
-        ),
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    let setup = Setup {
+        app: app.clone(),
+        browser: Browser {
+            cookie: world.owner.browser.cookie.clone(),
+            csrf: world.owner.browser.csrf.clone(),
+        },
+        organization_id: workspace,
+        pool: pool.clone(),
+        cleanup: None,
+    };
+    // Nate holds the narrowed role in WORK.
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["No tasks"]).expect("role id"))
+    .bind(Uuid::parse_str(&work).expect("work"))
+    .bind(world.people["nate"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow nate");
+
+    let dm_message = say(
+        &setup,
+        &world.people["lena"].browser,
+        &world.conversations["lena+mara"],
+        "private-comment-quote",
+        text(&format!("The {PRIVATE} plan")),
     )
     .await;
-    assert_eq!(made["outcome"], "ok", "{status} {made}");
-    let hook = made["value"]["hook"]["id"]
-        .as_str()
-        .expect("hook")
-        .to_owned();
-    let secret = made["value"]["secret"].as_str().expect("secret").to_owned();
-    let lena = &world.people["lena"];
-    let (_, listed) = send(
-        &world.app,
-        lena.browser.request(
-            "POST",
-            &route("incoming_hook_list"),
-            None,
-            json!({ "spaceId": space }),
-        ),
+    let sheet = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "sheet_write",
+        json!({"projectId": work, "name": "Budget", "cells": [{"cell": "A1", "input": "Rent"}],
+               "clientRequestId": "privacy-sheet"}),
     )
     .await;
-    assert_eq!(listed["outcome"], "ok", "{listed}");
-    assert_eq!(listed["value"]["hooks"][0]["id"], hook.as_str(), "{listed}");
-    assert!(!listed.to_string().contains(&secret), "{listed}");
-    for (op, body) in [
+    let sheet = string_at(&sheet, "/value/id");
+    let task = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "task_create",
+        json!({"projectId": "WORK", "title": format!("The {TASK} task"), "clientRequestId": "privacy-task"}),
+    )
+    .await;
+    let task = string_at(&task, "/value/workItemId");
+    let (status, thread) = op(
+        &world.owner.browser,
+        "comment_create",
+        json!({"thing": {"kind": "record", "id": task}, "text": "On the title",
+               "anchor": {"kind": "field", "field": "title"}}),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "owner comments on the task: {status} {thread}"
+    );
+    let thread = string_at(&thread, "/value/threadId");
+
+    // Omar isn't in the DM: quoting its message in a comment is refused and
+    // shows nothing of it.
+    let (status, quoted) = op(
+        &world.people["omar"].browser,
+        "comment_create",
+        json!({"thing": {"kind": "sheet", "id": sheet}, "text": "As said", "replyToMessageId": dm_message}),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "omar quotes the DM: {status} {quoted}"
+    );
+    assert!(!quoted.to_string().contains(PRIVATE), "{quoted}");
+
+    // Nate's role can't see tasks: no comment on the task, no reading or
+    // settling its discussion, nothing of it in the refusal; the sheet takes his comment.
+    for (name, input) in [
         (
-            "incoming_hook_create",
-            json!({ "spaceId": space, "name": "Mine" }),
+            "comment_create",
+            json!({"thing": {"kind": "record", "id": task}, "text": "Me too"}),
         ),
         (
-            "incoming_hook_delete",
-            json!({ "spaceId": space, "hookId": hook }),
+            "comment_list",
+            json!({"thing": {"kind": "record", "id": task}}),
+        ),
+        (
+            "comment_thread_update",
+            json!({"threadId": thread, "status": "Resolved"}),
         ),
     ] {
-        let (status, refused) = send(
-            &world.app,
-            lena.browser
-                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
-        )
-        .await;
-        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+        let (status, refused) = op(&world.people["nate"].browser, name, input).await;
+        assert!(!status.is_success(), "nate {name}: {status} {refused}");
+        assert!(!refused.to_string().contains(TASK), "{refused}");
     }
-    let still = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM incoming_hooks")
-        .fetch_one(world.pool())
+    let (status, commented) = op(
+        &world.people["nate"].browser,
+        "comment_create",
+        json!({"thing": {"kind": "sheet", "id": sheet}, "text": "Rent is fine"}),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "nate on the sheet: {status} {commented}"
+    );
+    let status_now = sqlx::query_scalar::<_, String>(
+        "SELECT thread_status FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&thread)
+    .fetch_one(pool)
+    .await
+    .expect("thread status");
+    assert_ne!(status_now.to_lowercase(), "resolved");
+    world.finish().await;
+}
+
+/// The chat writes that keep per-account state (C2.13, C2.15, C2.19, C2.28,
+/// C2.2) keep to what the writer may see inside the workspace: a member who
+/// isn't in a DM can't keep a draft there, mark it read or hear its words by
+/// keyword; nobody sets another account's status; and a role that can't
+/// manage settings can't retire someone else's emoji.
+#[tokio::test]
+async fn chat_writes_keep_to_what_the_writer_may_see() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("omar", "member")
+        .person("nate", "member")
+        .custom_role(
+            "Chat only",
+            &["projects.view", "channels.post", "directory.view"],
+        )
+        .dm("lena", "mara")
+        .build("privacy_chat_writes")
         .await
-        .expect("hooks");
-    assert_eq!(still, 1);
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = world.project("WORK").to_owned();
+    let dm = world.conversations["lena+mara"].clone();
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    let setup = Setup {
+        app: app.clone(),
+        browser: Browser {
+            cookie: world.owner.browser.cookie.clone(),
+            csrf: world.owner.browser.csrf.clone(),
+        },
+        organization_id: workspace,
+        pool: pool.clone(),
+        cleanup: None,
+    };
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Chat only"]).expect("role id"))
+    .bind(Uuid::parse_str(&work).expect("work"))
+    .bind(world.people["nate"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow nate");
+    let omar = &world.people["omar"];
+
+    // Omar listens for a word, then Lena says it in her DM with Mara.
+    let (status, set) = op(
+        &omar.browser,
+        "notification_keyword_set",
+        json!({"keywords": ["zephyr"]}),
+    )
+    .await;
+    assert!(status.is_success(), "{set}");
+    say(
+        &setup,
+        &world.people["lena"].browser,
+        &dm,
+        "private-keyword",
+        text(&format!("The zephyr {PRIVATE} plan")),
+    )
+    .await;
+    drain_outbox(&world.state).await;
+    let told = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1 AND kind = 'keyword'",
+    )
+    .bind(omar.actor)
+    .fetch_one(pool)
+    .await
+    .expect("keyword notifications");
+    assert_eq!(told, 0, "omar isn't in the DM");
+
+    // No draft kept in it, and nothing of it in the refusal or his list.
+    let (status, refused) = op(
+        &omar.browser,
+        "message_draft_set",
+        json!({"conversationId": dm, "draft": {"text": "Peek"}}),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "omar keeps a draft in the DM: {refused}"
+    );
+    assert!(!refused.to_string().contains(PRIVATE), "{refused}");
+    let (_, listed) = op(&omar.browser, "message_draft_list", json!({})).await;
+    assert_eq!(listed["value"]["drafts"], json!([]), "{listed}");
+
+    // Mark all read reads only what he can read: no read mark in the DM.
+    let (status, marked) = op(&omar.browser, "conversations_mark_read", json!({})).await;
+    assert!(status.is_success(), "{marked}");
+    let marks = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM conversation_read_states \
+         WHERE actor_id = $1 AND conversation_id = $2::uuid",
+    )
+    .bind(omar.actor)
+    .bind(&dm)
+    .fetch_one(pool)
+    .await
+    .expect("read marks");
+    assert_eq!(marks, 0, "omar marked the DM read");
+
+    // Nobody sets a person's status for them.
+    let (status, refused) = op(
+        &omar.browser,
+        "status_set",
+        json!({"text": "Out", "account": world.people["lena"].actor}),
+    )
+    .await;
+    assert!(!status.is_success(), "omar sets lena's status: {refused}");
+    let lenas =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM account_statuses WHERE account_id = $1")
+            .bind(world.people["lena"].actor)
+            .fetch_one(pool)
+            .await
+            .expect("statuses");
+    assert_eq!(lenas, 0);
+
+    // A role that can't manage settings can't retire the owner's emoji.
+    let emoji = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id) \
+         VALUES ($1, $2, 'owners_emoji', 'image/png', $3, $4)",
+    )
+    .bind(emoji)
+    .bind(workspace)
+    .bind(b"\x89PNG\r\n\x1a\n".to_vec())
+    .bind(world.owner.actor)
+    .execute(pool)
+    .await
+    .expect("emoji");
+    let (status, refused) = op(
+        &world.people["nate"].browser,
+        "custom_emoji_update",
+        json!({"id": emoji, "retired": true}),
+    )
+    .await;
+    assert!(!status.is_success(), "nate retires it: {refused}");
+    let retired = sqlx::query_scalar::<_, bool>(
+        "SELECT retired_at IS NOT NULL FROM custom_emojis WHERE id = $1",
+    )
+    .bind(emoji)
+    .fetch_one(pool)
+    .await
+    .expect("emoji row");
+    assert!(!retired);
     world.finish().await;
 }
 
@@ -1759,6 +2008,288 @@ async fn only_holders_of_workspace_delete_may_delete_or_keep_it() {
     assert_eq!(lifecycle().await, "active");
 }
 
+/// A2.11: a follow-up is its account's alone, and only about what that
+/// account can see. Another member can't change, cancel or list it, nor set
+/// one about a DM they aren't in.
+#[tokio::test]
+async fn follow_ups_are_their_accounts_own() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("privacy_schedules")
+        .await
+    else {
+        return;
+    };
+    let rook = world.agents["rook"].actor;
+    let schedule = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO agent_schedules (id, workspace_id, account_id, note, next_due_at) \
+         VALUES ($1, $2, $3, 'Rook checks back', now() + interval '1 day')",
+    )
+    .bind(schedule)
+    .bind(world.organization)
+    .bind(rook)
+    .execute(world.pool())
+    .await
+    .expect("rook's follow-up");
+    let (status, dm) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": rook }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("DM").to_owned();
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let lena = &world.people["lena"].browser;
+    for (name, key, body) in [
+        (
+            "schedule_update",
+            "s-1",
+            json!({ "scheduleId": schedule, "cancel": true }),
+        ),
+        (
+            "schedule_create",
+            "s-2",
+            json!({ "inMinutes": 30, "about": dm }),
+        ),
+    ] {
+        let (status, body) =
+            send(&world.app, lena.request("POST", &op(name), Some(key), body)).await;
+        assert_ne!(body["outcome"], "ok", "{name}: {status} {body}");
+    }
+    let (_, listed) = send(
+        &world.app,
+        lena.request("POST", &op("schedule_list"), None, json!({})),
+    )
+    .await;
+    assert!(
+        !listed.to_string().contains(&schedule.to_string()),
+        "{listed}"
+    );
+    let state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_schedules WHERE id = $1")
+        .bind(schedule)
+        .fetch_one(world.pool())
+        .await
+        .expect("state");
+    assert_eq!(state, "active");
+    world.finish().await;
+}
+
+/// A2: an account's delivery connections are its own and its managers'.
+/// Another member can't add one for an agent, change, re-key or remove its
+/// connection, or list them; the owner, who manages every agent, can.
+#[tokio::test]
+async fn only_an_account_and_its_managers_touch_its_connections() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("privacy_connections")
+        .await
+    else {
+        return;
+    };
+    let rook = world.agents["rook"].actor;
+    let connection = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM agent_connections WHERE account_id = $1 AND is_default \
+             AND source_connection_id IS NULL",
+    )
+    .bind(rook)
+    .fetch_one(world.pool())
+    .await
+    .expect("rook's connection");
+    // Its default, and the one for its credential.
+    let untouched = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM agent_connections WHERE account_id = $1",
+    )
+    .bind(rook)
+    .fetch_one(world.pool())
+    .await
+    .expect("count");
+    assert_eq!(untouched, 2);
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let lena = &world.people["lena"].browser;
+    for (name, key, body) in [
+        (
+            "connection_create",
+            "l-1",
+            json!({ "account": rook, "name": "Lena's" }),
+        ),
+        (
+            "connection_update",
+            "l-2",
+            json!({ "connectionId": connection, "name": "Lena's" }),
+        ),
+        (
+            "connection_secret_rotate",
+            "l-3",
+            json!({ "connectionId": connection }),
+        ),
+        (
+            "connection_remove",
+            "l-4",
+            json!({ "connectionId": connection }),
+        ),
+        ("connection_list", "l-5", json!({ "account": rook })),
+    ] {
+        let (status, body) =
+            send(&world.app, lena.request("POST", &op(name), Some(key), body)).await;
+        assert_ne!(body["outcome"], "ok", "{name}: {status} {body}");
+        assert!(
+            !body.to_string().contains(&connection.to_string()),
+            "{name}: {body}"
+        );
+    }
+    let unchanged = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM agent_connections WHERE account_id = $1 AND state = 'active' AND version = 1",
+    )
+    .bind(rook)
+    .fetch_one(world.pool())
+    .await
+    .expect("count");
+    assert_eq!(unchanged, untouched, "rook's connections are as they were");
+    let (status, body) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &op("connection_list"),
+            Some("o-1"),
+            json!({ "account": rook }),
+        ),
+    )
+    .await;
+    assert_eq!(body["outcome"], "ok", "{status} {body}");
+    assert!(body.to_string().contains(&connection.to_string()), "{body}");
+    world.finish().await;
+}
+
+/// K5.20: a direct upload goes only into a conversation the caller may post
+/// in (never a private group they aren't in), and only someone who may
+/// manage settings sees or changes the workspace's own bucket.
+#[tokio::test]
+async fn direct_uploads_and_the_workspace_bucket_stay_inside_their_rules() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("lena", "member")
+        .private_group("secret", &["ana"])
+        .build("privacy_direct_uploads")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let secret = world.conversations["secret"].clone();
+    let lena = &world.people["lena"];
+    let (status, refused) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &route("file_upload_start"),
+            Some("lena-upload"),
+            json!({ "conversationId": secret, "name": "a.txt", "size": 1,
+                    "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb" }),
+        ),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{status} {refused}");
+    for (op, body) in [
+        ("workspace_store_get", json!({})),
+        ("workspace_store_revoke", json!({})),
+        (
+            "workspace_store_set",
+            json!({ "endpoint": "https://s3.example.com", "bucket": "mine",
+                    "region": "us-east-1", "accessKeyId": "a", "secretAccessKey": "b" }),
+        ),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser
+                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    world.finish().await;
+}
+
+/// K3.26: only someone who may manage automations makes or deletes an
+/// incoming hook; a member sees the space's hooks but never a secret.
+#[tokio::test]
+async fn incoming_hooks_need_automations_manage_and_never_show_a_secret() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("privacy_incoming_hooks")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let space = world.projects["WORK"].clone();
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("incoming_hook_create"),
+            Some("hook-1"),
+            json!({ "spaceId": space, "name": "Alerts" }),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let hook = made["value"]["hook"]["id"]
+        .as_str()
+        .expect("hook")
+        .to_owned();
+    let secret = made["value"]["secret"].as_str().expect("secret").to_owned();
+    let lena = &world.people["lena"];
+    let (_, listed) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &route("incoming_hook_list"),
+            None,
+            json!({ "spaceId": space }),
+        ),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(listed["value"]["hooks"][0]["id"], hook.as_str(), "{listed}");
+    assert!(!listed.to_string().contains(&secret), "{listed}");
+    for (op, body) in [
+        (
+            "incoming_hook_create",
+            json!({ "spaceId": space, "name": "Mine" }),
+        ),
+        (
+            "incoming_hook_delete",
+            json!({ "spaceId": space, "hookId": hook }),
+        ),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser
+                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    let still = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM incoming_hooks")
+        .fetch_one(world.pool())
+        .await
+        .expect("hooks");
+    assert_eq!(still, 1);
+    world.finish().await;
+}
+
 /// K3.15: linking needs edit on the thing the link starts at and sight of
 /// the other end. A viewer can't link, and nobody can link to a private
 /// group they aren't in (the answer is the same as for no such thing).
@@ -1832,55 +2363,5 @@ async fn links_by_hand_need_edit_on_the_start_and_sight_of_the_end() {
     let (status, gone) = link("lena", "thing_unlink", notes, "lena-unlink").await;
     assert_eq!(gone["outcome"], "ok", "{status} {gone}");
     assert_eq!(gone["value"]["changed"], true, "{gone}");
-    world.finish().await;
-}
-
-/// K5.20: a direct upload goes only into a conversation the caller may post
-/// in (never a private group they aren't in), and only someone who may
-/// manage settings sees or changes the workspace's own bucket.
-#[tokio::test]
-async fn direct_uploads_and_the_workspace_bucket_stay_inside_their_rules() {
-    let Some(world) = super::support::world::WorldBuilder::default()
-        .project("WORK")
-        .person("ana", "member")
-        .person("lena", "member")
-        .private_group("secret", &["ana"])
-        .build("privacy_direct_uploads")
-        .await
-    else {
-        return;
-    };
-    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
-    let secret = world.conversations["secret"].clone();
-    let lena = &world.people["lena"];
-    let (status, refused) = send(
-        &world.app,
-        lena.browser.request(
-            "POST",
-            &route("file_upload_start"),
-            Some("lena-upload"),
-            json!({ "conversationId": secret, "name": "a.txt", "size": 1,
-                    "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb" }),
-        ),
-    )
-    .await;
-    assert_eq!(refused["outcome"], "not_found", "{status} {refused}");
-    for (op, body) in [
-        ("workspace_store_get", json!({})),
-        ("workspace_store_revoke", json!({})),
-        (
-            "workspace_store_set",
-            json!({ "endpoint": "https://s3.example.com", "bucket": "mine",
-                    "region": "us-east-1", "accessKeyId": "a", "secretAccessKey": "b" }),
-        ),
-    ] {
-        let (status, refused) = send(
-            &world.app,
-            lena.browser
-                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
-        )
-        .await;
-        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
-    }
     world.finish().await;
 }

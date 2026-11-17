@@ -1,9 +1,8 @@
-//! A1.7: requests, something an account needs from someone: an approval, an
-//! answer or acceptance of a proposal (A1 section 3.8). This holds the
-//! record; the operations to raise, answer and withdraw one by role come
-//! in A1.8. Until then a request is opened by a run's `interrupt` activity
-//! (or copied from the old approval and question tables, kept equal by
-//! `legacy`).
+//! Requests, something an account needs from someone: an approval, an
+//! answer or acceptance of a proposal (A1 section 3.8). One record for all
+//! of them: a run's `interrupt` activity opens one (A1.7), the request
+//! operations raise, answer and withdraw them by role (A1.8), and the
+//! built-in host and a sponsored run request raise theirs here (A1.14).
 
 use chrono::{DateTime, Duration, Utc};
 use rmcp::schemars;
@@ -13,7 +12,6 @@ use uuid::Uuid;
 
 use crate::{error::AppError, runs::store::RunRow};
 
-pub mod legacy;
 pub mod ops;
 
 /// The most requests a run may have open at once.
@@ -34,7 +32,7 @@ pub const REQUEST_COLUMNS: &str = r#"
     request.addressed_account_ids, request.addressed_role_keys, request.addressed_group_ids,
     request.status, request.answer, request.answered_by_account_id, request.answered_via_app_id,
     request.answered_at, request.delivered_at, request.expires_at, request.on_expiry,
-    request.legacy_source, request.version, request.created_at, request.updated_at
+    request.version, request.created_at, request.updated_at
 "#;
 
 /// One `requests` row.
@@ -69,7 +67,6 @@ pub struct RequestRow {
     pub delivered_at: Option<DateTime<Utc>>,
     pub expires_at: Option<DateTime<Utc>>,
     pub on_expiry: String,
-    pub legacy_source: Option<String>,
     pub version: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -139,6 +136,8 @@ pub struct Origin<'a> {
     pub host_request_ref: Option<&'a str>,
     pub conversation_id: Option<Uuid>,
     pub work_item_id: Option<Uuid>,
+    /// What it is about, by kind and id: a sponsored run request.
+    pub subject: Option<(&'a str, Uuid)>,
     /// The field errors name.
     pub field: &'static str,
 }
@@ -163,6 +162,7 @@ pub async fn open_for_run(
             host_request_ref: Some(activity_ref),
             conversation_id: run.conversation_id,
             work_item_id: run.work_item_id,
+            subject: None,
             field: "activities.payload.request",
         },
         request,
@@ -426,10 +426,10 @@ pub async fn open(
             id, workspace_id, space_id, kind, raised_by_account_id, run_id, host_request_ref,
             client_request_id, conversation_id, work_item_id, title, detail, options,
             allow_text, answer_permission, addressed_account_ids, addressed_role_keys,
-            expires_at, on_expiry
+            expires_at, on_expiry, subject_kind, subject_id
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
-                $19)
+                $19, $20, $21)
         "#,
     )
     .bind(request_id)
@@ -446,15 +446,19 @@ pub async fn open(
     .bind(&detail)
     .bind(Value::Array(options))
     .bind(allow_text)
-    .bind(if kind == "approval" && origin.run_id.is_some() {
-        "runs.approve"
-    } else {
-        "requests.answer"
-    })
+    .bind(
+        if kind == "approval" && (origin.run_id.is_some() || origin.subject.is_some()) {
+            "runs.approve"
+        } else {
+            "requests.answer"
+        },
+    )
     .bind(&accounts)
     .bind(&roles)
     .bind(expires_at)
     .bind(on_expiry)
+    .bind(origin.subject.map(|(kind, _)| kind))
+    .bind(origin.subject.map(|(_, id)| id))
     .execute(&mut **transaction)
     .await?;
     stage_event(
@@ -510,21 +514,45 @@ pub async fn resolved_by_run(
     Ok(())
 }
 
+/// Withdraw the open requests about these things (a sponsored run request
+/// that was itself withdrawn), leaving the things alone.
+pub async fn withdraw_about(
+    transaction: &mut Transaction<'_, Postgres>,
+    subject_kind: &str,
+    subject_ids: &[Uuid],
+) -> Result<(), AppError> {
+    let open = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM requests
+        WHERE subject_kind = $1 AND subject_id = ANY($2) AND status = 'open'
+        ORDER BY id FOR UPDATE
+        "#,
+    )
+    .bind(subject_kind)
+    .bind(subject_ids)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for request_id in open {
+        settle_only(transaction, request_id, "cancelled", None, None).await?;
+    }
+    Ok(())
+}
+
 /// A run finished: what it still asked for is withdrawn.
 pub async fn withdraw_for_run(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
 ) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        UPDATE requests
-           SET status = 'cancelled', version = version + 1, updated_at = now()
-         WHERE run_id = $1 AND status = 'open' AND legacy_source IS NULL
-        "#,
+    let open = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM requests WHERE run_id = $1 AND status = 'open' ORDER BY id FOR UPDATE",
     )
     .bind(run_id)
-    .execute(&mut **transaction)
+    .fetch_all(&mut **transaction)
     .await?;
+    for request_id in open {
+        // The run is ending: nothing on it to move along.
+        settle_only(transaction, request_id, "cancelled", None, None).await?;
+    }
     Ok(())
 }
 
@@ -618,7 +646,7 @@ pub async fn cancel_raised_via_host(
         r#"
         UPDATE requests
            SET status = 'cancelled', version = version + 1, updated_at = now()
-         WHERE raised_via_host_id = $1 AND status = 'open' AND legacy_source IS NULL
+         WHERE raised_via_host_id = $1 AND status = 'open'
         "#,
     )
     .bind(host_id)
@@ -631,8 +659,6 @@ pub async fn cancel_raised_via_host(
 
 /// The most characters of a typed answer.
 pub const MAX_ANSWER_CHARS: usize = 4_000;
-/// The event each of the raiser's connections gets when a request settles.
-pub const ANSWERED_EVENT: &str = "request.answered";
 
 /// The option a `deny` expiry picks: the first styled deny.
 fn deny_option(options: &[Value]) -> Option<&Value> {
@@ -781,6 +807,46 @@ pub async fn visible(
     .await?)
 }
 
+/// A request with whether its reader may answer it, for the places that
+/// show one where it was raised (a thread, a run).
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestForReader {
+    #[serde(flatten)]
+    pub request: RequestView,
+    pub may_answer: bool,
+}
+
+/// The requests raised in a conversation that `caller` may see, oldest
+/// first (at most 200), each with whether they may answer it.
+pub async fn in_conversation(
+    transaction: &mut Transaction<'_, Postgres>,
+    conversation_id: Uuid,
+    caller: &crate::access::Caller,
+) -> Result<Vec<RequestForReader>, AppError> {
+    let rows = sqlx::query_as::<_, RequestRow>(&format!(
+        r#"
+        SELECT {REQUEST_COLUMNS} FROM requests request
+        WHERE request.conversation_id = $1 AND request_visible_to(request.id, $2)
+        ORDER BY request.created_at, request.id
+        LIMIT 200
+        "#
+    ))
+    .bind(conversation_id)
+    .bind(caller.account_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut shown = Vec::with_capacity(rows.len());
+    for row in rows {
+        let may_answer = may_answer(transaction, caller, &row).await?;
+        shown.push(RequestForReader {
+            request: RequestView::from(&row),
+            may_answer,
+        });
+    }
+    Ok(shown)
+}
+
 /// The access scope a request is answered in: its space, or its workspace.
 fn scope_of(row: &RequestRow) -> crate::access::Target {
     row.space_id.map_or(
@@ -848,6 +914,21 @@ async fn holds_addressed_role(
     .await?)
 }
 
+/// The space a request lives in, unlocked and unchecked: only for holding
+/// its workspace open before the request's row is locked.
+pub async fn space_of(
+    executor: impl sqlx::PgExecutor<'_>,
+    request_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT space_id FROM requests WHERE id = $1")
+            .bind(request_id)
+            .fetch_optional(executor)
+            .await?
+            .flatten(),
+    )
+}
+
 /// Who may answer an open request they can see: an account it names; else
 /// a holder of one of the roles it names who has its permission; else,
 /// when it names nobody, anyone with its permission there. Never the
@@ -860,8 +941,10 @@ pub async fn may_answer(
     if row.status != "open" || row.raised_by_account_id == caller.account_id {
         return Ok(false);
     }
+    // Being asked by name still needs what answering it needs now: a
+    // sponsor who has lost `runs.approve` no longer approves their run.
     if row.addressed_account_ids.contains(&caller.account_id) {
-        return Ok(true);
+        return holds(transaction, caller, row, true).await;
     }
     if !row.addressed_role_keys.is_empty() {
         return Ok(
@@ -958,6 +1041,7 @@ fn clean_answer(
 /// its raiser is told, and a run waiting on it is told through its host.
 pub async fn answer(
     transaction: &mut Transaction<'_, Postgres>,
+    state: &crate::AppState,
     caller: &crate::access::Caller,
     row: &RequestRow,
     option_id: Option<&str>,
@@ -973,18 +1057,13 @@ pub async fn answer(
             }
         )));
     }
-    if row.legacy_source.is_some() {
-        return Err(AnswerError::Invalid {
-            field: "requestId",
-            message: "Answer this approval on its run (approval_respond).",
-        });
-    }
     if !may_answer(transaction, caller, row).await? {
         return Err(AnswerError::NotYours);
     }
     let answer = clean_answer(row, option_id, typed)?;
     let settled = settle(
         transaction,
+        state,
         row.id,
         "answered",
         Some(&answer),
@@ -998,6 +1077,7 @@ pub async fn answer(
 /// Withdraw an open request its raiser no longer needs.
 pub async fn cancel(
     transaction: &mut Transaction<'_, Postgres>,
+    state: &crate::AppState,
     account_id: Uuid,
     row: &RequestRow,
 ) -> Result<RequestRow, AnswerError> {
@@ -1007,13 +1087,7 @@ pub async fn cancel(
     if row.status != "open" {
         return Ok(row.clone());
     }
-    if row.legacy_source.is_some() {
-        return Err(AnswerError::Invalid {
-            field: "requestId",
-            message: "Withdraw this approval by stopping its run.",
-        });
-    }
-    settle(transaction, row.id, "cancelled", None, None)
+    settle(transaction, state, row.id, "cancelled", None, None)
         .await?
         .ok_or_else(|| AnswerError::Settled("This request was settled meanwhile.".to_owned()))
 }
@@ -1022,6 +1096,23 @@ pub async fn cancel(
 /// read, the raiser hears, and a run waiting on it goes on. `None` when it
 /// was no longer open.
 async fn settle(
+    transaction: &mut Transaction<'_, Postgres>,
+    state: &crate::AppState,
+    request_id: Uuid,
+    status: &str,
+    answer: Option<&Value>,
+    by: Option<Uuid>,
+) -> Result<Option<RequestRow>, AppError> {
+    let Some(row) = settle_only(transaction, request_id, status, answer, by).await? else {
+        return Ok(None);
+    };
+    follow(transaction, state, &row, status, by).await?;
+    Ok(Some(row))
+}
+
+/// [`settle`] leaving the run and what the request is about alone (a run
+/// that is ending withdraws what it asked).
+async fn settle_only(
     transaction: &mut Transaction<'_, Postgres>,
     request_id: Uuid,
     status: &str,
@@ -1079,7 +1170,28 @@ async fn settle(
     if status != "cancelled" {
         tell_raiser(transaction, &row, by).await?;
     }
-    if let Some(run_id) = row.run_id {
+    Ok(Some(row))
+}
+
+/// What a settled request moves along: the sponsored run request it
+/// approves, or the run waiting on it.
+async fn follow(
+    transaction: &mut Transaction<'_, Postgres>,
+    state: &crate::AppState,
+    row: &RequestRow,
+    status: &str,
+    by: Option<Uuid>,
+) -> Result<(), AppError> {
+    // A sponsored run request goes ahead or stops with its approval.
+    if row.subject_kind.as_deref() == Some(crate::external_execution::REQUEST_SUBJECT) {
+        crate::external_execution::approval_settled(state, transaction, row).await?;
+    }
+    // A run on the built-in host goes on in process (A1.14).
+    if let Some(run_id) = row.run_id
+        && crate::runs::ops::is_builtin(transaction, run_id).await?
+    {
+        crate::hosts::builtin::requests::settled(transaction, row).await?;
+    } else if let Some(run_id) = row.run_id {
         let summary = match status {
             "answered" => "Answered.",
             "expired" => "No answer came in time.",
@@ -1108,7 +1220,7 @@ async fn settle(
                 .await?;
         }
     }
-    Ok(Some(row))
+    Ok(())
 }
 
 /// Stage a request's event in the log. It names the request and its status,
@@ -1164,7 +1276,6 @@ async fn tell_raiser(
         work_item_id: row.work_item_id,
         comment_id: None,
         agent_run_id: row.run_id,
-        approval_id: None,
         pull_request_id: None,
         detail: serde_json::json!({}),
         group_key: format!("request:{}", row.id),
@@ -1172,30 +1283,6 @@ async fn tell_raiser(
     };
     if crate::notifications::deliver(transaction, &notification).await? {
         crate::notifications::announce(transaction, space_id, row.raised_by_account_id).await?;
-    }
-    let connections = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id FROM external_agent_connections
-        WHERE actor_id = $1 AND status = 'active' AND agent_connection_can_access(id, $2)
-        ORDER BY id
-        "#,
-    )
-    .bind(row.raised_by_account_id)
-    .bind(space_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for connection_id in connections {
-        crate::external_events::enqueue_external_event(
-            transaction,
-            connection_id,
-            space_id,
-            ANSWERED_EVENT,
-            "Your request was answered; read it with request_get",
-            "request",
-            row.id,
-            &crate::addresses::Target::Inbox.legacy_path(),
-        )
-        .await?;
     }
     Ok(())
 }
@@ -1268,7 +1355,6 @@ pub async fn announce_raised(
             work_item_id: row.work_item_id,
             comment_id: None,
             agent_run_id: row.run_id,
-            approval_id: None,
             pull_request_id: None,
             detail: serde_json::json!({ "href": href }),
             group_key: format!("request:{}", row.id),
@@ -1290,20 +1376,17 @@ async fn run_requester(
     let Some(run_id) = row.run_id else {
         return Ok(None);
     };
-    Ok(crate::runs::ops::locked(transaction, run_id)
-        .await?
-        .and_then(|run| run.requested_by_account_id))
+    crate::runs::ops::requested_by(&mut **transaction, run_id).await
 }
 
 /// Requests past their time: `deny` ones are answered with their deny
 /// option, the rest expire. Run by the job queue every minute.
-pub async fn expire_due(pool: &sqlx::PgPool) -> Result<usize, AppError> {
-    let mut transaction = crate::db::scoped_tx(pool).await?;
+pub async fn expire_due(state: &crate::AppState) -> Result<usize, AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let due = sqlx::query_as::<_, RequestRow>(&format!(
         r#"
         SELECT {REQUEST_COLUMNS} FROM requests request
         WHERE request.status = 'open' AND request.expires_at < now()
-          AND request.legacy_source IS NULL
         ORDER BY request.expires_at
         LIMIT 200
         FOR UPDATE SKIP LOCKED
@@ -1323,6 +1406,7 @@ pub async fn expire_due(pool: &sqlx::PgPool) -> Result<usize, AppError> {
             Some(option_id) => {
                 settle(
                     &mut transaction,
+                    state,
                     row.id,
                     "answered",
                     Some(&serde_json::json!({"optionId": option_id, "expired": true})),
@@ -1330,7 +1414,7 @@ pub async fn expire_due(pool: &sqlx::PgPool) -> Result<usize, AppError> {
                 )
                 .await?
             }
-            None => settle(&mut transaction, row.id, "expired", None, None).await?,
+            None => settle(&mut transaction, state, row.id, "expired", None, None).await?,
         };
         settled += usize::from(done.is_some());
     }
@@ -1342,7 +1426,7 @@ const EXPIRE_KIND: &str = "requests.expire_due";
 
 pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
     registry.register(EXPIRE_KIND, |context| async move {
-        expire_due(&context.state.pool).await?;
+        expire_due(&context.state).await?;
         Ok(())
     });
     registry.every(EXPIRE_KIND, std::time::Duration::from_secs(60));

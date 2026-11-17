@@ -11,10 +11,11 @@
   "permissions": ["whiteboards.edit", "whiteboards.comment", "whiteboards.suggest", "whiteboards.edit_own"],
   "tools": {
     "whiteboard_list": "query",
+    "whiteboard_template_list": "query",
     "whiteboard_read": "describe",
     "whiteboard_render": "describe",
     "whiteboard_create": "create",
-    "whiteboard_edit": "change",
+    "whiteboard_update_elements": "change",
     "whiteboard_update": "change",
     "whiteboard_trash_empty": "change",
     "whiteboard_duplicate": "create",

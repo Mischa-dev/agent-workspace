@@ -632,7 +632,6 @@ pub(crate) async fn apply_edit(
             conversation_kind: locked.conversation.effective_kind(),
             message_id: locked.id,
             author_actor_id: actor.actor_id,
-            author_kind: &actor.actor_kind,
             mentioned_actor_ids: &newly_mentioned,
         },
     )
@@ -747,9 +746,9 @@ pub(crate) async fn apply_removal(
         .rows_affected(),
     )
     .unwrap_or(i64::MAX);
-    let renamed_threads = neutralize_thread_names(transaction, locked, &texts).await?;
+    let mut renamed_threads = neutralize_thread_names(transaction, locked, &texts).await?;
     // Threads going by its text (nobody named them) take the next text along.
-    crate::conversations::refresh_auto_thread_names(
+    renamed_threads += crate::conversations::refresh_auto_thread_names(
         transaction,
         locked.project_id,
         locked.conversation.id,

@@ -82,7 +82,7 @@ async fn the_record_owns_title_values_and_archive_state() {
         json!({"projectId": "WORK", "title": "Fix the bridge", "clientRequestId": "bridge"}),
     )
     .await;
-    assert_eq!(made["outcome"], "applied", "{made}");
+    assert_eq!(made["outcome"], "ok", "{made}");
     let task = sqlx::query_scalar::<_, Uuid>(
         "SELECT record.id FROM collection_records record \
          JOIN collections collection ON collection.id = record.collection_id \
@@ -102,7 +102,7 @@ async fn the_record_owns_title_values_and_archive_state() {
         json!({"taskId": "WORK-1", "title": "Fix the old bridge", "expectedVersion": 1}),
     )
     .await;
-    assert_eq!(renamed["outcome"], "applied", "{renamed}");
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
     let after = both(pool, task).await;
     assert_eq!(after.record_title, "Fix the old bridge");
     assert_eq!(after.task_title, after.record_title);
@@ -118,7 +118,7 @@ async fn the_record_owns_title_values_and_archive_state() {
         }),
     )
     .await;
-    assert_eq!(both_changed["outcome"], "applied", "{both_changed}");
+    assert_eq!(both_changed["outcome"], "ok", "{both_changed}");
     let after = both(pool, task).await;
     assert_eq!(after.record_title, "Fix the new bridge");
     assert_eq!(after.record_values, json!({ field.as_str(): "steel" }));
@@ -131,7 +131,7 @@ async fn the_record_owns_title_values_and_archive_state() {
         json!({"taskId": "WORK-1", "priority": "high", "expectedVersion": 3}),
     )
     .await;
-    assert_eq!(prioritised["outcome"], "applied", "{prioritised}");
+    assert_eq!(prioritised["outcome"], "ok", "{prioritised}");
     let after = both(pool, task).await;
     assert_eq!((after.record_version, after.task_version), (3, 4));
 
@@ -153,7 +153,7 @@ async fn the_record_owns_title_values_and_archive_state() {
         json!({"taskId": "WORK-1", "archived": true, "expectedVersion": 4}),
     )
     .await;
-    assert_eq!(archived["outcome"], "applied", "{archived}");
+    assert_eq!(archived["outcome"], "ok", "{archived}");
     let after = both(pool, task).await;
     assert!(after.record_archived && after.task_archived, "{after:?}");
     assert_eq!((after.record_version, after.task_version), (4, 5));
@@ -162,7 +162,7 @@ async fn the_record_owns_title_values_and_archive_state() {
         json!({"taskId": "WORK-1", "archived": false, "expectedVersion": 5}),
     )
     .await;
-    assert_eq!(restored["outcome"], "applied", "{restored}");
+    assert_eq!(restored["outcome"], "ok", "{restored}");
     let after = both(pool, task).await;
     assert!(!after.record_archived && !after.task_archived, "{after:?}");
     assert_eq!((after.record_version, after.task_version), (5, 6));
@@ -235,7 +235,7 @@ async fn a_task_has_one_revision_whichever_side_writes_it() {
         json!({"projectId": "WORK", "title": "Fix the bridge", "clientRequestId": "bridge"}),
     )
     .await;
-    assert_eq!(made["outcome"], "applied", "{made}");
+    assert_eq!(made["outcome"], "ok", "{made}");
     let (task, tasks) = sqlx::query_as::<_, (Uuid, Uuid)>(
         "SELECT task.id, task.record_collection_id FROM task_rows task \
          WHERE task.project_id = $1::uuid",
@@ -296,7 +296,7 @@ async fn a_task_has_one_revision_whichever_side_writes_it() {
         json!({"taskId": "WORK-1", "status": "Ready", "expectedVersion": 2}),
     )
     .await;
-    assert_eq!(moved["outcome"], "applied", "{moved}");
+    assert_eq!(moved["outcome"], "ok", "{moved}");
     assert_eq!(revision().await, (3, Some(3)));
 
     // The record side, still at 2, conflicts; at 3 it sets a value: 4.
@@ -355,7 +355,7 @@ async fn a_search_finds_words_split_between_title_and_description() {
         }),
     )
     .await;
-    assert_eq!(made["outcome"], "applied", "{made}");
+    assert_eq!(made["outcome"], "ok", "{made}");
 
     let found = call("search", json!({"query": "bridge repair"})).await;
     let kinds = found["value"]["results"]
@@ -409,7 +409,7 @@ async fn tasks_as_records_search_built_in_names_and_sort_by_the_tasks_change() {
             json!({"projectId": "WORK", "title": title, "priority": priority, "clientRequestId": key}),
         )
         .await;
-        assert_eq!(made["outcome"], "applied", "{made}");
+        assert_eq!(made["outcome"], "ok", "{made}");
     }
     let tasks = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM collections WHERE project_id = $1::uuid AND builtin = 'tasks'",
@@ -458,7 +458,7 @@ async fn tasks_as_records_search_built_in_names_and_sort_by_the_tasks_change() {
         json!({"taskId": "WORK-2", "status": "Ready", "expectedVersion": 1}),
     )
     .await;
-    assert_eq!(moved["outcome"], "applied", "{moved}");
+    assert_eq!(moved["outcome"], "ok", "{moved}");
     let found = call(
         "record_query",
         json!({"projectId": "WORK", "collection": "Tasks", "search": "ready"}),
@@ -478,7 +478,7 @@ async fn tasks_as_records_search_built_in_names_and_sort_by_the_tasks_change() {
         json!({"taskId": "WORK-1", "status": "Ready", "expectedVersion": 1}),
     )
     .await;
-    assert_eq!(moved["outcome"], "applied", "{moved}");
+    assert_eq!(moved["outcome"], "ok", "{moved}");
     let sorted = call(
         "record_query",
         json!({

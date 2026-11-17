@@ -1215,6 +1215,30 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
         finish_delivery(pool, due.id, "skipped", Some(reason)).await?;
         return Ok(());
     }
+    // A module switched off since the event was routed (in the workspace,
+    // or in the event's space) stops what is still waiting (AWD-186).
+    if let Some(project_id) = due.project_id
+        && due.event_type != "ping"
+    {
+        let organization_id = due.organization_id;
+        let (modules, direct) = crate::db::scoped_one(pool, async |connection| {
+            let modules =
+                crate::modules::state::in_space(connection, organization_id, project_id).await?;
+            let direct = crate::spaces::kind::holds_messages(connection, project_id).await?;
+            Ok::<_, AppError>((modules, direct))
+        })
+        .await?;
+        if crate::events::shut_out(modules, &due.event_type, direct) {
+            finish_delivery(
+                pool,
+                due.id,
+                "skipped",
+                Some("Automations, or what the event is about, is turned off there."),
+            )
+            .await?;
+            return Ok(());
+        }
+    }
     let subject: Subject = serde_json::from_value(due.subject.clone()).unwrap_or_default();
     if let Some(project_id) = due.project_id
         && due.event_type != "ping"
@@ -1367,7 +1391,7 @@ async fn send_post(
         .map_err(|error| (None, error))?;
     let body = body.to_string();
     let timestamp = Utc::now().timestamp().to_string();
-    let signature = crate::replies::sign(secret, &timestamp, &body)
+    let signature = crate::delivery::sign::legacy(secret, &timestamp, &body)
         .ok_or((None, "could not sign the delivery"))?;
     let delivery = due.id.to_string();
     let standard = standard_signature(secret, &delivery, &timestamp, &body)

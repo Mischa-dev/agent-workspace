@@ -69,8 +69,8 @@ async fn create_task(
     let mut arguments = arguments;
     arguments["projectId"] = json!(project);
     let created = tool(&setup.app, token, session, "task_create", arguments).await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    created["key"].as_str().expect("key").to_owned()
+    assert_eq!(created["outcome"], "ok", "{created}");
+    created["value"]["key"].as_str().expect("key").to_owned()
 }
 
 #[tokio::test]
@@ -461,33 +461,31 @@ async fn workflow_update_is_for_admins_and_retired_statuses_move_their_tasks() {
     )
     .await;
     assert_eq!(watched["outcome"], "ok", "{watched}");
-    let mara_events = || {
-        sqlx::query_scalar::<_, i64>(
-            r#"
-            SELECT count(*)
-            FROM external_agent_events event
-            JOIN external_agent_connections connection ON connection.id = event.connection_id
-            JOIN actors actor ON actor.id = connection.actor_id
-            WHERE actor.kind = 'external_agent' AND event.kind = 'work_item.changed'
-              AND connection.actor_id IN (
-                  SELECT actor_id FROM work_item_watchers watcher
-                  JOIN task_rows item ON item.id = watcher.work_item_id
-                  WHERE item.project_id = $1 AND item.number = 1
-              )
-            "#,
-        )
-        .bind(flow.parse::<Uuid>().expect("flow id"))
-        .fetch_one(&setup.pool)
-    };
-    let before = mara_events().await.expect("events before");
+    // Mara's connection starts reading from here.
+    let opened = tool(app, &mara, &mara_session, "event_list", json!({})).await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let cursor = opened["value"]["nextCursor"].clone();
 
     let updated = tool(app, &codex, &session, "workflow_update", document.clone()).await;
     assert_eq!(updated["outcome"], "ok", "{updated}");
-    assert_eq!(
-        mara_events().await.expect("events after"),
-        before + 1,
-        "the watcher hears about the move"
-    );
+    agent_workspace_server::events::catch_up(&setup.pool)
+        .await
+        .expect("sequence events");
+    let heard = tool(
+        app,
+        &mara,
+        &mara_session,
+        "event_list",
+        json!({"cursor": cursor}),
+    )
+    .await;
+    let moves = heard["value"]["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|event| event["type"] == "task.updated" && event["reason"] == "following")
+        .count();
+    assert_eq!(moves, 1, "the watcher hears about the move: {heard}");
     assert_eq!(updated["value"]["statusesRetired"], 1);
     assert_eq!(updated["value"]["tasksMoved"], 2);
     assert_eq!(updated["value"]["workflow"]["version"], version + 1);
@@ -630,7 +628,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
                "priority": "urgent", "dueDate": "2026-10-20", "clearEstimate": true}),
     )
     .await;
-    assert_eq!(updated["outcome"], "applied", "{updated}");
+    assert_eq!(updated["outcome"], "ok", "{updated}");
     // A due date before a task's start is found before anything is applied.
     let early = call(
         "task_update_many",
@@ -720,7 +718,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
         json!({"taskId": "PLAN-1", "expectedVersion": current["value"]["task"]["version"], "estimate": 8}),
     )
     .await;
-    assert_eq!(sized["outcome"], "applied", "{sized}");
+    assert_eq!(sized["outcome"], "ok", "{sized}");
     let moved = call(
         "task_move",
         json!({"taskId": "PLAN-1", "toProjectId": "NEXT"}),

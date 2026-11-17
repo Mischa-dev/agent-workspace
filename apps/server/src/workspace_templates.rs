@@ -1165,13 +1165,13 @@ fn key_candidates(key: &str) -> Vec<String> {
 /// yet. A collection that is there gets the template's fields and views
 /// added, as collection_write does with a definition.
 /// The starter project being filled, and whether this use made it.
-struct StarterProject {
-    organization_id: Uuid,
-    id: Uuid,
-    new: bool,
+pub(crate) struct StarterProject {
+    pub(crate) organization_id: Uuid,
+    pub(crate) id: Uuid,
+    pub(crate) new: bool,
 }
 
-async fn starter_contents(
+pub(crate) async fn starter_contents(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     starter: StarterProject,

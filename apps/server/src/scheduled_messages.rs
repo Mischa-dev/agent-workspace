@@ -829,7 +829,6 @@ async fn fail(
         work_item_id: None,
         comment_id: None,
         agent_run_id: None,
-        approval_id: None,
         pull_request_id: None,
         detail: serde_json::json!({
             "title": "Your scheduled message wasn't sent",

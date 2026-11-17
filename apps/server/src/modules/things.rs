@@ -249,6 +249,8 @@ const RECORDS_SQL: &str = r#"
       ON editor.project_id = record.project_id AND editor.actor_id = record.updated_by_actor_id
     WHERE record.id = ANY($1) AND record.project_id = ANY($2)
       AND record.archived_at IS NULL AND collection.archived_at IS NULL
+      -- M1.6: a built module switched off hides its collections' records.
+      AND module_part_on('collection', collection.id)
       -- A task's record (the built-in Tasks collection) is the task.
       AND collection.builtin IS NULL
 "#;

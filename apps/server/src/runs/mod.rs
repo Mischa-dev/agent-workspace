@@ -1,8 +1,8 @@
 //! The run service (A1). It owns the run record every agent gets, whoever
 //! runs it: `runs`, `run_activities`, `run_usage` and `usage_reports`
 //! (`state` for where a run is, `store` for its rows). The built-in host
-//! still keeps its detail in `agent_runs`, mirrored into `runs` by triggers
-//! until A1.22.
+//! keeps its detail in `agent_runs` and writes its runs' records
+//! (`builtin`) and steps (`steps`) itself.
 //!
 //! It also holds what the run, approval and GitHub job cores share between
 //! the browser and MCP (docs/plans/mcp-tools.md, Phase 4): who is calling,
@@ -13,16 +13,13 @@
 //! sponsor of an approved run request); no tool ever takes a profile,
 //! sponsor or worker argument.
 
-use std::time::Duration;
-
-use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
     auth::AuthenticatedActor,
     error::AppError,
-    jobs::{JobContext, JobError, JobRegistry, NewJob},
+    jobs::JobRegistry,
     mcp::McpPrincipal,
     policy::ActorKind,
     work_item_commands::{AuditAttribution, CommandActor},
@@ -30,6 +27,7 @@ use crate::{
 
 pub mod activities;
 pub mod brief;
+pub mod builtin;
 pub mod credentials;
 pub mod finished;
 #[cfg(test)]
@@ -42,72 +40,16 @@ pub mod pages;
 pub mod reads;
 pub mod sql;
 pub mod state;
+pub mod steps;
 pub mod store;
 pub mod usage;
 pub mod views;
 
 pub use state::{Liveness, RunState};
 
-/// Copies `agent_run_events` into `run_activities`, a batch at a time (A1.1).
-pub const BACKFILL_ACTIVITIES_KIND: &str = "runs.backfill_activities";
-const BACKFILL_BATCH: i32 = 5000;
-
 pub fn register_jobs(registry: &mut JobRegistry) {
     liveness::register_jobs(registry);
     usage::register_jobs(registry);
-    registry.register_with_timeout(
-        BACKFILL_ACTIVITIES_KIND,
-        Duration::from_secs(300),
-        |context: JobContext| async move {
-            let payload: BackfillPayload = context.job.payload_as()?;
-            backfill_activities(&context.state.pool, payload.after)
-                .await
-                .map_err(|error| JobError::retry(error.log_category()))?;
-            Ok(())
-        },
-    );
-}
-
-/// Where the activities backfill got to.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BackfillPayload {
-    #[serde(default)]
-    after: Option<Uuid>,
-}
-
-/// Copy one batch of old run events after `after` and queue the next batch
-/// when this one was full. Safe to run twice: copied events are skipped.
-pub async fn backfill_activities(
-    pool: &sqlx::PgPool,
-    after: Option<Uuid>,
-) -> Result<Option<Uuid>, AppError> {
-    let mut transaction = pool.begin().await?;
-    let last = sqlx::query_scalar::<_, Option<Uuid>>("SELECT runs_backfill_activities($1, $2)")
-        .bind(after)
-        .bind(BACKFILL_BATCH)
-        .fetch_one(&mut *transaction)
-        .await?;
-    if let Some(last) = last {
-        let more = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM agent_run_events WHERE id > $1)",
-        )
-        .bind(last)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if more {
-            crate::jobs::enqueue(
-                &mut *transaction,
-                NewJob::new(BACKFILL_ACTIVITIES_KIND)
-                    .payload(BackfillPayload { after: Some(last) })
-                    .unique(format!("{BACKFILL_ACTIVITIES_KIND}:{last}"))
-                    .max_attempts(50),
-            )
-            .await?;
-        }
-    }
-    transaction.commit().await?;
-    Ok(last)
 }
 
 /// Built-in run states (`agent_runs.state`) that hold (or wait for) harness time. One list for starting a
@@ -133,35 +75,13 @@ pub const SPACE_OF_RUN: &str = "SELECT conversation.project_id FROM agent_runs r
      -- visibility: the space only, to refuse a write; the handler checks access\n \
      WHERE run.id = $1";
 
-/// The space an approval's run lives in, unlocked and unchecked: only for
-/// holding its workspace open before the approval row is locked (H1.24).
-pub(crate) async fn approval_space(
-    connection: &mut sqlx::PgConnection,
-    approval_id: Uuid,
-) -> Result<Option<Uuid>, sqlx::Error> {
-    sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT conversation.project_id
-        FROM agent_approvals approval
-        JOIN agent_runs run ON run.id = approval.agent_run_id
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        WHERE approval.id = $1
-        -- visibility: finds the workspace to hold; the caller's locked read
-        -- applies conversation_visible_to and membership.
-        "#,
-    )
-    .bind(approval_id)
-    .fetch_optional(connection)
-    .await
-}
-
 /// The runs in `workspace` that haven't finished, locked, with where each
 /// lives: what suspending or deleting the workspace stops (H1.24).
 pub(crate) async fn active_in_workspace(
     transaction: &mut Transaction<'_, Postgres>,
     workspace: Uuid,
-) -> Result<Vec<crate::api::RunToStop>, AppError> {
-    sqlx::query_as::<_, crate::api::RunToStop>(
+) -> Result<Vec<crate::hosts::builtin::http::RunToStop>, AppError> {
+    sqlx::query_as::<_, crate::hosts::builtin::http::RunToStop>(
         r#"
         SELECT run.id AS run_id, conversation.project_id, run.conversation_id
         FROM agent_runs run

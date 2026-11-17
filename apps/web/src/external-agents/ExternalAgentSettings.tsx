@@ -52,14 +52,13 @@ import {
 import { RUNNER_PRESETS, runnerSettings, type RunnerPresetId } from './runnerPresets'
 import '../styles/pages.css'
 
-const memberScopes: ExternalAgentScope[] = ['read', 'write', 'events', 'approval_respond', 'worker_request']
+const memberScopes: ExternalAgentScope[] = ['read', 'write', 'events', 'worker_request']
 const viewerScopes: ExternalAgentScope[] = ['read', 'events']
 
 const SCOPE_LABELS: Record<ExternalAgentScope, string> = {
   read: 'Read conversations',
   write: 'Post messages',
   events: 'Receive live events',
-  approval_respond: 'Answer approvals',
   worker_request: 'Ask for runs',
 }
 

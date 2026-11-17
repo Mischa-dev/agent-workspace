@@ -348,7 +348,7 @@ pub(super) async fn insert_audit(
 /// bad value in plain words instead of failing to parse the call. Pair it
 /// with `#[schemars(with = "Option<String>")]`: the input schema stays a
 /// plain string, without an anyOf.
-pub(super) fn string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+pub(crate) fn string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -535,7 +535,7 @@ struct HandleRow {
 
 /// Turn plain text into message content, making each `@handle` of someone in
 /// the Project a real mention so they're notified.
-pub(super) async fn content_from_text(
+pub(crate) async fn content_from_text(
     state: &AppState,
     project_id: Uuid,
     text: &str,

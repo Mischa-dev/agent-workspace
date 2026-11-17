@@ -258,15 +258,15 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
         json!({"projectId": "BETA", "title": "Beta crash", "priority": "urgent", "labels": ["Mobile"]}),
     ] {
         let task = call("task_create", arguments).await;
-        assert_eq!(task["outcome"], "applied", "{task}");
-        created.push(id(&task["workItemId"]));
+        assert_eq!(task["outcome"], "ok", "{task}");
+        created.push(id(&task["value"]["workItemId"]));
     }
     let by_mara = as_mara(
         "task_create",
         json!({"projectId": "ALPHA", "title": "Mara's", "priority": "medium"}),
     )
     .await;
-    assert_eq!(by_mara["key"], "ALPHA-4", "{by_mara}");
+    assert_eq!(by_mara["value"]["key"], "ALPHA-4", "{by_mara}");
     let archived_label = call(
         "label_write",
         json!({"projectId": "ALPHA", "label": "Old", "archived": true}),
@@ -527,7 +527,7 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
         json!({"taskId": "BETA-1", "expectedVersion": version(&setup, created[3]).await, "addLabels": ["ΟΔΟΣ"]}),
     )
     .await;
-    assert_eq!(tagged["outcome"], "applied", "{tagged}");
+    assert_eq!(tagged["outcome"], "ok", "{tagged}");
     let roads = list(json!({"labels": ["ΟΔΟΣ"]})).await;
     assert_eq!(keys(&roads["tasks"]), ["BETA-1"], "{roads}");
 }
@@ -559,7 +559,7 @@ async fn task_list_takes_several_values_and_reads_views_as_the_list_does() {
         let mut arguments = arguments;
         arguments["projectId"] = json!("VIEWS");
         let task = call("task_create", arguments).await;
-        assert_eq!(task["outcome"], "applied", "{task}");
+        assert_eq!(task["outcome"], "ok", "{task}");
     }
     let list = |arguments: Value| {
         let call = &call;
@@ -826,7 +826,7 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
         ("NEW", "Already here"),
     ] {
         let created = call("task_create", json!({"projectId": project, "title": title})).await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
     let mut tasks = Vec::new();
     for number in 1..=5 {
@@ -990,7 +990,7 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
         json!({"taskId": "ORD-4", "expectedVersion": 1, "status": "Ready", "clientRequestId": "ord-4-ready"}),
     )
     .await;
-    assert_eq!(ready["outcome"], "applied", "{ready}");
+    assert_eq!(ready["outcome"], "ok", "{ready}");
     let before = versions().await;
     assert_refused(
         &reorder(json!({"taskIds": ["ORD-1"], "beforeTaskId": "ORD-4"})).await,
@@ -1036,7 +1036,7 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
         json!({"taskId": "ORD-5", "expectedVersion": 2, "archived": true, "clientRequestId": "ord-5-archive"}),
     )
     .await;
-    assert_eq!(archived["outcome"], "applied", "{archived}");
+    assert_eq!(archived["outcome"], "ok", "{archived}");
     assert_refused(
         &reorder(json!({"taskIds": ["ORD-5"]})).await,
         "taskIds",
@@ -1118,7 +1118,7 @@ async fn task_link_repositories_pull_requests_and_threads() {
         json!({"projectId": "REPO", "title": "Offline mode"}),
     )
     .await;
-    let task = id(&created["workItemId"]);
+    let task = id(&created["value"]["workItemId"]);
     let link = |extra: Value| {
         let mut arguments = json!({"taskId": "REPO-1"});
         for (key, value) in extra.as_object().expect("object") {
@@ -1596,7 +1596,7 @@ async fn a_project_scoped_credential_never_learns_ids_beyond_its_project() {
             json!({"projectId": project, "title": "Start"}),
         )
         .await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
     let secret_task = task_id(&setup, &secret, 1).await.to_string();
     let scoped = mcp::issue_credential(
@@ -1755,7 +1755,7 @@ async fn a_claim_waits_behind_a_write_to_its_column() {
         json!({"projectId": "WORK", "title": "Claim me"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
     let project: Uuid = work.parse().expect("project ID");
     let claimed = task_id(&setup, &work, 1).await;
     let column = sqlx::query_scalar::<_, Uuid>("SELECT status_id FROM work_items WHERE id = $1")
@@ -1823,4 +1823,147 @@ async fn a_claim_waits_behind_a_write_to_its_column() {
     writer.commit().await.expect("writer commits");
     let claim = claim.await.expect("claim");
     assert_eq!(claim["outcome"], "ok", "{claim}");
+}
+
+/// A credential held to one project copies templates from that project
+/// only, even when the person can see templates in their other projects.
+#[tokio::test]
+async fn a_project_scoped_credential_copies_templates_only_from_its_project() {
+    let Some(setup) = setup("mcp_board_scoped_template").await else {
+        return;
+    };
+    let app = &setup.app;
+    let home = create_project(&setup, "HOME", "Home").await;
+    create_project(&setup, "SECRET", "Secret").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let mut templates = Vec::new();
+    for project in ["HOME", "SECRET"] {
+        let written = tool(
+            app,
+            &codex,
+            &session,
+            "page_write",
+            json!({
+                "projectId": project,
+                "title": format!("{project} template"),
+                "body": format!("{project} body"),
+                "isTemplate": true,
+                "clientRequestId": format!("template-{project}"),
+            }),
+        )
+        .await;
+        assert_eq!(written["outcome"], "ok", "{written}");
+        templates.push(written["value"]["id"].as_str().expect("page").to_owned());
+    }
+    let scoped = mcp::issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            project_id: home.parse().expect("home ID"),
+            actor_id: owner(&setup, &home).await,
+            client_name: "scoped-test".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("issue credential")
+    .token;
+    let scoped_session = initialize(app, &scoped).await.expect("scoped MCP");
+    let at_home = tool(
+        app,
+        &scoped,
+        &scoped_session,
+        "page_write",
+        json!({
+            "projectId": "HOME",
+            "fromTemplateId": templates[0],
+            "clientRequestId": "from-home",
+        }),
+    )
+    .await;
+    assert_eq!(at_home["outcome"], "ok", "{at_home}");
+    assert!(at_home.to_string().contains("HOME body"), "{at_home}");
+    let from_secret = tool(
+        app,
+        &scoped,
+        &scoped_session,
+        "page_write",
+        json!({
+            "projectId": "HOME",
+            "fromTemplateId": templates[1],
+            "clientRequestId": "from-secret",
+        }),
+    )
+    .await;
+    assert_ne!(from_secret["outcome"], "ok", "{from_secret}");
+    assert!(
+        !from_secret.to_string().contains("SECRET body"),
+        "{from_secret}"
+    );
+}
+
+/// The same credential lists the person's drafts in its project only.
+#[tokio::test]
+async fn a_project_scoped_credential_lists_drafts_only_from_its_project() {
+    let Some(setup) = setup("mcp_board_scoped_drafts").await else {
+        return;
+    };
+    let app = &setup.app;
+    let home = create_project(&setup, "HOME", "Home").await;
+    create_project(&setup, "SECRET", "Secret").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    for project in ["HOME", "SECRET"] {
+        let created = tool(
+            app,
+            &codex,
+            &session,
+            "channel_create",
+            json!({"projectId": project, "name": "general"}),
+        )
+        .await;
+        assert_eq!(created["outcome"], "ok", "{created}");
+        let channel = created["value"]["id"].as_str().expect("channel").to_owned();
+        let saved = tool(
+            app,
+            &codex,
+            &session,
+            "message_draft_set",
+            json!({"conversationId": channel, "draft": {"text": format!("{project} draft")}}),
+        )
+        .await;
+        assert_eq!(saved["outcome"], "ok", "{saved}");
+    }
+    let everywhere = tool(app, &codex, &session, "message_draft_list", json!({})).await;
+    assert!(
+        everywhere.to_string().contains("SECRET draft"),
+        "{everywhere}"
+    );
+
+    let scoped = mcp::issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            project_id: home.parse().expect("home ID"),
+            actor_id: owner(&setup, &home).await,
+            client_name: "scoped-test".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("issue credential")
+    .token;
+    let scoped_session = initialize(app, &scoped).await.expect("scoped MCP");
+    let listed = tool(
+        app,
+        &scoped,
+        &scoped_session,
+        "message_draft_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(listed.to_string().contains("HOME draft"), "{listed}");
+    assert!(!listed.to_string().contains("SECRET draft"), "{listed}");
 }

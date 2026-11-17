@@ -112,6 +112,9 @@ function normalizeSidebarChannel(value: unknown): SidebarChannel | null {
     highestSequence: Math.max(0, integer(item.highestSequence)),
     highestSeenSequence: Math.max(0, integer(item.highestSeenSequence)),
     unread: item.unread === true,
+    unreadMessages: Math.max(0, integer(item.unreadMessages)),
+    mentions: Math.max(0, integer(item.mentions)),
+    muted: item.muted === true,
     threads: Array.isArray(item.threads)
       ? item.threads
           .map(normalizeSidebarThread)

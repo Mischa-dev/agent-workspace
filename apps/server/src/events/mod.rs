@@ -378,6 +378,16 @@ pub async fn tail(
     Ok(rows)
 }
 
+/// The oldest position the log still keeps (1 when nothing was dropped).
+pub async fn oldest_position(connection: &mut PgConnection) -> Result<i64, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<i64>>("SELECT min(position) FROM events")
+            .fetch_one(&mut *connection)
+            .await?
+            .unwrap_or(1),
+    )
+}
+
 /// The newest position in the log (0 when it is empty).
 pub async fn head(connection: &mut PgConnection) -> Result<i64, AppError> {
     let next = sqlx::query_scalar::<_, i64>("SELECT next_position FROM event_position_counter")

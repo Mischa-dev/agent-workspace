@@ -29,6 +29,7 @@
 //! doesn't name its module; the web app's own guard covers its routes,
 //! navigation, palette, shortcuts, slash commands and settings pages.
 
+pub mod built;
 pub mod contract;
 pub mod core;
 pub mod gate;
@@ -376,7 +377,6 @@ mod tests {
             kind::MENTION,
             kind::COMMENT_MENTION,
             kind::ASSIGNED,
-            kind::APPROVAL_REQUESTED,
             kind::REQUEST_RAISED,
             kind::REQUEST_ANSWERED,
             kind::RUN_WAITING,
@@ -390,6 +390,14 @@ mod tests {
             kind::SCHEDULED_SEND_FAILED,
             kind::PAGE_SUGGESTION,
             kind::PAGE_COMMENT,
+            kind::THING_COMMENT,
+            kind::DIRECT_MESSAGE,
+            kind::THREAD_REPLY,
+            kind::KEYWORD,
+            kind::CONNECTION_PROBLEM,
+            kind::AGENT_UNRESPONSIVE,
+            kind::BUDGET_WARNING,
+            kind::THING_UPDATE,
             crate::automations::NOTIFICATION_KIND,
             "automation_disabled",
             "ai_suggestions",

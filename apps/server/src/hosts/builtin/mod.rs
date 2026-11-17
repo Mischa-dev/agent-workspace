@@ -1,6 +1,6 @@
 //! The built-in host: the agents this server runs itself (A1 section 3.11).
-//! Its detail row is `agent_runs`, which the mirror triggers copy into
-//! `runs` until A1.22. Everything that writes that detail row from outside
+//! Its detail row is `agent_runs`; it keeps the run's record in `runs`
+//! itself (`runs::builtin`). Everything that writes that detail row from outside
 //! the provider machinery goes through here:
 //!
 //! - A1.10, one run creation path: the browser and MCP start and retry, the
@@ -16,12 +16,14 @@ use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 pub mod capacity;
+pub mod http;
+pub mod requests;
 
 use crate::{
     AppState,
-    api::RunSetup,
     domain::RunState,
     error::AppError,
+    hosts::builtin::http::RunSetup,
     outbox,
     provider::run_config::RunConfig,
     runs::{ACTIVE_RUN_STATES, run_cap},
@@ -141,6 +143,24 @@ pub(crate) async fn create(
     new: NewRun<'_>,
 ) -> Result<Created, AppError> {
     let run_id = Uuid::now_v7();
+    let settings = serde_json::to_value(new.config)
+        .map_err(|_| AppError::Internal("serialize run settings"))?;
+    crate::runs::builtin::open(
+        transaction,
+        &crate::runs::builtin::NewBuiltinRun {
+            id: run_id,
+            project_id: new.project_id,
+            execution_worker_id: new.setup.execution_worker_id,
+            prompt: new.prompt,
+            from_request: new.external_execution_request_id.is_some(),
+            conversation_id: new.conversation_id,
+            requested_by: new.requested_by,
+            sponsored_by: new.sponsored_by,
+            predecessor_run_id: new.predecessor_run_id,
+            settings: &settings,
+        },
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -165,10 +185,7 @@ pub(crate) async fn create(
     .bind(new.prompt)
     .bind(&new.authorization)
     .bind(new.prompt_message_id)
-    .bind(
-        serde_json::to_value(new.config)
-            .map_err(|_| AppError::Internal("serialize run settings"))?,
-    )
+    .bind(&settings)
     .bind(new.made_through_app)
     .execute(&mut **transaction)
     .await?;
@@ -193,6 +210,22 @@ pub(crate) async fn create(
     })
 }
 
+/// Lock a built-in run for a change, returning its state. Take it before
+/// anything else about the run: every write to it (a claim, a step, a state)
+/// locks this row first and its `runs` record second, so taking them the
+/// other way round deadlocks.
+pub async fn lock(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<Option<RunState>, AppError> {
+    sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
+        .bind(run_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .map(|state| state.parse::<RunState>())
+        .transpose()
+}
+
 /// Move a built-in run to `next`, writing its state-change step. Refuses a
 /// move the built-in state machine doesn't allow; a move to where it already
 /// is changes nothing.
@@ -202,13 +235,9 @@ pub async fn transition(
     next: RunState,
     reason: Option<&str>,
 ) -> Result<RunState, AppError> {
-    let current =
-        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
-            .bind(run_id)
-            .fetch_optional(&mut **transaction)
-            .await?
-            .ok_or(AppError::NotFound("agent_run"))?
-            .parse::<RunState>()?;
+    let current = lock(transaction, run_id)
+        .await?
+        .ok_or(AppError::NotFound("agent_run"))?;
 
     if current == next {
         return Ok(current);
@@ -218,7 +247,14 @@ pub async fn transition(
     }
 
     let terminal = next.is_terminal();
-    sqlx::query(
+    let (failure_reason, started_at, finished_at) = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         r#"
         UPDATE agent_runs
            SET state = $2,
@@ -230,97 +266,49 @@ pub async fn transition(
                finished_at = CASE WHEN $4 THEN now() ELSE finished_at END,
                updated_at = now()
          WHERE id = $1
+        RETURNING failure_reason, started_at, finished_at
         "#,
     )
     .bind(run_id)
     .bind(next.to_string())
     .bind(reason)
     .bind(terminal)
-    .execute(&mut **transaction)
+    .fetch_one(&mut **transaction)
+    .await?;
+    crate::runs::builtin::moved(
+        transaction,
+        run_id,
+        crate::runs::builtin::Moved {
+            state: next,
+            failure_reason: failure_reason.as_deref(),
+            started_at,
+            finished_at,
+        },
+    )
     .await?;
 
-    let event_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (
-            id, agent_run_id, event_key, kind, summary, payload
-        )
-        VALUES ($1, $2, $3, 'run_state_changed', $4, $5)
-        "#,
+    crate::runs::steps::record_new(
+        transaction,
+        run_id,
+        "run_state_changed",
+        &format!("Run moved from {current} to {next}."),
+        serde_json::json!({
+            "from": current,
+            "to": next,
+            "reason": reason,
+        }),
     )
-    .bind(event_id)
-    .bind(run_id)
-    .bind(format!("state:{next}:{event_id}"))
-    .bind(format!("Run moved from {current} to {next}."))
-    .bind(serde_json::json!({
-        "from": current,
-        "to": next,
-        "reason": reason,
-    }))
-    .execute(&mut **transaction)
     .await?;
 
     if terminal {
+        // Its driver, wherever it runs, hears at once that it should stop.
+        sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
+            .execute(&mut **transaction)
+            .await?;
+        // What it still asked for is withdrawn (A1.14).
+        crate::requests::withdraw_for_run(transaction, run_id).await?;
         crate::runs::finished::announce(transaction, run_id).await?;
-        notify_sponsoring_agents(transaction, run_id, next).await?;
     }
 
     Ok(next)
-}
-
-/// An outside agent that asked for this sponsored run hears that it ended
-/// (`agent_run.terminal`, the event its connection already reads).
-async fn notify_sponsoring_agents(
-    transaction: &mut Transaction<'_, Postgres>,
-    run_id: Uuid,
-    state: RunState,
-) -> Result<(), AppError> {
-    let available =
-        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
-            .fetch_one(&mut **transaction)
-            .await?;
-    if !available {
-        return Ok(());
-    }
-    let recipients = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
-        r#"
-        SELECT connection.id, conversation.project_id, run.conversation_id
-        FROM agent_runs run
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        JOIN actors actor ON actor.id = run.requesting_actor_id
-         AND actor.kind = 'external_agent'
-        JOIN external_agent_connections connection
-          ON connection.project_id = conversation.project_id
-         AND connection.actor_id = run.requesting_actor_id
-         AND connection.status = 'active'
-        JOIN project_memberships membership
-          ON membership.project_id = connection.project_id
-         AND membership.actor_id = connection.actor_id
-         AND membership.enabled
-        WHERE run.id = $1 AND actor.status = 'active'
-        ORDER BY connection.id
-        FOR SHARE OF connection, actor, membership
-        "#,
-    )
-    .bind(run_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for (connection_id, project_id, conversation_id) in recipients {
-        crate::external_events::enqueue_external_event(
-            transaction,
-            connection_id,
-            project_id,
-            "agent_run.terminal",
-            &format!("Sponsored Worker run reached {state}"),
-            "agent_run",
-            run_id,
-            &crate::addresses::Target::space(
-                project_id,
-                crate::addresses::Place::Thread(conversation_id),
-            )
-            .legacy_path(),
-        )
-        .await?;
-    }
-    Ok(())
 }

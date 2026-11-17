@@ -1,0 +1,14 @@
+{
+  "secret": "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+  "headers": {
+    "content-type": "application/json",
+    "x-workspace-delivery": "evt_01a2b3c4-0000-7000-8000-0000000000e1",
+    "x-workspace-event": "message.mentioned",
+    "x-workspace-timestamp": "1794909600",
+    "x-workspace-signature": "sha256=7250f2c2607af341b389149c1c3f8408f79950c238406ecc1a2383d1de37964d",
+    "webhook-id": "evt_01a2b3c4-0000-7000-8000-0000000000e1",
+    "webhook-timestamp": "1794909600",
+    "webhook-signature": "v1,LprE4cxZI09IPPXtX4zDRcByq9MONMnm9dcYkNgbwfY="
+  },
+  "body": "{\"type\":\"message.mentioned\",\"timestamp\":\"2026-11-17T10:00:00.000Z\",\"id\":\"evt_01a2b3c4-0000-7000-8000-0000000000e1\",\"cursor\":\"c1.AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAq.example\",\"workspace\":{\"id\":\"01a2b3c4-0000-7000-8000-0000000000d1\",\"slug\":\"example\"},\"recipient\":{\"accountId\":\"01a2b3c4-0000-7000-8000-0000000000a1\"},\"reason\":\"mentioned\",\"actor\":{\"accountId\":\"01a2b3c4-0000-7000-8000-0000000000b1\",\"kind\":\"person\"},\"requestedBy\":null,\"data\":{\"conversationId\":\"01a2b3c4-0000-7000-8000-000000000002\",\"messageId\":\"01a2b3c4-0000-7000-8000-000000000003\",\"thing\":{\"kind\":\"message\",\"id\":\"01a2b3c4-0000-7000-8000-000000000003\"},\"spaceId\":\"01a2b3c4-0000-7000-8000-000000000001\"}}"
+}

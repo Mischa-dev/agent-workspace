@@ -198,6 +198,7 @@ async fn reserve_change<I: Serialize>(
     let Some(key) = given_key(call) else {
         return Ok(Keyed::Reserved(None));
     };
+    call.key_honoured();
     let account = call.account_id();
     let scope = crate::idempotency::resource_bound_scope("runs", run_id, action)?;
     let hash = RequestHash::for_value(input).map_err(|_| OpError::Unavailable)?;
@@ -345,7 +346,7 @@ impl Targeted for RunCreateInput {
     }
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunCreateOutput {
     pub run: RunRecord,
@@ -387,6 +388,28 @@ impl Operation for RunCreate {
             Some(reference) => Some(task_in_space(call, space, reference).await?),
             None => None,
         };
+        // A retry is the same run when the caller names it (clientRunId),
+        // or else when they sent a request id, which is held here: the
+        // dispatcher leaves `Command` operations' ids to them.
+        let mut reservation = None;
+        if input.client_run_id.is_some() {
+            call.key_honoured();
+        } else if let Some(key) = given_key(call) {
+            call.key_honoured();
+            let account = call.account_id();
+            let scope = crate::idempotency::resource_bound_scope("runs", space, "create")?;
+            let hash = RequestHash::for_value(&input).map_err(|_| OpError::Unavailable)?;
+            let tx = call.tx().await?;
+            match reserve(tx, account, &scope, &key, hash).await? {
+                IdempotencyOutcome::Replay(replay) => {
+                    let mut value = replay.decode::<RunCreateOutput>()?;
+                    value.created = false;
+                    call.mark_replayed(true);
+                    return Ok(value);
+                }
+                IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),
+            }
+        }
         let reporter = reporter(call);
         let tx = call.tx().await?;
         let opened = ops::open(
@@ -419,10 +442,15 @@ impl Operation for RunCreate {
             json!({ "causeKind": opened.run.cause_kind, "created": opened.created }),
         );
         call.mark_replayed(!opened.created);
-        Ok(RunCreateOutput {
+        let output = RunCreateOutput {
             run: RunRecord::from(&opened.run),
             created: opened.created,
-        })
+        };
+        if let Some(reservation) = reservation {
+            let tx = call.tx().await?;
+            complete(tx, &reservation, axum::http::StatusCode::OK, &output).await?;
+        }
+        Ok(output)
     }
 }
 
@@ -660,6 +688,8 @@ impl Operation for RunActivityReport {
                     .and_then(|payload| payload.get("request"))
                     .is_some_and(serde_json::Value::is_object)
         });
+        // Each activity's id is kept once, so a retried batch adds nothing.
+        call.key_honoured();
         let mut batch = Vec::with_capacity(input.activities.len());
         for activity in input.activities {
             let occurred_at = match activity.at.as_deref() {
@@ -858,6 +888,8 @@ impl Operation for RunUsageReport {
             recorded.report_id,
             json!({ "duplicate": recorded.duplicate }),
         );
+        // Each reportKey is recorded once.
+        call.key_honoured();
         call.mark_replayed(recorded.duplicate);
         Ok(RunUsageReportOutput {
             report_id: recorded.report_id.to_string(),
@@ -957,6 +989,8 @@ impl Operation for RunResultReport {
         let reporter = reporter(call);
         let tx = call.tx().await?;
         let (run, added) = ops::add_results(tx, reporter, run_id, results).await?;
+        // Each result is kept once by its kind and reference.
+        call.key_honoured();
         call.audit_target("run", run.id, json!({ "added": added }));
         Ok(RunResultOutput {
             added,
@@ -1010,6 +1044,9 @@ impl Operation for RunCancel {
         };
         if builtin {
             // A run on the built-in host stops the way its Stop button does.
+            if given_key(call).is_some() {
+                call.key_honoured();
+            }
             let key = given_key(call)
                 .map(Ok)
                 .unwrap_or_else(|| IdempotencyKey::parse(&Uuid::now_v7().to_string()))
@@ -1021,7 +1058,8 @@ impl Operation for RunCancel {
                 via_grant_id: call.ctx.caller.via_grant_id,
                 audit: actor.audit,
             };
-            crate::api::interrupt_run_in(call.state, &caller, run_id, Ok(key)).await?;
+            crate::hosts::builtin::http::interrupt_run_in(call.state, &caller, run_id, Ok(key))
+                .await?;
             let run = store::get(&call.state.pool, run_id)
                 .await?
                 .ok_or(OpError::not_found(RUN))?;

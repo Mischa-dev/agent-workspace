@@ -37,24 +37,20 @@ const KIND_RULES: &[&str] = &[
 /// P0.32 rewrites the vendor names (K2.1's soft need); K1's slices replace
 /// the kind rules the descriptions report.
 const KNOWN: &[(&str, &[&str])] = &[
-    ("agent_list", &["codex"]),                   // P0.32
-    ("approval_get", &["codex"]),                 // P0.32
-    ("approval_list", &["codex", "people only"]), // P0.32, K1.13
-    ("approval_respond", &["codex"]),             // P0.32
-    ("conversation_continue", &["people only"]),  // K1.13
-    ("conversation_update", &["codex"]),          // P0.32
-    ("environment_list", &["codex"]),             // P0.32
-    ("project_archive", &["codex"]),              // P0.32
-    ("project_create", &["people only"]),         // K1.13
-    ("repository_list", &["codex"]),              // P0.32
-    ("run_get", &["codex"]),                      // P0.32
-    ("run_list", &["codex"]),                     // P0.32
-    ("run_request", &["codex"]),                  // P0.32
-    ("run_start", &["codex"]),                    // P0.32
-    ("session_bind", &["codex", "claude"]),       // P0.32
-    ("settings_set", &["agents only"]),           // K1.13
-    ("task_link", &["codex"]),                    // P0.32
-    ("workspace_update", &["agents can't"]),      // K1.13
+    ("agent_list", &["codex"]),              // P0.32
+    ("conversation_update", &["codex"]),     // P0.32
+    ("environment_list", &["codex"]),        // P0.32
+    ("project_archive", &["codex"]),         // P0.32
+    ("project_create", &["people only"]),    // K1.13
+    ("repository_list", &["codex"]),         // P0.32
+    ("run_get", &["codex"]),                 // P0.32
+    ("run_list", &["codex"]),                // P0.32
+    ("run_request", &["codex"]),             // P0.32
+    ("run_start", &["codex"]),               // P0.32
+    ("session_bind", &["codex", "claude"]),  // P0.32
+    ("settings_set", &["agents only"]),      // K1.13
+    ("task_link", &["codex"]),               // P0.32
+    ("workspace_update", &["agents can't"]), // K1.13
 ];
 
 /// The rule's words found in one description, lower-cased.

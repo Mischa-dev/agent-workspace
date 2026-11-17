@@ -47,7 +47,11 @@ async fn archived_facts_and_cold_page_versions_still_answer() {
         json!({"projectId": world.project("WORK"), "title": "Paint", "clientRequestId": "k3-25-task"}),
     )
     .await;
-    let task = created["workItemId"].as_str().expect("task").to_owned();
+    let task = created["workItemId"]
+        .as_str()
+        .or_else(|| created["value"]["workItemId"].as_str())
+        .unwrap_or_else(|| panic!("task in {created}"))
+        .to_owned();
     for (version, title) in [(1, "Paint the gate"), (2, "Paint the hall")] {
         call(
             "task_update",

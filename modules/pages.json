@@ -14,6 +14,7 @@
     "page_get": "describe",
     "page_blocks": "describe",
     "page_write": "change",
+    "page_template_list": "query",
     "page_edit": "change",
     "page_comments": "query",
     "page_comment": "create",

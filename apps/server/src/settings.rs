@@ -287,6 +287,24 @@ pub const REGISTRY: &[SettingDef] = &[
         default: "false",
     },
     SettingDef {
+        key: "replies.max_chain_depth",
+        label: "Deepest reply chain",
+        description: "How many replies in a row may ask someone else to reply before the conversation waits for a fresh message or Continue. Stops two agents from answering each other forever.",
+        kind: SettingType::Integer { min: 0, max: 50 },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "5",
+    },
+    SettingDef {
+        key: "replies.turn_allowance",
+        label: "Replies before Continue",
+        description: "How many replies a conversation takes after a fresh message before someone has to say Continue.",
+        kind: SettingType::Integer { min: 0, max: 200 },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "6",
+    },
+    SettingDef {
         key: "messages.link_previews",
         label: "Link previews",
         description: "Show the title, description and picture of web pages linked in new messages.",
@@ -713,6 +731,39 @@ pub async fn resolve(
 }
 
 /// Most specific first.
+/// One whole-number setting as it applies in a space: the space's value,
+/// else the workspace's, else the default. For hot paths that need one
+/// team setting and no person's (such as the reply rules, A2.8).
+pub async fn space_integer(
+    connection: &mut PgConnection,
+    space_id: Uuid,
+    key: &str,
+) -> Result<i64, AppError> {
+    let definition = definition(key).ok_or(AppError::Validation("setting key"))?;
+    let stored = sqlx::query_scalar::<_, Value>(
+        r#"
+        SELECT setting.value
+        FROM settings setting
+        JOIN projects space ON space.organization_id = setting.organization_id
+        WHERE space.id = $1
+          AND setting.key = $2
+          AND (setting.scope = 'workspace'
+               OR (setting.scope = 'project' AND setting.project_id = $1))
+        ORDER BY (setting.scope = 'project') DESC
+        "#,
+    )
+    .bind(space_id)
+    .bind(key)
+    .fetch_all(&mut *connection)
+    .await?;
+    Ok(stored
+        .into_iter()
+        .find(|value| definition.validate(value).is_ok())
+        .unwrap_or_else(|| definition.default_value())
+        .as_i64()
+        .unwrap_or_default())
+}
+
 fn precedence(scope: Scope) -> u8 {
     match scope {
         Scope::Project => 0,

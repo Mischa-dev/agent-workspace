@@ -23,7 +23,10 @@ const SHELL: Shortcut[] = [
   { action: 'next-conversation', keys: ['⌥', '↓'], label: 'Next item in the sidebar', group: 'Conversations' },
   { action: 'previous-unread', keys: ['⌥', '⇧', '↑'], label: 'Previous unread conversation', group: 'Conversations' },
   { action: 'next-unread', keys: ['⌥', '⇧', '↓'], label: 'Next unread conversation', group: 'Conversations' },
+  { action: 'mark-read', keys: ['Esc'], label: 'Mark this conversation read', group: 'Conversations' },
   { action: 'mark-all-read', keys: ['⇧', 'Esc'], label: 'Mark all messages read', group: 'Conversations' },
+  { action: 'all-unreads', keys: ['⌘', '⇧', 'A'], label: 'All unread', group: 'Conversations' },
+  { action: 'all-threads', keys: ['⌘', '⇧', 'T'], label: 'Threads', group: 'Conversations' },
   { action: 'go-home', keys: ['G', 'H'], label: 'Home', group: 'Go to' },
 ]
 

@@ -505,8 +505,8 @@ async fn events_arrive_with_listen_off() {
 /// A run's state and how many times it was recovered.
 async fn recovered(pool: &sqlx::PgPool, run: Uuid) -> (String, i64) {
     sqlx::query_as::<_, (String, i64)>(
-        "SELECT state, (SELECT count(*) FROM agent_run_events \
-                        WHERE agent_run_id = run.id AND kind = 'recovery') \
+        "SELECT state, (SELECT count(*) FROM run_activities \
+                        WHERE run_id = run.id AND payload->>'step' = 'recovery') \
          FROM agent_runs run WHERE id = $1",
     )
     .bind(run)
@@ -2322,7 +2322,7 @@ async fn ticks_drive_work_with_the_loop_off() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(job_state().await, "queued");
     assert_eq!(sent().await, "scheduled");
-    assert_eq!(behind().await, 2, "both consumers wait");
+    assert_eq!(behind().await, 3, "every consumer waits");
 
     let tick = |token: Option<&str>| {
         let mut request = axum::http::Request::builder()

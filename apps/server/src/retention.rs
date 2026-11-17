@@ -33,64 +33,72 @@ pub struct WorktreeRetentionResult {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExternalEventRetentionResult {
+pub struct DeliveryRetentionResult {
     pub policy_version: u32,
     pub mode: &'static str,
     pub expired_candidates: u64,
-    pub removed_events: u64,
-    pub remaining_expired_events: u64,
+    pub removed_deliveries: u64,
+    pub remaining_expired_deliveries: u64,
 }
 
-pub async fn clean_external_events(
+/// How long a finished webhook delivery (delivered, failed or skipped) is
+/// kept for its connection's health page. Pending ones are never trimmed.
+const DELIVERY_KEEP: &str = "7 days";
+
+/// Trims finished webhook deliveries older than [`DELIVERY_KEEP`], one
+/// bounded batch per call. The events themselves stay on the log's own
+/// retention.
+pub async fn clean_deliveries(
     pool: &PgPool,
     apply: bool,
-) -> Result<ExternalEventRetentionResult, AppError> {
-    let expired_candidates = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM external_agent_events WHERE expires_at <= now()",
-    )
-    .fetch_one(crate::db::scoped(pool))
-    .await?
-    .try_into()
-    .map_err(|_| AppError::Internal("expired external event count"))?;
-    let removed_events = if apply {
-        sqlx::query(
+) -> Result<DeliveryRetentionResult, AppError> {
+    let count = format!(
+        "SELECT count(*) FROM deliveries \
+         WHERE state <> 'pending' AND created_at < now() - interval '{DELIVERY_KEEP}'"
+    );
+    let expired_candidates = sqlx::query_scalar::<_, i64>(&count)
+        .fetch_one(crate::db::scoped(pool))
+        .await?
+        .try_into()
+        .map_err(|_| AppError::Internal("expired delivery count"))?;
+    let removed_deliveries = if apply {
+        sqlx::query(&format!(
             r#"
             WITH candidates AS (
-                SELECT id
-                FROM external_agent_events
-                WHERE expires_at <= now()
-                ORDER BY expires_at, id
+                SELECT connection_id, event_position
+                FROM deliveries
+                WHERE state <> 'pending' AND created_at < now() - interval '{DELIVERY_KEEP}'
+                ORDER BY created_at
                 LIMIT 10000
                 FOR UPDATE SKIP LOCKED
             )
-            DELETE FROM external_agent_events event
+            DELETE FROM deliveries delivery
             USING candidates
-            WHERE event.id = candidates.id
-            "#,
-        )
+            WHERE delivery.connection_id = candidates.connection_id
+              AND delivery.event_position = candidates.event_position
+            "#
+        ))
         .execute(crate::db::scoped(pool))
         .await?
         .rows_affected()
     } else {
         0
     };
-    let remaining_expired_events = if apply {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM external_agent_events WHERE expires_at <= now()",
-        )
-        .fetch_one(crate::db::scoped(pool))
-        .await?
-        .try_into()
-        .map_err(|_| AppError::Internal("remaining expired external event count"))?
+    let remaining_expired_deliveries = if apply {
+        sqlx::query_scalar::<_, i64>(&count)
+            .fetch_one(crate::db::scoped(pool))
+            .await?
+            .try_into()
+            .map_err(|_| AppError::Internal("remaining expired delivery count"))?
     } else {
         expired_candidates
     };
-    Ok(ExternalEventRetentionResult {
-        policy_version: 1,
+    Ok(DeliveryRetentionResult {
+        policy_version: 2,
         mode: if apply { "apply" } else { "dry_run" },
         expired_candidates,
-        removed_events,
-        remaining_expired_events,
+        removed_deliveries,
+        remaining_expired_deliveries,
     })
 }
 
@@ -266,37 +274,34 @@ fn candidate_paths_match(data_root: &Path, candidate: &WorktreeCandidate) -> boo
 /// O3: the retention commands, run on a schedule as background jobs
 /// instead of by hand. The host commands still work for a dry run.
 pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
-    registry.register(EXTERNAL_EVENTS_JOB, |context| async move {
+    registry.register(DELIVERIES_JOB, |context| async move {
         // Each pass deletes one bounded batch; keep going until nothing
         // expired is left, so a busy server never falls behind for good.
         let started = std::time::Instant::now();
         let mut removed = 0;
         let remaining = loop {
-            let result = clean_external_events(&context.state.pool, true).await?;
-            removed += result.removed_events;
-            if result.remaining_expired_events == 0
-                || result.removed_events == 0
+            let result = clean_deliveries(&context.state.pool, true).await?;
+            removed += result.removed_deliveries;
+            if result.remaining_expired_deliveries == 0
+                || result.removed_deliveries == 0
                 || started.elapsed() > std::time::Duration::from_secs(8 * 60)
             {
-                break result.remaining_expired_events;
+                break result.remaining_expired_deliveries;
             }
         };
-        tracing::info!(removed, remaining, "trimmed expired agent events");
+        tracing::info!(removed, remaining, "trimmed finished webhook deliveries");
         if remaining > 0 {
             crate::metrics::alert(crate::metrics::Alert {
                 key: "retention_behind",
-                subject: EXTERNAL_EVENTS_JOB.to_owned(),
+                subject: DELIVERIES_JOB.to_owned(),
                 detail: format!(
-                    "Agent event retention removed {removed} rows and still has {remaining} expired rows left."
+                    "Delivery retention removed {removed} rows and still has {remaining} expired rows left."
                 ),
             });
         }
         Ok(())
     });
-    registry.every(
-        EXTERNAL_EVENTS_JOB,
-        std::time::Duration::from_secs(6 * 60 * 60),
-    );
+    registry.every(DELIVERIES_JOB, std::time::Duration::from_secs(6 * 60 * 60));
     registry.register_with_timeout(
         WORKTREES_JOB,
         std::time::Duration::from_secs(30 * 60),
@@ -373,5 +378,5 @@ pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
     Ok(changed)
 }
 
-pub const EXTERNAL_EVENTS_JOB: &str = "retention.external_events";
+pub const DELIVERIES_JOB: &str = "retention.deliveries";
 pub const WORKTREES_JOB: &str = "retention.worktrees";

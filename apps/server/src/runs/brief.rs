@@ -66,8 +66,8 @@ const SELECT: &str = r#"
            pr.pull_request_number AS pr_number, pr.html_url AS pr_url, pr.title AS pr_title,
            pr.state AS pr_state, pr.checks_state AS pr_checks, pr.review_state AS pr_review,
            CASE WHEN detail.id IS NOT NULL
-                THEN (SELECT count(*) FROM agent_approvals approval
-                      WHERE approval.agent_run_id = detail.id AND approval.status = 'pending')
+                THEN (SELECT count(*) FROM requests request
+                      WHERE request.run_id = detail.id AND request.status = 'open')
                 ELSE (SELECT count(*) FROM requests open_request
                       WHERE open_request.run_id = run.id AND open_request.status = 'open')
            END AS approvals_waiting,
@@ -222,7 +222,7 @@ fn builtin_stage(row: &BriefRow, detail: &str) -> Stage {
         }
         "blocked" if row.approvals_waiting > 0 => stage_of(
             "waiting_for_approval",
-            "The run is waiting on an approval; answer it in the thread (approval_list shows it).",
+            "The run is waiting on an approval; answer it in the thread (request_list shows it).",
             Some(60),
         ),
         "starting" | "working" | "blocked" | "recovering" => {
@@ -316,14 +316,14 @@ pub async fn failure_notice(
         r#"
         SELECT event.id, run.project_id, run.conversation_id
           FROM agent_runs run
-          JOIN agent_run_events event ON event.agent_run_id = run.id
+          JOIN run_activities event ON event.run_id = run.id
           JOIN conversation_entries entry
-            ON entry.agent_run_event_id = event.id
+            ON entry.run_activity_id = event.id
            AND entry.conversation_id = run.conversation_id
          WHERE run.id = $1
            AND run.state = 'failed'
-           AND event.kind = 'run_failed'
-         ORDER BY event.id DESC
+           AND event.payload->>'step' = 'run_failed'
+         ORDER BY event.seq DESC
          LIMIT 1
         "#,
     )

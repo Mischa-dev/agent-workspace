@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::{
     BoardChange, BoardSummary, Caller, LinkView, ListFilter, Placement, TargetKind, access,
-    edit::{self, EditError, EditOutcome},
+    edit::EditError,
     elements::{self, MAX_BATCH},
     render, scene, store,
 };
@@ -167,6 +167,8 @@ struct CreateRequest {
     project_id: Option<Uuid>,
     /// Link the new board to this task, project or page straight away.
     link: Option<LinkTarget>,
+    /// Start from a template: a template board's ID or a built-in's name.
+    from_template_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,7 +214,21 @@ async fn create_http(
         (None, None) => return Err(AppError::Validation("organizationId")),
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let id = super::create(&mut transaction, &caller, placement, &request.title).await?;
+    let id = match request.from_template_id.as_deref() {
+        Some(template) => super::templates::create_from(
+            &mut transaction,
+            &caller,
+            template,
+            placement,
+            Some(&request.title),
+        )
+        .await
+        .map_err(|error| match error {
+            EditError::App(error) => error,
+            EditError::Invalid(_) | EditError::Conflict(_) => AppError::NotFound("template"),
+        })?,
+        None => super::create(&mut transaction, &caller, placement, &request.title).await?,
+    };
     if let Some(link) = request.link {
         super::set_link(
             &mut transaction,
@@ -423,49 +439,39 @@ struct OperationsRequest {
 }
 
 /// Agents' operations over plain HTTP, for scripts and services that act as
-/// a signed-in person (the MCP tool whiteboard_edit runs the same code).
+/// a signed-in person: the operation `whiteboard_update_elements` (K2.12),
+/// so it checks, audits and answers as the agent tool does.
 async fn operations_http(
     State(state): State<AppState>,
     headers: HeaderMap,
     principal: AuthenticatedActor,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<OperationsRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let board = access(&mut transaction, &caller, id, true).await?;
-    if board.deleted {
-        return Err(AppError::Conflict(
-            "whiteboard_deleted",
-            "This board is in the trash. Restore it to draw on it.",
-        ));
+) -> Response {
+    if let Err(error) = require_authenticated_write(&state, &headers, &principal).await {
+        return error.into_response();
     }
-    let result: Result<EditOutcome, EditError> = edit::apply(
-        &mut transaction,
-        &caller,
-        id,
-        &request.operations,
-        request.expected_scene_seq,
-        request.confirm_delete.unwrap_or(false),
+    let mut input = serde_json::json!({
+        "whiteboardId": id,
+        "operations": request.operations,
+    });
+    if let Some(seq) = request.expected_scene_seq {
+        input["expectedSceneSeq"] = seq.into();
+    }
+    if let Some(confirm) = request.confirm_delete {
+        input["confirmDelete"] = confirm.into();
+    }
+    match crate::ops::web::run_for_session(
+        &state,
+        &headers,
+        &principal,
+        "whiteboard_update_elements",
+        input,
     )
-    .await;
-    match result {
-        Ok(outcome) => {
-            transaction.commit().await?;
-            Ok(Json(outcome).into_response())
-        }
-        Err(EditError::App(error)) => Err(error),
-        Err(EditError::Invalid(message)) => Ok((
-            axum::http::StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": { "code": "validation_failed", "message": message, "field": "operations" } })),
-        )
-            .into_response()),
-        Err(EditError::Conflict(message)) => Ok((
-            axum::http::StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": { "code": "conflict", "message": message } })),
-        )
-            .into_response()),
+    .await
+    {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(response) => response,
     }
 }
 

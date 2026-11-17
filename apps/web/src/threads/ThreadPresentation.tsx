@@ -6,7 +6,8 @@ import { runSettingsFrom } from '../execution/api'
 import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, formatFullDate, formatRelative, type ChipTone, type IconName } from '../ui'
 import { RUN_STATUS } from '../runs/runModel'
 import { runAgent } from './runAgent'
-import type { Approval, Run } from './threadTypes'
+import { answerKey } from './threadTimeline'
+import type { RequestAnswer, Run, ThreadRequest } from './threadTypes'
 import '../styles/conversation.css'
 
 function ordinal(position: number) {
@@ -136,7 +137,7 @@ export function RunCard({ actions, developerDetail = true, notes, run }: { actio
   )
 }
 
-/** A decision the run needs from you: allow or deny, or answer a question. */
+/** A request the run raised: allow or deny, or answer a question. */
 export function ApprovalCard({
   approval,
   busyAction,
@@ -144,16 +145,17 @@ export function ApprovalCard({
   onRespond,
   run,
 }: {
-  approval: Approval
+  approval: ThreadRequest
   /** The run asking, for its name. */
   run: Run | null
   busyAction: string | null
   canRespond: boolean
-  onRespond: (approvalId: string, response: { decision: 'approve' | 'deny' } | { answer: string }) => void
+  onRespond: (requestId: string, answer: RequestAnswer) => void
 }) {
   const [answer, setAnswer] = useState('')
-  const question = approval.kind === 'question'
+  const question = approval.kind !== 'approval'
   const agent = runAgent(run)
+  const send = (reply: RequestAnswer) => onRespond(approval.id, reply)
   return (
     <section aria-labelledby={`approval-${approval.id}`} className="aw-card aw-approval is-open">
       <header className="aw-card__head">
@@ -167,72 +169,65 @@ export function ApprovalCard({
           Needs you
         </StatusChip>
       </header>
-      <p className="aw-approval__summary">{approval.summary}</p>
-      {canRespond && question ? (
+      <p className="aw-approval__summary">{approval.title}</p>
+      {canRespond ? (
         <form
           className="aw-approval__answer-form"
           onSubmit={(event) => {
             event.preventDefault()
             const value = answer.trim()
-            if (value) onRespond(approval.id, { answer: value })
+            if (value) send({ text: value })
           }}
         >
           {approval.options.length > 0 ? (
-            <div aria-label="Suggested answers" className="aw-card__actions" role="group">
-              {/* A suggested answer is an answer: it sends straight away. */}
+            <div
+              aria-label={question ? 'Suggested answers' : 'Answers'}
+              className="aw-card__actions"
+              role="group"
+            >
+              {/* An offered answer is an answer: it sends straight away. */}
               {approval.options.map((option) => (
                 <Button
-                  busy={busyAction === `${approval.id}:answer` && answer === option.label}
+                  busy={busyAction === answerKey(approval.id, { optionId: option.id })}
                   disabled={Boolean(busyAction)}
                   key={option.id}
-                  onClick={() => {
-                    setAnswer(option.label)
-                    onRespond(approval.id, { answer: option.label })
-                  }}
-                  size="sm"
+                  onClick={() => send({ optionId: option.id })}
+                  size={question ? 'sm' : undefined}
+                  type="button"
+                  variant={(option.style ?? option.id) === 'approve' ? 'primary' : undefined}
                 >
                   {option.label}
                 </Button>
               ))}
             </div>
           ) : null}
-          <TextArea
-            disabled={Boolean(busyAction)}
-            id={`approval-answer-${approval.id}`}
-            label={approval.options.length > 0 ? 'Or write your own' : 'Your answer'}
-            maxLength={4000}
-            onChange={(event) => setAnswer(event.target.value)}
-            required
-            rows={3}
-            value={answer}
-          />
-          <div className="aw-card__actions">
-            <Button busy={busyAction === `${approval.id}:answer`} disabled={Boolean(busyAction) || !answer.trim()} type="submit" variant="primary">
-              Send answer
-            </Button>
-          </div>
+          {approval.allowText ? (
+            <>
+              <TextArea
+                disabled={Boolean(busyAction)}
+                id={`approval-answer-${approval.id}`}
+                label={approval.options.length > 0 ? 'Or write your own' : 'Your answer'}
+                maxLength={4000}
+                onChange={(event) => setAnswer(event.target.value)}
+                required
+                rows={3}
+                value={answer}
+              />
+              <div className="aw-card__actions">
+                <Button
+                  busy={busyAction === answerKey(approval.id, {})}
+                  disabled={Boolean(busyAction) || !answer.trim()}
+                  type="submit"
+                  variant="primary"
+                >
+                  Send answer
+                </Button>
+              </div>
+            </>
+          ) : null}
         </form>
       ) : null}
-      {canRespond && !question ? (
-        <footer className="aw-card__actions">
-          <Button
-            busy={busyAction === `${approval.id}:approve`}
-            disabled={Boolean(busyAction)}
-            onClick={() => onRespond(approval.id, { decision: 'approve' })}
-            variant="primary"
-          >
-            Allow once
-          </Button>
-          <Button
-            busy={busyAction === `${approval.id}:deny`}
-            disabled={Boolean(busyAction)}
-            onClick={() => onRespond(approval.id, { decision: 'deny' })}
-          >
-            Deny
-          </Button>
-        </footer>
-      ) : null}
-      {!canRespond ? <p className="aw-approval__note">Only people who can run work in this project can answer.</p> : null}
+      {!canRespond ? <p className="aw-approval__note">This waits on whoever it asks; they answer it here or from their inbox.</p> : null}
     </section>
   )
 }

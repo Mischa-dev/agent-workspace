@@ -143,6 +143,86 @@ async fn space_keys_to_ids(
             input[field] = Value::String(id.to_string());
         }
     }
+    task_keys_to_ids(state, request, input).await
+}
+
+/// A task's key (such as "AWD-12") in a field that names a task, replaced
+/// by the task's id (K2.13), the way MCP's own key resolution does for its
+/// tools: the task that has the key now, or the one a moved task went to,
+/// among spaces the caller is an enabled member of and can reach. A key two
+/// of the caller's workspaces share is never guessed; it stays for the
+/// input to refuse.
+async fn task_keys_to_ids(
+    state: &AppState,
+    request: &DispatchRequest,
+    mut input: Value,
+) -> Result<Value, OpError> {
+    for field in ["taskId", "workItemId", "parentId", "parentWorkItemId"] {
+        let Some((space_key, number)) = input
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(crate::mcp::split_task_key)
+            .map(|(key, number)| (key.to_owned(), number))
+        else {
+            continue;
+        };
+        let caller = &request.caller;
+        let workspace = request.workspace;
+        let found = crate::db::scoped_one(&state.pool, async |connection| {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+            SELECT found.id FROM (
+                SELECT item.id, 0 AS preference, item.project_id
+                FROM task_rows item
+                JOIN projects project ON project.id = item.project_id
+                WHERE upper(project.project_key) = upper($3) AND item.number = $4
+                  AND project.archived_at IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM work_item_key_aliases moved
+                      WHERE moved.source_work_item_id = item.id
+                  )
+                UNION ALL
+                SELECT alias.work_item_id, 1, item.project_id
+                FROM work_item_key_aliases alias
+                JOIN task_rows item ON item.id = alias.work_item_id
+                WHERE upper(alias.project_key) = upper($3) AND alias.number = $4
+            ) found
+            JOIN projects project ON project.id = found.project_id
+            JOIN project_memberships membership
+              ON membership.project_id = found.project_id
+             AND membership.actor_id = $1
+             AND membership.enabled
+            WHERE actor_can_access_project($1, $2, found.project_id)
+              AND ($5::uuid IS NULL OR found.project_id = $5)
+              AND ($6::uuid IS NULL OR project.organization_id = $6)
+            GROUP BY found.id
+            ORDER BY min(found.preference)
+            LIMIT 2
+            "#,
+            )
+            .bind(caller.account_id)
+            .bind(caller.connection_id)
+            .bind(&space_key)
+            .bind(number)
+            .bind(caller.confined_space)
+            .bind(workspace)
+            .fetch_all(connection)
+            .await
+        })
+        .await
+        .map_err(|error: sqlx::Error| OpError::logged("task key", &error.into()))?;
+        match found.as_slice() {
+            [id] => input[field] = Value::String(id.to_string()),
+            [] => return Err(OpError::not_found("That task")),
+            _ => {
+                return Err(OpError::invalid(
+                    "taskId",
+                    "That key names tasks in more than one of your workspaces. Use the task's \
+                     id or link.",
+                ));
+            }
+        }
+    }
     Ok(input)
 }
 
@@ -251,9 +331,10 @@ async fn pipeline<O: Operation>(
         request.workspace,
     )
     .await?;
+    let module = module_here::<O>(&mut connection, &located).await?;
     let need = crate::access::Need::maybe(O::PERMISSION)
         .writing(writes)
-        .in_module(O::MODULE);
+        .in_module(module);
     let _grant = crate::access::check(
         &mut connection,
         &request.caller,
@@ -298,6 +379,9 @@ async fn pipeline<O: Operation>(
         tx: None,
         audit: None,
         replayed: false,
+        start_queued_runs: false,
+        keyed: false,
+        audited: false,
     };
     let mut reservation = None;
     if let Some(key) = key.as_ref()
@@ -333,7 +417,12 @@ async fn pipeline<O: Operation>(
         request_id: ctx.request_id.clone(),
         replayed: call.replayed,
         // A write without a request id ran once; a retry would run again.
-        replay_safe: writes.then_some(ctx.request_id.is_some()),
+        // A command that keeps its own idempotency is retry-safe only when
+        // it says it deduplicated this call.
+        replay_safe: writes.then_some(match O::IDEMPOTENCY {
+            Idempotency::Dispatcher => ctx.request_id.is_some(),
+            Idempotency::Command | Idempotency::None => call.keyed,
+        }),
         preview: request.preview,
     }
     .to_json();
@@ -355,6 +444,7 @@ async fn pipeline<O: Operation>(
     }
     if writes {
         let audit = call.audit.take();
+        let audited = call.audited;
         let tx = call.tx().await?;
         let (kind, id, metadata) = match audit {
             Some(facts) => (facts.kind, facts.id, facts.metadata),
@@ -363,15 +453,33 @@ async fn pipeline<O: Operation>(
                 (kind, id, serde_json::json!({}))
             }
         };
-        audit_row(tx, &ctx, kind, id, metadata).await?;
+        if !audited {
+            audit_row(tx, &ctx, kind, id, metadata).await?;
+        }
         if let Some(reservation) = reservation.as_ref() {
-            idempotency::complete(tx, reservation, answer.status, &answer.body).await?;
+            // A secret shown once is never kept for a replay (it would sit
+            // in plain text beside the request id).
+            let mut stored = answer.body.clone();
+            if let Some(value) = stored
+                .get_mut("value")
+                .and_then(|value| value.as_object_mut())
+            {
+                for field in O::SHOWN_ONCE {
+                    if value.contains_key(*field) {
+                        value.insert((*field).to_owned(), serde_json::Value::Null);
+                    }
+                }
+            }
+            idempotency::complete(tx, reservation, answer.status, &stored).await?;
         }
     }
     if let Some(tx) = call.tx.take() {
         tx.commit()
             .await
             .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+    }
+    if call.start_queued_runs {
+        crate::scheduler::kick(state.clone());
     }
     Ok(answer)
 }
@@ -394,6 +502,27 @@ async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid])
         )
         .into(),
     }
+}
+
+/// The module that must be on where an operation acts: its own, except
+/// that a conversation's follows the space it is in (registered as
+/// conversation filters: Messages in the direct space, Channels in a
+/// project), as the older tools decide.
+async fn module_here<O: Operation>(
+    connection: &mut sqlx::PgConnection,
+    located: &target::Located,
+) -> Result<&'static str, OpError> {
+    let registry = crate::modules::registry::Registry::global();
+    let Some(space) = located.space_id else {
+        return Ok(O::MODULE);
+    };
+    if !registry.governs_conversations(O::MODULE) {
+        return Ok(O::MODULE);
+    }
+    let direct = crate::spaces::kind::holds_messages(connection, space)
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+    Ok(registry.conversation_module(direct).unwrap_or(O::MODULE))
 }
 
 /// What `access` is asked about for a located target.

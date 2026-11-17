@@ -63,35 +63,52 @@ impl Channel {
 #[serde(rename_all = "snake_case")]
 pub enum Group {
     Mentions,
+    /// A message in a DM or group you're in (C2.5).
+    DirectMessages,
+    /// A reply in a thread you follow (C2.5).
+    Threads,
     Approvals,
     Runs,
     Tasks,
     PullRequests,
     Usage,
     Reminders,
+    /// Agents and apps you manage, and their budgets (A2's kinds).
+    Agents,
+    /// Things you follow changing (A2's follows).
+    Following,
     Other,
 }
 
 impl Group {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 12] = [
         Self::Mentions,
+        Self::DirectMessages,
+        Self::Threads,
         Self::Approvals,
         Self::Runs,
         Self::Tasks,
         Self::PullRequests,
         Self::Usage,
         Self::Reminders,
+        Self::Agents,
+        Self::Following,
         Self::Other,
     ];
 
     pub fn of(kind: &str) -> Self {
         match kind {
-            kind::MENTION | kind::COMMENT_MENTION | kind::CONVERSATION_MESSAGE => Self::Mentions,
+            kind::MENTION | kind::COMMENT_MENTION | kind::CONVERSATION_MESSAGE | kind::KEYWORD => {
+                Self::Mentions
+            }
+            kind::DIRECT_MESSAGE => Self::DirectMessages,
+            kind::THREAD_REPLY => Self::Threads,
+            kind::CONNECTION_PROBLEM | kind::AGENT_UNRESPONSIVE | kind::BUDGET_WARNING => {
+                Self::Agents
+            }
+            kind::THING_UPDATE => Self::Following,
             kind::REMINDER | kind::SCHEDULED_SEND_FAILED => Self::Reminders,
-            kind::APPROVAL_REQUESTED
-            | kind::RUN_WAITING
-            | kind::REQUEST_RAISED
-            | kind::REQUEST_ANSWERED => Self::Approvals,
+            kind::RUN_WAITING | kind::REQUEST_RAISED | kind::REQUEST_ANSWERED => Self::Approvals,
             kind::RUN_COMPLETED | kind::RUN_FAILED => Self::Runs,
             kind::ASSIGNED | kind::TASK_CHANGED => Self::Tasks,
             kind::CHECKS_FAILED | kind::REVIEW_REQUESTED => Self::PullRequests,
@@ -103,12 +120,16 @@ impl Group {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Mentions => "mentions",
+            Self::DirectMessages => "direct_messages",
+            Self::Threads => "threads",
             Self::Approvals => "approvals",
             Self::Runs => "runs",
             Self::Tasks => "tasks",
             Self::PullRequests => "pull_requests",
             Self::Usage => "usage",
             Self::Reminders => "reminders",
+            Self::Agents => "agents",
+            Self::Following => "following",
             Self::Other => "other",
         }
     }
@@ -120,12 +141,16 @@ impl Group {
     fn label(self) -> &'static str {
         match self {
             Self::Mentions => "Mentions",
+            Self::DirectMessages => "Direct messages",
+            Self::Threads => "Replies in threads you follow",
             Self::Approvals => "Approvals and questions",
             Self::Runs => "Runs finishing or stopping",
             Self::Tasks => "Tasks assigned or changed",
             Self::PullRequests => "Pull request checks and reviews",
             Self::Usage => "Capacity alerts",
             Self::Reminders => "Reminders and scheduled messages",
+            Self::Agents => "Agents and apps you manage",
+            Self::Following => "Things you follow",
             Self::Other => "Everything else",
         }
     }
@@ -134,9 +159,16 @@ impl Group {
     pub fn default_for(self, channel: Channel) -> bool {
         match channel {
             Channel::InApp => true,
+            // DMs push; thread replies and things you follow don't (C2 Q1, Q2).
             Channel::Push => matches!(
                 self,
-                Self::Mentions | Self::Approvals | Self::Runs | Self::Usage | Self::Reminders
+                Self::Mentions
+                    | Self::DirectMessages
+                    | Self::Approvals
+                    | Self::Runs
+                    | Self::Usage
+                    | Self::Reminders
+                    | Self::Agents
             ),
             Channel::Email => false,
         }
@@ -289,7 +321,15 @@ pub async fn conversation_still_notifies(
     use crate::notifications::kind;
     let kind = notification.kind.as_str();
     if notification.subject.kind != "conversation"
-        || !matches!(kind, kind::MENTION | kind::CONVERSATION_MESSAGE)
+        || !matches!(
+            kind,
+            kind::MENTION
+                | kind::CONVERSATION_MESSAGE
+                | kind::THREAD_REPLY
+                | kind::DIRECT_MESSAGE
+                | kind::KEYWORD
+                | kind::THING_COMMENT
+        )
     {
         return Ok(true);
     }
@@ -299,7 +339,11 @@ pub async fn conversation_still_notifies(
         .fetch_one(&mut *connection)
         .await?;
     Ok(match kind {
-        kind::CONVERSATION_MESSAGE => level == "all",
+        // Choosing mentions on a thread unfollows it.
+        kind::CONVERSATION_MESSAGE | kind::THREAD_REPLY => level == "all",
+        // Mentions, DMs, keywords and comments
+        // on things you follow reach you unless the conversation is muted
+        // since.
         _ => level != "nothing",
     })
 }
@@ -672,10 +716,11 @@ pub async fn set_conversation_level(
         Some(level) => {
             sqlx::query(
                 r#"
-                INSERT INTO conversation_notification_levels (actor_id, conversation_id, project_id, level)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO conversation_notification_levels
+                    (actor_id, conversation_id, project_id, level, source)
+                VALUES ($1, $2, $3, $4, 'chosen')
                 ON CONFLICT (actor_id, conversation_id)
-                DO UPDATE SET level = EXCLUDED.level, updated_at = now()
+                DO UPDATE SET level = EXCLUDED.level, source = 'chosen', updated_at = now()
                 "#,
             )
             .bind(actor_id)
@@ -696,6 +741,35 @@ pub async fn set_conversation_level(
         }
     }
     conversation_level(pool, actor_id, conversation_id).await
+}
+
+/// Follows a thread for each of `actors` (C2.5): they start it, post in it,
+/// are mentioned in it, or it opens from their message. Written as `auto`
+/// and never over a level someone chose, so "mentions" (unfollow) stays.
+pub(crate) async fn follow_automatically(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    project_id: Uuid,
+    thread_id: Uuid,
+    actors: &[Uuid],
+) -> Result<(), AppError> {
+    if actors.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_notification_levels
+            (actor_id, conversation_id, project_id, level, source)
+        SELECT DISTINCT actor_id, $2, $3, 'all', 'auto'
+        FROM unnest($1::uuid[]) AS actor_id
+        ON CONFLICT (actor_id, conversation_id) DO NOTHING
+        "#,
+    )
+    .bind(actors)
+    .bind(thread_id)
+    .bind(project_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -852,6 +926,15 @@ mod tests {
     fn every_kind_has_a_group_and_defaults_keep_the_inbox() {
         assert_eq!(Group::of(kind::MENTION), Group::Mentions);
         assert_eq!(Group::of(kind::RUN_FAILED), Group::Runs);
+        assert_eq!(Group::of(kind::DIRECT_MESSAGE), Group::DirectMessages);
+        assert_eq!(Group::of(kind::THREAD_REPLY), Group::Threads);
+        assert_eq!(Group::of(kind::CONNECTION_PROBLEM), Group::Agents);
+        assert_eq!(Group::of(kind::AGENT_UNRESPONSIVE), Group::Agents);
+        assert_eq!(Group::of(kind::BUDGET_WARNING), Group::Agents);
+        assert_eq!(Group::of(kind::THING_UPDATE), Group::Following);
+        assert!(Group::DirectMessages.default_for(Channel::Push));
+        assert!(!Group::Threads.default_for(Channel::Push));
+        assert!(!Group::Following.default_for(Channel::Push));
         assert_eq!(Group::of("capacity_reset_soon"), Group::Usage);
         assert_eq!(Group::of("something_new"), Group::Other);
         for group in Group::ALL {

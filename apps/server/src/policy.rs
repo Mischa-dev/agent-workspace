@@ -47,7 +47,6 @@ pub enum Action {
     NavigationWrite,
     WorkerInvoke,
     RunInterrupt,
-    ApprovalRespond,
     /// Open runs for yourself and report on them (A1): any account, for its
     /// own work.
     RunReport,
@@ -58,6 +57,9 @@ pub enum Action {
     /// Remove anyone's message (owners and admins; people only, checked by
     /// the caller).
     MessageModerate,
+    /// Continue, stop or retry the replies accounts were asked for in a
+    /// conversation (A2.8), whatever kind of account asks.
+    ReplySteer,
     ThreadCreate,
     ConversationArchive,
     ReadStateUpdate,
@@ -116,12 +118,12 @@ impl Action {
         Self::NavigationWrite,
         Self::WorkerInvoke,
         Self::RunInterrupt,
-        Self::ApprovalRespond,
         Self::RunReport,
         Self::RequestRaise,
         Self::ChannelCreate,
         Self::MessageSend,
         Self::MessageModerate,
+        Self::ReplySteer,
         Self::ThreadCreate,
         Self::ConversationArchive,
         Self::ReadStateUpdate,
@@ -168,7 +170,6 @@ impl Action {
             Self::ExecutionProfileView | Self::ExecutionProfileManage => Permission::RunsAccounts,
             Self::WorkerInvoke => Permission::RunsLaunch,
             Self::RunInterrupt => Permission::RunsInterrupt,
-            Self::ApprovalRespond => Permission::RunsApprove,
             Self::RunReport => Permission::RunsReport,
             Self::RequestRaise => Permission::RequestsRaise,
             Self::ChannelCreate | Self::ConversationArchive => Permission::ChannelsCreate,
@@ -176,6 +177,7 @@ impl Action {
                 Permission::ChannelsPost
             }
             Self::MessageModerate => Permission::ChannelsModerate,
+            Self::ReplySteer => Permission::RepliesSteer,
             Self::WorkItemView => Permission::TasksView,
             Self::WorkItemCreate => Permission::TasksCreate,
             Self::WorkItemArchive => Permission::TasksDelete,
@@ -409,7 +411,6 @@ pub struct ProjectScope {
     pub thread_id: Option<Uuid>,
     pub run_id: Option<Uuid>,
     pub repository_id: Option<Uuid>,
-    pub approval_id: Option<Uuid>,
     pub work_item_id: Option<Uuid>,
 }
 
@@ -420,7 +421,6 @@ impl ProjectScope {
             thread_id: None,
             run_id: None,
             repository_id: None,
-            approval_id: None,
             work_item_id: None,
         }
     }
@@ -431,7 +431,6 @@ impl ProjectScope {
             thread_id: Some(thread_id),
             run_id: None,
             repository_id: None,
-            approval_id: None,
             work_item_id: None,
         }
     }
@@ -442,24 +441,6 @@ impl ProjectScope {
             thread_id: Some(thread_id),
             run_id: Some(run_id),
             repository_id: Some(repository_id),
-            approval_id: None,
-            work_item_id: None,
-        }
-    }
-
-    pub const fn approval(
-        project_id: Uuid,
-        thread_id: Uuid,
-        run_id: Uuid,
-        repository_id: Uuid,
-        approval_id: Uuid,
-    ) -> Self {
-        Self {
-            project_id,
-            thread_id: Some(thread_id),
-            run_id: Some(run_id),
-            repository_id: Some(repository_id),
-            approval_id: Some(approval_id),
             work_item_id: None,
         }
     }
@@ -470,7 +451,6 @@ impl ProjectScope {
             thread_id: None,
             run_id: None,
             repository_id: None,
-            approval_id: None,
             work_item_id: Some(work_item_id),
         }
     }
@@ -562,30 +542,9 @@ impl Subject {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ApprovalEligibility {
-    AnyAuthorizedMember,
-    Actor(Uuid),
-    Role(MembershipRole),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ApprovalRequirements {
-    pub requesting_actor_id: Uuid,
-    pub eligibility: ApprovalEligibility,
-    pub human_required: bool,
-    pub separation_of_duty: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Resource {
-    Organization {
-        organization_id: Uuid,
-    },
+    Organization { organization_id: Uuid },
     Project(ProjectScope),
-    Approval {
-        scope: ProjectScope,
-        requirements: ApprovalRequirements,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -598,9 +557,6 @@ pub enum DenyReason {
     RoleDenied,
     DelegatedScopeMissing,
     DelegatedScopeMismatch,
-    ApprovalEligibilityMismatch,
-    HumanRequired,
-    SeparationOfDuty,
     /// The person may, but not through an app or agent.
     AgentLimit,
 }
@@ -662,6 +618,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::ChannelCreate
             | Action::MessageSend
             | Action::MessageModerate
+            | Action::ReplySteer
             | Action::ThreadCreate
             | Action::ConversationArchive
             | Action::ReadStateUpdate
@@ -686,9 +643,6 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::SettingsManage,
             Resource::Project(scope),
         ) => MembershipScope::Project(scope.project_id),
-        (Action::ApprovalRespond, Resource::Approval { scope, .. }) => {
-            MembershipScope::Project(scope.project_id)
-        }
         _ => return Decision::Deny(DenyReason::ActionResourceMismatch),
     };
 
@@ -727,60 +681,29 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
         return Decision::Deny(DenyReason::AgentLimit);
     }
 
-    if let Resource::Approval { requirements, .. } = resource {
-        if !approval_eligibility_matches(
-            subject.actor_id,
-            membership.role(),
-            requirements.eligibility,
-        ) {
-            return Decision::Deny(DenyReason::ApprovalEligibilityMismatch);
-        }
-        if requirements.human_required && subject.actor_kind != ActorKind::Human {
-            return Decision::Deny(DenyReason::HumanRequired);
-        }
-        if requirements.separation_of_duty && requirements.requesting_actor_id == subject.actor_id {
-            return Decision::Deny(DenyReason::SeparationOfDuty);
-        }
-    }
-
     Decision::Allow
 }
 
 const fn worker_action_is_delegatable(action: Action) -> bool {
     matches!(
         action,
-        Action::ProjectView
-            | Action::NavigationRead
-            | Action::RunInterrupt
-            | Action::ApprovalRespond
+        Action::ProjectView | Action::NavigationRead | Action::RunInterrupt
     )
 }
 
 const fn project_scope(resource: Resource) -> Option<ProjectScope> {
     match resource {
-        Resource::Project(scope) | Resource::Approval { scope, .. } => Some(scope),
+        Resource::Project(scope) => Some(scope),
         Resource::Organization { .. } => None,
-    }
-}
-
-fn approval_eligibility_matches(
-    actor_id: Uuid,
-    role: MembershipRole,
-    eligibility: ApprovalEligibility,
-) -> bool {
-    match eligibility {
-        ApprovalEligibility::AnyAuthorizedMember => true,
-        ApprovalEligibility::Actor(eligible_actor_id) => actor_id == eligible_actor_id,
-        ApprovalEligibility::Role(eligible_role) => role == eligible_role,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, DelegatedScope,
-        DenyReason, Membership, MembershipRole, PERMISSIONS, Permission, PermissionScope,
-        PermissionSet, ProjectScope, Resource, RoleGrant, Subject, authorize,
+        Action, ActorKind, Decision, DelegatedScope, DenyReason, Membership, MembershipRole,
+        PERMISSIONS, Permission, PermissionScope, PermissionSet, ProjectScope, Resource, RoleGrant,
+        Subject, authorize,
     };
     use uuid::Uuid;
 
@@ -791,7 +714,6 @@ mod tests {
     const OTHER_THREAD_ID: Uuid = Uuid::from_u128(5);
     const RUN_ID: Uuid = Uuid::from_u128(6);
     const REPOSITORY_ID: Uuid = Uuid::from_u128(7);
-    const APPROVAL_ID: Uuid = Uuid::from_u128(8);
     const ACTOR_ID: Uuid = Uuid::from_u128(9);
     const OTHER_ACTOR_ID: Uuid = Uuid::from_u128(10);
 
@@ -799,28 +721,13 @@ mod tests {
         ProjectScope::run(PROJECT_ID, THREAD_ID, RUN_ID, REPOSITORY_ID)
     }
 
-    fn project_resource(action: Action, role: MembershipRole) -> Resource {
+    fn project_resource(action: Action) -> Resource {
         match action {
             Action::OrganizationProjectCreate | Action::RoleManage | Action::HostManage => {
                 Resource::Organization {
                     organization_id: ORGANIZATION_ID,
                 }
             }
-            Action::ApprovalRespond => Resource::Approval {
-                scope: ProjectScope::approval(
-                    PROJECT_ID,
-                    THREAD_ID,
-                    RUN_ID,
-                    REPOSITORY_ID,
-                    APPROVAL_ID,
-                ),
-                requirements: ApprovalRequirements {
-                    requesting_actor_id: OTHER_ACTOR_ID,
-                    eligibility: ApprovalEligibility::Role(role),
-                    human_required: false,
-                    separation_of_duty: false,
-                },
-            },
             _ => Resource::Project(project_scope()),
         }
     }
@@ -853,7 +760,7 @@ mod tests {
 
     fn worker_delegation(action: Action, resource: Resource) -> Option<DelegatedScope> {
         let scope = match resource {
-            Resource::Project(scope) | Resource::Approval { scope, .. } => scope,
+            Resource::Project(scope) => scope,
             Resource::Organization { .. } => return None,
         };
         Some(DelegatedScope::new(scope, [action]))
@@ -866,7 +773,7 @@ mod tests {
     fn exhaustive_ordinary_role_action_matrix() {
         for role in MembershipRole::ALL {
             for action in Action::ALL {
-                let resource = project_resource(action, role);
+                let resource = project_resource(action);
                 let delegation = (role == MembershipRole::Worker)
                     .then(|| worker_delegation(action, resource))
                     .flatten();
@@ -892,7 +799,6 @@ mod tests {
                             | Action::PullRequestCreate
                             | Action::PullRequestRefresh
                             | Action::RunInterrupt
-                            | Action::ApprovalRespond
                             | Action::ChannelCreate
                             | Action::MessageSend
                             | Action::ThreadCreate
@@ -915,6 +821,8 @@ mod tests {
                             // A1: every role reports its own runs.
                             | Action::RunReport
                             | Action::RequestRaise
+                            // A2.8: members steer the replies they asked for.
+                            | Action::ReplySteer
                     ),
                     MembershipRole::Viewer => {
                         matches!(
@@ -933,10 +841,7 @@ mod tests {
                     }
                     MembershipRole::Worker => matches!(
                         action,
-                        Action::ProjectView
-                            | Action::NavigationRead
-                            | Action::RunInterrupt
-                            | Action::ApprovalRespond
+                        Action::ProjectView | Action::NavigationRead | Action::RunInterrupt
                     ),
                 };
 
@@ -953,7 +858,7 @@ mod tests {
     fn only_owners_and_admins_moderate_messages() {
         let action = Action::MessageModerate;
         for role in MembershipRole::ALL {
-            let resource = project_resource(action, role);
+            let resource = project_resource(action);
             let delegation = (role == MembershipRole::Worker)
                 .then(|| worker_delegation(action, resource))
                 .flatten();
@@ -974,7 +879,7 @@ mod tests {
     fn disabled_actor_denies_every_action_before_role_or_delegation() {
         for role in MembershipRole::ALL {
             for action in Action::ALL {
-                let resource = project_resource(action, role);
+                let resource = project_resource(action);
                 let delegation = worker_delegation(action, resource);
                 let decision = authorize(
                     &subject(ActorKind::Human, action, role, false, true, delegation),
@@ -994,7 +899,7 @@ mod tests {
     fn disabled_membership_denies_every_action_before_role_or_delegation() {
         for role in MembershipRole::ALL {
             for action in Action::ALL {
-                let resource = project_resource(action, role);
+                let resource = project_resource(action);
                 let delegation = worker_delegation(action, resource);
                 let decision = authorize(
                     &subject(ActorKind::Human, action, role, true, false, delegation),
@@ -1072,7 +977,7 @@ mod tests {
             MembershipRole::Viewer,
         ] {
             for action in Action::ALL {
-                let resource = project_resource(action, role);
+                let resource = project_resource(action);
                 let human = subject(ActorKind::Human, action, role, true, true, None);
                 let external_agent =
                     subject(ActorKind::ExternalAgent, action, role, true, true, None);
@@ -1154,10 +1059,6 @@ mod tests {
                 ..delegated
             },
             ProjectScope {
-                approval_id: Some(APPROVAL_ID),
-                ..delegated
-            },
-            ProjectScope {
                 work_item_id: Some(Uuid::from_u128(13)),
                 ..delegated
             },
@@ -1183,7 +1084,7 @@ mod tests {
             Action::NavigationWrite,
             Action::WorkerInvoke,
         ] {
-            let resource = project_resource(action, MembershipRole::Worker);
+            let resource = project_resource(action);
             let delegation = worker_delegation(action, resource);
             let worker = subject(
                 ActorKind::ExecutionWorker,
@@ -1267,223 +1168,6 @@ mod tests {
                 },
             ),
             Decision::Deny(DenyReason::ActionResourceMismatch)
-        );
-        assert_eq!(
-            authorize(
-                &owner,
-                Action::ApprovalRespond,
-                Resource::Project(ProjectScope::project(PROJECT_ID)),
-            ),
-            Decision::Deny(DenyReason::ActionResourceMismatch)
-        );
-    }
-
-    fn approval_resource(
-        eligibility: ApprovalEligibility,
-        human_required: bool,
-        separation_of_duty: bool,
-        requesting_actor_id: Uuid,
-    ) -> Resource {
-        Resource::Approval {
-            scope: ProjectScope::approval(
-                PROJECT_ID,
-                THREAD_ID,
-                RUN_ID,
-                REPOSITORY_ID,
-                APPROVAL_ID,
-            ),
-            requirements: ApprovalRequirements {
-                requesting_actor_id,
-                eligibility,
-                human_required,
-                separation_of_duty,
-            },
-        }
-    }
-
-    fn approval_subject(kind: ActorKind, actor_id: Uuid, role: MembershipRole) -> Subject {
-        Subject::new(
-            actor_id,
-            kind,
-            true,
-            Some(Membership::project(
-                PROJECT_ID,
-                RoleGrant::built_in(role),
-                true,
-            )),
-            None,
-        )
-    }
-
-    #[test]
-    fn approval_must_be_addressed_to_the_actor_or_their_exact_role() {
-        let member = approval_subject(ActorKind::Human, ACTOR_ID, MembershipRole::Member);
-
-        assert!(
-            authorize(
-                &member,
-                Action::ApprovalRespond,
-                approval_resource(
-                    ApprovalEligibility::Actor(ACTOR_ID),
-                    false,
-                    false,
-                    OTHER_ACTOR_ID,
-                ),
-            )
-            .is_allowed()
-        );
-        assert!(
-            authorize(
-                &member,
-                Action::ApprovalRespond,
-                approval_resource(
-                    ApprovalEligibility::Role(MembershipRole::Member),
-                    false,
-                    false,
-                    OTHER_ACTOR_ID,
-                ),
-            )
-            .is_allowed()
-        );
-        assert_eq!(
-            authorize(
-                &member,
-                Action::ApprovalRespond,
-                approval_resource(
-                    ApprovalEligibility::Actor(OTHER_ACTOR_ID),
-                    false,
-                    false,
-                    OTHER_ACTOR_ID,
-                ),
-            ),
-            Decision::Deny(DenyReason::ApprovalEligibilityMismatch)
-        );
-        assert_eq!(
-            authorize(
-                &member,
-                Action::ApprovalRespond,
-                approval_resource(
-                    ApprovalEligibility::Role(MembershipRole::Owner),
-                    false,
-                    false,
-                    OTHER_ACTOR_ID,
-                ),
-            ),
-            Decision::Deny(DenyReason::ApprovalEligibilityMismatch)
-        );
-    }
-
-    #[test]
-    fn viewer_cannot_answer_even_when_explicitly_addressed() {
-        let viewer = approval_subject(ActorKind::Human, ACTOR_ID, MembershipRole::Viewer);
-
-        assert_eq!(
-            authorize(
-                &viewer,
-                Action::ApprovalRespond,
-                approval_resource(
-                    ApprovalEligibility::Actor(ACTOR_ID),
-                    false,
-                    false,
-                    OTHER_ACTOR_ID,
-                ),
-            ),
-            Decision::Deny(DenyReason::RoleDenied)
-        );
-    }
-
-    #[test]
-    fn human_required_approval_rejects_every_non_human_actor_kind() {
-        for actor_kind in [
-            ActorKind::ExternalAgent,
-            ActorKind::ExecutionWorker,
-            ActorKind::Integration,
-            ActorKind::System,
-        ] {
-            let subject = approval_subject(actor_kind, ACTOR_ID, MembershipRole::Member);
-
-            assert_eq!(
-                authorize(
-                    &subject,
-                    Action::ApprovalRespond,
-                    approval_resource(
-                        ApprovalEligibility::Actor(ACTOR_ID),
-                        true,
-                        false,
-                        OTHER_ACTOR_ID,
-                    ),
-                ),
-                Decision::Deny(DenyReason::HumanRequired),
-                "{actor_kind:?}"
-            );
-        }
-
-        let human = approval_subject(ActorKind::Human, ACTOR_ID, MembershipRole::Member);
-        assert!(
-            authorize(
-                &human,
-                Action::ApprovalRespond,
-                approval_resource(
-                    ApprovalEligibility::Actor(ACTOR_ID),
-                    true,
-                    false,
-                    OTHER_ACTOR_ID,
-                ),
-            )
-            .is_allowed()
-        );
-    }
-
-    #[test]
-    fn separation_of_duty_rejects_self_approval_for_every_actor_kind() {
-        for actor_kind in [
-            ActorKind::Human,
-            ActorKind::ExternalAgent,
-            ActorKind::ExecutionWorker,
-            ActorKind::Integration,
-            ActorKind::System,
-        ] {
-            let subject = approval_subject(actor_kind, ACTOR_ID, MembershipRole::Member);
-
-            assert_eq!(
-                authorize(
-                    &subject,
-                    Action::ApprovalRespond,
-                    approval_resource(ApprovalEligibility::Actor(ACTOR_ID), false, true, ACTOR_ID,),
-                ),
-                Decision::Deny(DenyReason::SeparationOfDuty),
-                "{actor_kind:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn explicitly_delegated_worker_approval_still_obeys_approval_conditions() {
-        let resource = approval_resource(
-            ApprovalEligibility::Actor(ACTOR_ID),
-            true,
-            false,
-            OTHER_ACTOR_ID,
-        );
-        let scope = match resource {
-            Resource::Approval { scope, .. } => scope,
-            _ => unreachable!("test resource is an approval"),
-        };
-        let worker = Subject::new(
-            ACTOR_ID,
-            ActorKind::ExecutionWorker,
-            true,
-            Some(Membership::project(
-                PROJECT_ID,
-                RoleGrant::built_in(MembershipRole::Worker),
-                true,
-            )),
-            Some(DelegatedScope::new(scope, [Action::ApprovalRespond])),
-        );
-
-        assert_eq!(
-            authorize(&worker, Action::ApprovalRespond, resource),
-            Decision::Deny(DenyReason::HumanRequired)
         );
     }
 
@@ -1572,7 +1256,7 @@ mod tests {
             .expect("valid in the test"),
         );
         for action in Action::ALL {
-            let resource = project_resource(action, MembershipRole::Viewer);
+            let resource = project_resource(action);
             let membership = membership_for(action, MembershipRole::Viewer, true);
             let custom = Subject::new(
                 ACTOR_ID,

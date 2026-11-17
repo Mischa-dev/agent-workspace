@@ -452,10 +452,16 @@ impl super::Consumer for Router {
 pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<usize, AppError> {
     let events = &payload.events;
     // AWD-75: with Automations off (it holds webhooks too), nothing follows
-    // the workspace's events; nor do events of a module that's off.
+    // the workspace's events; nor do events of a module that's off. A space
+    // that turns a module off narrows it for its own events (AWD-186).
     let modules = {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        crate::modules::state::workspace(&mut connection, payload.organization_id).await?
+        crate::modules::state::in_space(
+            &mut connection,
+            payload.organization_id,
+            payload.project_id,
+        )
+        .await?
     };
     if !modules.contains("automations") {
         return Ok(0);

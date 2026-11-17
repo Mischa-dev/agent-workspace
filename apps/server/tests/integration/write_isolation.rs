@@ -38,12 +38,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use agent_workspace_server::policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod};
 use agent_workspace_server::test_support::source::{
     routes as shared_routes, rust_files, server_src, strip_tests,
-};
-use agent_workspace_server::{
-    domain::allocate_conversation_sequence,
-    policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod},
 };
 use axum::{
     body::{Body, to_bytes},
@@ -81,7 +78,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/account/connected-apps/{id}/revoke",
     "PUT /api/v1/account/default-workspace",
     "POST /api/v1/account/sessions/{session_id}/revoke",
-    "POST /api/v1/agent-approvals/{id}/respond",
     "POST /api/v1/agent-runs/{id}/acknowledge-failure",
     "POST /api/v1/agent-runs/{id}/interrupt",
     "POST /api/v1/agent-runs/{id}/retry",
@@ -480,11 +476,15 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "ai_analyze",
     "ai_suggestion_decide",
     "ai_summarize",
-    "approval_respond",
     "automation_write",
     "bug_report_link_write",
     "channel_create",
+    "connection_create",
+    "connection_remove",
+    "connection_secret_rotate",
+    "connection_update",
     "conversation_continue",
+    "conversation_mark_read",
     "conversation_members",
     "conversation_start",
     "conversation_update",
@@ -517,21 +517,38 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sheet_write",
     "later_save",
     "later_update",
+    "schedule_create",
+    "schedule_update",
     "request_create",
     "request_respond",
     "request_cancel",
     "launch_cancel",
-    "mark_read",
+    "conversations_mark_read",
+    "custom_emoji_create",
+    "custom_emoji_update",
+    "comment_create",
+    "comment_thread_update",
     "message_delete",
-    "message_edit",
+    "message_draft_set",
     "message_forward",
     "message_preview_hide",
     "message_react",
     "message_schedule",
     "message_send",
+    "message_update",
     "milestone_write",
+    "module_archive",
+    "module_create",
+    "module_part_link",
+    "module_part_unlink",
+    "module_restore",
+    "module_set",
+    "module_update",
     "model_catalog_write",
+    "notification_keyword_set",
     "notification_update",
+    "package_install",
+    "package_remove",
     "page_comment",
     "page_comment_update",
     "page_edit",
@@ -574,25 +591,27 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "scheduled_message_update",
     "session_bind",
     "settings_set",
+    "status_delete",
+    "status_set",
     "task_claim",
-    "task_comment",
+    "task_archive",
+    "task_comment_create",
     "task_comment_delete",
-    "task_comment_edit",
+    "task_comment_update",
     "task_create",
     "task_create_many",
-    "task_criteria",
+    "task_criteria_update",
     "task_depend",
     "task_from_template",
     "task_import",
     "task_launch",
     "task_link",
     "task_link_pull_request",
-    "task_mark_blocked",
-    "task_mark_ready_for_review",
     "task_move",
     "task_relate",
     "task_release",
     "task_reorder",
+    "task_restore",
     "task_update",
     "task_update_many",
     "task_watch",
@@ -604,7 +623,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "webhook_write",
     "whiteboard_create",
     "whiteboard_duplicate",
-    "whiteboard_edit",
+    "whiteboard_update_elements",
     "whiteboard_link",
     "whiteboard_update",
     "whiteboard_trash_empty",
@@ -1322,7 +1341,18 @@ struct Targets {
     /// Runs the owner reports on themselves (A1.3): one to report on, one
     /// to stop, and one whose start is uncertain.
     reported_runs: [Uuid; 3],
+    /// The owner's own delivery connection, with a webhook (A2).
+    connection: Uuid,
+    /// A follow-up the owner set (A2.11).
+    schedule: Uuid,
+    /// The workspace's own emoji (C2.19).
+    custom_emoji: Uuid,
+    /// A thread in the sheet's comments (C1.3).
+    comment_thread: Uuid,
 }
+
+/// The smallest PNG header a custom emoji passes with (C2.19).
+const NET_PNG: &[u8] = b"\x89PNG\r\n\x1a\nnet";
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
     let a_side = world.marker.is_empty();
@@ -1611,6 +1641,14 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         run_threads.push(thread);
     }
     let failed_run = Uuid::now_v7();
+    let net_worker =
+        sqlx::query_scalar::<_, Uuid>("SELECT execution_worker_id FROM agent_runs WHERE id = $1")
+            .bind(world.run)
+            .fetch_one(pool)
+            .await
+            .expect("worker");
+    crate::support::builtin_run_record(pool, failed_run, run_threads[2], net_worker, "failed")
+        .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -1632,33 +1670,21 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .execute(pool)
     .await
     .expect("failed run");
-    let failed_event = Uuid::now_v7();
     let mut transaction = pool.begin().await.expect("failure transaction");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (id, agent_run_id, event_key, kind, summary, payload)
-        VALUES ($1, $2, 'net:failed', 'run_failed', 'Net failure.', '{}'::jsonb)
-        "#,
+    let failed_event = agent_workspace_server::runs::steps::record_new(
+        &mut transaction,
+        failed_run,
+        "run_failed",
+        "Net failure.",
+        serde_json::json!({}),
     )
-    .bind(failed_event)
-    .bind(failed_run)
-    .execute(&mut *transaction)
     .await
     .expect("failure event");
-    let sequence = allocate_conversation_sequence(&mut transaction, run_threads[2])
-        .await
-        .expect("failure sequence");
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (id, conversation_id, sequence, kind, agent_run_event_id)
-        VALUES ($1, $2, $3, 'worker_event', $4)
-        "#,
+    agent_workspace_server::runs::steps::show_in_thread(
+        &mut transaction,
+        run_threads[2],
+        failed_event,
     )
-    .bind(Uuid::now_v7())
-    .bind(run_threads[2])
-    .bind(sequence)
-    .bind(failed_event)
-    .execute(&mut *transaction)
     .await
     .expect("failure entry");
     transaction.commit().await.expect("commit failure");
@@ -1770,9 +1796,82 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .expect("host agent");
         }
     }
+    // The owner's delivery connection, with a webhook to sign for (A2).
+    let connection = {
+        let mut database = pool.acquire().await.expect("connection");
+        let made = agent_workspace_server::delivery::connections::default_for(&mut database, owner)
+            .await
+            .expect("delivery connection");
+        sqlx::query(
+            "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/net', \
+             webhook_format = 'standard' WHERE id = $1",
+        )
+        .bind(made.id)
+        .execute(&mut *database)
+        .await
+        .expect("webhook");
+        made.id
+    };
+    // A follow-up the owner set (A2.11).
+    let schedule = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO agent_schedules (id, workspace_id, account_id, note, next_due_at) \
+         VALUES ($1, $2, $3, 'Net follow-up', now() + interval '1 day')",
+    )
+    .bind(schedule)
+    .bind(organization)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("follow-up");
+    // C2.19: a custom emoji, to retire.
+    let custom_emoji = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id)
+        VALUES ($1, $2, 'net_emoji', 'image/png', $3, $4)
+        "#,
+    )
+    .bind(custom_emoji)
+    .bind(organization)
+    .bind(NET_PNG)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("custom emoji");
+    // C1.3: the sheet's comments and a thread in them, to resolve.
+    let (comments, comment_thread) = (Uuid::now_v7(), Uuid::now_v7());
+    for (id, kind, parent, visibility, subject) in [
+        (comments, "comments", None, "subject", Some(world.sheet)),
+        (comment_thread, "thread", Some(comments), "project", None),
+    ] {
+        sqlx::query(
+            r#"
+            INSERT INTO conversations (
+                id, project_id, kind, parent_channel_id, name, visibility, subject_kind, subject_id
+            )
+            SELECT $1, sheet.project_id, $2, $3, 'Net comments', $4,
+                   CASE WHEN $5::uuid IS NULL THEN NULL ELSE 'sheet' END, $5
+            FROM sheets sheet WHERE sheet.id = $6
+            "#,
+        )
+        .bind(id)
+        .bind(kind)
+        .bind(parent)
+        .bind(visibility)
+        .bind(subject)
+        .bind(world.sheet)
+        .execute(pool)
+        .await
+        .expect("comments");
+    }
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
+        connection,
+        schedule,
+        custom_emoji,
+        comment_thread,
         hosts,
         questions,
         reported_runs,
@@ -1954,14 +2053,10 @@ struct Spares {
     project_invitation: Uuid,
     /// An agent in the project to change, rotate and remove.
     agent_connection: Uuid,
-    /// Approvals runs are blocked on: one of the owner's runs', answered
-    /// over HTTP, and one of rook's, answered through MCP (where nobody
-    /// answers their own run's).
-    approvals: [Uuid; 2],
     /// Dismissed over HTTP and through MCP.
     suggestions: [Uuid; 2],
-    /// The owner's approval run, stopped through MCP once its approval is
-    /// answered, and a failed run in its own thread, retried after that.
+    /// The owner's run waiting on an approval, stopped through MCP (which
+    /// withdraws it), and a failed run in its own thread, retried after that.
     run_stop: Uuid,
     run_retry: Uuid,
     /// A launch queued for next year, cancelled through MCP.
@@ -2348,6 +2443,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .await
         .expect("approval thread");
         let run = Uuid::now_v7();
+        crate::support::builtin_run_record(pool, run, thread, worker, "failed").await;
         sqlx::query(
             r#"
             INSERT INTO agent_runs (
@@ -2377,35 +2473,15 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .execute(pool)
     .await
     .expect("runs blocked");
-    let mut approvals = Vec::new();
-    for (run, requester) in [(runs[0], ax.owner), (runs[1], a.rook)] {
-        let approval = Uuid::now_v7();
-        sqlx::query(
-            r#"
-            INSERT INTO agent_approvals (
-                id, agent_run_id, requesting_actor_id, provider_request_id,
-                kind, summary, options, eligible_role, human_required
-            )
-            VALUES ($1, $2, $3, $4, 'approval', 'Net approval',
-                    '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-                    'any_authorized', false)
-            "#,
-        )
-        .bind(approval)
-        .bind(run)
-        .bind(requester)
-        .bind(format!("net-{approval}"))
-        .execute(pool)
-        .await
-        .expect("approval");
-        approvals.push(approval);
+    for (index, run) in runs.iter().enumerate() {
+        crate::support::requests::approval(pool, *run, &format!("net-{index}"), "Net approval")
+            .await;
     }
 
     // Run control through MCP: a failed run to retry, in its own thread, and
     // a launch queued for next year. The run stopped through MCP is the
-    // owner's approval run, after its approval is answered over HTTP: the
-    // stop makes room under the owner's cap of five runs at once through
-    // apps for the retry, which runs after it.
+    // owner's approval run: the stop makes room under the owner's cap of
+    // five runs at once through apps for the retry, which runs after it.
     let retry_thread = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -2421,6 +2497,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await
     .expect("retry thread");
     let retry_run = Uuid::now_v7();
+    crate::support::builtin_run_record(pool, retry_run, retry_thread, worker, "failed").await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -2623,7 +2700,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         bug_link,
         project_invitation,
         agent_connection,
-        approvals: [approvals[0], approvals[1]],
         suggestions: [suggestions[0], suggestions[1]],
         run_stop: runs[0],
         run_retry: retry_run,
@@ -2758,21 +2834,21 @@ async fn reply_request(
 // The digest of B's rows
 // ---------------------------------------------------------------------------
 
-/// Every row, in any table, whose JSON form mentions one of B's IDs, by
+/// Every row, in any table, whose JSON form mentions one of `ids`, by
 /// table. A new row that points at B shows up as well as a change.
-async fn digest(pool: &PgPool, pattern: &str) -> BTreeMap<String, BTreeSet<String>> {
-    digest_ignoring(pool, pattern, &[]).await
+async fn digest(pool: &PgPool, ids: &[String]) -> BTreeMap<String, BTreeSet<String>> {
+    digest_ignoring(pool, ids, &[]).await
 }
 
 /// [`digest`], leaving out the `ignored` columns of every row (ones a read
 /// may legitimately touch, such as a credential's `last_used_at`).
 pub(super) async fn digest_ignoring(
     pool: &PgPool,
-    pattern: &str,
+    ids: &[String],
     ignored: &[&str],
 ) -> BTreeMap<String, BTreeSet<String>> {
     let tables = base_tables(pool).await;
-    digest_tables(pool, pattern, ignored, &tables).await
+    digest_tables(pool, ids, ignored, &tables).await
 }
 
 /// Every table in the schema (partitions and their parents included),
@@ -2793,26 +2869,47 @@ async fn base_tables(pool: &PgPool) -> Vec<String> {
     .expect("tables")
 }
 
-/// [`digest_ignoring`] over the named tables only.
+/// [`digest_ignoring`] over the named tables only. One statement over the
+/// tables, and each row's UUIDs compared with the IDs as a set: a regex
+/// alternating a few hundred IDs, one statement per table, made this most of
+/// the isolation tests' time.
 pub(super) async fn digest_tables(
     pool: &PgPool,
-    pattern: &str,
+    ids: &[String],
     ignored: &[&str],
     tables: &[String],
 ) -> BTreeMap<String, BTreeSet<String>> {
-    let mut rows = BTreeMap::new();
-    for table in tables {
-        let found = sqlx::query_scalar::<_, String>(&format!(
-            r#"SELECT listed.row_text FROM (SELECT (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value) listed WHERE listed.row_text ~ $1"#
-        ))
-        .bind(pattern)
-        .bind(ignored)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_else(|error| panic!("digest {table}: {error}"));
-        if !found.is_empty() {
-            rows.insert(table.clone(), found.into_iter().collect::<BTreeSet<_>>());
-        }
+    let mut rows = BTreeMap::<String, BTreeSet<String>>::new();
+    if tables.is_empty() {
+        return rows;
+    }
+    let scans = tables
+        .iter()
+        .map(|table| {
+            let name = table.replace('\'', "''");
+            format!(
+                r#"SELECT '{name}'::text AS table_name, (to_jsonb(row_value) - $2::text[])::text AS row_text FROM "{table}" row_value"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n");
+    let found = sqlx::query_as::<_, (String, String)>(&format!(
+        r#"SELECT listed.table_name, listed.row_text FROM ({scans}) listed
+        WHERE ARRAY(
+            SELECT found[1] FROM regexp_matches(
+                listed.row_text,
+                '([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})',
+                'g'
+            ) found
+        ) && $1::text[]"#
+    ))
+    .bind(ids)
+    .bind(ignored)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|error| panic!("digest: {error}"));
+    for (table, row) in found {
+        rows.entry(table).or_default().insert(row);
     }
     rows
 }
@@ -2847,7 +2944,7 @@ pub(super) async fn table_fingerprints(pool: &PgPool) -> BTreeMap<String, String
 /// return the new fingerprints.
 pub(super) async fn refresh_digest(
     pool: &PgPool,
-    pattern: &str,
+    ids: &[String],
     ignored: &[&str],
     fingerprints: &BTreeMap<String, String>,
     rows: &mut BTreeMap<String, BTreeSet<String>>,
@@ -2864,7 +2961,7 @@ pub(super) async fn refresh_digest(
                 .cloned(),
         )
         .collect::<Vec<_>>();
-    let refreshed = digest_tables(pool, pattern, ignored, &moved).await;
+    let refreshed = digest_tables(pool, ids, ignored, &moved).await;
     for table in &moved {
         rows.remove(table);
     }
@@ -2927,8 +3024,8 @@ async fn one_workspace_never_writes_to_another() {
     let bx = more_targets(app, pool, b).await;
     let sp = spares(app, pool, a, &ax).await;
     let b_ids = sweep_ids(pool, b.organization).await;
-    let pattern = b_ids.iter().cloned().collect::<Vec<_>>().join("|");
-    let before = digest(pool, &pattern).await;
+    let b_list = b_ids.iter().cloned().collect::<Vec<_>>();
+    let before = digest(pool, &b_list).await;
     eprintln!(
         "B's digest: {} rows in {} tables",
         before.values().map(BTreeSet::len).sum::<usize>(),
@@ -3003,7 +3100,7 @@ async fn one_workspace_never_writes_to_another() {
             .await;
         }
     }
-    let after_foreign = digest(pool, &pattern).await;
+    let after_foreign = digest(pool, &b_list).await;
     for change in digest_changes(&before, &after_foreign) {
         report
             .failures
@@ -3024,7 +3121,7 @@ async fn one_workspace_never_writes_to_another() {
     for case in http.iter().filter(|case| case.last) {
         own_http(&mut sender, case, &b_ids, &mut report).await;
     }
-    let after_own = digest(pool, &pattern).await;
+    let after_own = digest(pool, &b_list).await;
     for change in digest_changes(&after_foreign, &after_own) {
         report
             .failures
@@ -3093,6 +3190,7 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
         .expect("thread");
         let run = Uuid::now_v7();
         // Made failed (no admission check), then blocked, as `spares` does.
+        crate::support::builtin_run_record(pool, run, thread, worker, "failed").await;
         sqlx::query(
             r#"
             INSERT INTO agent_runs (
@@ -3120,52 +3218,39 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
         .execute(pool)
         .await
         .expect("run blocked");
-        let approval = Uuid::now_v7();
-        sqlx::query(
-            r#"
-            INSERT INTO agent_approvals (
-                id, agent_run_id, requesting_actor_id, provider_request_id,
-                kind, summary, options, eligible_role, human_required
-            )
-            VALUES ($1, $2, $3, $4, 'approval', 'Unadmitted approval',
-                    '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-                    'any_authorized', false)
-            "#,
+        let approval = crate::support::requests::approval(
+            pool,
+            run,
+            &format!("unadmitted-{index}"),
+            "Unadmitted approval",
         )
-        .bind(approval)
-        .bind(run)
-        .bind(a.rook)
-        .bind(format!("unadmitted-{approval}"))
-        .execute(pool)
-        .await
-        .expect("approval");
+        .await;
         approvals.push((approval, run));
     }
     let reason = "This run uses a provider account that isn't its requester's";
 
     // Over HTTP, as the owner.
     let (approval, run) = approvals[0];
-    let (status, body) = send(
-        app,
+    let respond = |key: &str, option: &str| {
         a.browser.request(
             "POST",
-            &format!("/api/v1/agent-approvals/{approval}/respond"),
-            Some("unadmitted-http"),
-            json!({"decision": "approve"}),
-        ),
-    )
-    .await;
+            "/api/v2/ops/request_respond",
+            Some(key),
+            json!({"requestId": approval, "optionId": option}),
+        )
+    };
+    let (status, body) = send(app, respond("unadmitted-http", "approve")).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"]["code"], "run_not_admitted", "{body}");
+    assert_eq!(body["code"], "run_not_admitted", "{body}");
     assert!(
-        body["error"]["message"]
+        body["message"]
             .as_str()
             .is_some_and(|message| message.starts_with(reason)),
         "{body}"
     );
     let (approval_status, run_state) = sqlx::query_as::<_, (String, String)>(
-        "SELECT approval.status, run.state FROM agent_approvals approval \
-         JOIN agent_runs run ON run.id = approval.agent_run_id WHERE approval.id = $1",
+        "SELECT request.status, run.state FROM requests request \
+         JOIN agent_runs run ON run.id = request.run_id WHERE request.id = $1",
     )
     .bind(approval)
     .fetch_one(pool)
@@ -3173,45 +3258,33 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
     .expect("approval after");
     assert_eq!(
         (approval_status.as_str(), run_state.as_str()),
-        ("pending", "blocked"),
+        ("open", "blocked"),
         "nothing changes when the run can't carry on ({run})"
     );
     // Denying still works: an interrupted run needs no admission.
-    let (status, body) = send(
-        app,
-        a.browser.request(
-            "POST",
-            &format!("/api/v1/agent-approvals/{approval}/respond"),
-            Some("unadmitted-http-deny"),
-            json!({"decision": "deny"}),
-        ),
-    )
-    .await;
+    let (status, body) = send(app, respond("unadmitted-http-deny", "deny")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     // Through MCP, as the owner's connected app.
     let (approval, _) = approvals[1];
     let session = initialize(app, &a.app_token).await.expect("app MCP");
-    let version = version_now(pool, "agent_approvals", approval).await;
     let (_, body) = call_tool(
         app,
         &a.app_token,
         &session,
-        "approval_respond",
+        "request_respond",
         json!({
-            "approvalId": approval,
-            "expectedVersion": version,
-            "decision": "approve",
+            "requestId": approval,
+            "optionId": "approve",
             "clientRequestId": "unadmitted-mcp",
         }),
     )
     .await;
     let result = structured(&body);
     assert_eq!(result["outcome"], "conflict", "{body}");
-    assert_eq!(result["retryCategory"], "do_not_retry", "{body}");
-    assert_eq!(result["current"]["status"], "pending", "{body}");
+    assert_eq!(result["code"], "run_not_admitted", "{body}");
     assert!(
-        result["reason"]
+        result["message"]
             .as_str()
             .is_some_and(|message| message.starts_with(reason)),
         "{body}"
@@ -3733,12 +3806,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[id(sp.session, bx.session)],
             empty(),
         ),
-        // Runs and approvals
-        path_case(
-            "POST /api/v1/agent-approvals/{id}/respond",
-            &[id(sp.approvals[0], b.approval)],
-            json_body(json!({"decision": "approve"})),
-        ),
+        // Runs
         path_case(
             "POST /api/v1/agent-runs/{id}/acknowledge-failure",
             &[id(ax.failed_run, bx.failed_run)],
@@ -6157,6 +6225,71 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
         ),
+        // A2: an account's delivery connections are its own and its
+        // managers'. B's connection and B's agent aren't A's to change.
+        mcp_case(
+            "connection_create",
+            json!({"name": "Net connection", "clientRequestId": "net-connection"}),
+            vec![json!({"account": b.agent, "name": "Net taken"})],
+        ),
+        mcp_case(
+            "connection_update",
+            json!({"connectionId": ax.connection, "name": "Net renamed"}),
+            vec![json!({"connectionId": bx.connection, "name": "Net taken"})],
+        ),
+        mcp_case(
+            "connection_secret_rotate",
+            json!({"connectionId": ax.connection}),
+            vec![json!({"connectionId": bx.connection})],
+        ),
+        mcp_case(
+            "connection_remove",
+            json!({"connectionId": ax.connection}),
+            vec![json!({"connectionId": bx.connection})],
+        ),
+        // A2.11: a follow-up is its account's, in its workspace, and about
+        // a thing the account can see there.
+        mcp_case(
+            "schedule_create",
+            json!({"inMinutes": 60, "about": a.task, "clientRequestId": "net-schedule"}),
+            vec![json!({"inMinutes": 60, "about": b.task})],
+        ),
+        mcp_case(
+            "schedule_update",
+            json!({"scheduleId": ax.schedule, "note": "Net moved"}),
+            vec![json!({"scheduleId": bx.schedule, "cancel": true})],
+        ),
+        // C2.15: an agent's status is set by those who manage it; B's agent
+        // isn't A's to set.
+        mcp_case(
+            "status_set",
+            json!({"text": "Net status", "account": a.agent}),
+            vec![json!({"text": "Net status", "account": b.agent})],
+        ),
+        mcp_case(
+            "status_delete",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
+        // C2.19: an emoji goes in the workspace called; B's can't be retired
+        // from A.
+        mcp_case(
+            "custom_emoji_create",
+            json!({"name": "net_new", "imageBase64": "iVBORw0KGgpuZXQ=", "clientRequestId": "net-emoji"}),
+            vec![json!({"workspace": b.organization, "name": "net_new", "imageBase64": "iVBORw0KGgpuZXQ=", "clientRequestId": "net-emoji-b"})],
+        ),
+        mcp_case(
+            "custom_emoji_update",
+            json!({"id": ax.custom_emoji, "retired": true}),
+            vec![json!({"id": bx.custom_emoji, "retired": true})],
+        ),
+        // C2.13: keywords are the caller's own, in the workspace called; a
+        // workspace the caller isn't in takes none.
+        mcp_case(
+            "notification_keyword_set",
+            json!({"keywords": ["net launch"]}),
+            vec![json!({"workspace": b.organization, "keywords": ["net launch"]})],
+        ),
         // H1.24: deleting a workspace, or keeping it, only ever acts on the
         // caller's own. A's own call would stop every later case here;
         // workspace_lifecycle.rs runs it.
@@ -6340,7 +6473,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         ),
         mcp_case(
-            "message_edit",
+            "message_update",
             json!({"messageId": a.message, "text": "Launch message, edited again"}),
             vec![json!({"messageId": b.message, "text": "Net edit"})],
         ),
@@ -6366,9 +6499,34 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"conversationId": b.group})],
         ),
         mcp_case(
-            "mark_read",
+            "conversation_mark_read",
             json!({"conversationId": a.channel}),
             vec![json!({"conversationId": b.channel})],
+        ),
+        mcp_case(
+            "message_draft_set",
+            json!({"conversationId": a.channel, "draft": {"text": "Net draft"}}),
+            vec![json!({"conversationId": b.channel, "draft": {"text": "Net draft"}})],
+        ),
+        mcp_case(
+            "conversations_mark_read",
+            json!({"spaceId": a.project}),
+            vec![json!({"spaceId": b.project})],
+        ),
+        mcp_case(
+            "comment_create",
+            json!({"thing": {"kind": "sheet", "id": a.sheet}, "text": "Net comment"}),
+            vec![
+                json!({"thing": {"kind": "sheet", "id": b.sheet}, "text": "Net comment"}),
+                json!({"thing": {"kind": "whiteboard", "id": b.whiteboard}, "text": "Net"}),
+                json!({"thing": {"kind": "sheet", "id": a.sheet}, "text": "Net",
+                       "threadId": bx.comment_thread}),
+            ],
+        ),
+        mcp_case(
+            "comment_thread_update",
+            json!({"threadId": ax.comment_thread, "status": "Resolved"}),
+            vec![json!({"threadId": bx.comment_thread, "status": "Resolved"})],
         ),
         mcp_case(
             "notification_update",
@@ -6621,7 +6779,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "taskIds": [a.subtask], "fields": keyed(ax.person_field, json!(b.rook)), "clientRequestId": "net-update-many-m5"}),
         ]),
         mcp_case(
-            "task_criteria",
+            "task_criteria_update",
             json!({
                 "taskId": a.task,
                 "expectedVersion": task_version(a.task),
@@ -6642,7 +6800,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "clientRequestId": "net-criteria-mixed",
         })]),
         mcp_case(
-            "task_comment",
+            "task_comment_create",
             json!({
                 "taskId": a.task,
                 "text": "Net comment",
@@ -6658,7 +6816,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "clientRequestId": "net-comment-mixed",
         })]),
         mcp_case(
-            "task_comment_edit",
+            "task_comment_update",
             json!({"taskId": a.task, "commentId": a.comment, "text": "Launch comment, edited by a tool"}),
             vec![json!({"taskId": b.task, "commentId": b.comment, "text": "Net edit"})],
         )
@@ -6676,31 +6834,29 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"taskId": b.task, "commentId": sp.comments[1]}),
         ]),
         mcp_case(
-            "task_mark_blocked",
+            "task_archive",
             json!({
-                "taskId": a.subtask,
-                "expectedVersion": task_version(a.subtask),
-                "reason": "Net waiting",
-                "clientRequestId": "net-blocked-own",
+                "taskId": sp.second_task,
+                "expectedVersion": task_version(sp.second_task),
+                "clientRequestId": "net-archive-own",
             }),
             vec![json!({
                 "taskId": b.task,
                 "expectedVersion": task_version(b.task),
-                "reason": "Net waiting",
-                "clientRequestId": "net-blocked-b",
+                "clientRequestId": "net-archive-b",
             })],
         ),
         mcp_case(
-            "task_mark_ready_for_review",
+            "task_restore",
             json!({
-                "taskId": a.subtask,
-                "expectedVersion": task_version(a.subtask),
-                "clientRequestId": "net-review-own",
+                "taskId": sp.second_task,
+                "expectedVersion": task_version(sp.second_task),
+                "clientRequestId": "net-restore-own",
             }),
             vec![json!({
                 "taskId": b.task,
                 "expectedVersion": task_version(b.task),
-                "clientRequestId": "net-review-b",
+                "clientRequestId": "net-restore-b",
             })],
         ),
         mcp_case(
@@ -6954,7 +7110,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "linkTo": {"targetKind": "task", "targetId": b.task},
         })]),
         mcp_case(
-            "whiteboard_edit",
+            "whiteboard_update_elements",
             json!({"whiteboardId": a.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]}),
             vec![json!({"whiteboardId": b.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]})],
         ),
@@ -6987,6 +7143,64 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": b.task}),
             json!({"whiteboardId": a.whiteboard, "targetKind": "page", "targetId": b.page}),
         ]),
+        // Packages (M1.9). An install needs a fresh preview's planHash
+        // (packages_install.rs installs for real); another workspace's
+        // space or install is never reached.
+        mcp_case(
+            "package_install",
+            json!({}),
+            vec![json!({"package": tiny_package(), "target": {"spaceId": b.project}, "planHash": "sha256:0", "clientRequestId": "net-package-b"})],
+        )
+        .without_own("needs a planHash from a preview; packages_install.rs covers installing"),
+        mcp_case(
+            "package_remove",
+            json!({"installId": a.package_install, "parts": "keep", "clientRequestId": "net-package-remove-own"}),
+            vec![json!({"installId": b.package_install, "parts": "archive", "clientRequestId": "net-package-remove-b"})],
+        ),
+        // Built modules (M1.6). Linked, then unlinked, so A's collection
+        // stays visible to the cases after these.
+        mcp_case(
+            "module_create",
+            json!({"spaceId": a.project, "key": "net_own", "name": "Net", "clientRequestId": "net-module-own"}),
+            vec![json!({"spaceId": b.project, "key": "net_b", "name": "Net", "clientRequestId": "net-module-b"})],
+        )
+        .rejecting(vec![
+            json!({"spaceId": a.project, "key": "net_m1", "name": "Net", "parts": [{"kind": "collection", "id": b.collection}], "clientRequestId": "net-module-m1"}),
+            json!({"spaceId": a.project, "key": "net_m2", "name": "Net", "parts": [{"kind": "automation", "id": b.rule}], "clientRequestId": "net-module-m2"}),
+        ]),
+        mcp_case(
+            "module_update",
+            json!({"moduleId": a.module, "expectedRevision": 1, "name": "Net", "clientRequestId": "net-module-update-own"}),
+            vec![json!({"moduleId": b.module, "expectedRevision": 1, "name": "Net", "clientRequestId": "net-module-update-b"})],
+        ),
+        mcp_case(
+            "module_part_link",
+            json!({"moduleId": a.module, "part": {"kind": "collection", "id": a.collection}, "clientRequestId": "net-part-link-own"}),
+            vec![json!({"moduleId": b.module, "part": {"kind": "collection", "id": b.collection}, "clientRequestId": "net-part-link-b"})],
+        )
+        .rejecting(vec![
+            json!({"moduleId": a.module, "part": {"kind": "collection", "id": b.collection}, "clientRequestId": "net-part-link-m1"}),
+        ]),
+        mcp_case(
+            "module_part_unlink",
+            json!({"moduleId": a.module, "part": {"kind": "collection", "id": a.collection}, "clientRequestId": "net-part-unlink-own"}),
+            vec![json!({"moduleId": b.module, "part": {"kind": "collection", "id": b.collection}, "clientRequestId": "net-part-unlink-b"})],
+        ),
+        mcp_case(
+            "module_set",
+            json!({"moduleId": a.module, "on": true, "clientRequestId": "net-module-set-own"}),
+            vec![json!({"moduleId": b.module, "on": false, "clientRequestId": "net-module-set-b"})],
+        ),
+        mcp_case(
+            "module_archive",
+            json!({"moduleId": a.module, "parts": "keep", "clientRequestId": "net-module-archive-own"}),
+            vec![json!({"moduleId": b.module, "parts": "archive", "clientRequestId": "net-module-archive-b"})],
+        ),
+        mcp_case(
+            "module_restore",
+            json!({"moduleId": a.module, "clientRequestId": "net-module-restore-own"}),
+            vec![json!({"moduleId": b.module, "clientRequestId": "net-module-restore-b"})],
+        ),
         // K3.19: restoring any thing's version, by id alone.
         mcp_case(
             "history_restore",
@@ -7465,20 +7679,18 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"launchId": sp.launch}),
             vec![json!({"launchId": bx.launch})],
         ),
-        mcp_case(
-            "approval_respond",
-            json!({
-                "approvalId": sp.approvals[1],
-                "expectedVersion": version("agent_approvals", sp.approvals[1]),
-                "decision": "approve",
-                "clientRequestId": "net-approval-own",
-            }),
-            vec![json!({
-                "approvalId": b.approval,
-                "expectedVersion": version("agent_approvals", b.approval),
-                "decision": "approve",
-                "clientRequestId": "net-approval-b",
-            })],
-        ),
     ]
+}
+
+/// The smallest package (M1.9's isolation cases).
+fn tiny_package() -> Value {
+    json!({
+        "format": "agent-workspace-package/1",
+        "id": "net_tiny",
+        "version": "1.0.0",
+        "name": "Tiny",
+        "target": "space",
+        "contents": [{"kind": "collection", "key": "tiny", "body": {
+            "name": "Tiny", "titleName": "Name", "fields": [], "views": []}}],
+    })
 }

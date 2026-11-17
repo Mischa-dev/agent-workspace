@@ -46,6 +46,16 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "custom_emojis",
+                table: "custom_emojis",
+                references: &[
+                    ("created_by_account_id", "actors"),
+                    ("retired_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "field_definitions",
                 table: "field_definitions",
                 references: &[
@@ -89,6 +99,68 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("space_id", "projects"),
                     ("changed_by_actor_id", "actors"),
                     ("via_app_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "modules",
+                table: "modules",
+                references: &[
+                    ("space_id", "projects"),
+                    ("created_by_actor_id", "actors"),
+                    ("package_install_id", "package_installs"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "module_nav",
+                table: "module_nav",
+                references: &[("module_id", "modules")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "module_parts",
+                table: "module_parts",
+                references: &[("module_id", "modules"), ("space_id", "projects")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "packages",
+                table: "packages",
+                references: &[("created_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "package_installs",
+                table: "package_installs",
+                references: &[
+                    ("space_id", "projects"),
+                    ("package_id", "packages"),
+                    ("installed_by_actor_id", "actors"),
+                    ("via_app_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "package_objects",
+                table: "package_objects",
+                references: &[("install_id", "package_installs")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "agent_templates",
+                table: "agent_templates",
+                references: &[
+                    ("space_id", "projects"),
+                    ("install_id", "package_installs"),
+                    ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -500,6 +572,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
         ],
         not_exported: &[
             (
+                "agent_schedules",
+                "runtime state of this server (queues, leases, retries)",
+            ),
+            (
                 "agent_sessions",
                 "runtime state of this server (queues, leases, retries)",
             ),
@@ -507,16 +583,11 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "agent_setup_links",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
-            ("agent_webhook_deliveries", "a delivery log"),
+            ("deliveries", "a delivery log"),
             (
                 "external_agent_connections",
                 "a connection to an outside service, reconnected after import (needs/connections.jsonl)",
             ),
-            (
-                "external_agent_event_counters",
-                "runtime state of this server (queues, leases, retries)",
-            ),
-            ("external_agent_events", "a delivery log"),
             (
                 "harness_catalog_refreshes",
                 "runtime state of this server (queues, leases, retries)",
@@ -538,7 +609,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 references: &[
                     ("conversation_id", "conversations"),
                     ("message_id", "messages"),
-                    ("agent_run_event_id", "agent_run_events"),
+                    ("run_activity_id", "run_activities"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -646,6 +717,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("message_id", "messages"),
                     ("actor_id", "actors"),
                     ("via_oauth_grant_id", "mcp_oauth_grants"),
+                    ("custom_emoji_id", "custom_emojis"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -682,6 +754,14 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             },
         ],
         not_exported: &[
+            (
+                "message_drafts",
+                "a person's unsent words, theirs and not the workspace's record",
+            ),
+            (
+                "notification_keywords",
+                "a person's own alert settings, theirs and not the workspace's record",
+            ),
             (
                 "message_link_previews",
                 "a cache or index derived from other rows, rebuilt on import",
@@ -1306,7 +1386,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("work_item_id", "work_items"),
                     ("comment_id", "work_item_comments"),
                     ("agent_run_id", "runs"),
-                    ("approval_id", "requests"),
                     ("pull_request_id", "github_pull_requests"),
                 ],
                 text_references: &[],
@@ -1541,11 +1620,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             KindDecl {
                 kind: "run_activities",
                 table: "run_activities",
-                references: &[
-                    ("run_id", "runs"),
-                    ("reported_by_account_id", "actors"),
-                    ("legacy_event_id", "agent_run_events"),
-                ],
+                references: &[("run_id", "runs"), ("reported_by_account_id", "actors")],
                 text_references: &[],
                 exclude: &[],
             },
@@ -1589,50 +1664,13 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
-                kind: "agent_approvals",
-                table: "agent_approvals",
-                references: &[
-                    ("agent_run_id", "agent_runs"),
-                    ("requesting_actor_id", "actors"),
-                    ("responded_by_actor_id", "actors"),
-                    (
-                        "external_execution_request_id",
-                        "external_execution_requests",
-                    ),
-                    ("eligible_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
                 kind: "agent_run_acknowledgements",
                 table: "agent_run_acknowledgements",
                 references: &[
                     ("project_id", "projects"),
                     ("agent_run_id", "agent_runs"),
                     ("actor_id", "actors"),
-                    ("acknowledged_event_id", "agent_run_events"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "agent_run_events",
-                table: "agent_run_events",
-                references: &[
-                    ("agent_run_id", "agent_runs"),
-                    ("conversation_id", "conversations"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "agent_run_usage",
-                table: "agent_run_usage",
-                references: &[
-                    ("agent_run_id", "agent_runs"),
-                    ("project_id", "projects"),
-                    ("provider_account_id", "provider_accounts"),
+                    ("acknowledged_event_id", "run_activities"),
                 ],
                 text_references: &[],
                 exclude: &[],

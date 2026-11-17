@@ -104,6 +104,13 @@ pub struct OpCall<'a> {
     pub(super) tx: Option<Transaction<'static, Postgres>>,
     pub(super) audit: Option<AuditFacts>,
     pub(super) replayed: bool,
+    pub(super) start_queued_runs: bool,
+    /// An `Idempotency::Command` operation made this call retry-safe
+    /// (`key_honoured`).
+    pub(super) keyed: bool,
+    /// The command wrote the write's audit row itself (K2.7's message
+    /// commands keep theirs), so dispatch adds none.
+    pub(super) audited: bool,
 }
 
 /// What the audit row says the write was about, when not the target.
@@ -129,10 +136,31 @@ impl OpCall<'_> {
         self.audit = Some(AuditFacts { kind, id, metadata });
     }
 
+    /// The write queued a run: once it commits, the scheduler looks at the
+    /// queue now rather than at its next pass.
+    pub fn start_queued_runs(&mut self) {
+        self.start_queued_runs = true;
+    }
+
     /// For commands that keep their own idempotency (`Idempotency::Command`):
     /// the answer was a replay.
     pub fn mark_replayed(&mut self, replayed: bool) {
         self.replayed |= replayed;
+    }
+
+    /// For commands that keep their own idempotency (`Idempotency::Command`):
+    /// a retry of this call changes nothing more, because the command
+    /// deduplicated it (on the caller's request id, or on a key in the
+    /// input such as `clientRunId`). Only then does the answer say
+    /// `replaySafe: true` (ruling R52).
+    pub fn key_honoured(&mut self) {
+        self.keyed = true;
+    }
+
+    /// The command wrote this write's audit row itself (or changed
+    /// nothing), so dispatch writes none: one row per write.
+    pub fn audited_by_command(&mut self) {
+        self.audited = true;
     }
 
     /// The account the call acts as.
@@ -149,6 +177,7 @@ impl From<&OpContext> for crate::memory::Writer {
             actor_id: ctx.caller.account_id,
             actor_kind: ctx.caller.kind,
             via_grant_id: ctx.caller.via_grant_id,
+            confined_project: ctx.caller.confined_space,
         }
     }
 }
@@ -268,6 +297,44 @@ impl From<&OpContext> for crate::work_item_commands::CommandActor {
                     accepted_by: *accepted_by,
                 },
             },
+        }
+    }
+}
+
+impl From<&OpContext> for crate::events::Caller {
+    /// Webhooks', rules' and forms' own caller, for an operation that makes
+    /// them (a built module's parts, M1.6). Dispatch already checked the
+    /// credential reaches the space and may write.
+    fn from(ctx: &OpContext) -> Self {
+        let (channel, authentication_class, client_name) = match &ctx.edge {
+            Edge::Web { .. } => ("browser", "password_session", None),
+            Edge::Mcp {
+                authentication_class,
+                client_name,
+                ..
+            } => ("mcp", *authentication_class, Some(client_name.clone())),
+            Edge::PublicApi {
+                authentication_class,
+                client_name,
+                ..
+            } => ("api", *authentication_class, Some(client_name.clone())),
+            Edge::Automation { .. } => ("automation", "automation", None),
+            Edge::Job { .. } | Edge::Proposal { .. } => ("system", "background_job", None),
+        };
+        Self {
+            actor_id: ctx.caller.account_id,
+            actor_kind: ctx.caller.kind,
+            session_id: match ctx.edge {
+                Edge::Web { session_id } => Some(session_id),
+                _ => None,
+            },
+            via_grant_id: ctx.caller.via_grant_id,
+            external_agent_connection_id: ctx.caller.connection_id,
+            token_project_id: ctx.caller.confined_space,
+            can_write: ctx.caller.can_write,
+            channel,
+            authentication_class,
+            client_name: client_name.map(|name| name.chars().take(80).collect()),
         }
     }
 }

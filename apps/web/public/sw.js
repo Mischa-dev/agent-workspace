@@ -27,7 +27,7 @@ const MAX_ASSETS = 120
 // the first segments of the routes in app/routes.tsx (serviceWorker.test.ts
 // checks).
 const APP_ROUTE =
-  /^\/(?:|w|dm|home|welcome|inbox|later|my-work|runs|whiteboards|pages|messages|projects|settings|search|share|new-task|forms|sign-in|forgot-password|reset-password|verify-email|join|design-system)(?:\/|$)|^\/[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\/?$/
+  /^\/(?:|w|dm|home|welcome|inbox|later|threads|my-work|runs|whiteboards|pages|messages|projects|settings|search|share|new-task|forms|sign-in|forgot-password|reset-password|verify-email|join|design-system)(?:\/|$)|^\/[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\/?$/
 
 self.addEventListener('install', (event) => {
   event.waitUntil(cacheShell().catch(() => undefined).then(() => self.skipWaiting()))
@@ -72,7 +72,7 @@ self.addEventListener('push', (event) => {
   event.waitUntil(showPush(event))
 })
 
-const TOKEN_ACTIONS = ['approve', 'deny', 'reply', 'done', 'snooze']
+const TOKEN_ACTIONS = ['approve', 'deny', 'reply', 'read', 'done', 'snooze']
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
@@ -92,7 +92,7 @@ self.addEventListener('notificationclick', (event) => {
 })
 
 const DONE = { approve: 'Approved', deny: 'Denied', reply: 'Reply sent', done: 'Marked done', snooze: 'Reminding you in an hour' }
-const FAILED = { approve: 'Not approved', deny: 'Not denied', reply: 'Reply not sent', done: 'Not marked done', snooze: 'Not snoozed' }
+const FAILED = { approve: 'Not approved', deny: 'Not denied', reply: 'Reply not sent', read: 'Not marked read', done: 'Not marked done', snooze: 'Not snoozed' }
 
 // Answer from the notification, then say what happened in a quiet one that
 // replaces it. A failure says why and opens the app where it can be done.
@@ -107,6 +107,8 @@ async function act(data, action, reply) {
       body: JSON.stringify(action === 'reply' ? { token: data.token, action, text: reply } : { token: data.token, action }),
     })
     if (response.ok) {
+      // Marking it read needs no word back: the notification just goes.
+      if (action === 'read') return undefined
       const result = await response.json().catch(() => ({}))
       const done = result && result.outcome === 'answered' ? 'Answer sent' : DONE[action]
       return self.registration.showNotification(done, {

@@ -33,17 +33,19 @@ import {
   type SavedItem,
   type ScheduledMessage,
 } from './api'
+import { DraftsList } from './DraftsList'
 import { SavedRow, ScheduledRow } from './LaterRows'
 import { TimeDialog } from './TimeDialog'
 import { atPhrase, whenPhrase } from './when'
 import './later.css'
 
-type Tab = 'open' | 'done' | 'scheduled'
+type Tab = 'open' | 'done' | 'scheduled' | 'drafts'
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'open', label: 'Saved' },
   { value: 'done', label: 'Done' },
   { value: 'scheduled', label: 'Scheduled' },
+  { value: 'drafts', label: 'Drafts' },
 ]
 
 type Editing =
@@ -166,10 +168,11 @@ export function LaterPage() {
           ) : null}
         </div>
 
-        {list.isPending ? <ListSkeleton label="Loading" rows={5} /> : null}
-        {list.isError ? <ErrorState error={list.error} onRetry={() => void list.refetch()} title="This list didn’t load" /> : null}
+        {tab !== 'drafts' && list.isPending ? <ListSkeleton label="Loading" rows={5} /> : null}
+        {tab !== 'drafts' && list.isError ? <ErrorState error={list.error} onRetry={() => void list.refetch()} title="This list didn’t load" /> : null}
+        {tab === 'drafts' ? <DraftsList /> : null}
 
-        {tab !== 'scheduled' && saved.data ? (
+        {(tab === 'open' || tab === 'done') && saved.data ? (
           items.length ? (
             <ul aria-label={tab === 'done' ? 'Done' : 'Saved for later'} className="aw-later__list">
               {items.map((item) => (

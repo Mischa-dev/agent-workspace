@@ -82,6 +82,26 @@ const fn signal(
     }
 }
 
+/// A fact addressed to one account (a wake-up for it, A2): kept, never in
+/// the audit trail (the change it is about is), never a rule's trigger.
+const fn addressed(
+    name: &'static str,
+    module: &'static str,
+    thing_kind: Option<&'static str>,
+    summary: &'static str,
+) -> EventType {
+    EventType {
+        name,
+        module,
+        thing_kind,
+        class: EventClass::Fact,
+        summary,
+        audited: false,
+        automatable: false,
+        legacy_names: &[],
+    }
+}
+
 impl EventType {
     const fn legacy(mut self, names: &'static [&'static str]) -> Self {
         self.legacy_names = names;
@@ -146,6 +166,12 @@ pub static MESSAGE_CREATED: EventType = fact(
 )
 .legacy(&["conversation.message.created"])
 .automatable();
+pub static MESSAGE_MENTIONED: EventType = addressed(
+    "message.mentioned",
+    "messages",
+    Some("message"),
+    "You were mentioned in a message",
+);
 pub static MESSAGE_EDITED: EventType = fact(
     "message.edited",
     "messages",
@@ -176,6 +202,18 @@ pub static CONVERSATION_PINS_CHANGED: EventType = fact(
 );
 
 // --- channels ----------------------------------------------------------
+pub static MESSAGE_DRAFT_CHANGED: EventType = signal(
+    "message_draft.changed",
+    "messages",
+    None,
+    "Someone's draft was saved or cleared",
+);
+pub static NOTIFICATION_KEYWORDS_CHANGED: EventType = signal(
+    "notification_keywords.changed",
+    "messages",
+    None,
+    "Someone's keyword alerts changed",
+);
 pub static THREAD_STATUS_CHANGED: EventType = fact(
     "thread.status_changed",
     "channels",
@@ -194,6 +232,12 @@ pub static RUN_FINISHED: EventType = fact(
     "A run finished, failed or was stopped",
 )
 .automatable();
+pub static RUN_CANCEL_ASKED: EventType = addressed(
+    "run.cancel",
+    "runs",
+    Some("run"),
+    "Someone asked the agent doing a run to stop it",
+);
 pub static REQUEST_RAISED: EventType = fact(
     "request.raised",
     "runs",
@@ -226,6 +270,18 @@ pub static TASK_CREATED: EventType =
     fact("task.created", "tasks", Some("task"), "A task was created").automatable();
 pub static TASK_UPDATED: EventType =
     fact("task.updated", "tasks", Some("task"), "A task changed").automatable();
+pub static TASK_ASSIGNED: EventType = addressed(
+    "task.assigned",
+    "tasks",
+    Some("task"),
+    "A task was assigned to you",
+);
+pub static COMMENT_MENTIONED: EventType = addressed(
+    "comment.mentioned",
+    "tasks",
+    Some("task"),
+    "You were mentioned in a comment",
+);
 pub static TASK_PLACEMENT_CHANGED: EventType = signal(
     "task.placement_changed",
     "tasks",
@@ -494,6 +550,19 @@ pub static WORKSPACE_FILE_STORE_CHANGED: EventType = fact(
     None,
     "The workspace's own file bucket was set or stopped",
 );
+pub static ACCOUNT_STATUS_CHANGED: EventType = signal(
+    "account.status_changed",
+    "workspace",
+    None,
+    "Someone's status changed",
+)
+.legacy(&["account.status.changed"]);
+pub static CUSTOM_EMOJI_CHANGED: EventType = signal(
+    "custom_emoji.changed",
+    "workspace",
+    None,
+    "A workspace's custom emoji changed",
+);
 
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
@@ -503,6 +572,44 @@ pub static NOTIFICATION_CHANGED: EventType = signal(
     "Someone's notifications changed",
 )
 .legacy(&["notifications.updated"]);
+pub static REPLY_REQUESTED: EventType = addressed(
+    "reply.requested",
+    "agents",
+    Some("reply_request"),
+    "You were asked to reply",
+);
+pub static REPLY_FOLLOWUP: EventType = addressed(
+    "reply.followup",
+    "agents",
+    Some("reply_request"),
+    "Someone followed up where you are working",
+);
+pub static REPLY_CANCELLED: EventType = addressed(
+    "reply.cancelled",
+    "agents",
+    Some("reply_request"),
+    "Someone stopped a reply you were asked for",
+);
+pub static SCHEDULE_DUE: EventType =
+    addressed("schedule.due", "agents", None, "A follow-up you set is due");
+pub static SCHEDULE_CHANGED: EventType = signal(
+    "schedule.changed",
+    "agents",
+    Some("schedule"),
+    "A follow-up of yours was set, changed or cancelled",
+);
+pub static CONNECTION_PUSH_DISABLED: EventType = addressed(
+    "connection.push_disabled",
+    "agents",
+    None,
+    "Pushes to a connection's webhook were turned off after failing",
+);
+pub static CONNECTION_CHANGED: EventType = signal(
+    "connection.changed",
+    "agents",
+    Some("connection"),
+    "A connection of yours was added, changed or removed",
+);
 pub static ACCOUNT_MANAGERS_CHANGED: EventType = signal(
     "account.managers_changed",
     "agents",
@@ -529,19 +636,25 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONVERSATION_REPLY_REQUESTS_CHANGED,
         &CONVERSATION_READ,
         &MESSAGE_CREATED,
+        &MESSAGE_MENTIONED,
         &MESSAGE_EDITED,
         &MESSAGE_REMOVED,
         &MESSAGE_REACTIONS_CHANGED,
         &CONVERSATION_PINS_CHANGED,
+        &MESSAGE_DRAFT_CHANGED,
+        &NOTIFICATION_KEYWORDS_CHANGED,
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,
+        &RUN_CANCEL_ASKED,
         &REQUEST_RAISED,
         &REQUEST_ANSWERED,
         &REQUEST_CANCELLED,
         &REQUEST_EXPIRED,
         &TASK_CREATED,
         &TASK_UPDATED,
+        &TASK_ASSIGNED,
+        &COMMENT_MENTIONED,
         &TASK_PLACEMENT_CHANGED,
         &TASK_COMMENTED,
         &TASK_COMMENT_CHANGED,
@@ -579,7 +692,16 @@ pub fn catalog() -> &'static [&'static EventType] {
         &FILE_REMOVED,
         &FILE_UPLOAD_STARTED,
         &WORKSPACE_FILE_STORE_CHANGED,
+        &ACCOUNT_STATUS_CHANGED,
+        &CUSTOM_EMOJI_CHANGED,
         &NOTIFICATION_CHANGED,
+        &REPLY_REQUESTED,
+        &REPLY_FOLLOWUP,
+        &REPLY_CANCELLED,
+        &SCHEDULE_DUE,
+        &SCHEDULE_CHANGED,
+        &CONNECTION_PUSH_DISABLED,
+        &CONNECTION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
         &ACCOUNT_ACCESS_CHANGED,
     ];

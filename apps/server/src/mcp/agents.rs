@@ -129,7 +129,6 @@ pub(super) struct AgentConnection {
     /// full or read.
     pub access: String,
     pub can_request_runs: bool,
-    pub can_answer_approvals: bool,
     /// The category of its last error, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
@@ -228,7 +227,10 @@ pub(super) async fn agent_list(
                        CASE WHEN connection.status = 'active' AND actor.status = 'active'
                             THEN 'active' ELSE 'disabled' END AS status,
                        connection.runtime_kind, connection.scopes,
-                       connection.webhook_url IS NOT NULL AS wakeups,
+                       EXISTS (SELECT 1 FROM agent_connections delivery
+                               WHERE delivery.account_id = actor.id
+                                 AND delivery.webhook_url IS NOT NULL
+                                 AND delivery.state = 'active') AS wakeups,
                        connection.last_used_at, connection.last_error_category
                 FROM actors actor
                 JOIN external_agent_connections connection
@@ -426,7 +428,6 @@ pub(super) async fn agent_list(
                         wakeups: agent.wakeups,
                         access: if has("write") { "full" } else { "read" }.to_owned(),
                         can_request_runs: has("worker_request"),
-                        can_answer_approvals: has("approval_respond"),
                         last_error: agent.last_error_category.clone(),
                         manage_url: public_url(state, "/messages/agents"),
                     }

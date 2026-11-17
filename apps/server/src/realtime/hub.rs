@@ -340,6 +340,8 @@ pub(super) fn checked_delivery(
                 | "conversation.member.removed"
                 | "notifications.updated"
                 | "account.managers.changed"
+                | "message_draft.changed"
+                | "notification_keywords.changed"
         );
         let invalid_actor_scope = if actor_targeted_event {
             payload_actor_id.is_none() || payload_actor_id != envelope.recipient_actor_id
@@ -362,12 +364,16 @@ pub(super) fn checked_delivery(
                 | "project.membership.updated"
                 | "notifications.updated"
                 | "account.managers.changed"
+                | "account.status.changed"
                 | "whiteboard.updated"
                 | "page.updated"
                 | "page.discussion.updated"
                 | "collection.updated"
                 | "sheet.updated"
                 | "project.modules.updated"
+                | "custom_emoji.changed"
+                | "message_draft.changed"
+                | "notification_keywords.changed"
                 | "workspace.lifecycle.changed"
         );
         let project_scoped_event = matches!(
@@ -376,12 +382,16 @@ pub(super) fn checked_delivery(
                 | "project.membership.updated"
                 | "notifications.updated"
                 | "account.managers.changed"
+                | "account.status.changed"
                 | "whiteboard.updated"
                 | "page.updated"
                 | "page.discussion.updated"
                 | "collection.updated"
                 | "sheet.updated"
                 | "project.modules.updated"
+                | "custom_emoji.changed"
+                | "message_draft.changed"
+                | "notification_keywords.changed"
                 | "workspace.lifecycle.changed"
         );
         let invalid_conversation_scope = if project_scoped_event {

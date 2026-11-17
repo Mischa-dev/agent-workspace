@@ -1,9 +1,4 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::get,
-};
+use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
@@ -11,19 +6,17 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    api::{ApprovalResponse, select_run_setup},
     auth::AuthenticatedActor,
-    conversations::{ApprovalCapabilities, ApprovalRow, ApprovalView},
     domain::allocate_conversation_sequence,
     error::{ApiPath, AppError},
-    external_events::enqueue_external_event,
+    hosts::builtin::http::select_run_setup,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     mcp::McpPrincipal,
     message_content::MessageContent,
     outbox,
     policy::{
-        Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
-        MembershipRole, ProjectScope, Resource, RoleGrant, Subject, authorize,
+        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant,
+        Subject, authorize,
     },
     provider::run_config::RunConfig,
 };
@@ -124,7 +117,6 @@ struct SponsorAuthorization {
 #[derive(Debug, FromRow)]
 struct SponsoredApprovalContext {
     project_id: Uuid,
-    connection_id: Uuid,
     requesting_actor_id: Uuid,
     sponsoring_actor_id: Uuid,
     conversation_id: Uuid,
@@ -133,11 +125,6 @@ struct SponsoredApprovalContext {
     request_status: String,
     request_version: i64,
     request_expired: bool,
-    approval_status: String,
-    approval_response: Option<serde_json::Value>,
-    responded_by_actor_id: Option<Uuid>,
-    sponsor_role: String,
-    sponsor_role_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -385,7 +372,6 @@ async fn request_sponsored_execution_inner(
     };
 
     let request_id = Uuid::now_v7();
-    let approval_id = Uuid::now_v7();
     sqlx::query(
         r#"
         INSERT INTO external_execution_requests (
@@ -405,42 +391,45 @@ async fn request_sponsored_execution_inner(
     .bind(&arguments.prompt)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, external_execution_request_id,
-            requesting_actor_id, eligible_actor_id, provider_request_id,
-            kind, summary, options, eligible_role, human_required
-        ) VALUES (
-            $1, NULL, $2, $3, $4, $5,
-            'approval', 'External agent requested sponsored Worker execution.',
-            '["approve", "deny"]'::jsonb, $6, true
-        )
-        "#,
-    )
-    .bind(approval_id)
-    .bind(request_id)
-    .bind(principal.actor_id)
-    .bind(sponsor_actor_id)
-    .bind(format!("external-execution:{request_id}"))
-    .bind(&sponsor.membership_role)
-    .execute(&mut *transaction)
-    .await?;
-    crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
-    enqueue_external_event(
+    // A1.14: its approval is a request to the sponsor, about the run request.
+    let workspace_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(principal.project_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+    let raised = crate::requests::open(
         &mut transaction,
-        connection_id,
-        principal.project_id,
-        "external_execution.requested",
-        "Sponsored Worker execution is awaiting human approval",
-        "external_execution_request",
-        request_id,
-        &format!(
-            "/projects/{}/external-execution-requests/{request_id}",
-            principal.project_id
-        ),
+        crate::requests::Origin {
+            account_id: principal.actor_id,
+            workspace_id,
+            space_id: Some(principal.project_id),
+            run_id: None,
+            host_request_ref: None,
+            conversation_id: Some(conversation_id),
+            work_item_id: None,
+            subject: Some((REQUEST_SUBJECT, request_id)),
+            field: "request",
+        },
+        &serde_json::json!({
+            "kind": "approval",
+            "title": "An agent asks to run work in your name.",
+            "options": [
+                {"id": "approve", "label": "Approve", "style": "approve"},
+                {"id": "deny", "label": "Deny", "style": "deny"},
+            ],
+            "allowText": false,
+            "audience": {"accounts": [sponsor_actor_id]},
+        }),
     )
-    .await?;
+    .await
+    .map_err(|error| match error {
+        crate::requests::OpenError::App(error) => error,
+        crate::requests::OpenError::Refused { .. } => {
+            AppError::Invalid("sponsored execution request")
+        }
+    })?;
+    crate::requests::announce_raised(&mut transaction, raised.request_id).await?;
+    let approval_id = raised.request_id;
     sqlx::query(
         r#"
         INSERT INTO audit_events (
@@ -474,10 +463,7 @@ async fn request_sponsored_execution_inner(
         status: "pending".to_owned(),
         version: 1,
         idempotent_replay: false,
-        canonical_path: format!(
-            "/projects/{}/external-execution-requests/{request_id}",
-            principal.project_id
-        ),
+        canonical_path: request_href(principal.project_id, request_id),
     };
     idempotency::complete(
         &mut transaction,
@@ -532,8 +518,8 @@ async fn list_sponsored_execution_requests(
                request.expires_at::text AS expires_at,
                request.created_at::text AS created_at
         FROM external_execution_requests request
-        JOIN agent_approvals approval
-          ON approval.external_execution_request_id = request.id
+        JOIN requests approval
+          ON approval.subject_kind = 'run_request' AND approval.subject_id = request.id
         JOIN project_memberships requester
           ON requester.project_id = request.project_id
          AND requester.actor_id = request.requesting_actor_id
@@ -549,31 +535,53 @@ async fn list_sponsored_execution_requests(
     Ok(Json(SponsoredExecutionList { requests }))
 }
 
-pub(crate) async fn respond_to_sponsored_execution(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    approval_id: Uuid,
-    external_request_id: Uuid,
-    response: ApprovalResponse,
-) -> Result<ApprovalView, AppError> {
-    if response.answer.is_some()
-        || !matches!(response.decision.as_deref(), Some("approve" | "deny"))
-    {
-        return Err(AppError::Invalid("sponsored execution decision"));
-    }
-    let decision = response
-        .decision
-        .as_deref()
-        .ok_or(AppError::Invalid("sponsored execution decision"))?;
-    let response_json = serde_json::json!({"decision": decision});
-    let request_hash = RequestHash::for_value(&response)?;
+/// What a sponsored run request's approval is about (`requests.subject_kind`).
+pub(crate) const REQUEST_SUBJECT: &str = "run_request";
 
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+/// A sponsored run request's approval settled (A1.14). Approved, the run
+/// starts in the sponsor's name, or the answer is refused when it can no
+/// longer start; denied, unanswered in time or withdrawn, the run request
+/// ends there. The agent that asked hears which.
+pub(crate) async fn approval_settled(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    row: &crate::requests::RequestRow,
+) -> Result<(), AppError> {
+    let Some(external_request_id) = row.subject_id else {
+        return Ok(());
+    };
+    let approved = row.status == "answered"
+        && row
+            .answer
+            .as_ref()
+            .and_then(|answer| answer.get("optionId"))
+            .and_then(serde_json::Value::as_str)
+            == Some("approve");
+    if !approved {
+        let status = match row.status.as_str() {
+            "answered" => "denied",
+            "expired" => "expired",
+            _ => "canceled",
+        };
+        sqlx::query(
+            r#"
+            UPDATE external_execution_requests
+            SET status = $2, version = version + 1, resolved_at = now(), updated_at = now()
+            WHERE id = $1 AND status = 'pending'
+            "#,
+        )
+        .bind(external_request_id)
+        .bind(status)
+        .execute(&mut **transaction)
+        .await?;
+        return Ok(());
+    }
     let context = sqlx::query_as::<_, SponsoredApprovalContext>(
         r#"
+        -- visibility: by id, for the sponsor answering the run request's
+        -- request (requests::may_answer checked them); locks the thread the
+        -- run will start in.
         SELECT request.project_id,
-               request.external_agent_connection_id AS connection_id,
                request.requesting_actor_id,
                request.sponsoring_actor_id,
                request.conversation_id,
@@ -581,18 +589,8 @@ pub(crate) async fn respond_to_sponsored_execution(
                request.prompt,
                request.status AS request_status,
                request.version AS request_version,
-               request.expires_at <= now() AS request_expired,
-               approval.status AS approval_status,
-               approval.response AS approval_response,
-               approval.responded_by_actor_id,
-               sponsor_membership.role AS sponsor_role,
-               workspace_role_permissions(sponsor_membership.role_id) AS sponsor_role_permissions
+               request.expires_at <= now() AS request_expired
         FROM external_execution_requests request
-        JOIN agent_approvals approval
-          ON approval.external_execution_request_id = request.id
-         AND approval.id = $2
-         AND approval.eligible_actor_id = $3
-         AND approval.human_required
         JOIN external_agent_connections connection
           ON connection.id = request.external_agent_connection_id
          AND connection.project_id = request.project_id
@@ -628,207 +626,52 @@ pub(crate) async fn respond_to_sponsored_execution(
           ON sponsor_organization_membership.organization_id = project.organization_id
          AND sponsor_organization_membership.actor_id = sponsor.id
          AND sponsor_organization_membership.enabled
-        WHERE request.id = $1 AND request.sponsoring_actor_id = $3
-        FOR UPDATE OF request, approval, conversation
+        WHERE request.id = $1 AND request.sponsoring_actor_id = $2
+        FOR UPDATE OF request, conversation
         FOR SHARE OF connection, requester, requester_membership, project, parent,
                      repository, sponsor_membership, sponsor, sponsor_user,
                      sponsor_organization_membership
         "#,
     )
     .bind(external_request_id)
-    .bind(approval_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut *transaction)
+    .bind(row.answered_by_account_id)
+    .fetch_optional(&mut **transaction)
     .await?
-    .ok_or(AppError::NotFound("agent_approval"))?;
-    let sponsor_role = parse_role(
-        &context.sponsor_role,
-        context.sponsor_role_permissions.as_deref(),
-    )?;
-    let sponsor = Subject::new(
-        principal.actor_id,
-        ActorKind::Human,
-        true,
-        Some(Membership::project(context.project_id, sponsor_role, true)),
-        None,
-    );
-    if !matches!(
-        authorize(
-            &sponsor,
-            Action::ApprovalRespond,
-            Resource::Approval {
-                scope: ProjectScope::approval(
-                    context.project_id,
-                    context.conversation_id,
-                    external_request_id,
-                    context.repository_id,
-                    approval_id,
-                ),
-                requirements: ApprovalRequirements {
-                    requesting_actor_id: context.requesting_actor_id,
-                    eligibility: ApprovalEligibility::Actor(context.sponsoring_actor_id),
-                    human_required: true,
-                    separation_of_duty: true,
-                },
-            },
-        ),
-        Decision::Allow
-    ) {
-        return Err(AppError::NotFound("agent_approval"));
-    }
+    .ok_or(AppError::Conflict(
+        "external_execution_request",
+        "this run request can no longer start",
+    ))?;
     if context.request_expired {
         return Err(AppError::Conflict(
             "external_execution_request",
             "sponsored execution request expired",
         ));
     }
-
-    let key = IdempotencyKey::from_headers(headers)?;
-    let scope = idempotency::resource_bound_scope("approval", approval_id, "respond")?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let reference = replay.decode::<SponsoredApprovalReference>()?;
-            if reference.approval_id != approval_id {
-                return Err(AppError::Internal("sponsored approval replay mismatch"));
-            }
-            transaction.commit().await?;
-            return fetch_sponsored_approval(state, approval_id, context.project_id).await;
-        }
-        IdempotencyOutcome::Reserved(value) => value,
-    };
-    if context.request_status != "pending" || context.approval_status != "pending" {
-        if context.responded_by_actor_id == Some(principal.actor_id)
-            && context.approval_response == Some(response_json.clone())
-        {
-            idempotency::complete(
-                &mut transaction,
-                &reservation,
-                StatusCode::OK,
-                &SponsoredApprovalReference { approval_id },
-            )
-            .await?;
-            transaction.commit().await?;
-            return fetch_sponsored_approval(state, approval_id, context.project_id).await;
-        }
+    if context.request_status != "pending" {
         return Err(AppError::Conflict(
             "external_execution_request",
             "sponsored execution request already resolved",
         ));
     }
-
-    let run_id = if decision == "approve" {
-        Some(launch_sponsored_run(state, &mut transaction, &context, external_request_id).await?)
-    } else {
-        None
-    };
-    sqlx::query(
-        r#"
-        UPDATE agent_approvals
-        SET status = 'resolved', responded_by_actor_id = $2,
-            response = $3, responded_at = now()
-        WHERE id = $1 AND status = 'pending'
-        "#,
-    )
-    .bind(approval_id)
-    .bind(principal.actor_id)
-    .bind(&response_json)
-    .execute(&mut *transaction)
-    .await?;
-    crate::requests::legacy::approval_written(&mut *transaction, approval_id).await?;
+    let run_id = launch_sponsored_run(state, transaction, &context, external_request_id).await?;
     sqlx::query(
         r#"
         UPDATE external_execution_requests
-        SET status = $2, version = version + 1, agent_run_id = $3,
+        SET status = 'launched', version = version + 1, agent_run_id = $2,
             resolved_at = now(), updated_at = now()
-        WHERE id = $1 AND status = 'pending' AND version = $4
+        WHERE id = $1 AND status = 'pending' AND version = $3
         "#,
     )
     .bind(external_request_id)
-    .bind(if run_id.is_some() {
-        "launched"
-    } else {
-        "denied"
-    })
     .bind(run_id)
     .bind(context.request_version)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    enqueue_external_event(
-        &mut transaction,
-        context.connection_id,
-        context.project_id,
-        if run_id.is_some() {
-            "external_execution.approved"
-        } else {
-            "external_execution.denied"
-        },
-        if run_id.is_some() {
-            "Sponsored Worker execution was approved and queued"
-        } else {
-            "Sponsored Worker execution was denied"
-        },
-        "external_execution_request",
-        external_request_id,
-        &format!(
-            "/projects/{}/external-execution-requests/{external_request_id}",
-            context.project_id
-        ),
-    )
-    .await?;
-    let request_id = headers
-        .get(crate::REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128);
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, channel,
-            external_agent_connection_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'external_execution.responded', 'external_execution_request',
-            $5, 'succeeded', $6, 'browser', $7,
-            jsonb_build_object('decision', $8, 'agent_run_id', $9)
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(context.project_id)
-    .bind(principal.session_id)
-    .bind(external_request_id)
-    .bind(request_id)
-    .bind(context.connection_id)
-    .bind(decision)
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await?;
-    idempotency::complete(
-        &mut transaction,
-        &reservation,
-        StatusCode::OK,
-        &SponsoredApprovalReference { approval_id },
-    )
-    .await?;
-    transaction.commit().await?;
-    if run_id.is_some() {
-        crate::scheduler::kick(state.clone());
-    }
-    fetch_sponsored_approval(state, approval_id, context.project_id).await
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct SponsoredApprovalReference {
-    approval_id: Uuid,
+    // The built-in host's holder starts it (K5.3).
+    sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
 }
 
 async fn launch_sponsored_run(
@@ -991,37 +834,6 @@ impl SponsoredRunContext for SponsoredApprovalContext {
     }
 }
 
-async fn fetch_sponsored_approval(
-    state: &AppState,
-    approval_id: Uuid,
-    project_id: Uuid,
-) -> Result<ApprovalView, AppError> {
-    let approval = sqlx::query_as::<_, ApprovalRow>(
-        r#"
-        SELECT approval.id, request.agent_run_id AS agent_run_id,
-               approval.kind, approval.summary, approval.options,
-               approval.status, approval.response,
-               approval.created_at::text AS created_at,
-               request.repository_id, approval.requesting_actor_id,
-               approval.eligible_role, approval.human_required
-        FROM agent_approvals approval
-        JOIN external_execution_requests request
-          ON request.id = approval.external_execution_request_id
-         AND request.project_id = $2
-        WHERE approval.id = $1
-        "#,
-    )
-    .bind(approval_id)
-    .bind(project_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
-    .ok_or(AppError::NotFound("agent_approval"))?;
-    Ok(ApprovalView {
-        approval,
-        capabilities: ApprovalCapabilities { respond: false },
-    })
-}
-
 /// A person's or agent's stored role; workers never come through here.
 fn parse_role(value: &str, permissions: Option<&[String]>) -> Result<RoleGrant, AppError> {
     match RoleGrant::stored(value, permissions) {
@@ -1058,4 +870,9 @@ fn require_policy(
     } else {
         Err(AppError::Forbidden)
     }
+}
+
+/// Where an external execution request's events point.
+fn request_href(project_id: Uuid, request_id: Uuid) -> String {
+    format!("/projects/{project_id}/external-execution-requests/{request_id}")
 }

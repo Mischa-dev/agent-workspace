@@ -14,6 +14,7 @@ impl CoreModule for Module {
 
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::whiteboards::router);
+        module.operations(crate::whiteboards::ops::register_ops);
         module.id_route(IdRoute {
             prefix: "/api/v1/whiteboards/",
             param: "id",

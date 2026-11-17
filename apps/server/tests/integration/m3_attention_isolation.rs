@@ -1,9 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use agent_workspace_server::{
-    AppState, config::AppConfig, domain::allocate_conversation_sequence,
-    provider::SupervisorRegistry, rate_limit::RateLimiters, realtime::RealtimeHub, router,
-    seed::dev_seed,
+    AppState, config::AppConfig, provider::SupervisorRegistry, rate_limit::RateLimiters,
+    realtime::RealtimeHub, router, seed::dev_seed,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -61,8 +60,15 @@ async fn failed_run_acknowledgement_is_private_durable_and_actor_scoped() {
     let actor_b = insert_session(&pool, seed.collaborator_actor_id, "attention-b").await;
 
     let run_id = Uuid::now_v7();
-    let failure_event_id = Uuid::now_v7();
     let mut transaction = pool.begin().await.expect("attention transaction");
+    crate::support::builtin_run_record(
+        &mut *transaction,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "failed",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -86,38 +92,29 @@ async fn failed_run_acknowledgement_is_private_durable_and_actor_scoped() {
     .execute(&mut *transaction)
     .await
     .expect("insert failed attention run");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (
-            id, agent_run_id, event_key, kind, summary, payload
-        )
-        VALUES ($1, $2, 'attention:failed', 'run_failed',
-                'The synthetic run failed.', '{}'::jsonb)
-        "#,
+    let failure_event_id = agent_workspace_server::runs::steps::record_new(
+        &mut transaction,
+        run_id,
+        "run_failed",
+        "The synthetic run failed.",
+        serde_json::json!({}),
     )
-    .bind(failure_event_id)
-    .bind(run_id)
-    .execute(&mut *transaction)
     .await
     .expect("insert durable failure event");
-    let failure_sequence = allocate_conversation_sequence(&mut transaction, seed.thread_id)
-        .await
-        .expect("allocate failure sequence");
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (
-            id, conversation_id, sequence, kind, agent_run_event_id
-        )
-        VALUES ($1, $2, $3, 'worker_event', $4)
-        "#,
+    agent_workspace_server::runs::steps::show_in_thread(
+        &mut transaction,
+        seed.thread_id,
+        failure_event_id,
     )
-    .bind(Uuid::now_v7())
-    .bind(seed.thread_id)
-    .bind(failure_sequence)
-    .bind(failure_event_id)
-    .execute(&mut *transaction)
     .await
     .expect("attach durable failure event");
+    let failure_sequence = sqlx::query_scalar::<_, i64>(
+        "SELECT sequence FROM conversation_entries WHERE run_activity_id = $1",
+    )
+    .bind(failure_event_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .expect("failure sequence");
     transaction
         .commit()
         .await

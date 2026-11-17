@@ -682,8 +682,12 @@ pub async fn stop_runs(state: &AppState, workspace: Uuid) -> Result<usize, AppEr
                 Some(Lifecycle::Deleting) => "workspace_deleting",
                 _ => return Ok(0),
             };
-            let mut stopped =
-                crate::api::interrupt_workspace_runs(&mut transaction, workspace, why).await?;
+            let mut stopped = crate::hosts::builtin::http::interrupt_workspace_runs(
+                &mut transaction,
+                workspace,
+                why,
+            )
+            .await?;
             // Runs that report for themselves end through the run service.
             stopped += crate::runs::ops::end_for_closed_workspace(
                 &mut transaction,
@@ -868,6 +872,7 @@ async fn delete_in_scope(
     .bind(workspace)
     .execute(&mut *connection)
     .await?;
+    crate::delivery::connections::rehome_from(connection, workspace).await?;
     let rows = delete_rows(connection, workspace).await?;
     sqlx::query(
         "INSERT INTO deleted_workspaces (id, requested_by_actor_id, repository_ids) \
@@ -979,14 +984,18 @@ fn tenant_column(table: &str) -> Option<&'static str> {
         .map(|(_, column)| *column)
 }
 
-/// Server-wide tables the deletion walks into: the hosts the workspace owns
-/// and what hangs off them. Every other server-wide table is never
-/// touched (accounts stay, R19).
+/// Server-wide tables the deletion walks into: the hosts the workspace owns,
+/// the connections still at home there (`delivery::connections::rehome_from`
+/// first moves those that reach on elsewhere), and what hangs off them.
+/// Every other server-wide table is never touched (accounts stay, R19).
 const OWNED_GLOBAL_TABLES: &[(&str, &str)] = &[
     ("hosts", "owner_workspace_id"),
     ("host_enrolments", "owner_workspace_id"),
     ("host_agents", ""),
     ("host_notices", ""),
+    ("agent_connections", "home_workspace_id"),
+    ("connection_signing_secrets", ""),
+    ("event_subscriptions", ""),
 ];
 
 fn ident(name: &str) -> String {

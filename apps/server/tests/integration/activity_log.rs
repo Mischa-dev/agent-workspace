@@ -62,6 +62,7 @@ async fn the_audit_trail_names_who_how_and_for_whom_and_keeps_private_conversati
     .await;
     let task = created["workItemId"]
         .as_str()
+        .or_else(|| created["value"]["workItemId"].as_str())
         .unwrap_or_else(|| panic!("task in {created}"))
         .to_owned();
     let staged = sqlx::query(

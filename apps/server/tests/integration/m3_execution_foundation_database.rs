@@ -246,6 +246,14 @@ async fn deferred_repository_run_guard_closes_the_concurrent_archive_race() {
 
     let run_id = Uuid::now_v7();
     let mut run_transaction = pool.begin().await.expect("begin run admission transaction");
+    crate::support::builtin_run_record(
+        &mut *run_transaction,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "queued",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

@@ -6,6 +6,11 @@ export const queryKeys = {
   projectSearch: (query: string) => ['projects', 'search', query] as const,
   projectsArchived: ['projects', 'archived'] as const,
   project: (projectId: string) => ['project', projectId] as const,
+  /** A workspace's own emoji (`customEmojiKeys`); without a workspace, every workspace's. */
+  customEmoji: ['custom-emoji'] as const,
+  customEmojiOf: (workspaceId: string | null) => ['custom-emoji', workspaceId] as const,
+  /** Everyone's statuses (`statusKeys`). */
+  statuses: ['statuses'] as const,
   /** One thing and its links (`GET /api/v1/things/{kind}/{id}`), shared by embeds and chips. */
   things: ['things'] as const,
   thing: (kind: string, id: string) => ['things', kind, id] as const,

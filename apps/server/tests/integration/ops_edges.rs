@@ -499,9 +499,9 @@ async fn every_edge_runs_the_same_operation() {
     .await
     .expect("note rows");
     assert_eq!(workspaces, [workspace, other]);
-    // Through the other workspace's path, a hand-written tool doesn't reach
-    // this workspace's space, for a write or a read; through its own path
-    // it does.
+    // Through the other workspace's path, neither an operation (a write)
+    // nor a hand-written tool (a read) reaches this workspace's space;
+    // through its own path it does.
     let (status, refused) = rpc(
         app,
         &token,
@@ -513,7 +513,11 @@ async fn every_edge_runs_the_same_operation() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    assert_eq!(status, StatusCode::OK, "{refused}");
+    assert_eq!(
+        refused["result"]["structuredContent"]["outcome"], "not_found",
+        "{refused}"
+    );
     let made: i64 = sqlx::query_scalar("SELECT count(*) FROM task_rows WHERE title = 'Elsewhere'")
         .fetch_one(&setup.pool)
         .await

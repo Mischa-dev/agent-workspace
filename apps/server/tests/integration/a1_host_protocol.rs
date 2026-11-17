@@ -36,7 +36,7 @@ fn host_call(method: &str, uri: &str, token: Option<&str>, body: Value) -> Reque
 
 /// A host operation from the web app, in `workspace`: the value on
 /// success, the refusal otherwise.
-async fn host_op(
+pub(super) async fn host_op(
     app: &axum::Router,
     browser: &Browser,
     workspace: Uuid,
@@ -777,7 +777,7 @@ async fn secrets_typed_into_runs_requests_and_hosts_are_never_kept() {
         "project_memberships",
         "events",
         "event_staging",
-        "external_agent_events",
+        "deliveries",
         "audit_events",
         "idempotency_keys",
     ] {
@@ -802,7 +802,7 @@ use agent_workspace_server::runs::{
 use super::support::test_host::TestHost;
 
 /// A run for `agent` handed to its host, as A1.13's launch path will.
-async fn dispatch(pool: &sqlx::PgPool, space: Uuid, agent: Uuid, title: &str) -> Uuid {
+pub(super) async fn dispatch(pool: &sqlx::PgPool, space: Uuid, agent: Uuid, title: &str) -> Uuid {
     let mut transaction = pool.begin().await.expect("transaction");
     let opened = open_queued(
         &mut transaction,
@@ -842,7 +842,7 @@ async fn dispatch(pool: &sqlx::PgPool, space: Uuid, agent: Uuid, title: &str) ->
     run.id
 }
 
-async fn run_state(pool: &sqlx::PgPool, run: Uuid) -> String {
+pub(super) async fn run_state(pool: &sqlx::PgPool, run: Uuid) -> String {
     sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
         .bind(run)
         .fetch_one(pool)
@@ -913,7 +913,7 @@ async fn kept_nowhere(pool: &sqlx::PgPool, secret: &str) {
         "runs",
         "events",
         "event_staging",
-        "external_agent_events",
+        "deliveries",
         "audit_events",
         "background_jobs",
     ] {

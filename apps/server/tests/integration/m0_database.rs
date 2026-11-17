@@ -134,6 +134,14 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         .expect("rollback invariant transaction");
 
     let terminal_run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        terminal_run_id,
+        first.thread_id,
+        first.execution_worker_id,
+        "interrupted",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -154,20 +162,24 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
     .execute(&pool)
     .await
     .expect("insert terminal run");
+    // A request still open on a run that already ended (as after a crash
+    // between the two): recovery withdraws it.
     let approval_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options
+        INSERT INTO requests (
+            id, workspace_id, space_id, kind, raised_by_account_id, run_id,
+            title, answer_permission
         )
-        VALUES ($1, $2, $3, $4, 'approval', 'stale approval', '[]'::jsonb)
+        SELECT $1, project.organization_id, project.id, 'approval', $3, $4,
+               'stale approval', 'runs.approve'
+        FROM projects project WHERE project.id = $2
         "#,
     )
     .bind(approval_id)
+    .bind(first.project_id)
+    .bind(first.worker_actor_id)
     .bind(terminal_run_id)
-    .bind(first.human_actor_id)
-    .bind(format!("integration-{approval_id}"))
     .execute(&pool)
     .await
     .expect("insert stale approval");
@@ -181,18 +193,18 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         supervisors,
     };
     assert_eq!(
-        recovery::cancel_terminal_run_approvals(&state)
+        recovery::withdraw_finished_run_requests(&state)
             .await
             .expect("cancel stale approval"),
         1
     );
     let approval_status =
-        sqlx::query_scalar::<_, String>("SELECT status FROM agent_approvals WHERE id = $1")
+        sqlx::query_scalar::<_, String>("SELECT status FROM requests WHERE id = $1")
             .bind(approval_id)
             .fetch_one(&pool)
             .await
             .expect("read canceled approval");
-    assert_eq!(approval_status, "canceled");
+    assert_eq!(approval_status, "cancelled");
 
     sqlx::query(
         r#"
@@ -239,17 +251,6 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         duplicate_worker_message.is_err(),
         "provider replay cannot create a second Worker Message for one Agent Run"
     );
-
-    let invalid_delivery = sqlx::query(
-        "UPDATE agent_approvals SET provider_response_delivered_at = now() WHERE id = $1",
-    )
-    .bind(approval_id)
-    .execute(&pool)
-    .await;
-    assert!(
-        invalid_delivery.is_err(),
-        "a delivered provider response must have a durable claim"
-    );
 }
 
 async fn insert_active_run(
@@ -257,6 +258,14 @@ async fn insert_active_run(
     seed: &agent_workspace_server::seed::DevSeed,
     run_id: Uuid,
 ) -> Result<(), sqlx::Error> {
+    crate::support::builtin_run_record(
+        &mut **transaction,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "working",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

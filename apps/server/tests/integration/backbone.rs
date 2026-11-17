@@ -771,15 +771,18 @@ async fn a_saved_key_never_shows_in_a_dump_a_response_a_log_or_a_run_environment
         .as_str()
         .expect("signing secret shown once")
         .to_owned();
-    let (plaintext, secret_id) = sqlx::query_as::<_, (Option<String>, Option<Uuid>)>(
-        "SELECT webhook_secret, webhook_secret_id FROM external_agent_connections WHERE id = $1",
+    let secret_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT secret.secret_id
+        FROM connection_signing_secrets secret
+        JOIN agent_connections delivery ON delivery.id = secret.connection_id
+        WHERE delivery.source_connection_id = $1 AND secret.state = 'active'
+        "#,
     )
     .bind(connection)
     .fetch_one(&setup.pool)
     .await
-    .expect("connection secret");
-    assert_eq!(plaintext, None);
-    let secret_id = secret_id.expect("stored secret");
+    .expect("stored secret");
     assert_eq!(
         secrets::reveal(&setup.pool, keys.as_ref(), secret_id, "test.sign")
             .await
@@ -860,7 +863,7 @@ async fn a_saved_key_never_shows_in_a_dump_a_response_a_log_or_a_run_environment
 }
 
 #[tokio::test]
-async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
+async fn webhook_secrets_live_in_the_store_and_keys_rotate() {
     let Some(setup) = backbone("backbone_rotation").await else {
         return;
     };
@@ -876,31 +879,39 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
         .expect("space")
         .to_owned();
     let (agent, _) = create_agent(&setup.app, &setup.browser, &space, "Rook", "rook").await;
-    // As a connection looked before the store: plaintext in the row.
-    sqlx::query(
-        "UPDATE external_agent_connections SET webhook_url = 'https://old.example.test/', webhook_secret = 'whsec_legacyplaintextvalue123' WHERE actor_id = $1",
-    )
-    .bind(agent)
-    .execute(&setup.pool)
-    .await
-    .expect("legacy row");
-    assert_eq!(
-        secrets::migrate_plaintext_webhook_secrets(&setup.pool, &setup.state.config)
-            .await
-            .expect("migrate"),
-        1
-    );
-    assert_eq!(
-        rows_containing(&setup.pool, "whsec_legacyplaintextvalue123").await,
-        Vec::<String>::new()
-    );
-    let secret_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT webhook_secret_id FROM external_agent_connections WHERE actor_id = $1",
+    let source = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM external_agent_connections WHERE actor_id = $1",
     )
     .bind(agent)
     .fetch_one(&setup.pool)
     .await
-    .expect("moved");
+    .expect("connection");
+    // A connection's signing secret is sealed in the store, never in a row.
+    let mut transaction = setup.pool.begin().await.expect("begin");
+    let delivery =
+        agent_workspace_server::delivery::connections::for_source(&mut transaction, agent, source)
+            .await
+            .expect("delivery side");
+    let signing = agent_workspace_server::delivery::connections::new_signing_secret(
+        &mut transaction,
+        &setup.state.config,
+        &delivery,
+        false,
+    )
+    .await
+    .expect("secret");
+    transaction.commit().await.expect("commit");
+    assert_eq!(
+        rows_containing(&setup.pool, &signing).await,
+        Vec::<String>::new()
+    );
+    let secret_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT secret_id FROM connection_signing_secrets WHERE connection_id = $1",
+    )
+    .bind(delivery.id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("stored");
 
     // Rotating the master key re-seals the data key under a new one and
     // drops the old key; the value still opens.
@@ -928,7 +939,7 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
             .await
             .expect("still opens")
             .expose(),
-        "whsec_legacyplaintextvalue123"
+        signing
     );
     // A caller that read the keyring just before the rotation re-sealed the
     // row still opens it: the unknown new key makes it read the file again.
@@ -943,7 +954,7 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
         .await
         .expect("opens with a keyring read before the rotation")
         .expose(),
-        "whsec_legacyplaintextvalue123"
+        signing
     );
 
     // A server that read the keyring before the rotation can't store a
@@ -1590,7 +1601,7 @@ async fn retention_runs_as_scheduled_jobs() {
     let Some(setup) = backbone("backbone_retention").await else {
         return;
     };
-    // More expired agent events than one cleanup batch holds.
+    // More finished webhook deliveries than one cleanup batch holds.
     let space = send(
         &setup.app,
         setup
@@ -1603,23 +1614,35 @@ async fn retention_runs_as_scheduled_jobs() {
         .expect("space")
         .to_owned();
     let (agent, _) = create_agent(&setup.app, &setup.browser, &space, "Wren", "wren").await;
-    sqlx::query(
-        r#"
-        INSERT INTO external_agent_events (
-            id, project_id, connection_id, sequence, kind, summary, resource_kind,
-            resource_id, canonical_path, created_at, expires_at
-        )
-        SELECT gen_random_uuid(), connection.project_id, connection.id, 1000000 + n, 'test.expired',
-               'expired', 'message', gen_random_uuid(), '/expired',
-               now() - interval '40 days', now() - interval '1 day'
-        FROM external_agent_connections connection, generate_series(1, 10050) n
-        WHERE connection.actor_id = $1
-        "#,
+    let source = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM external_agent_connections WHERE actor_id = $1",
     )
     .bind(agent)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("connection");
+    let mut transaction = setup.pool.begin().await.expect("begin");
+    let delivery =
+        agent_workspace_server::delivery::connections::for_source(&mut transaction, agent, source)
+            .await
+            .expect("delivery side");
+    transaction.commit().await.expect("commit");
+    sqlx::query(
+        r#"
+        INSERT INTO deliveries (
+            connection_id, event_position, event_id, workspace_id, event_type, reason, state,
+            created_at
+        )
+        SELECT $1, 1000000 + n, gen_random_uuid(), $2, 'message.created', 'visible',
+               'delivered', now() - interval '8 days'
+        FROM generate_series(1, 10050) n
+        "#,
+    )
+    .bind(delivery.id)
+    .bind(delivery.home_workspace_id)
     .execute(&setup.pool)
     .await
-    .expect("expired events");
+    .expect("finished deliveries");
     let registry = jobs::default_registry();
     jobs::ensure_recurring(&setup.pool, &registry)
         .await
@@ -1641,20 +1664,15 @@ async fn retention_runs_as_scheduled_jobs() {
                 "retention.database_windows".to_owned(),
                 "succeeded".to_owned()
             ),
-            (
-                "retention.external_events".to_owned(),
-                "succeeded".to_owned()
-            ),
+            ("retention.deliveries".to_owned(), "succeeded".to_owned()),
             ("retention.worktrees".to_owned(), "succeeded".to_owned()),
         ]
     );
-    let left = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM external_agent_events WHERE expires_at <= now()",
-    )
-    .fetch_one(&setup.pool)
-    .await
-    .expect("left");
-    assert_eq!(left, 0, "one run drains every expired event");
+    let left = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM deliveries")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("left");
+    assert_eq!(left, 0, "one run drains every finished delivery");
     // Each queued its next run for later.
     let later = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM background_jobs WHERE kind LIKE 'retention.%' AND state = 'queued' AND run_at > now() + interval '5 hours'",

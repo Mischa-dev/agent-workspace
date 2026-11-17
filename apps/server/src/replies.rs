@@ -21,10 +21,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use hmac::{Hmac, Mac};
 use serde::Serialize;
-use sha2::Sha256;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -37,16 +34,16 @@ use crate::{
         lock_conversation_for, parse_actor_kind,
     },
     error::{ApiPath, AppError},
-    external_events::enqueue_external_event,
     outbox::{OutboxEventPayload, ReplyRequestsUpdatedPayload},
     policy::{Action, ActorKind},
 };
 
-/// Agent messages allowed in a group before a person has to say Continue.
+/// Replies allowed in a conversation, after a message that starts a chain,
+/// before someone has to say Continue; the `replies.turn_allowance` setting
+/// changes it per workspace or space (A2.8).
 pub(crate) const TURN_ALLOWANCE: i32 = 6;
 pub(crate) const LEASE_MINUTES: i32 = 15;
 const WORKER_INTERVAL: Duration = Duration::from_secs(3);
-const WEBHOOK_MAX_ATTEMPTS: i32 = 8;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -88,48 +85,94 @@ pub(crate) struct NewMessage<'a> {
     pub conversation_kind: &'a str,
     pub message_id: Uuid,
     pub author_actor_id: Uuid,
-    pub author_kind: &'a str,
     pub mentioned_actor_ids: &'a [Uuid],
 }
 
-/// Ask the right agents to reply. Runs in the message's own transaction.
+/// The loop limits that apply in a space: the deepest chain of asks
+/// (`replies.max_chain_depth`) and the replies allowed before someone says
+/// Continue (`replies.turn_allowance`).
+struct Limits {
+    max_chain_depth: i32,
+    turn_allowance: i32,
+}
+
+async fn limits(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+) -> Result<Limits, AppError> {
+    Ok(Limits {
+        max_chain_depth: crate::settings::space_integer(
+            transaction,
+            project_id,
+            "replies.max_chain_depth",
+        )
+        .await?
+        .try_into()
+        .unwrap_or(i32::MAX),
+        turn_allowance: crate::settings::space_integer(
+            transaction,
+            project_id,
+            "replies.turn_allowance",
+        )
+        .await?
+        .try_into()
+        .unwrap_or(TURN_ALLOWANCE),
+    })
+}
+
+/// How deep in a chain of asks a message is: one more than the deepest ask
+/// its author is answering here (the one this message answered, or one
+/// still open), and 0 when nobody asked them (a fresh start, whoever wrote
+/// it). Mentions and replies by anyone ask, so this, not the kind of
+/// account, is what ends a loop.
+async fn chain_depth(
+    transaction: &mut Transaction<'_, Postgres>,
+    message: &NewMessage<'_>,
+) -> Result<i32, AppError> {
+    Ok(sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT COALESCE(max(request.chain_depth)::integer + 1, 0)
+        FROM reply_requests request
+        WHERE request.agent_actor_id = $2
+          AND (request.conversation_id = $1 OR request.thread_id = $1)
+          AND (request.reply_message_id = $3 OR request.status IN ('pending', 'claimed'))
+        "#,
+    )
+    .bind(message.conversation_id)
+    .bind(message.author_actor_id)
+    .bind(message.message_id)
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
+/// Ask the right accounts to reply. Runs in the message's own transaction.
+///
+/// Anyone's message asks: in a channel or a thread under one, the accounts
+/// it mentions and, in a thread, those already working there; in a DM or
+/// group, the other members. Only accounts that take reply requests are
+/// asked. Loops end by depth and turns, never by who wrote it: a message
+/// that answers an ask is one deeper than it, nothing past
+/// `replies.max_chain_depth` asks anyone, every message past the start of a
+/// chain uses up a turn, and a fresh start gives the turns back (A2.8).
 pub(crate) async fn ask_for_replies(
     transaction: &mut Transaction<'_, Postgres>,
     message: NewMessage<'_>,
 ) -> Result<(), AppError> {
-    if matches!(message.conversation_kind, "channel" | "thread") {
-        // Project discussions ask agents a person mentions, and in a thread
-        // also the agents already working there (follow-ups). DMs and groups
-        // retain their existing delivery and turn rules below.
-        if message.author_kind != "human" {
-            return Ok(());
-        }
-        if !message.mentioned_actor_ids.is_empty() {
-            ask(transaction, &message, true).await?;
-            // Tagging an agent backed by a harness launches a run (A8).
-            crate::launch::queue_tag_launches(
-                transaction,
-                message.project_id,
-                message.conversation_id,
-                message.message_id,
-                message.mentioned_actor_ids,
-            )
+    if !matches!(
+        message.conversation_kind,
+        "channel" | "thread" | "dm" | "group"
+    ) {
+        return Ok(());
+    }
+    let limits = limits(transaction, message.project_id).await?;
+    let depth = chain_depth(transaction, &message).await?;
+    if depth == 0 {
+        sqlx::query("UPDATE conversations SET agent_turns_remaining = $2 WHERE id = $1")
+            .bind(message.conversation_id)
+            .bind(limits.turn_allowance)
+            .execute(&mut **transaction)
             .await?;
-        }
-        if message.conversation_kind == "thread" {
-            let followers = thread_followers(transaction, &message).await?;
-            insert_requests(transaction, &message, &followers, false, true).await?;
-        }
-        return Ok(());
-    }
-    if !matches!(message.conversation_kind, "dm" | "group") {
-        return Ok(());
-    }
-    let from_agent = message.author_kind == "external_agent";
-    if from_agent {
-        if message.conversation_kind == "dm" {
-            return Ok(());
-        }
+    } else {
         let remaining = sqlx::query_scalar::<_, i32>(
             r#"
             UPDATE conversations
@@ -141,57 +184,80 @@ pub(crate) async fn ask_for_replies(
         .bind(message.conversation_id)
         .fetch_one(&mut **transaction)
         .await?;
-        if remaining == 0 {
-            // Allowance used up: the conversation waits for a person.
+        if remaining == 0 || depth >= limits.max_chain_depth {
+            // The chain has gone far enough: it waits for someone to start
+            // afresh or say Continue.
             return notify(transaction, message.project_id, message.conversation_id).await;
         }
-    } else {
-        sqlx::query("UPDATE conversations SET agent_turns_remaining = $2 WHERE id = $1")
-            .bind(message.conversation_id)
-            .bind(TURN_ALLOWANCE)
-            .execute(&mut **transaction)
-            .await?;
     }
-    let required = !from_agent && message.conversation_kind == "dm";
-    ask(transaction, &message, required).await
+    if matches!(message.conversation_kind, "channel" | "thread") {
+        if !message.mentioned_actor_ids.is_empty() {
+            ask(transaction, &message, true, depth).await?;
+            // Tagging an agent backed by a harness launches a run (A8).
+            if depth == 0 {
+                crate::launch::queue_tag_launches(
+                    transaction,
+                    message.project_id,
+                    message.conversation_id,
+                    message.message_id,
+                    message.mentioned_actor_ids,
+                )
+                .await?;
+            }
+        }
+        if message.conversation_kind == "thread" {
+            let followers = thread_followers(transaction, &message).await?;
+            insert_requests(transaction, &message, &followers, false, true, depth).await?;
+        }
+        return Ok(());
+    }
+    let required = depth == 0 && message.conversation_kind == "dm";
+    ask(transaction, &message, required, depth).await
 }
 
-/// Ask agents a person newly @mentioned by editing their message, in a
-/// channel or a thread under one. `message.mentioned_actor_ids` holds only the
-/// newly mentioned (in no earlier revision). Nothing is superseded and turns
-/// don't change. In DMs and groups (and threads under them) every agent member
-/// was already asked when the message was sent, and agents' own edits ask
-/// nobody, matching send.
+/// Ask the accounts newly @mentioned by editing a message, in a channel or
+/// a thread under one. `message.mentioned_actor_ids` holds only the newly
+/// mentioned (in no earlier revision). Nothing is superseded and turns don't
+/// change; the edit is as deep in its chain as a new message from its author
+/// would be, and past the deepest chain it asks nobody. In DMs and groups
+/// (and threads under them) every member who takes requests was already
+/// asked when the message was sent.
 pub(crate) async fn ask_after_edit(
     transaction: &mut Transaction<'_, Postgres>,
     message: NewMessage<'_>,
 ) -> Result<(), AppError> {
     if !matches!(message.conversation_kind, "channel" | "thread")
-        || message.author_kind != "human"
         || message.mentioned_actor_ids.is_empty()
     {
         return Ok(());
     }
+    let limits = limits(transaction, message.project_id).await?;
+    let depth = chain_depth(transaction, &message).await?;
+    if depth >= limits.max_chain_depth {
+        return Ok(());
+    }
     let agents = agents_to_ask(transaction, &message).await?;
-    insert_requests(transaction, &message, &agents, true, false).await?;
+    insert_requests(transaction, &message, &agents, true, false, depth).await?;
     Ok(())
 }
 
-/// Ask the agents the reply rules pick, superseding their pending requests
+/// Ask the accounts the reply rules pick, superseding their pending requests
 /// about earlier messages here.
 async fn ask(
     transaction: &mut Transaction<'_, Postgres>,
     message: &NewMessage<'_>,
     required: bool,
+    depth: i32,
 ) -> Result<(), AppError> {
     let agents = agents_to_ask(transaction, message).await?;
-    insert_requests(transaction, message, &agents, required, true).await?;
+    insert_requests(transaction, message, &agents, required, true, depth).await?;
     Ok(())
 }
 
-/// The agents the reply rules ask about a message. In a channel or thread
-/// under one: the active agents a person mentioned who can see it. In a DM or
-/// group (or a thread under one): every other active agent member.
+/// The accounts the reply rules ask about a message: only active accounts
+/// that take reply requests, never its author. In a channel or thread under
+/// one: those it mentions who can see it. In a DM or group (or a thread
+/// under one): every other member.
 async fn agents_to_ask(
     transaction: &mut Transaction<'_, Postgres>,
     message: &NewMessage<'_>,
@@ -204,9 +270,10 @@ async fn agents_to_ask(
             JOIN actors actor ON actor.id = membership.actor_id
             WHERE membership.project_id = $1
               AND membership.enabled
-              AND actor.kind = 'external_agent'
+              AND actor.accepts_reply_requests
               AND actor.status = 'active'
               AND actor.id = ANY($2)
+              AND actor.id <> $4
               AND conversation_visible_to($3, actor.id)
             ORDER BY actor.id
             "#,
@@ -214,6 +281,7 @@ async fn agents_to_ask(
         .bind(message.project_id)
         .bind(message.mentioned_actor_ids)
         .bind(message.conversation_id)
+        .bind(message.author_actor_id)
         .fetch_all(&mut **transaction)
         .await?);
     }
@@ -227,7 +295,7 @@ async fn agents_to_ask(
          AND membership.actor_id = member.actor_id
         WHERE member.conversation_id = $1
           AND member.actor_id <> $2
-          AND actor.kind = 'external_agent'
+          AND actor.accepts_reply_requests
           AND actor.status = 'active'
           AND membership.enabled
         ORDER BY member.actor_id
@@ -259,7 +327,7 @@ async fn thread_followers(
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE membership.project_id = $1
           AND membership.enabled
-          AND actor.kind = 'external_agent'
+          AND actor.accepts_reply_requests
           AND actor.status = 'active'
           AND actor.id <> $3
           AND NOT (actor.id = ANY($4))
@@ -314,6 +382,7 @@ async fn insert_requests(
     agents: &[Uuid],
     required: bool,
     supersede_others: bool,
+    depth: i32,
 ) -> Result<usize, AppError> {
     if agents.is_empty() {
         return Ok(0);
@@ -343,10 +412,10 @@ async fn insert_requests(
             r#"
             INSERT INTO reply_requests (
                 id, project_id, conversation_id, message_id, agent_actor_id,
-                required, mentioned, follows_request_id
+                required, mentioned, chain_depth, follows_request_id
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7,
+                $1, $2, $3, $4, $5, $6, $7, $8,
                 (
                     SELECT claimed.id FROM reply_requests claimed
                     WHERE claimed.agent_actor_id = $5
@@ -367,6 +436,7 @@ async fn insert_requests(
         .bind(agent)
         .bind(required)
         .bind(message.mentioned_actor_ids.contains(&agent))
+        .bind(i16::try_from(depth).unwrap_or(i16::MAX))
         .fetch_optional(&mut **transaction)
         .await?;
         if let Some((request_id, follows)) = inserted {
@@ -493,25 +563,17 @@ pub(crate) enum Wakeup {
 }
 
 impl Wakeup {
-    pub(crate) fn event(self) -> &'static str {
+    fn event_type(self) -> &'static crate::events::EventType {
         match self {
-            Self::Requested => "reply.requested",
-            Self::FollowUp => "reply.followup",
-            Self::Cancelled => "reply.cancelled",
-        }
-    }
-
-    fn summary(self) -> &'static str {
-        match self {
-            Self::Requested => "You were asked to reply",
-            Self::FollowUp => "A person followed up where you're working",
-            Self::Cancelled => "A person stopped this request",
+            Self::Requested => &crate::events::catalog::REPLY_REQUESTED,
+            Self::FollowUp => &crate::events::catalog::REPLY_FOLLOWUP,
+            Self::Cancelled => &crate::events::catalog::REPLY_CANCELLED,
         }
     }
 }
 
-/// Tell each of the agent's active connections what happened: an inbox event
-/// for pollers, plus a webhook delivery if the connection has one.
+/// Tells the agent what happened to a reply request: one event heard by
+/// that agent alone, which its connections read or are pushed (A2.5).
 async fn wake(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -520,47 +582,38 @@ async fn wake(
     request_id: Uuid,
     wakeup: Wakeup,
 ) -> Result<(), AppError> {
-    let connections = sqlx::query_as::<_, (Uuid, bool)>(
-        r#"
-        SELECT id, webhook_url IS NOT NULL
-        FROM external_agent_connections
-        WHERE agent_connection_can_access(id, $1) AND actor_id = $2 AND status = 'active'
-        "#,
-    )
-    .bind(project_id)
-    .bind(agent_actor_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for (connection_id, has_webhook) in connections {
-        enqueue_external_event(
-            transaction,
-            connection_id,
+    let Some((thread_id, message_id, generation, follows, required)) =
+        sqlx::query_as::<_, (Option<Uuid>, Uuid, i32, Option<Uuid>, bool)>(
+            "SELECT thread_id, message_id, generation, follows_request_id, required \
+             FROM reply_requests WHERE id = $1",
+        )
+        .bind(request_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+    else {
+        return Ok(());
+    };
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            wakeup.event_type(),
             project_id,
-            wakeup.event(),
-            wakeup.summary(),
             "reply_request",
             request_id,
-            &format!("/messages/{conversation_id}"),
         )
-        .await?;
-        if has_webhook {
-            sqlx::query(
-                r#"
-                INSERT INTO agent_webhook_deliveries (id, connection_id, reply_request_id, event)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (connection_id, reply_request_id, event) DO UPDATE
-                SET attempts = 0, next_attempt_at = now(), delivered_at = NULL,
-                    last_error = NULL
-                "#,
-            )
-            .bind(Uuid::now_v7())
-            .bind(connection_id)
-            .bind(request_id)
-            .bind(wakeup.event())
-            .execute(&mut **transaction)
-            .await?;
-        }
-    }
+        .access_thing(thread_id.unwrap_or(conversation_id))
+        .audience(crate::events::Audience::Account(agent_actor_id))
+        .payload(serde_json::json!({
+            "replyRequestId": request_id,
+            "conversationId": conversation_id,
+            "threadId": thread_id,
+            "messageId": message_id,
+            "generation": generation,
+            "followsRequestId": follows,
+            "required": required,
+        })),
+    )
+    .await?;
     Ok(())
 }
 
@@ -840,11 +893,12 @@ pub(crate) struct ContinueOutcome {
     pub asked: Vec<ActorView>,
 }
 
-/// Let the agents in a group (or a thread under one) take another round:
-/// reset its turn allowance and, when the newest message is an agent's, ask
-/// the group's other agents to answer it. People only, so agents can't keep a
-/// conversation going on their own. Shared by the browser API and MCP;
-/// callers record their own audit rows.
+/// Let a conversation's chain take another round: give its turns back and,
+/// in a DM or group (or a thread under one) whose newest message is by an
+/// account that takes reply requests, ask the other members to answer it
+/// as a fresh start. Needs `replies.steer` where the conversation is, so a
+/// role decides who may keep agents going, whoever holds it. Shared by the
+/// browser API and MCP; callers record their own audit rows.
 ///
 /// A removed message is never asked about: the newest message that wasn't
 /// removed counts. Asking about the same message again leaves each agent
@@ -856,29 +910,26 @@ pub(crate) async fn continue_conversation_in(
     actor_kind: ActorKind,
     conversation_id: Uuid,
 ) -> Result<ContinueOutcome, AppError> {
-    if actor_kind != ActorKind::Human {
-        return Err(AppError::Forbidden);
-    }
     let conversation = lock_conversation_for(
         transaction,
         actor_id,
         actor_kind,
         conversation_id,
-        Action::MessageSend,
+        Action::ReplySteer,
         false,
     )
     .await?;
-    if conversation.effective_kind() != "group" {
-        return Err(AppError::Conflict("conversation", "only groups have turns"));
-    }
+    let allowance = limits(transaction, conversation.project_id)
+        .await?
+        .turn_allowance;
     sqlx::query("UPDATE conversations SET agent_turns_remaining = $2 WHERE id = $1")
         .bind(conversation_id)
-        .bind(TURN_ALLOWANCE)
+        .bind(allowance)
         .execute(&mut **transaction)
         .await?;
-    let latest = sqlx::query_as::<_, (Uuid, Uuid, String)>(
+    let latest = sqlx::query_as::<_, (Uuid, Uuid, bool)>(
         r#"
-        SELECT message.id, message.author_actor_id, actor.kind
+        SELECT message.id, message.author_actor_id, actor.accepts_reply_requests
         FROM conversation_entries entry
         JOIN messages message ON message.id = entry.message_id
         JOIN actors actor ON actor.id = message.author_actor_id
@@ -891,8 +942,9 @@ pub(crate) async fn continue_conversation_in(
     .bind(conversation_id)
     .fetch_optional(&mut **transaction)
     .await?;
-    if let Some((message_id, author_actor_id, author_kind)) = &latest
-        && author_kind == "external_agent"
+    let effective_kind = conversation.effective_kind();
+    if let Some((message_id, author_actor_id, true)) = &latest
+        && matches!(effective_kind, "dm" | "group")
     {
         ask(
             transaction,
@@ -900,13 +952,13 @@ pub(crate) async fn continue_conversation_in(
                 project_id: conversation.project_id,
                 conversation_id,
                 members_conversation_id: conversation.membership_conversation_id(),
-                conversation_kind: "group",
+                conversation_kind: effective_kind,
                 message_id: *message_id,
                 author_actor_id: *author_actor_id,
-                author_kind,
                 mentioned_actor_ids: &[],
             },
             false,
+            0,
         )
         .await?;
     }
@@ -945,7 +997,7 @@ pub(crate) async fn continue_conversation_in(
     Ok(ContinueOutcome {
         project_id: conversation.project_id,
         conversation_id,
-        agent_turns_remaining: TURN_ALLOWANCE,
+        agent_turns_remaining: allowance,
         latest_message_id,
         asked,
     })
@@ -1011,7 +1063,7 @@ pub(crate) async fn retry_request_in(
         actor_id,
         actor_kind,
         conversation_id,
-        Action::MessageSend,
+        Action::ReplySteer,
         false,
     )
     .await?;
@@ -1138,8 +1190,8 @@ pub(crate) struct StopOutcome {
 }
 
 /// Stop an agent's pending or claimed request, and the follow-ups queued
-/// behind it where it answers. People only, and only people who can see the
-/// conversation. The agent's next call on any of them is refused with the
+/// behind it where it answers. Needs `replies.steer` in a conversation the
+/// caller can see, whatever kind of account holds it. The agent's next call on any of them is refused with the
 /// reason, and its connections get a `reply.cancelled` wakeup at once.
 /// Shared by the browser API and MCP; callers record their own audit rows.
 pub(crate) async fn stop_request_in(
@@ -1148,9 +1200,6 @@ pub(crate) async fn stop_request_in(
     actor_kind: ActorKind,
     request_id: Uuid,
 ) -> Result<StopOutcome, AppError> {
-    if actor_kind != ActorKind::Human {
-        return Err(AppError::Forbidden);
-    }
     let Some((conversation_id, answer_conversation_id, agent_actor_id)) =
         sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
             r#"
@@ -1172,7 +1221,7 @@ pub(crate) async fn stop_request_in(
         actor_id,
         actor_kind,
         conversation_id,
-        Action::MessageSend,
+        Action::ReplySteer,
         false,
     )
     .await
@@ -1313,10 +1362,9 @@ pub(crate) async fn stop_for_run(
     Ok(true)
 }
 
-/// Background loop: expire lapsed claims and deliver webhook wakeups.
+/// Background loop: expire lapsed claims. Wakeups are deliveries now
+/// (`crate::delivery`).
 pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
-    // Each delivery builds its own client, pinned to the address it checked
-    // (see `outbound::webhook_client`), so there is no shared one here.
     loop {
         round(&state).await;
         tokio::select! {
@@ -1329,14 +1377,11 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     }
 }
 
-/// One pass: expire lapsed claims, then deliver due webhook wakeups. Each
-/// failure is logged; the next pass tries again.
+/// One pass: expire lapsed claims. A failure is logged; the next pass
+/// tries again.
 pub async fn round(state: &AppState) {
     if let Err(error) = expire_leases(&state.pool).await {
         tracing::warn!(category = error.log_category(), "reply lease sweep failed");
-    }
-    if let Err(error) = deliver_webhooks(state).await {
-        tracing::warn!(category = error.log_category(), "webhook delivery failed");
     }
 }
 
@@ -1361,413 +1406,4 @@ async fn expire_leases(pool: &PgPool) -> Result<(), AppError> {
     }
     transaction.commit().await?;
     Ok(())
-}
-
-#[derive(Debug, FromRow)]
-struct DueDelivery {
-    id: Uuid,
-    connection_id: Uuid,
-    reply_request_id: Uuid,
-    event: String,
-    attempts: i32,
-    agent_actor_id: Uuid,
-    project_id: Uuid,
-    conversation_id: Uuid,
-    thread_id: Option<Uuid>,
-    message_id: Uuid,
-    generation: i32,
-    follows_request_id: Option<Uuid>,
-    /// Whether what the wakeup says is still true: the request still waits
-    /// for the agent (or, for a stop, was stopped), and the agent can still
-    /// reach it.
-    still_true: bool,
-    /// The agent's session in the conversation (A3), to resume.
-    session_ref: Option<String>,
-    session_harness: Option<String>,
-    wakeup_format: String,
-    webhook_url: Option<String>,
-    /// Plaintext from before the secrets store; moved into it at startup.
-    webhook_secret: Option<String>,
-    webhook_secret_id: Option<Uuid>,
-}
-
-async fn deliver_webhooks(state: &AppState) -> Result<(), AppError> {
-    let claimed = claim_due_wakeups(state).await?;
-    let trusted_origins = &state.config.webhook_trusted_origins;
-    // Posted outside any transaction, side by side, so a slow runner holds
-    // no database connection and the lease sweep never waits behind it.
-    // Each post is bounded by `outbound::WEBHOOK_TIMEOUT` (twice, with the lookup),
-    // well inside the claim.
-    let results = futures_util::future::join_all(claimed.into_iter().map(|wakeup| async move {
-        let error = match wakeup.secret.as_ref() {
-            None => Some("the webhook's signing secret couldn't be read"),
-            Some(secret) => post_wakeup(
-                &wakeup.url,
-                secret.expose(),
-                &wakeup.delivery,
-                trusted_origins,
-            )
-            .await
-            .err(),
-        };
-        record_wakeup(&state.pool, &wakeup.delivery, error).await
-    }))
-    .await;
-    results.into_iter().collect()
-}
-
-/// How long a claimed wakeup is left to its poster before another sweep
-/// may take it up again.
-const WAKEUP_CLAIM: &str = "30 seconds";
-
-/// A due wakeup claimed for posting.
-struct ClaimedWakeup {
-    delivery: DueDelivery,
-    url: String,
-    /// `None` when the stored secret couldn't be opened: a failed attempt,
-    /// retried with backoff, not a wakeup quietly dropped.
-    secret: Option<crate::secrets::SecretValue>,
-}
-
-/// Claims up to ten due wakeups in one short transaction: those with nothing
-/// left to wake are marked delivered, the rest are pushed `WAKEUP_CLAIM` into
-/// the future so no other sweep posts them meanwhile.
-async fn claim_due_wakeups(state: &AppState) -> Result<Vec<ClaimedWakeup>, AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let due = sqlx::query_as::<_, DueDelivery>(
-        r#"
-        SELECT delivery.id, delivery.connection_id, delivery.reply_request_id,
-               delivery.event, delivery.attempts, request.agent_actor_id,
-               request.project_id, request.conversation_id, request.thread_id,
-               request.message_id, request.generation, request.follows_request_id,
-               (
-                   CASE delivery.event
-                       WHEN 'reply.cancelled' THEN request.status = 'cancelled'
-                       ELSE request.status = 'pending'
-                   END
-                   AND agent_connection_can_access(connection.id, request.project_id)
-                   AND conversation_visible_to(request.conversation_id, request.agent_actor_id)
-               ) AS still_true,
-               session.external_ref AS session_ref, session.harness AS session_harness,
-               connection.wakeup_format,
-               connection.webhook_url, connection.webhook_secret, connection.webhook_secret_id
-        FROM agent_webhook_deliveries delivery
-        JOIN reply_requests request ON request.id = delivery.reply_request_id
-        JOIN external_agent_connections connection ON connection.id = delivery.connection_id
-        LEFT JOIN agent_sessions session
-          ON session.agent_actor_id = request.agent_actor_id
-         AND session.conversation_id = COALESCE(request.thread_id, request.conversation_id)
-         AND session.state IN ('active', 'idle')
-        WHERE delivery.delivered_at IS NULL
-          AND delivery.next_attempt_at <= now()
-          AND delivery.attempts < $1
-        ORDER BY delivery.next_attempt_at
-        LIMIT 10
-        FOR UPDATE OF delivery SKIP LOCKED
-        "#,
-    )
-    .bind(WEBHOOK_MAX_ATTEMPTS)
-    .fetch_all(&mut *transaction)
-    .await?;
-    let mut claimed = Vec::new();
-    for delivery in due {
-        let (secret, secret_unreadable) =
-            match (&delivery.webhook_secret_id, &delivery.webhook_secret) {
-                (Some(id), _) => {
-                    let revealed = match crate::secrets::keyring(&state.config) {
-                        Ok(keys) => crate::secrets::reveal(
-                            &mut *transaction,
-                            keys.as_ref(),
-                            *id,
-                            "agent_webhook.sign",
-                        )
-                        .await
-                        .ok(),
-                        Err(_) => None,
-                    };
-                    let unreadable = revealed.is_none();
-                    (revealed, unreadable)
-                }
-                (None, Some(plaintext)) => (
-                    Some(crate::secrets::SecretValue::new(plaintext.clone())),
-                    false,
-                ),
-                (None, None) => (None, false),
-            };
-        // Bridges on the old format only understand "check your inbox", which
-        // a stop doesn't need.
-        let legacy_stop = delivery.wakeup_format == "inbox" && delivery.event == "reply.cancelled";
-        let deliverable = delivery.webhook_url.is_some()
-            && (secret.is_some() || secret_unreadable)
-            && delivery.still_true
-            && !legacy_stop;
-        if !deliverable {
-            // Answered, superseded, or the webhook was removed: nothing to wake.
-            sqlx::query("UPDATE agent_webhook_deliveries SET delivered_at = now() WHERE id = $1")
-                .bind(delivery.id)
-                .execute(&mut *transaction)
-                .await?;
-            continue;
-        }
-        sqlx::query(&format!(
-            "UPDATE agent_webhook_deliveries SET next_attempt_at = now() + interval '{WAKEUP_CLAIM}' \
-             WHERE id = $1"
-        ))
-        .bind(delivery.id)
-        .execute(&mut *transaction)
-        .await?;
-        claimed.push(ClaimedWakeup {
-            url: delivery.webhook_url.clone().unwrap_or_default(),
-            delivery,
-            secret,
-        });
-    }
-    transaction.commit().await?;
-    Ok(claimed)
-}
-
-/// Records one posted wakeup's result in its own short transaction.
-async fn record_wakeup(
-    pool: &sqlx::PgPool,
-    delivery: &DueDelivery,
-    error: Option<&str>,
-) -> Result<(), AppError> {
-    let attempts = delivery.attempts + 1;
-    let backoff_seconds = (5_i64 << attempts.min(6)).min(300);
-    let mut transaction = crate::db::scoped_tx(pool).await?;
-    sqlx::query(
-        r#"
-        UPDATE agent_webhook_deliveries
-        SET attempts = $2,
-            next_attempt_at = now() + make_interval(secs => $3),
-            delivered_at = CASE WHEN $4::text IS NULL THEN now() END,
-            last_error = $4
-        WHERE id = $1
-        "#,
-    )
-    .bind(delivery.id)
-    .bind(attempts)
-    .bind(backoff_seconds as f64)
-    .bind(error)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        UPDATE external_agent_connections
-        SET last_wakeup_at = now(), last_wakeup_error = $2
-        WHERE id = $1
-        "#,
-    )
-    .bind(delivery.connection_id)
-    .bind(error)
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await?;
-    Ok(())
-}
-
-/// The webhook body. Typed wakeups say what happened and where, so a runner
-/// can route them (to the session already working in a thread, say) without a
-/// round trip. Neither format carries message text: the runner claims the
-/// request to read it, and every read is checked against who can see the
-/// conversation.
-fn wakeup_body(delivery: &DueDelivery) -> serde_json::Value {
-    if delivery.wakeup_format == "inbox" {
-        return serde_json::json!({
-            "event": "inbox.available",
-            "deliveryId": delivery.id,
-            "agentId": delivery.agent_actor_id,
-            "replyRequestId": delivery.reply_request_id,
-        });
-    }
-    serde_json::json!({
-        "event": delivery.event,
-        "deliveryId": delivery.id,
-        "agentId": delivery.agent_actor_id,
-        "projectId": delivery.project_id,
-        "replyRequestId": delivery.reply_request_id,
-        "conversationId": delivery.conversation_id,
-        "threadId": delivery.thread_id,
-        "messageId": delivery.message_id,
-        "generation": delivery.generation,
-        "followsRequestId": delivery.follows_request_id,
-        // The agent's own session in this conversation (A3), so it resumes
-        // rather than starting cold; null until it binds one.
-        "sessionRef": delivery.session_ref,
-        "sessionHarness": delivery.session_harness,
-    })
-}
-
-async fn post_wakeup(
-    url: &str,
-    secret: &str,
-    delivery: &DueDelivery,
-    trusted_origins: &[String],
-) -> Result<(), &'static str> {
-    let (url, client) = crate::outbound::webhook_client(url, trusted_origins).await?;
-    let body = wakeup_body(delivery);
-    let event = body["event"].as_str().unwrap_or_default().to_owned();
-    let body = body.to_string();
-    let timestamp = unix_timestamp();
-    let signature = sign(secret, &timestamp, &body).ok_or("could not sign the wakeup")?;
-    let response = client
-        .post(url)
-        .header("content-type", "application/json")
-        .header("x-workspace-delivery", delivery.id.to_string())
-        .header("x-workspace-event", event)
-        .header("x-workspace-timestamp", &timestamp)
-        .header("x-workspace-signature", format!("sha256={signature}"))
-        .body(body)
-        .send()
-        .await
-        .map_err(|_| "the webhook did not respond")?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err("the webhook returned an error status")
-    }
-}
-
-/// What a runner answered to a test wakeup.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct TestWakeup {
-    pub ok: bool,
-    /// The HTTP status the runner answered with, if it answered.
-    pub status: Option<u16>,
-    /// Why it didn't work, in words a person can act on.
-    pub error: Option<String>,
-    pub elapsed_ms: u64,
-    pub delivery_id: Uuid,
-}
-
-/// Send a signed `ping` to a runner, now, and report what it answered. It is
-/// signed and sent exactly like a real wakeup (same headers, same timeout,
-/// same address checks), but names no request, so a runner only has to
-/// verify it and answer 2xx. Nothing is queued or retried.
-pub(crate) async fn send_test_wakeup(
-    url: &str,
-    secret: &str,
-    agent_id: Uuid,
-    project_id: Uuid,
-    trusted_origins: &[String],
-) -> TestWakeup {
-    let delivery_id = Uuid::now_v7();
-    let started = std::time::Instant::now();
-    let outcome = async {
-        let (url, client) = crate::outbound::webhook_client(url, trusted_origins)
-            .await
-            .map_err(|error| (None, error.to_owned()))?;
-        let body = serde_json::json!({
-            "event": "ping",
-            "deliveryId": delivery_id,
-            "agentId": agent_id,
-            "projectId": project_id,
-            "message": "A test wakeup from Agent Workspace. Verify the signature and answer 2xx; there is nothing to claim.",
-        })
-        .to_string();
-        let timestamp = unix_timestamp();
-        let signature = sign(secret, &timestamp, &body)
-            .ok_or((None, "could not sign the wakeup".to_owned()))?;
-        let response = client
-            .post(url)
-            .header("content-type", "application/json")
-            .header("x-workspace-delivery", delivery_id.to_string())
-            .header("x-workspace-event", "ping")
-            .header("x-workspace-timestamp", &timestamp)
-            .header("x-workspace-signature", format!("sha256={signature}"))
-            .body(body)
-            .send()
-            .await
-            .map_err(|error| {
-                (
-                    None,
-                    if error.is_timeout() {
-                        "the runner didn't answer within 8 seconds".to_owned()
-                    } else {
-                        "the runner couldn't be reached".to_owned()
-                    },
-                )
-            })?;
-        let status = response.status();
-        if status.is_success() {
-            Ok(status.as_u16())
-        } else if matches!(status.as_u16(), 401 | 403) {
-            Err((
-                Some(status.as_u16()),
-                "the runner refused the signature: check it uses this webhook's current secret"
-                    .to_owned(),
-            ))
-        } else {
-            Err((
-                Some(status.as_u16()),
-                format!("the runner answered {status}"),
-            ))
-        }
-    }
-    .await;
-    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    match outcome {
-        Ok(status) => TestWakeup {
-            ok: true,
-            status: Some(status),
-            error: None,
-            elapsed_ms,
-            delivery_id,
-        },
-        Err((status, error)) => TestWakeup {
-            ok: false,
-            status,
-            error: Some(error),
-            elapsed_ms,
-            delivery_id,
-        },
-    }
-}
-
-/// Validate webhook destinations without making a network request: public
-/// https only, unless the URL's origin is one the operator trusts
-/// (`AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`), which may also be http on a
-/// private or tailnet address. Credentials and fragments are never allowed.
-/// HMAC-SHA256 over "{timestamp}.{body}", hex encoded.
-pub fn sign(secret: &str, timestamp: &str, body: &str) -> Option<String> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
-    mac.update(timestamp.as_bytes());
-    mac.update(b".");
-    mac.update(body.as_bytes());
-    Some(
-        mac.finalize()
-            .into_bytes()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-    )
-}
-
-fn unix_timestamp() -> String {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs().to_string())
-        .unwrap_or_default()
-}
-
-/// A new random webhook signing secret, shown to the owner once.
-pub(crate) fn new_webhook_secret() -> String {
-    use rand_core::{OsRng, RngCore};
-    let mut bytes = [0_u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    format!("whsec_{}", URL_SAFE_NO_PAD.encode(bytes))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn signatures_cover_timestamp_and_body() {
-        let signature = sign("secret", "1700000000", "{}").expect("sign");
-        assert_eq!(signature.len(), 64);
-        assert_ne!(Some(signature.clone()), sign("secret", "1700000001", "{}"));
-        assert_ne!(Some(signature), sign("other", "1700000000", "{}"));
-    }
 }

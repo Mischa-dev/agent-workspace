@@ -1,0 +1,11 @@
+{
+  "secret": "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+  "headers": {
+    "content-type": "application/json",
+    "x-workspace-delivery": "01a2b3c4-0000-7000-8000-0000000000e1",
+    "x-workspace-event": "reply.requested",
+    "x-workspace-timestamp": "1794909600",
+    "x-workspace-signature": "sha256=e64f4faf2d882d319214a9475ed0e59f5b1b7f30b1cb05c139406a630571d61d"
+  },
+  "body": "{\"event\":\"reply.requested\",\"deliveryId\":\"01a2b3c4-0000-7000-8000-0000000000e1\",\"agentId\":\"01a2b3c4-0000-7000-8000-0000000000a1\",\"projectId\":\"01a2b3c4-0000-7000-8000-000000000001\",\"replyRequestId\":\"01a2b3c4-0000-7000-8000-0000000000f1\",\"conversationId\":\"01a2b3c4-0000-7000-8000-000000000002\",\"threadId\":null,\"messageId\":\"01a2b3c4-0000-7000-8000-000000000003\",\"generation\":1,\"followsRequestId\":null,\"sessionRef\":null,\"sessionHarness\":null}"
+}

@@ -186,13 +186,15 @@ export function ChannelPage() {
     primaryFor: (message) => {
       const threads = linkedThreadsByMessage.get(message.id) ?? []
       if (threads.length) {
-        return <IconButton icon="messages" label="Open thread" onClick={() => openThread(threads[0].id)} size="sm" />
+        return <IconButton data-message-key="r" icon="messages" label="Open thread" shortcut="R" onClick={() => openThread(threads[0].id)} size="sm" />
       }
       if (!canStartThread) return null
       return (
         <IconButton
+          data-message-key="r"
           icon="messages"
           label="Start a thread"
+          shortcut="R"
           onClick={() => startThread({ messageId: message.id, text: message.plainText, author: message.author.displayName })}
           size="sm"
         />

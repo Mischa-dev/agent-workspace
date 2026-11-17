@@ -163,7 +163,7 @@ export function ThreadPanel({
   const runActions = useThreadRunActions({ entries, includeArchived: false, projectId, threadId, timeline })
   const activeRun = timeline?.activeRun ?? null
   const latestTerminalRun = timeline?.latestTerminalRun ?? null
-  const pendingApproval = timeline?.approvals.find((approval) => approval.status === 'pending')
+  const pendingApproval = timeline?.requests.find((request) => request.status === 'open' && Boolean(request.runId))
   const writer = runAgent(activeRun)
 
   const requestsByMessage = useMemo(() => groupReplyRequests(timeline?.replyRequests ?? []), [timeline?.replyRequests])
@@ -275,9 +275,9 @@ export function ThreadPanel({
             <ApprovalCard
               approval={pendingApproval}
               busyAction={runActions.busyAction}
-              canRespond={pendingApproval.capabilities.respond}
+              canRespond={pendingApproval.mayAnswer}
               onRespond={runActions.respond}
-              run={[activeRun, latestTerminalRun].find((run) => run?.id === pendingApproval.agentRunId) ?? activeRun}
+              run={[activeRun, latestTerminalRun].find((run) => run?.id === pendingApproval.runId) ?? activeRun}
             />
           </div>
         ) : null}

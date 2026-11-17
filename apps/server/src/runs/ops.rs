@@ -262,6 +262,21 @@ pub async fn state_of<'e, E: sqlx::PgExecutor<'e>>(
     .await?)
 }
 
+/// Who asked for a run, read without locking it (a notification's
+/// recipient, not a change to the run).
+pub async fn requested_by<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    run_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT requested_by_account_id FROM runs WHERE id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(executor)
+    .await?
+    .flatten())
+}
+
 /// The run, locked for a change.
 pub async fn locked(
     transaction: &mut Transaction<'_, Postgres>,
@@ -1424,13 +1439,7 @@ pub async fn request_cancel(
     )
     .await?;
     if !next.is_terminal() {
-        notify_agent(
-            transaction,
-            &saved,
-            "run.cancel",
-            "You were asked to stop this run.",
-        )
-        .await?;
+        ask_to_stop(transaction, &saved).await?;
         // A run on a host is stopped by its host, which confirms (A1.12).
         if saved.host_id.is_some() {
             crate::hosts::commands::cancel_run(transaction, &saved, by, reason.as_deref()).await?;
@@ -1439,43 +1448,29 @@ pub async fn request_cancel(
     Ok(saved)
 }
 
-/// Tell the agent that does a run something about it, on each of its active
-/// connections that can reach the run's project, wherever the connection's
-/// home is (the agent event feed until A2's delivery).
-pub async fn notify_agent(
+/// Asks the account that does a run to stop it (`run.cancel`, heard by
+/// that account alone). The reason stays on the run.
+pub async fn ask_to_stop(
     transaction: &mut Transaction<'_, Postgres>,
     run: &RunRow,
-    kind: &str,
-    summary: &str,
 ) -> Result<(), AppError> {
     let Some(space_id) = run.space_id else {
         return Ok(());
     };
-    let connections = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT connection.id FROM external_agent_connections connection
-        WHERE agent_connection_can_access(connection.id, $1)
-          AND connection.actor_id = $2 AND connection.status = 'active'
-        ORDER BY connection.id
-        "#,
-    )
-    .bind(space_id)
-    .bind(run.account_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for connection in connections {
-        crate::external_events::enqueue_external_event(
-            transaction,
-            connection,
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::RUN_CANCEL_ASKED,
             space_id,
-            kind,
-            summary,
             "run",
             run.id,
-            &format!("/runs/{}", run.id),
         )
-        .await?;
-    }
+        .access_thing(run.id)
+        .audience(crate::events::Audience::Account(run.account_id))
+        .version(run.version)
+        .payload(serde_json::json!({ "runId": run.id, "state": run.state })),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1594,7 +1589,7 @@ pub async fn end_for_closed_workspace(
         else {
             continue;
         };
-        notify_agent(transaction, &saved, "run.cancel", reason).await?;
+        ask_to_stop(transaction, &saved).await?;
         // Nobody asked: the workspace closed. The stop names the run's own
         // account, as the host's command needs one.
         crate::hosts::commands::cancel_run(transaction, &saved, saved.account_id, Some(reason))
