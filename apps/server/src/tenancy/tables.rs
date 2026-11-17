@@ -306,10 +306,6 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the kinds of thing the server knows: a kind is the server's, not a workspace's (K3.10)",
     ),
     (
-        "things_backfill",
-        "how far the server's registry backfill got per source table",
-    ),
-    (
         "user_email_addresses",
         "a person's own addresses, server-wide",
     ),
