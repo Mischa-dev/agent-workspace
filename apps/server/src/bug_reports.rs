@@ -1099,11 +1099,13 @@ async fn receive_answer(
     content_type: Option<&str>,
     body: &[u8],
 ) -> Result<Response, AppError> {
-    state.rate_limits.check_form_answer_sender(
-        link.id,
-        crate::rate_limit::client_address(&state.config, headers),
-    )
-    .await?;
+    state
+        .rate_limits
+        .check_form_answer_sender(
+            link.id,
+            crate::rate_limit::client_address(&state.config, headers),
+        )
+        .await?;
     let closed = || {
         Ok(refused(
             StatusCode::FORBIDDEN,
