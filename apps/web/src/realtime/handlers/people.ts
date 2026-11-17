@@ -43,9 +43,31 @@ const lifecycleChanged: Handler = (event) => {
   ]
 }
 
+/** A workspace's own emoji changed: its pickers read the list again. */
+const customEmojiChanged: Handler = (event) => {
+  const workspaceId = payloadId(event, 'workspaceId', 'workspace_id')
+  return [
+    workspaceId
+      ? { id: `custom-emoji:${workspaceId}`, filters: { queryKey: queryKeys.customEmojiOf(workspaceId) } }
+      : { id: 'custom-emoji', filters: { queryKey: queryKeys.customEmoji } },
+  ]
+}
+
+/** One of your own lists changed on another device: that operation's queries. */
+const ownList =
+  (op: string): Handler =>
+  () => [{ id: `op:${op}`, filters: { predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === op } }]
+
+/** Someone's status changed: the names that show it read it again. */
+const statusChanged: Handler = () => [{ id: 'statuses', filters: { queryKey: queryKeys.statuses } }]
+
 export const peopleHandlers: Record<string, Handler> = {
   'project.membership.updated': membershipUpdated,
   'notifications.updated': notificationsUpdated,
   'account.managers.changed': managersChanged,
   'workspace.lifecycle.changed': lifecycleChanged,
+  'custom_emoji.changed': customEmojiChanged,
+  'message_draft.changed': ownList('message_draft_list'),
+  'notification_keywords.changed': ownList('notification_keyword_list'),
+  'account.status.changed': statusChanged,
 }

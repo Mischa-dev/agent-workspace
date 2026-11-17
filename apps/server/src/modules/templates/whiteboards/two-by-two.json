@@ -1,0 +1,11 @@
+{
+  "title": "2x2 matrix",
+  "operations": [
+    {"op": "add", "type": "rectangle", "id": "top-left", "x": 0, "y": 0, "width": 360, "height": 280, "backgroundColor": "#fff3bf", "fillStyle": "solid", "text": "High impact, low effort"},
+    {"op": "add", "type": "rectangle", "id": "top-right", "x": 380, "y": 0, "width": 360, "height": 280, "backgroundColor": "#d0ebff", "fillStyle": "solid", "text": "High impact, high effort"},
+    {"op": "add", "type": "rectangle", "id": "bottom-left", "x": 0, "y": 300, "width": 360, "height": 280, "backgroundColor": "#ebfbee", "fillStyle": "solid", "text": "Low impact, low effort"},
+    {"op": "add", "type": "rectangle", "id": "bottom-right", "x": 380, "y": 300, "width": 360, "height": 280, "backgroundColor": "#f1f3f5", "fillStyle": "solid", "text": "Low impact, high effort"},
+    {"op": "add", "type": "text", "id": "effort", "x": 300, "y": 600, "text": "Effort →"},
+    {"op": "add", "type": "text", "id": "impact", "x": -120, "y": 270, "text": "Impact ↑"}
+  ]
+}

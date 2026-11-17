@@ -176,6 +176,18 @@ pub static CONVERSATION_PINS_CHANGED: EventType = fact(
 );
 
 // --- channels ----------------------------------------------------------
+pub static MESSAGE_DRAFT_CHANGED: EventType = signal(
+    "message_draft.changed",
+    "messages",
+    None,
+    "Someone's draft was saved or cleared",
+);
+pub static NOTIFICATION_KEYWORDS_CHANGED: EventType = signal(
+    "notification_keywords.changed",
+    "messages",
+    None,
+    "Someone's keyword alerts changed",
+);
 pub static THREAD_STATUS_CHANGED: EventType = fact(
     "thread.status_changed",
     "channels",
@@ -457,6 +469,19 @@ pub static FILE_REMOVED: EventType = fact(
     Some("file"),
     "A file was removed",
 );
+pub static ACCOUNT_STATUS_CHANGED: EventType = signal(
+    "account.status_changed",
+    "workspace",
+    None,
+    "Someone's status changed",
+)
+.legacy(&["account.status.changed"]);
+pub static CUSTOM_EMOJI_CHANGED: EventType = signal(
+    "custom_emoji.changed",
+    "workspace",
+    None,
+    "A workspace's custom emoji changed",
+);
 
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
@@ -487,6 +512,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &MESSAGE_REMOVED,
         &MESSAGE_REACTIONS_CHANGED,
         &CONVERSATION_PINS_CHANGED,
+        &MESSAGE_DRAFT_CHANGED,
+        &NOTIFICATION_KEYWORDS_CHANGED,
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,
@@ -528,6 +555,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &WORKSPACE_LIFECYCLE_CHANGED,
         &FILE_ATTACHED,
         &FILE_REMOVED,
+        &ACCOUNT_STATUS_CHANGED,
+        &CUSTOM_EMOJI_CHANGED,
         &NOTIFICATION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
     ];

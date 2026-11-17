@@ -1,14 +1,12 @@
-//! W18: acting straight from a push notification. An approval request gets
-//! Approve and Deny, an agent's question and a mention get Reply. A request
-//! (A1) gets the same by what it takes, whatever its kind (W1.32): Approve
-//! and Deny when its options say yes and no, Reply when it takes a typed
-//! answer; the answer goes through `request_respond`.
+//! W18: acting straight from a push notification. A request offering
+//! approve and deny gets Approve and Deny, one that takes words and a
+//! mention get Reply.
 //!
 //! The service worker can't rely on the session cookie or the CSRF token, so
 //! each push carries one random token for its notification (only its sha256
 //! is kept). The token names who acts and what they may do; everything else
 //! goes through the app's own commands, which recheck the person's current
-//! membership, the conversation's visibility and the approval's policy when
+//! membership, the conversation's visibility and who may answer when
 //! they act (principle 9). After one action the token only answers a retry of
 //! that same action, and it expires with the push itself.
 
@@ -23,7 +21,6 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    api::{ApprovalResponse, RunActor, answer_approval, sponsored_execution_request},
     auth::{random_token, require_allowed_origin},
     conversations::{MessageCommandActor, append_message_command},
     error::{ApiJson, AppError},
@@ -31,6 +28,7 @@ use crate::{
     message_content::MessageContent,
     notifications::{self, NotificationView, Selection, UpdateAction},
     policy::ActorKind,
+    requests::{AnswerError, RequestCard},
 };
 
 /// As long as a push service keeps an undelivered push, so a button works
@@ -44,6 +42,9 @@ pub enum NotificationAction {
     Approve,
     Deny,
     Reply,
+    /// A mention or message: read the conversation (C2.2), as opening it
+    /// would.
+    Read,
     /// A reminder: mark its saved item done (W21).
     Done,
     /// A reminder: remind again in an hour (W21).
@@ -56,6 +57,7 @@ impl NotificationAction {
             Self::Approve => "approve",
             Self::Deny => "deny",
             Self::Reply => "reply",
+            Self::Read => "read",
             Self::Done => "done",
             Self::Snooze => "snooze",
         }
@@ -66,6 +68,7 @@ impl NotificationAction {
             "approve" => Some(Self::Approve),
             "deny" => Some(Self::Deny),
             "reply" => Some(Self::Reply),
+            "read" => Some(Self::Read),
             "done" => Some(Self::Done),
             "snooze" => Some(Self::Snooze),
             _ => None,
@@ -76,41 +79,42 @@ impl NotificationAction {
 /// What a notification offers on the phone, before any access check: the
 /// command that runs checks access when someone acts.
 pub fn offered(notification: &NotificationView) -> Vec<NotificationAction> {
-    if let Some(request) = &notification.request {
-        let styled = |style: &str| {
-            request
-                .options
-                .iter()
-                .any(|option| option.style.as_deref() == Some(style))
-        };
-        return match request.status.as_str() {
-            "open" if styled("approve") && styled("deny") => {
-                vec![NotificationAction::Approve, NotificationAction::Deny]
-            }
-            "open" if request.allow_text => vec![NotificationAction::Reply],
-            _ => Vec::new(),
-        };
-    }
     match notification.kind.as_str() {
-        notifications::kind::APPROVAL_REQUESTED => match &notification.approval {
-            Some(approval) if approval.status == "pending" && approval.kind == "approval" => {
-                vec![NotificationAction::Approve, NotificationAction::Deny]
-            }
-            Some(approval) if approval.status == "pending" && approval.kind == "question" => {
-                vec![NotificationAction::Reply]
+        notifications::kind::REQUEST_RAISED => match &notification.request {
+            Some(request) if request.status == "open" => {
+                let mut actions = Vec::new();
+                if styled(request, "approve").is_some() && styled(request, "deny").is_some() {
+                    actions.extend([NotificationAction::Approve, NotificationAction::Deny]);
+                }
+                if request.allow_text {
+                    actions.push(NotificationAction::Reply);
+                }
+                actions
             }
             _ => Vec::new(),
         },
         notifications::kind::MENTION | notifications::kind::CONVERSATION_MESSAGE
             if notification.reply_conversation_id.is_some() =>
         {
-            vec![NotificationAction::Reply]
+            vec![NotificationAction::Reply, NotificationAction::Read]
         }
         notifications::kind::REMINDER if notification.saved_item_id.is_some() => {
             vec![NotificationAction::Done, NotificationAction::Snooze]
         }
         _ => Vec::new(),
     }
+}
+
+/// The option of a request styled (or, unstyled, named) approve or deny.
+fn styled<'a>(request: &'a RequestCard, style: &str) -> Option<&'a str> {
+    request
+        .options
+        .iter()
+        .find(|option| match option.style.as_deref() {
+            Some(found) => found == style,
+            None => option.id == style,
+        })
+        .map(|option| option.id.as_str())
 }
 
 /// A token for a notification's actions, as the push carries it.
@@ -126,7 +130,8 @@ fn token_hash(token: &str) -> Vec<u8> {
 }
 
 /// Make a token for `recipient` to act on `notification` from its push, if
-/// it offers any action. Sponsored executions are answered only in the app.
+/// it offers any action. A run in someone's name is approved only in the
+/// app, where its sponsor sees what it will do.
 pub async fn mint(
     pool: &PgPool,
     organization_id: Uuid,
@@ -137,12 +142,13 @@ pub async fn mint(
     if actions.is_empty() {
         return Ok(None);
     }
-    if let Some(approval) = &notification.approval {
+    if let Some(request) = &notification.request {
         let sponsored = crate::db::scoped_one(pool, async |connection| {
             sqlx::query_scalar::<_, bool>(
-                "SELECT external_execution_request_id IS NOT NULL FROM agent_approvals WHERE id = $1",
+                "SELECT subject_kind IS NOT DISTINCT FROM $2 FROM requests WHERE id = $1",
             )
-            .bind(approval.id)
+            .bind(request.id)
+            .bind(crate::external_execution::REQUEST_SUBJECT)
             .fetch_optional(connection)
             .await
         })
@@ -159,7 +165,7 @@ pub async fn mint(
             r#"
         INSERT INTO notification_action_tokens (
             id, organization_id, actor_id, notification_id, token_hash, actions, expires_at,
-            approval_id
+            request_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
         )
@@ -175,7 +181,7 @@ pub async fn mint(
                 .collect::<Vec<_>>(),
         )
         .bind(expires_at)
-        .bind(notification.approval.as_ref().map(|approval| approval.id))
+        .bind(notification.request.as_ref().map(|request| request.id))
         .execute(connection)
         .await
     })
@@ -191,10 +197,7 @@ pub async fn mint(
 /// Reply is an inline text field where the platform has one; elsewhere the
 /// worker opens the composer instead.
 pub fn payload_actions(notification: &NotificationView, minted: &MintedActions) -> Vec<Value> {
-    let question = notification
-        .approval
-        .as_ref()
-        .is_some_and(|approval| approval.kind == "question");
+    let question = notification.request.is_some();
     minted
         .actions
         .iter()
@@ -206,6 +209,7 @@ pub fn payload_actions(notification: &NotificationView, minted: &MintedActions) 
                 "title": format!("In {} min", crate::later::SNOOZE_MINUTES),
             }),
             NotificationAction::Deny => json!({"action": "deny", "title": "Deny"}),
+            NotificationAction::Read => json!({"action": "read", "title": "Mark read"}),
             NotificationAction::Reply => json!({
                 "action": "reply",
                 "title": if question { "Answer" } else { "Reply" },
@@ -255,7 +259,7 @@ struct TokenRow {
     id: Uuid,
     actor_id: Uuid,
     notification_id: Uuid,
-    approval_id: Option<Uuid>,
+    request_id: Option<Uuid>,
     actions: Vec<String>,
     used_action: Option<String>,
 }
@@ -263,82 +267,6 @@ struct TokenRow {
 /// The person the token acts as, while their account is active.
 struct TokenActor {
     actor_id: Uuid,
-}
-
-impl RunActor for TokenActor {
-    fn actor_id(&self) -> Uuid {
-        self.actor_id
-    }
-    fn actor_kind(&self) -> Result<ActorKind, AppError> {
-        Ok(ActorKind::Human)
-    }
-}
-
-/// W1.32: answer a request (A1) from its push, through `request_respond`
-/// as the person the token names, rechecked there like any answer.
-async fn answer_request(
-    state: &AppState,
-    token_id: Uuid,
-    actor_id: Uuid,
-    card: &crate::requests::RequestCard,
-    action: NotificationAction,
-    text: Option<&str>,
-    key: IdempotencyKey,
-) -> Result<&'static str, AppError> {
-    let missing = || AppError::NotFound("notification_action");
-    let (option_id, typed, outcome) = match action {
-        NotificationAction::Approve | NotificationAction::Deny => {
-            let (style, outcome) = if action == NotificationAction::Approve {
-                ("approve", "approved")
-            } else {
-                ("deny", "denied")
-            };
-            let option = card
-                .options
-                .iter()
-                .find(|option| option.style.as_deref() == Some(style))
-                .ok_or_else(missing)?;
-            (Some(option.id.clone()), None, outcome)
-        }
-        NotificationAction::Reply => {
-            let text = text
-                .map(str::trim)
-                .filter(|text| !text.is_empty() && text.chars().count() <= REPLY_CHARACTERS)
-                .ok_or(AppError::Validation("text"))?;
-            (None, Some(text.to_owned()), "answered")
-        }
-        NotificationAction::Done | NotificationAction::Snooze => return Err(missing()),
-    };
-    let answer = crate::ops::dispatch(
-        state,
-        crate::ops::DispatchRequest {
-            // The token's holder is a person (checked when it was read).
-            caller: crate::access::Caller::person(actor_id, ActorKind::Human),
-            edge: crate::ops::Edge::Job {
-                job_id: token_id,
-                source: "notification_action",
-            },
-            trace_id: None,
-            workspace: None,
-            request_id: Some(key.as_str().to_owned()),
-            unkeyed: crate::ops::Unkeyed::RunOnce,
-            preview: false,
-            renamed_from: None,
-            defer_long: false,
-        },
-        "request_respond",
-        json!({ "requestId": card.id, "optionId": option_id, "text": typed }),
-    )
-    .await;
-    match answer.outcome() {
-        "ok" => Ok(outcome),
-        "conflict" => Err(AppError::Conflict(
-            "notification_action",
-            "this request was already answered",
-        )),
-        "invalid_request" => Err(AppError::Validation("text")),
-        _ => Err(missing()),
-    }
 }
 
 pub(crate) async fn act_http(
@@ -364,7 +292,7 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
     let token = crate::db::scoped_one(&state.pool, async |connection| {
         sqlx::query_as::<_, TokenRow>(
             r#"
-        SELECT t.id, t.actor_id, t.notification_id, t.approval_id, t.actions, t.used_action
+        SELECT t.id, t.actor_id, t.notification_id, t.request_id, t.actions, t.used_action
         FROM notification_action_tokens t
         JOIN actors a ON a.id = t.actor_id AND a.status = 'active' AND a.kind = 'human'
         JOIN users u ON u.actor_id = t.actor_id AND u.status = 'active'
@@ -415,142 +343,136 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
     .into_iter()
     .next()
     .ok_or(AppError::NotFound("notification_action"))?;
-    // Approval notifications are grouped per run, so the row may now show
-    // the run's next approval: a button only answers the one it was shown
-    // with.
-    let shown_approval = notification
-        .approval
+    // A run's waiting notifications are grouped, so the row may now show
+    // another request: a button only answers the one it was shown with.
+    let shown_request = notification
+        .request
         .as_ref()
-        .filter(|approval| Some(approval.id) == token.approval_id);
+        .filter(|request| Some(request.id) == token.request_id);
+    // A retry of the button already used gives the same answer again.
+    let retried = token.used_action.as_deref() == Some(action.as_str());
     // Every retry of the same button reuses one key, so a send that timed
-    // out on the phone can't post or answer twice.
+    // out on the phone can't post twice.
     let key = IdempotencyKey::parse(&format!(
         "notification-action-{}-{}",
         token.id,
         action.as_str()
     ))?;
-    let outcome = if let Some(card) = &notification.request {
-        answer_request(
-            state,
-            token.id,
-            actor.actor_id,
-            card,
-            action,
-            request.text.as_deref(),
-            key,
-        )
-        .await?
-    } else {
-        match action {
-            NotificationAction::Approve | NotificationAction::Deny => {
-                let approval = shown_approval
-                    .filter(|approval| approval.kind == "approval")
-                    .ok_or(AppError::NotFound("notification_action"))?;
-                if sponsored_execution_request(state, approval.id)
-                    .await?
-                    .is_some()
-                {
-                    return Err(AppError::NotFound("notification_action"));
-                }
-                let decision = if action == NotificationAction::Approve {
-                    "approve"
-                } else {
-                    "deny"
-                };
-                answer_approval(
+    let outcome = match action {
+        NotificationAction::Approve | NotificationAction::Deny => {
+            let request = shown_request.ok_or(AppError::NotFound("notification_action"))?;
+            let style = if action == NotificationAction::Approve {
+                "approve"
+            } else {
+                "deny"
+            };
+            let option = styled(request, style).ok_or(AppError::NotFound("notification_action"))?;
+            if !retried {
+                answer_request(state, actor.actor_id, request.id, Some(option), None).await?;
+            }
+            if action == NotificationAction::Approve {
+                "approved"
+            } else {
+                "denied"
+            }
+        }
+        NotificationAction::Done | NotificationAction::Snooze => {
+            let saved_item_id = notification
+                .saved_item_id
+                .ok_or(AppError::NotFound("notification_action"))?;
+            if action == NotificationAction::Done {
+                crate::later::change(
                     state,
-                    &actor,
-                    approval.id,
-                    ApprovalResponse {
-                        decision: Some(decision.to_owned()),
-                        answer: None,
+                    actor.actor_id,
+                    saved_item_id,
+                    crate::later::ChangeRequest {
+                        done: Some(true),
+                        ..crate::later::ChangeRequest::default()
                     },
-                    key,
                 )
                 .await?;
-                if action == NotificationAction::Approve {
-                    "approved"
-                } else {
-                    "denied"
-                }
+                "done"
+            } else {
+                crate::later::snooze(state, actor.actor_id, saved_item_id).await?;
+                "snoozed"
             }
-            NotificationAction::Done | NotificationAction::Snooze => {
-                let saved_item_id = notification
-                    .saved_item_id
-                    .ok_or(AppError::NotFound("notification_action"))?;
-                if action == NotificationAction::Done {
-                    crate::later::change(
+        }
+        NotificationAction::Read => {
+            let conversation_id = notification
+                .reply_conversation_id
+                .ok_or(AppError::NotFound("notification_action"))?;
+            // The same read as opening it (C2.2), rechecked now: a
+            // conversation they can no longer read reads nothing.
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+            let conversation = sqlx::query_as::<_, (Uuid, i64)>(
+                r#"
+                SELECT conversation.project_id, conversation.next_entry_sequence - 1
+                FROM conversations conversation
+                WHERE conversation.id = $1
+                  AND actor_can_access_project($2, NULL, conversation.project_id)
+                  AND conversation_readable_by(conversation.id, $2)
+                "#,
+            )
+            .bind(conversation_id)
+            .bind(actor.actor_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .ok_or(AppError::NotFound("notification_action"))?;
+            crate::read_state::mark_seen(
+                &mut transaction,
+                conversation.0,
+                conversation_id,
+                actor.actor_id,
+                conversation.1,
+            )
+            .await?;
+            transaction.commit().await?;
+            "read"
+        }
+        NotificationAction::Reply => {
+            let text = request
+                .text
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty() && text.chars().count() <= REPLY_CHARACTERS)
+                .ok_or(AppError::Validation("text"))?;
+            if notification.request.is_some() && shown_request.is_none() {
+                return Err(AppError::NotFound("notification_action"));
+            }
+            match shown_request {
+                Some(request) => {
+                    if !request.allow_text {
+                        return Err(AppError::NotFound("notification_action"));
+                    }
+                    if !retried {
+                        answer_request(state, actor.actor_id, request.id, None, Some(text)).await?;
+                    }
+                    "answered"
+                }
+                _ => {
+                    let conversation_id = notification
+                        .reply_conversation_id
+                        .ok_or(AppError::NotFound("notification_action"))?;
+                    let content = MessageContent::from_plain_text(text)
+                        .map_err(|_| AppError::Validation("text"))?;
+                    let (content, _, _) = content.into_parts();
+                    append_message_command(
                         state,
-                        actor.actor_id,
-                        saved_item_id,
-                        crate::later::ChangeRequest {
-                            done: Some(true),
-                            ..crate::later::ChangeRequest::default()
+                        MessageCommandActor {
+                            actor_id: actor.actor_id,
+                            actor_kind: "human".to_owned(),
+                            mcp_credential: None,
+                            via_grant_id: None,
                         },
+                        conversation_id,
+                        None,
+                        key,
+                        serde_json::to_value(content)
+                            .map_err(|_| AppError::Internal("reply content"))?,
+                        None,
                     )
                     .await?;
-                    "done"
-                } else {
-                    crate::later::snooze(state, actor.actor_id, saved_item_id).await?;
-                    "snoozed"
-                }
-            }
-            NotificationAction::Reply => {
-                let text = request
-                    .text
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty() && text.chars().count() <= REPLY_CHARACTERS)
-                    .ok_or(AppError::Validation("text"))?;
-                if notification.approval.is_some() && shown_approval.is_none() {
-                    return Err(AppError::NotFound("notification_action"));
-                }
-                match shown_approval {
-                    Some(approval) if approval.kind == "question" => {
-                        if sponsored_execution_request(state, approval.id)
-                            .await?
-                            .is_some()
-                        {
-                            return Err(AppError::NotFound("notification_action"));
-                        }
-                        answer_approval(
-                            state,
-                            &actor,
-                            approval.id,
-                            ApprovalResponse {
-                                decision: None,
-                                answer: Some(text.to_owned()),
-                            },
-                            key,
-                        )
-                        .await?;
-                        "answered"
-                    }
-                    _ => {
-                        let conversation_id = notification
-                            .reply_conversation_id
-                            .ok_or(AppError::NotFound("notification_action"))?;
-                        let content = MessageContent::from_plain_text(text)
-                            .map_err(|_| AppError::Validation("text"))?;
-                        let (content, _, _) = content.into_parts();
-                        append_message_command(
-                            state,
-                            MessageCommandActor {
-                                actor_id: actor.actor_id,
-                                actor_kind: "human".to_owned(),
-                                mcp_credential: None,
-                                via_grant_id: None,
-                            },
-                            conversation_id,
-                            None,
-                            key,
-                            serde_json::to_value(content)
-                                .map_err(|_| AppError::Internal("reply content"))?,
-                            None,
-                        )
-                        .await?;
-                        "replied"
-                    }
+                    "replied"
                 }
             }
         }
@@ -583,4 +505,33 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
         outcome,
         href: notification.href,
     })
+}
+
+/// Answer a request as the token's person, with the same checks as
+/// `request_respond`: they must still see it and be one it asks.
+async fn answer_request(
+    state: &AppState,
+    actor_id: Uuid,
+    request_id: Uuid,
+    option_id: Option<&str>,
+    text: Option<&str>,
+) -> Result<(), AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let row = crate::requests::visible(&mut transaction, request_id, actor_id, true)
+        .await?
+        .ok_or(AppError::NotFound("notification_action"))?;
+    let caller = crate::access::Caller::person(actor_id, ActorKind::Human); // kind-check: mechanical (push tokens are minted for people's devices)
+    crate::requests::answer(&mut transaction, state, &caller, &row, option_id, text)
+        .await
+        .map_err(|error| match error {
+            AnswerError::Invalid { field, .. } => AppError::Validation(field),
+            AnswerError::Settled(_) => AppError::Conflict(
+                "notification_action",
+                "this notification was already answered",
+            ),
+            AnswerError::NotYours => AppError::NotFound("notification_action"),
+            AnswerError::App(error) => error,
+        })?;
+    transaction.commit().await?;
+    Ok(())
 }

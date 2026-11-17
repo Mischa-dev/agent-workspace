@@ -38,7 +38,16 @@ export const conversation = (projectId: string, conversationId: string): Touch =
 /** A thread, channel or conversation embedded in a page as a card. */
 export const conversationThing = (conversationId: string): Touch => ({
   id: `thing:conversation:${conversationId}`,
-  filters: { predicate: (query) => CONVERSATION_THINGS.some((kind) => isThingKey(query.queryKey, kind, conversationId)) },
+  filters: {
+    predicate: (query) =>
+      CONVERSATION_THINGS.some((kind) => isThingKey(query.queryKey, kind, conversationId)) ||
+      // A comment or a resolved thread changes the open things' discussion
+      // summaries (cell marks, thread counts) and the followed-threads list
+      // (order, unread, status); only mounted ones refetch.
+      (query.queryKey[0] === 'op' &&
+        (query.queryKey[2] === 'comment_list' || query.queryKey[2] === 'thread_followed_list') &&
+        query.getObserversCount() > 0),
+  },
 })
 
 /** One thing embedded as a card or chip. */

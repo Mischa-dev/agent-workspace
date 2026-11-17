@@ -7,9 +7,9 @@ import { toastError } from '../app/mutations'
 import { Button, Menu, showToast } from '../ui'
 import { PAGE_IMPORT_ACCEPT, importPage, memoryKeys, pageExportHref } from './api'
 
-/** Downloads a page as Markdown or a Word document. */
+/** Downloads a page as Markdown, a Word document or a PDF, or prints it. */
 export function PageDownloadMenu({ pageId }: { pageId: string }) {
-  const download = (format: 'markdown' | 'docx') => {
+  const download = (format: 'markdown' | 'docx' | 'pdf') => {
     const link = document.createElement('a')
     link.href = pageExportHref(pageId, format)
     link.download = ''
@@ -23,6 +23,8 @@ export function PageDownloadMenu({ pageId }: { pageId: string }) {
       items={[
         { label: 'Markdown (.md)', onSelect: () => download('markdown') },
         { label: 'Word document (.docx)', onSelect: () => download('docx') },
+        { label: 'PDF (.pdf)', onSelect: () => download('pdf') },
+        { label: 'Print…', onSelect: () => window.print() },
       ]}
       label="Download page"
       placement="bottom-end"

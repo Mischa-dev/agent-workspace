@@ -6,6 +6,7 @@ import slashClaims from 'virtual:modules/slots/slash'
 
 import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
+import { MESSAGE_SHORTCUTS } from '../conversations/messageShortcuts'
 import { isWorkspacePath, legacyPathOf } from '../app/href'
 import { useWorkspaceHref, useWorkspaceId } from '../app/workspace'
 import { useHomeExperience, useProjectExperience, type Experience } from '../experience/layout'
@@ -472,7 +473,7 @@ export function CommandPalette() {
         project={current ? projectExperience : null}
         taskView={taskViewAt(location.pathname, location.search)}
       />
-      <MarkAllReadDialog onClose={closeCommandMenu} open={state.open === 'mark-all-read'} projectIds={projects.map((project) => project.id)} />
+      <MarkAllReadDialog onClose={closeCommandMenu} open={state.open === 'mark-all-read'} workspaceIds={[...(homeId ? [homeId] : []), ...projects.map((project) => project.organizationId)]} />
     </>
   )
 }
@@ -535,6 +536,21 @@ function ShortcutSheet({
             </dl>
           </section>
         ) : null}
+        <section>
+          <h3>Focused message</h3>
+          <dl>
+            {MESSAGE_SHORTCUTS.map((shortcut) => (
+              <div className="aw-shortcuts__row" key={shortcut.label} style={{ display: 'contents' }}>
+                <dt>{shortcut.label}</dt>
+                <dd>
+                  {shortcut.keys.map((key, index) => (
+                    <kbd key={index}>{key}</kbd>
+                  ))}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
         {groups.map((group) => (
           <section key={group}>
             <h3>{group}</h3>
@@ -573,13 +589,13 @@ function spokenKey(key: string) {
 }
 
 /** Asks first: there's no undo for marking everything read. */
-function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void; open: boolean; projectIds: string[] }) {
+function MarkAllReadDialog({ onClose, open, workspaceIds }: { onClose: () => void; open: boolean; workspaceIds: string[] }) {
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
   const run = async () => {
     setBusy(true)
     try {
-      const { marked, failed } = await markAllRead(projectIds)
+      const { marked, failed } = await markAllRead(workspaceIds)
       await queryClient.invalidateQueries()
       if (failed) {
         showToast({ tone: 'danger', title: `${countLabel(marked, 'conversation')} marked read, but some weren’t`, description: 'Try again in a moment.' })
@@ -595,7 +611,7 @@ function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void;
   }
   return (
     <Dialog
-      description="Every channel, thread, DM and group you can see will be marked read. Your inbox doesn’t change."
+      description="Every channel, thread, DM and group you can see will be marked read, and their notifications in your inbox with them."
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>

@@ -64,7 +64,6 @@ mod admin;
 mod agent_profile_tools;
 mod agents;
 pub(crate) mod ai_tools;
-mod approvals;
 mod batch_tools;
 pub(crate) mod briefing;
 pub(crate) mod bug_report_tools;
@@ -112,6 +111,7 @@ mod sheet_tools;
 pub(crate) mod talk;
 pub(crate) mod task_batch;
 mod workspace_template_tools;
+pub(crate) use common::content_from_text;
 pub(crate) use task_batch::{ImportTask, create_for_import};
 pub(crate) mod task_commands;
 mod task_drafts;
@@ -946,7 +946,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List the agents you share a project with: handle, status, when they last checked in, the projects you share, what they're working on (claimed tasks, and reply requests in conversations you can see). People who manage an agent also see how it connects, whether it gets wakeups, its access, whether it can ask for runs or answer approvals, and its last error. Never shows tokens or other secrets; agents are added and changed in the web app.",
+        description = "List the agents you share a project with: handle, status, when they last checked in, the projects you share, what they're working on (claimed tasks, and reply requests in conversations you can see). People who manage an agent also see how it connects, whether it gets wakeups, its access, whether it can ask for runs, and its last error. Never shows tokens or other secrets; agents are added and changed in the web app.",
         annotations(title = "List agents", read_only_hint = true, open_world_hint = false)
     )]
     async fn agent_list(
@@ -1238,7 +1238,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create or edit a page: what's true now for the project (or, with projectId \"workspace\", the whole workspace), in Markdown. Edits replace the text and keep every earlier version, so restoreVersion can undo one. Pass expectedVersion when editing. A page with skillDescription is a skill: instructions agents load with skill_get when that one line says they apply. A line `[label](/path \"embed\")` shows the task, page, whiteboard, thread, task list or collection view at that address live.",
+        description = "Create or edit a page: what's true now for the project (or, with projectId \"workspace\", the whole workspace), in Markdown. Edits replace the text and keep every earlier version, so restoreVersion can undo one. Pass expectedVersion when editing. A page with skillDescription is a skill: instructions agents load with skill_get when that one line says they apply. A line `[label](/path \"embed\")` shows the task, page, whiteboard, thread, task list or collection view at that address live. fromTemplateId starts a page from a template (page_list marks them isTemplate) with its date, author and project filled in.",
         annotations(
             title = "Write page",
             read_only_hint = false,
@@ -1440,23 +1440,6 @@ impl McpServer {
     }
 
     // -- Code, runs and approvals --------------------------------------------
-
-    #[tool(
-        description = "Approvals runs are waiting on that you can answer, oldest first (people only). Answer one with approval_respond. Approvals that need a person are answered in the web app, where the step is shown in full; inWebApp counts them.",
-        annotations(
-            title = "List approvals",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn approval_list(
-        &self,
-        Parameters(arguments): Parameters<approvals::ApprovalListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<approvals::ApprovalListValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(approvals::list(&self.state, principal, arguments).await)
-    }
 
     #[tool(
         description = "Create a task, with its subtasks, labels and acceptance criteria, from a task template (by name or ID). You can give it its own title, assignee, milestone and dates.",
@@ -1881,48 +1864,6 @@ impl McpServer {
             )
             .await,
         )
-    }
-
-    #[tool(
-        description = "Read an approval a run is waiting on: what it asks, its options, and whether you can answer it. People see approvals addressed to them or their role; agents see ones addressed to them.",
-        annotations(
-            title = "Get approval",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn approval_get(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<approvals::ApprovalGetArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<approvals::ApprovalToolResult> {
-        let principal = principal_or!(parts, approvals::ApprovalToolResult::denied());
-        Json(approvals::get(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Answer an approval a run is waiting on (approve, deny, or answer a question), passing its version as expectedVersion. Approving lets the run continue. Approvals that need a person are answered in the web app.",
-        annotations(
-            title = "Answer approval",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn approval_respond(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<approvals::ApprovalRespondArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<approvals::ApprovalToolResult> {
-        let principal = principal_or!(parts, approvals::ApprovalToolResult::denied());
-        Json(approvals::respond(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -4466,19 +4407,6 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
     (
         "threadId",
         "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
-    ),
-    // An approval belongs to a run, or to an agent's run request (which has
-    // no run yet); either way its thread decides who can see it.
-    (
-        "approvalId",
-        r#"SELECT conversation.project_id
-           FROM agent_approvals approval
-           LEFT JOIN agent_runs run ON run.id = approval.agent_run_id
-           LEFT JOIN external_execution_requests request
-             ON request.id = approval.external_execution_request_id
-           JOIN conversations conversation
-             ON conversation.id = COALESCE(run.conversation_id, request.conversation_id)
-           WHERE approval.id = $1 AND conversation_visible_to(conversation.id, $2)"#,
     ),
     (
         "conversationId",

@@ -133,10 +133,6 @@ pub(crate) fn scope(template: &str, param: impl Fn(&str) -> Option<String>) -> O
 #[cfg(test)]
 pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
     (
-        "/api/v1/agent-approvals/",
-        "an approval belongs to a run; the run's thread is checked by conversation access",
-    ),
-    (
         "/api/v1/agent-runs/",
         "runs are read through their thread, whose handler checks the Runs module",
     ),

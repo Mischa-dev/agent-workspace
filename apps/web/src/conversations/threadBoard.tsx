@@ -133,7 +133,7 @@ export function ThreadStatusButton({
   return (
     <>
       {quietWhenOpen && thread.status === 'Open' ? (
-        <IconButton icon="circle-check" label="Set status" onClick={() => setOpen(true)} size="sm" />
+        <IconButton icon="circle-check" label="Close with outcome" onClick={() => setOpen(true)} size="sm" />
       ) : (
         <button
           aria-label={`Status: ${thread.status}. Change it`}

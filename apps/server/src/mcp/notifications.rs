@@ -55,9 +55,6 @@ pub(crate) struct NotificationLine {
     pub snoozed_until: Option<String>,
     pub at: String,
     pub url: String,
-    /// Answer with the web app or the run's thread; pending approvals only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approval_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -112,10 +109,6 @@ pub(super) fn line(state: &AppState, view: NotificationView) -> NotificationLine
         snoozed_until: view.snoozed_until,
         at: view.at,
         url,
-        approval_id: view
-            .approval
-            .filter(|approval| approval.status == "pending")
-            .map(|approval| approval.id.to_string()),
     }
 }
 

@@ -139,110 +139,76 @@ pub async fn enqueue_external_work_item_event(
     Ok(())
 }
 
-pub async fn enqueue_external_approval_requested(
-    transaction: &mut Transaction<'_, Postgres>,
-    approval_id: Uuid,
-) -> Result<(), AppError> {
-    let available =
-        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
-            .fetch_one(&mut **transaction)
-            .await?;
-    if !available {
-        return Ok(());
-    }
-    let recipients = external_approval_recipients(transaction, approval_id, "pending").await?;
-    for (connection_id, project_id, conversation_id) in recipients {
-        enqueue_external_event(
-            transaction,
-            connection_id,
-            project_id,
-            "approval.requested",
-            "An approval requires your decision",
-            "agent_approval",
-            approval_id,
-            &format!("/projects/{project_id}/threads/{conversation_id}"),
-        )
-        .await?;
-    }
-    Ok(())
+/// A comment on a task or page, for `comment.mentioned` (C1.1).
+pub struct MentioningComment {
+    pub project_id: Uuid,
+    /// A `subject_visible_to` kind: `task` or `page`.
+    pub thing_kind: &'static str,
+    pub thing_id: Uuid,
+    /// The event's resource: `work_item_comment` or `page_comment`.
+    pub comment_kind: &'static str,
+    pub comment_id: Uuid,
+    /// What the link's `#comment-` points at: the comment, or a page
+    /// comment's thread.
+    pub anchor: Uuid,
+    pub author_actor_id: Uuid,
 }
 
-pub async fn enqueue_external_approval_resolved(
+/// Each agent a task or page comment mentions gets one `comment.mentioned`
+/// event per active connection (C1.1), the way `message.mentioned` works
+/// for messages: only while it's an enabled member who may see the thing,
+/// never for the author. The event carries ids and a link to the comment,
+/// never its words.
+pub async fn enqueue_comment_mentioned(
     transaction: &mut Transaction<'_, Postgres>,
-    approval_id: Uuid,
+    comment: MentioningComment,
+    mentioned_actor_ids: &[Uuid],
 ) -> Result<(), AppError> {
-    let available =
-        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
-            .fetch_one(&mut **transaction)
-            .await?;
-    if !available {
+    if mentioned_actor_ids.is_empty() {
         return Ok(());
     }
-    let recipients = external_approval_recipients(transaction, approval_id, "resolved").await?;
-    for (connection_id, project_id, conversation_id) in recipients {
-        enqueue_external_event(
-            transaction,
-            connection_id,
-            project_id,
-            "approval.resolved",
-            "An addressed approval was resolved",
-            "agent_approval",
-            approval_id,
-            &format!("/projects/{project_id}/threads/{conversation_id}"),
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-async fn external_approval_recipients(
-    transaction: &mut Transaction<'_, Postgres>,
-    approval_id: Uuid,
-    required_status: &str,
-) -> Result<Vec<(Uuid, Uuid, Uuid)>, AppError> {
-    let recipients = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+    let recipients = sqlx::query_as::<_, (Uuid, String)>(
         r#"
-        SELECT connection.id, conversation.project_id, run.conversation_id
-        FROM agent_approvals approval
-        JOIN agent_runs run ON run.id = approval.agent_run_id
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        JOIN projects project ON project.id = conversation.project_id
-         AND project.archived_at IS NULL
-        JOIN external_agent_connections connection
-          ON agent_connection_can_access(connection.id, conversation.project_id)
-          AND connection.status = 'active'
-         AND connection.actor_id <> approval.requesting_actor_id
+        SELECT connection.id,
+               subject_href($4, $5) || '#comment-' || $6::text AS href
+        FROM external_agent_connections connection
         JOIN actors actor ON actor.id = connection.actor_id
-         AND actor.kind = 'external_agent' AND actor.status = 'active'
         JOIN project_memberships membership
-          ON membership.project_id = conversation.project_id
+          ON membership.project_id = $1
          AND membership.actor_id = connection.actor_id
-         AND membership.enabled
-         AND membership.role IN ('owner', 'admin', 'member')
-         AND custom_role_allows(membership.role_id, 'runs.approve')
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = connection.actor_id
-         AND organization_membership.enabled
-        WHERE approval.id = $1
-          AND approval.status = $2
-          AND NOT approval.human_required
-          AND (
-              approval.eligible_actor_id = connection.actor_id
-              OR (
-                  approval.eligible_actor_id IS NULL
-                  AND approval.eligible_role IN (membership.role, 'any_authorized')
-              )
-          )
+        WHERE agent_connection_can_access(connection.id, $1)
+          AND connection.actor_id = ANY($2)
+          AND connection.actor_id <> $3
+          AND connection.status = 'active'
+          AND actor.status = 'active'
+          AND membership.enabled
+          AND subject_visible_to($4, $5, connection.actor_id)
         ORDER BY connection.id
-        FOR SHARE OF approval, run, connection, actor, membership, organization_membership
+        FOR SHARE OF connection, actor, membership
         "#,
     )
-    .bind(approval_id)
-    .bind(required_status)
+    .bind(comment.project_id)
+    .bind(mentioned_actor_ids)
+    .bind(comment.author_actor_id)
+    .bind(comment.thing_kind)
+    .bind(comment.thing_id)
+    .bind(comment.anchor)
     .fetch_all(&mut **transaction)
     .await?;
-    Ok(recipients)
+    for (connection_id, href) in recipients {
+        enqueue_external_event(
+            transaction,
+            connection_id,
+            comment.project_id,
+            "comment.mentioned",
+            "You were mentioned in a comment",
+            comment.comment_kind,
+            comment.comment_id,
+            &href,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub fn encode_cursor(

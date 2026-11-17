@@ -31,6 +31,16 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "custom_emojis",
+                table: "custom_emojis",
+                references: &[
+                    ("created_by_account_id", "actors"),
+                    ("retired_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "field_definitions",
                 table: "field_definitions",
                 references: &[
@@ -681,6 +691,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("message_id", "messages"),
                     ("actor_id", "actors"),
                     ("via_oauth_grant_id", "mcp_oauth_grants"),
+                    ("custom_emoji_id", "custom_emojis"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -717,6 +728,14 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             },
         ],
         not_exported: &[
+            (
+                "message_drafts",
+                "a person's unsent words, theirs and not the workspace's record",
+            ),
+            (
+                "notification_keywords",
+                "a person's own alert settings, theirs and not the workspace's record",
+            ),
             (
                 "message_link_previews",
                 "a cache or index derived from other rows, rebuilt on import",
@@ -1357,7 +1376,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("work_item_id", "work_items"),
                     ("comment_id", "work_item_comments"),
                     ("agent_run_id", "runs"),
-                    ("approval_id", "requests"),
                     ("pull_request_id", "github_pull_requests"),
                 ],
                 text_references: &[],
@@ -1635,22 +1653,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("conversation_id", "conversations"),
                     ("work_item_id", "work_items"),
                     ("answered_by_account_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "agent_approvals",
-                table: "agent_approvals",
-                references: &[
-                    ("agent_run_id", "agent_runs"),
-                    ("requesting_actor_id", "actors"),
-                    ("responded_by_actor_id", "actors"),
-                    (
-                        "external_execution_request_id",
-                        "external_execution_requests",
-                    ),
-                    ("eligible_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],

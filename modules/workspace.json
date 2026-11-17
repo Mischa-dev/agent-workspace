@@ -15,6 +15,12 @@
     "settings_set": "change",
     "people_search": "query",
     "workspace_search": "query",
+    "status_set": "change",
+    "status_delete": "change",
+    "status_list": "query",
+    "custom_emoji_create": "create",
+    "custom_emoji_list": "query",
+    "custom_emoji_update": "change",
     "notification_list": "query",
     "notification_update": "change",
     "file_upload": "create",
@@ -85,6 +91,7 @@
     "/api/v1/links/resolve",
     "/api/v1/auth/*",
     "/api/v1/client-errors",
+    "/api/v1/custom-emoji/*",
     "/api/v1/dev/bootstrap",
     "/api/v1/files/*",
     "/api/v1/link-previews/*",
@@ -101,10 +108,10 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["file.attached", "file.removed", "workspace.lifecycle_changed"],
+    "emits": ["file.attached", "file.removed", "account.status_changed", "custom_emoji.changed", "workspace.lifecycle_changed"],
     "listens": []
   },
-  "notifications": [],
+  "notifications": ["thing_update"],
   "search": ["files"],
   "automations": { "triggers": [], "actions": [] },
   "things": [],

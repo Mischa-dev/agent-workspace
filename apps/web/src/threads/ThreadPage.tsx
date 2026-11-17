@@ -108,8 +108,8 @@ export function ThreadPage() {
 
   const pendingApproval = useMemo(
     () =>
-      verifiedTimeline?.approvals.find(
-        (approval) => approval.status === 'pending',
+      verifiedTimeline?.requests.find(
+        (request) => request.status === 'open' && Boolean(request.runId),
       ),
     [verifiedTimeline],
   )
@@ -494,9 +494,9 @@ export function ThreadPage() {
             <ApprovalCard
               approval={pendingApproval}
               busyAction={busyAction}
-              canRespond={pendingApproval.capabilities.respond}
+              canRespond={pendingApproval.mayAnswer}
               onRespond={runActions.respond}
-              run={[activeRun, latestTerminalRun].find((run) => run?.id === pendingApproval.agentRunId) ?? activeRun}
+              run={[activeRun, latestTerminalRun].find((run) => run?.id === pendingApproval.runId) ?? activeRun}
             />
           </div>
         ) : null}

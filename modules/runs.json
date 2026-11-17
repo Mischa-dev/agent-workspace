@@ -39,9 +39,6 @@
     "environment_archive": "change",
     "environment_check": "change",
     "model_catalog_write": "change",
-    "approval_list": "query",
-    "approval_get": "describe",
-    "approval_respond": "change",
     "request_create": "create",
     "request_respond": "change",
     "request_cancel": "change",
@@ -54,7 +51,6 @@
   "routes": [
     "/api/v1/runs*",
     "/api/v1/agent-runs/*",
-    "/api/v1/agent-approvals/*",
     "/api/v1/usage*",
     "/api/v1/threads/{id}/agent-runs",
     "/api/v1/projects/{id}/execution-profiles",
@@ -72,7 +68,6 @@
   ],
   "events": { "emits": ["run.updated", "run.finished", "request.raised", "request.answered", "request.cancelled", "request.expired"], "listens": ["task.created", "task.updated"] },
   "notifications": [
-    "approval_requested",
     "request_raised",
     "request_answered",
     "run_waiting",

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use axum::{
     Json, Router,
     extract::State,
@@ -21,23 +19,20 @@ use crate::{
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
-    message_content::{MessageContent, MessageContentError, MessageNode},
-    outbox::{
-        ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload, enqueue_typed,
-    },
+    message_content::{MessageContent, MessageContentError},
     policy::{Action, Decision, Permission, RoleGrant},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor, ConflictKind,
         CreateWorkItemCommand, CreateWorkItemOutcome, CriteriaCommand, CriteriaOperation,
         CriteriaOutcome, CriteriaPlanError, CriterionTarget, LinkWording,
-        MAX_BLOCKED_REASON_CHARACTERS, NewTaskFields, PlacementProblem, ProjectMembership,
-        PullRequestLinkChange, RepositoryLinkOutcome, TaskFieldChanges, ThreadLinkOutcome,
-        UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation, change_criteria,
-        change_pull_request_link, change_repository_link, change_thread_link, conflict_kind,
-        create_work_item as execute_create_work_item, finalize_change, finalize_comment,
-        lock_membership, lock_work_item, set_archived, update_locked_work_item,
-        update_work_item_by_id, valid_estimate,
+        MAX_BLOCKED_REASON_CHARACTERS, NewTaskComment, NewTaskFields, PlacementProblem,
+        ProjectMembership, PullRequestLinkChange, RepositoryLinkOutcome, TaskFieldChanges,
+        ThreadLinkOutcome, UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation,
+        change_criteria, change_pull_request_link, change_repository_link, change_thread_link,
+        conflict_kind, create_work_item as execute_create_work_item, finalize_change,
+        insert_task_comment, lock_membership, lock_work_item, set_archived,
+        update_locked_work_item, update_work_item_by_id, valid_estimate,
     },
     work_item_labels::LabelDelta,
 };
@@ -1567,64 +1562,41 @@ async fn work_with_worker(
         if current.archived_at.is_some() {
             return Err(AppError::Conflict("work_item", "archived"));
         }
-        let channel_exists = sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM conversations
-                WHERE project_id = $1 AND id = $2 AND kind = 'channel' AND archived_at IS NULL
-                  AND conversation_visible_to(id, $3)
-            )
-            "#,
+        // A worker's thread goes in a channel of this project the person can
+        // see; `threads::create` locks it and checks again.
+        let channel_here = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM conversations WHERE project_id = $1 AND id = $2 AND kind = 'channel' AND conversation_visible_to(id, $3))",
         )
         .bind(project_id)
         .bind(request.channel_id)
         .bind(principal.actor_id)
         .fetch_one(&mut *transaction)
         .await?;
-        if !channel_exists {
+        if !channel_here {
             return Err(AppError::NotFound("channel"));
         }
-
-        let thread_id = Uuid::now_v7();
         let work_item_key = format!("{}-{}", current.project_key, current.number);
-        let thread_name = worker_thread_name(&work_item_key, &current.title, thread_id);
-        sqlx::query(
-            r#"
-            INSERT INTO conversations (id, project_id, workspace_id, kind, parent_channel_id, name)
-            VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4)
-            "#,
+        let creator = crate::conversations::threads::ThreadCreator::browser(&principal, &headers)?;
+        let thread = match crate::conversations::threads::create(
+            &mut transaction,
+            &creator,
+            request.channel_id,
+            crate::conversations::threads::ThreadSpec::new(
+                crate::conversations::threads::ThreadName::Composed(worker_thread_name(
+                    &work_item_key,
+                    &current.title,
+                    Uuid::now_v7(),
+                )),
+            )
+            .linked_to_task(work_item_id),
         )
-        .bind(thread_id)
-        .bind(project_id)
-        .bind(request.channel_id)
-        .bind(&thread_name)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO conversation_read_states (
-                project_id, conversation_id, actor_id, highest_seen_sequence
-            ) VALUES ($1, $2, $3, 0)
-            "#,
-        )
-        .bind(project_id)
-        .bind(thread_id)
-        .bind(principal.actor_id)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO work_item_conversation_links (
-                project_id, work_item_id, conversation_id, created_by_actor_id
-            ) VALUES ($1, $2, $3, $4)
-            "#,
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(thread_id)
-        .bind(principal.actor_id)
-        .execute(&mut *transaction)
-        .await?;
+        .await
+        {
+            Ok(thread) => thread,
+            Err(AppError::NotFound(_)) => return Err(AppError::NotFound("channel")),
+            Err(error) => return Err(error),
+        };
+        let thread_id = thread.id;
 
         let setup = crate::api::select_run_setup(
             &mut transaction,
@@ -1637,16 +1609,6 @@ async fn work_with_worker(
         let version =
             advance_work_item_version(&mut transaction, project_id, work_item_id, current.version)
                 .await?;
-        enqueue_typed(
-            &mut transaction,
-            project_id,
-            OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
-                conversation_id: thread_id,
-                kind: OutboxConversationKind::Thread,
-                version: 1,
-            }),
-        )
-        .await?;
         record_work_item_change(
             &mut transaction,
             &headers,
@@ -3117,102 +3079,36 @@ async fn create_work_item_comment(
     {
         return Err(AppError::Validation("replyToCommentId"));
     }
-    let mention_ids = content.mentioned_actor_ids();
-    let mention_rows = fetch_comment_actor_rows(&mut transaction, project_id, &mention_ids).await?;
-    let handles = mention_rows
-        .iter()
-        .map(|actor| (actor.id, actor.handle.clone()))
-        .collect::<HashMap<_, _>>();
-    let references = content.work_item_references();
-    let reference_ids = references
-        .iter()
-        .map(|(_, work_item_id)| *work_item_id)
-        .collect::<Vec<_>>();
-    let reference_rows =
-        fetch_work_item_reference_rows(&mut transaction, project_id, &reference_ids).await?;
-    let labels = reference_rows
-        .iter()
-        .map(|item| (item.id, item.key.clone()))
-        .collect::<HashMap<_, _>>();
-    let mention_nodes = content
-        .nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(index, node)| match node {
-            MessageNode::Mention { actor_id } => Some((index, *actor_id)),
-            MessageNode::Text { .. } | MessageNode::WorkItemRef { .. } => None,
-        })
-        .collect::<Vec<_>>();
-    let (content, plain_text, _) = content
-        .validate_with_resources(
-            |actor_id| handles.get(&actor_id).cloned(),
-            |referenced_id| labels.get(&referenced_id).cloned(),
-        )
-        .map_err(message_content_error)?
-        .into_parts();
-    let content_json = serde_json::to_value(content)
-        .map_err(|_| AppError::Internal("serialize Work Item comment"))?;
-    let comment_id = Uuid::now_v7();
-    let created_at = sqlx::query_scalar::<_, String>(
-        r#"
-        INSERT INTO work_item_comments (
-            id, project_id, work_item_id, author_actor_id,
-            content_version, content, plain_text, reply_to_comment_id
-        ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
-        RETURNING created_at::text
-        "#,
-    )
-    .bind(comment_id)
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(principal.actor_id)
-    .bind(&content_json)
-    .bind(&plain_text)
-    .bind(request.reply_to_comment_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    for (node_index, actor_id) in mention_nodes {
-        sqlx::query(
-            "INSERT INTO work_item_comment_mentions (project_id, work_item_id, comment_id, actor_id, node_index) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(comment_id)
-        .bind(actor_id)
-        .bind(i32::try_from(node_index).map_err(|_| AppError::Validation("comment content"))?)
-        .execute(&mut *transaction)
-        .await?;
-    }
-    for (node_index, referenced_id) in &references {
-        sqlx::query(
-            "INSERT INTO work_item_comment_references (project_id, source_work_item_id, comment_id, referenced_work_item_id, node_index) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(comment_id)
-        .bind(referenced_id)
-        .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("comment content"))?)
-        .execute(&mut *transaction)
-        .await?;
-    }
-    let (sequence, _) = finalize_comment(
+    // One path with the agent tool (C1.1).
+    let inserted = insert_task_comment(
         &mut transaction,
         &browser_actor(&headers, &principal, project_id)?,
-        work_item_id,
-        comment_id,
-        current.version,
-        "work_item.comment_created",
+        NewTaskComment {
+            work_item_id,
+            version: current.version,
+            content,
+            reply_to: request.reply_to_comment_id,
+            attachments: &request.attachments,
+            audit_action: "work_item.comment_created",
+        },
     )
     .await?;
-    crate::files::attach_to_comment(
+    let comment_id = inserted.comment_id;
+    let sequence = inserted.sequence;
+    let mention_rows =
+        fetch_comment_actor_rows(&mut transaction, project_id, &inserted.mentioned_actor_ids)
+            .await?;
+    let reference_rows = fetch_work_item_reference_rows(
         &mut transaction,
         project_id,
-        work_item_id,
-        comment_id,
-        principal.actor_id,
-        &request.attachments,
+        &inserted.referenced_work_item_ids,
     )
     .await?;
+    let (content_json, plain_text, created_at) = (
+        inserted.content_json,
+        inserted.plain_text,
+        inserted.created_at,
+    );
     let author = fetch_comment_actor_rows(&mut transaction, project_id, &[principal.actor_id])
         .await?
         .into_iter()

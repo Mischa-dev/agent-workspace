@@ -99,6 +99,8 @@ pub(crate) struct World {
     pub(crate) task_file: Uuid,
     /// The link preview `file_message` shows, made ready by the test.
     pub(crate) link_preview: Uuid,
+    /// The workspace's own emoji (C2.19), added by `rook`.
+    pub(crate) custom_emoji: Uuid,
     /// A built module (M1.6) in the project, holding nothing.
     pub(crate) module: Uuid,
     /// A package install (M1.9) in the project, that made nothing.
@@ -1025,29 +1027,13 @@ async fn build_workspace(
         .execute(pool)
         .await
         .expect("run blocked");
-    let approval = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options, eligible_role, human_required
-        )
-        VALUES ($1, $2, $3, $4, 'approval', $5,
-                '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-                'any_authorized', false)
-        "#,
+    let approval = super::requests::approval(
+        pool,
+        run,
+        &format!("isolation-{run}"),
+        &format!("Launch approval{m}"),
     )
-    .bind(approval)
-    .bind(run)
-    .bind(rook)
-    .bind(format!("isolation-{approval}"))
-    .bind(format!("Launch approval{m}"))
-    .execute(pool)
-    .await
-    .expect("approval");
-    agent_workspace_server::requests::legacy::approval_written(pool, approval)
-        .await
-        .expect("the approval's request");
+    .await;
 
     // W12: what the run did and cost, an agent profile made from a
     // template, and a harness the workspace registered (a connected runner).
@@ -1623,6 +1609,20 @@ async fn build_workspace(
         .fetch_one(pool)
         .await
         .expect("workspace slug");
+    let custom_emoji = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id)
+        VALUES ($1, $2, 'world_emoji', 'image/png', $3, $4)
+        "#,
+    )
+    .bind(custom_emoji)
+    .bind(organization)
+    .bind(tiny_png())
+    .bind(rook)
+    .execute(pool)
+    .await
+    .expect("custom emoji");
     let module = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -1746,6 +1746,7 @@ async fn build_workspace(
         file_message,
         task_file,
         link_preview,
+        custom_emoji,
         module,
         package_install,
         job,

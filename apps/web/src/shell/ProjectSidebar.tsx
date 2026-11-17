@@ -151,13 +151,14 @@ export function ProjectSidebar({
             const selected = channel.id === selectedChannelId
             const rows = [
               <SidebarLink
+                badge={!channel.muted && channel.mentions > 0 ? channel.mentions : undefined}
                 icon="hash"
                 keep={selected || channel.unread}
                 key={channel.id}
                 label={channel.name}
                 onNavigate={onNavigate}
                 to={`${base}/channels/${encodeURIComponent(channel.id)}`}
-                unread={channel.unread}
+                unread={channel.unread && !channel.muted}
               />,
               ...(threads ? channel.threads : []).map((channelThread) => (
                 <SidebarLink

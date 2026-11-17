@@ -155,6 +155,7 @@ pub(super) async fn workspace_template_apply(
                 actor_id: principal.actor_id,
                 actor_kind: principal.actor_kind,
                 via_grant_id: principal.via_grant_id(),
+                confined_project: super::common::confined_project(principal),
             },
             maker,
             template: None,

@@ -19,12 +19,6 @@ import { isExternalHref, snoozeChoices, type InboxNotification, type InboxReques
 import { KIND_ICON } from './kinds'
 
 /** What became of a question or approval someone already answered. */
-function answeredText(status: string) {
-  if (status === 'superseded') return 'A newer request replaced this one.'
-  if (status === 'canceled') return 'The run stopped before anyone answered.'
-  return 'Answered. Open the thread to see the reply.'
-}
-
 /** What was answered, in one line. */
 function answerText(answer: NonNullable<InboxRequest['answer']>) {
   return [answer.label, answer.text].filter(Boolean).join(' · ')
@@ -123,9 +117,7 @@ function snoozeHint(until: Date, now = new Date()) {
 
 /** The preview pane: what happened, and every way to act on it. */
 export function NotificationDetail({
-  busyApproval,
   item,
-  onAnswer,
   onAnswerRequest,
   onArchive,
   onBack,
@@ -135,9 +127,7 @@ export function NotificationDetail({
   onUnsnooze,
   view,
 }: {
-  busyApproval: string | null
   item: InboxNotification
-  onAnswer: (decision: 'approve' | 'deny') => void
   onAnswerRequest: (answer: { optionId?: string; text?: string }) => Promise<void>
   onArchive: () => void
   onBack: () => void
@@ -147,8 +137,6 @@ export function NotificationDetail({
   onUnsnooze: () => void
   view: InboxView
 }) {
-  const pendingApproval = item.approval?.status === 'pending' && item.approval.kind === 'approval'
-  const pendingQuestion = item.approval?.status === 'pending' && item.approval.kind === 'question'
   const external = isExternalHref(item.href)
   const preview = plainPreview(item.preview)
   const runPage = item.subject.kind === 'agent_run' ? `/runs/${encodeURIComponent(item.subject.id)}` : null
@@ -178,37 +166,14 @@ export function NotificationDetail({
       ) : preview ? (
         <blockquote className="aw-inbox__quote">{preview}</blockquote>
       ) : null}
-      {item.approval && item.approval.status !== 'pending' ? <Banner tone="info">{answeredText(item.approval.status)}</Banner> : null}
       <div className="aw-inbox__actions">
-        {pendingApproval ? (
-          <>
-            <Button
-              busy={busyApproval === `${item.id}:approve`}
-              disabled={busyApproval !== null}
-              icon="check"
-              onClick={() => onAnswer('approve')}
-              variant="primary"
-            >
-              Approve
-            </Button>
-            <Button
-              busy={busyApproval === `${item.id}:deny`}
-              disabled={busyApproval !== null}
-              icon="x"
-              onClick={() => onAnswer('deny')}
-              variant="danger"
-            >
-              Deny
-            </Button>
-          </>
-        ) : null}
         {item.request && item.href === '/inbox' ? null : external ? (
-          <Button icon="external" onClick={onOpen} variant={pendingApproval ? 'secondary' : 'primary'}>
+          <Button icon="external" onClick={onOpen} variant="primary">
             Open on GitHub
           </Button>
         ) : (
-          <ButtonLink to={item.href} variant={pendingApproval ? 'secondary' : 'primary'}>
-            {pendingQuestion ? 'Answer in the thread' : 'Open'}
+          <ButtonLink to={item.href} variant="primary">
+            Open
           </ButtonLink>
         )}
         {runPage ? (

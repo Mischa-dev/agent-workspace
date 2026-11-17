@@ -1682,6 +1682,8 @@ async fn apply_route(
             actor_id: principal.actor_id,
             actor_kind: maker.actor_kind,
             via_grant_id: None,
+            // A browser session is the person's whole account.
+            confined_project: None,
         },
         maker,
         template: None,

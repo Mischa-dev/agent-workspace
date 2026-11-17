@@ -30,7 +30,7 @@ use crate::{
         CreateWorkItemOutcome, LockedWorkItem, MAX_SUBTASK_LEVELS, NewTaskFields, ParentProblem,
         PlacementProblem, TaskFieldChanges, UpdateWorkItemCommand, UpdateWorkItemOutcome,
         authorize_mutation, conflict_kind, create_work_item as execute_create_work_item,
-        finalize_comment, lock_membership, lock_work_item, normalize_criterion_text, record_audit,
+        lock_membership, lock_work_item, normalize_criterion_text, record_audit,
         set_archived as execute_set_archived, update_locked_work_item, update_work_item_by_id,
     },
     work_item_labels::{self, LabelDelta, MAX_LABELS_PER_TASK, echo},
@@ -1368,73 +1368,35 @@ async fn post_update_inner(
             return Ok(WriteResult::invalid("replyToCommentId", REPLY_MESSAGE));
         }
     }
-    let resolved = match crate::work_items::comments::resolve_comment_content(
-        &mut transaction,
-        principal.project_id,
-        validated,
-    )
-    .await
-    {
-        Ok(resolved) => resolved,
-        Err(AppError::Validation(_)) => {
-            return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
-        }
-        Err(error) => return Err(error),
-    };
-    let comment_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO work_item_comments (
-            id, project_id, work_item_id, author_actor_id, content_version,
-            content, plain_text, reply_to_comment_id
-        ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
-        "#,
-    )
-    .bind(comment_id)
-    .bind(principal.project_id)
-    .bind(work_item_id)
-    .bind(principal.actor_id)
-    .bind(&resolved.content_json)
-    .bind(&resolved.plain_text)
-    .bind(reply_to)
-    .execute(&mut *transaction)
-    .await?;
-    crate::work_items::comments::insert_comment_projections(
-        &mut transaction,
-        principal.project_id,
-        work_item_id,
-        comment_id,
-        &resolved,
-    )
-    .await?;
-    let (_sequence, result_id) = finalize_comment(
+    // One path with the web (C1.1).
+    let inserted = match crate::work_item_commands::insert_task_comment(
         &mut transaction,
         &mcp_actor(principal, key.as_str().to_owned()),
-        work_item_id,
-        comment_id,
-        current.version,
-        "work_item.mcp_update_posted",
-    )
-    .await?;
-    match crate::files::attach_to_comment(
-        &mut transaction,
-        principal.project_id,
-        work_item_id,
-        comment_id,
-        principal.actor_id,
-        &attachments,
+        crate::work_item_commands::NewTaskComment {
+            work_item_id,
+            version: current.version,
+            content: validated,
+            reply_to,
+            attachments: &attachments,
+            audit_action: "work_item.mcp_update_posted",
+        },
     )
     .await
     {
-        Ok(_) => {}
-        Err(AppError::Validation(_)) => {
+        Ok(inserted) => inserted,
+        Err(AppError::Validation("attachments")) => {
             return Ok(WriteResult::invalid(
                 "attachmentIds",
                 "Those files aren't your unsent uploads for a comment on this task.",
             ));
         }
+        Err(AppError::Validation(_)) => {
+            return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
+        }
         Err(error) => return Err(error),
-    }
+    };
+    let comment_id = inserted.comment_id;
+    let result_id = inserted.audit_id;
     let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
     let result = applied(
         work_item_id,

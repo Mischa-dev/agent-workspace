@@ -1,338 +1,619 @@
-//! Threads and conversations as operations (K2.8): start and update a
-//! thread, make a channel, change a conversation, pin, change a group's
-//! members, and let a group's agents continue. Agents call them as tools of
-//! the same names (`conversation_members` stays as an alias), scripts
-//! through the v2 route, and rules as actions. Each runs the command the
-//! hand-written tool ran (`mcp::talk`, `mcp::channels`, `mcp::groups`), as
-//! the caller the dispatcher checked, which keeps its own checks inside:
-//! who may change what, archived conversations, and
-//! `conversation_visible_to` on everything it reads. Each command writes its
-//! own audit row.
+//! The one way a thread is made (C1.2, ruling R9).
 //!
-//! Starting a DM or group (`conversation_start`) stays a hand-written tool
-//! until DMs have their own scope (K4.24): it acts in the caller's Messages
-//! space, which no workspace names.
+//! Every path that starts a thread (the web dialog, `thread_start`, an agent
+//! answering a channel tag, "work with a worker", a task launch, a tagged
+//! run) calls [`create`]. It locks the parent through
+//! `lock_conversation_for` (so visibility is checked again after any wait),
+//! refuses a parent that is a thread, archived or out of reach, reuses the
+//! open thread already started from the same message when asked, names the
+//! thread by one policy, and always writes the creator's read state, one
+//! `ConversationCreated` and an audit row. Nothing else inserts a thread
+//! (`structure_guards`' `conversation_inserts`).
 
-use rmcp::schemars::{self, JsonSchema};
-use serde::{Deserialize, Serialize};
+use axum::http::HeaderMap;
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use super::{
+    ConversationAccessRow, UNNAMED_THREAD, enqueue_event, lock_conversation_for,
+    map_conversation_insert, normalize_conversation_name, thread_name_from_text,
+};
 use crate::{
-    mcp::{
-        channels::{
-            self, ChannelCreateArguments, ConversationUpdateArguments, ConversationValue,
-            PinSetArguments, PinValue,
-        },
-        groups::{
-            self, ContinueValue, ConversationContinueArguments, ConversationMembersArguments,
-            GroupMembersValue,
-        },
-        talk::{self, ThreadStartArguments, ThreadUpdateArguments, ThreadValue},
-        task_commands::{principal_for, tool_answer},
-    },
-    ops::{
-        Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
-        refs::parse_id,
-    },
+    auth::AuthenticatedActor,
+    error::AppError,
+    outbox::{ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload},
+    policy::{Action, ActorKind},
 };
 
-/// The Channels module's thread and channel operations.
-pub fn register_channel_ops(registry: &mut Registry) {
-    registry
-        .add::<ThreadStart>()
-        .add::<ThreadUpdate>()
-        .add::<ChannelCreate>();
+/// How a new thread is named.
+#[derive(Clone, Debug)]
+pub(crate) enum ThreadName {
+    /// Someone named it. A name already used by an open thread under the
+    /// same parent is refused (409), as the web dialog expects.
+    Given(String),
+    /// Named from its origin message, else its first message, until someone
+    /// names it (`auto_named`): editing or removing that message renames it
+    /// (`refresh_auto_thread_names`), so its words never outlive the message.
+    Derived,
+    /// A name a caller composes (a task launch, an agent naming its own
+    /// thread): made unique under the parent with " (2)", " (3)"…
+    Composed(String),
 }
 
-/// The Messages module's conversation operations.
-pub fn register_conversation_ops(registry: &mut Registry) {
-    registry
-        .add::<ConversationUpdate>()
-        .add::<PinSet>()
-        .add::<ConversationMembersUpdate>()
-        .add::<ConversationContinue>();
+/// What to make.
+#[derive(Clone, Debug)]
+pub(crate) struct ThreadSpec {
+    /// The message in the parent the thread starts from.
+    pub origin_message_id: Option<Uuid>,
+    pub name: ThreadName,
+    /// Return the open thread already started from the origin message
+    /// instead of making a second one.
+    pub reuse_for_origin: bool,
+    /// Link the new thread to this task (`work_item_conversation_links`).
+    pub link_task: Option<Uuid>,
+    /// Extra audit metadata (a reply request, a launch). Ids only.
+    pub audit: serde_json::Value,
+    /// Where on a thing the thread is about (C1.3), already checked by
+    /// `discussion::anchors`. Only under a comments conversation.
+    pub anchor: Option<serde_json::Value>,
 }
 
-fn conversation(id: &str) -> Target {
-    Target::thing("conversation", parse_id(id).unwrap_or_else(Uuid::nil))
-}
-
-/// One operation over a command that audits itself and is retried through
-/// the dispatcher's request ids.
-macro_rules! conversation_op {
-    (
-        $op:ident {
-            name: $name:literal,
-            kind: $kind:ident,
-            module: $module:literal,
-            permission: $perm:expr,
-            destructive: $destructive:literal,
-            title: $title:literal,
-            description: $description:expr,
-            emits: $emits:literal,
-            input: $input:ty,
-            output: $output:ty,
-            run: $command:path
+impl ThreadSpec {
+    pub(crate) fn new(name: ThreadName) -> Self {
+        Self {
+            origin_message_id: None,
+            name,
+            reuse_for_origin: false,
+            link_task: None,
+            audit: serde_json::json!({}),
+            anchor: None,
         }
-    ) => {
-        pub(crate) struct $op;
+    }
 
-        impl Operation for $op {
-            const NAME: &'static str = $name;
-            const KIND: OpKind = OpKind::$kind;
-            const MODULE: &'static str = $module;
-            const PERMISSION: Option<Perm> = $perm;
-            const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
-            const DESTRUCTIVE: bool = $destructive;
-            const TITLE: &'static str = $title;
-            const DESCRIPTION: &'static str = $description;
-            const EMITS: &'static [&'static str] = &[$emits];
+    pub(crate) fn anchored(mut self, anchor: Option<serde_json::Value>) -> Self {
+        self.anchor = anchor;
+        self
+    }
 
-            type Input = $input;
-            type Output = $output;
+    pub(crate) fn opened_from(mut self, origin_message_id: Option<Uuid>) -> Self {
+        self.origin_message_id = origin_message_id;
+        self
+    }
 
-            async fn run(call: &mut OpCall<'_>, input: $input) -> Result<$output, OpError> {
-                let principal = principal_for(call.ctx, None);
-                let answer = tool_answer($command(call.state, &principal, input).await)?;
-                call.audited_by_command();
-                Ok(answer)
-            }
+    pub(crate) fn reusing(mut self) -> Self {
+        self.reuse_for_origin = true;
+        self
+    }
+
+    pub(crate) fn linked_to_task(mut self, work_item_id: Uuid) -> Self {
+        self.link_task = Some(work_item_id);
+        self
+    }
+
+    pub(crate) fn audited_with(mut self, metadata: serde_json::Value) -> Self {
+        self.audit = metadata;
+        self
+    }
+}
+
+/// Who is making the thread, and through which edge: the audit row's
+/// columns. Constructors cover each edge.
+#[derive(Clone, Debug)]
+pub(crate) struct ThreadCreator {
+    pub actor_id: Uuid,
+    pub actor_kind: ActorKind,
+    /// Refuse (as not found) a parent outside this project: an MCP call
+    /// acts in its principal's project.
+    pub project_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
+    pub authentication_class: &'static str,
+    pub channel: Option<&'static str>,
+    pub client_name: Option<String>,
+    pub mcp_credential_id: Option<Uuid>,
+    pub mcp_oauth_grant_id: Option<Uuid>,
+    pub external_agent_connection_id: Option<Uuid>,
+    pub request_id: Option<String>,
+}
+
+impl ThreadCreator {
+    /// A person in the browser.
+    pub(crate) fn browser(
+        principal: &AuthenticatedActor,
+        headers: &HeaderMap,
+    ) -> Result<Self, AppError> {
+        Ok(Self {
+            actor_id: principal.actor_id,
+            actor_kind: super::parse_actor_kind(&principal.actor_kind)?,
+            project_id: None,
+            session_id: Some(principal.session_id),
+            authentication_class: "password_session",
+            channel: Some("browser"),
+            client_name: None,
+            mcp_credential_id: None,
+            mcp_oauth_grant_id: None,
+            external_agent_connection_id: None,
+            request_id: headers
+                .get(crate::REQUEST_ID_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| value.len() <= 128)
+                .map(str::to_owned),
+        })
+    }
+
+    /// An agent or connected app over MCP, confined to its project.
+    pub(crate) fn mcp(principal: &crate::mcp::McpPrincipal) -> Self {
+        Self {
+            actor_id: principal.actor_id,
+            actor_kind: principal.actor_kind,
+            project_id: Some(principal.project_id),
+            session_id: None,
+            authentication_class: principal.authentication_class,
+            channel: Some("mcp"),
+            client_name: Some(principal.client_name.chars().take(80).collect()),
+            mcp_credential_id: principal.mcp_credential_id,
+            mcp_oauth_grant_id: principal.oauth_grant_id,
+            external_agent_connection_id: principal.external_agent_connection_id,
+            request_id: None,
+        }
+    }
+
+    /// Anyone, on a path that keeps its own audit columns (a launch).
+    pub(crate) fn plain(
+        actor_id: Uuid,
+        actor_kind: ActorKind,
+        session_id: Option<Uuid>,
+        authentication_class: &'static str,
+        request_id: Option<String>,
+    ) -> Self {
+        Self {
+            actor_id,
+            actor_kind,
+            project_id: None,
+            session_id,
+            authentication_class,
+            channel: None,
+            client_name: None,
+            mcp_credential_id: None,
+            mcp_oauth_grant_id: None,
+            external_agent_connection_id: None,
+            request_id,
+        }
+    }
+}
+
+/// The thread made (or found, with `created: false`).
+#[derive(Clone, Debug)]
+pub(crate) struct CreatedThread {
+    pub id: Uuid,
+    pub name: String,
+    pub created: bool,
+    pub status: String,
+    pub outcome: Option<String>,
+    /// The parent, as locked and checked.
+    pub parent: ConversationAccessRow,
+}
+
+/// The refusal for a parent that can't hold threads.
+pub(crate) const NOT_A_THREAD_PARENT: AppError = AppError::Refused {
+    field: "conversationId",
+    message: "Threads go in a channel, DM, or group, not inside another thread.",
+};
+
+/// The refusal for an origin message that was removed.
+pub(crate) const ORIGIN_REMOVED: AppError = AppError::Conflict("message", "removed");
+
+/// Make a thread under `parent_id`, or find the one already started from the
+/// same message (`reuse_for_origin`). Runs in the caller's transaction, so a
+/// caller that does more (posting, linking a run) commits it all at once.
+///
+/// Errors: `NotFound("conversation")` when the parent is out of reach or
+/// archived; [`NOT_A_THREAD_PARENT`]; `NotFound("message")` when the origin
+/// isn't a message of the parent; [`ORIGIN_REMOVED`]; a 409 for a given name
+/// already in use.
+pub(crate) async fn create(
+    transaction: &mut Transaction<'_, Postgres>,
+    creator: &ThreadCreator,
+    parent_id: Uuid,
+    spec: ThreadSpec,
+) -> Result<CreatedThread, AppError> {
+    let parent = lock_conversation_for(
+        transaction,
+        creator.actor_id,
+        creator.actor_kind,
+        parent_id,
+        Action::ThreadCreate,
+        false,
+    )
+    .await?;
+    if creator
+        .project_id
+        .is_some_and(|project_id| project_id != parent.project_id)
+    {
+        return Err(AppError::NotFound("conversation"));
+    }
+    if !matches!(
+        parent.kind.as_str(),
+        "channel" | "dm" | "group" | "comments"
+    ) {
+        return Err(NOT_A_THREAD_PARENT);
+    }
+    if spec.anchor.is_some() && parent.kind != "comments" {
+        return Err(AppError::Refused {
+            field: "anchor",
+            message: "Only a thread in a thing's comments is anchored to a place in it.",
+        });
+    }
+
+    let mut origin_text = None;
+    let mut origin_author = None;
+    if let Some(origin_id) = spec.origin_message_id {
+        // Whether it was removed comes first: a removed message's text is
+        // never read.
+        let origin = sqlx::query_as::<_, (bool, String, Uuid)>(
+            r#"
+            -- visibility: a message of the parent locked and checked above
+            SELECT removed_at IS NOT NULL,
+                   CASE WHEN removed_at IS NULL THEN plain_text ELSE '' END,
+                   author_actor_id
+            FROM messages
+            WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+            "#,
+        )
+        .bind(origin_id)
+        .bind(parent.id)
+        .bind(parent.project_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("message"))?;
+        if spec.reuse_for_origin
+            && let Some((id, name, status, outcome)) =
+                sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
+                    r#"
+                    -- visibility: a thread under the parent checked above
+                    SELECT id, name, thread_status, thread_outcome FROM conversations
+                    WHERE origin_message_id = $1 AND parent_channel_id = $2
+                      AND kind = 'thread' AND archived_at IS NULL
+                    ORDER BY created_at, id
+                    LIMIT 1
+                    "#,
+                )
+                .bind(origin_id)
+                .bind(parent.id)
+                .fetch_optional(&mut **transaction)
+                .await?
+        {
+            return Ok(CreatedThread {
+                id,
+                name,
+                created: false,
+                status,
+                outcome,
+                parent,
+            });
+        }
+        if origin.0 {
+            return Err(ORIGIN_REMOVED);
+        }
+        origin_text = Some(origin.1);
+        origin_author = Some(origin.2);
+    }
+
+    let (name, auto_named) = match &spec.name {
+        ThreadName::Given(name) => (normalize_conversation_name(name)?, false),
+        ThreadName::Derived => (
+            origin_text
+                .as_deref()
+                .and_then(thread_name_from_text)
+                .unwrap_or_else(|| UNNAMED_THREAD.to_owned()),
+            true,
+        ),
+        ThreadName::Composed(base) => {
+            let base = normalize_conversation_name(base)?;
+            (unique_name(transaction, parent.id, &base).await?, false)
         }
     };
-}
 
-impl Targeted for ThreadStartArguments {
-    fn target(&self) -> Target {
-        conversation(&self.conversation_id)
+    let thread_id = Uuid::now_v7();
+    let inserted = insert(
+        transaction,
+        NewConversation {
+            id: thread_id,
+            project_id: parent.project_id,
+            kind: "thread",
+            parent_id: Some(parent.id),
+            origin_message_id: spec.origin_message_id,
+            name: &name,
+            auto_named,
+            visibility: "project",
+            subject: None,
+            anchor: spec.anchor.as_ref(),
+        },
+    )
+    .await;
+    map_conversation_insert(inserted)?;
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_read_states (
+            project_id, conversation_id, actor_id, highest_seen_sequence
+        )
+        VALUES ($1, $2, $3, 0)
+        "#,
+    )
+    .bind(parent.project_id)
+    .bind(thread_id)
+    .bind(creator.actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    // C2.5: whoever starts a thread, and whoever wrote the message it opens
+    // from, follows it.
+    let followers = std::iter::once(creator.actor_id)
+        .chain(origin_author)
+        .collect::<Vec<_>>();
+    crate::notification_settings::follow_automatically(
+        transaction,
+        parent.project_id,
+        thread_id,
+        &followers,
+    )
+    .await?;
+    if let Some(work_item_id) = spec.link_task {
+        sqlx::query(
+            r#"
+            INSERT INTO work_item_conversation_links (
+                project_id, work_item_id, conversation_id, created_by_actor_id
+            ) VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(parent.project_id)
+        .bind(work_item_id)
+        .bind(thread_id)
+        .bind(creator.actor_id)
+        .execute(&mut **transaction)
+        .await?;
     }
-}
-
-conversation_op!(ThreadStart {
-    name: "thread_start",
-    kind: Create,
-    module: "channels",
-    permission: Some(Perm::ChannelsPost),
-    destructive: false,
-    title: "Start thread",
-    description: "Move a topic into its own thread, usually from the message where it started \
-        (fromMessageId), in a channel, DM or group. Optionally post the first message. Starting \
-        from the same message again returns the existing thread.",
-    emits: "thread.started",
-    input: ThreadStartArguments,
-    output: ThreadValue,
-    run: talk::thread_start
-});
-
-impl Targeted for ThreadUpdateArguments {
-    fn target(&self) -> Target {
-        conversation(&self.thread_id)
+    enqueue_event(
+        transaction,
+        parent.project_id,
+        OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
+            conversation_id: thread_id,
+            kind: OutboxConversationKind::Thread,
+            version: 1,
+        }),
+    )
+    .await?;
+    let mut metadata = serde_json::json!({ "parent_channel_id": parent.id });
+    if let (Some(object), Some(extra)) = (metadata.as_object_mut(), spec.audit.as_object()) {
+        object.extend(extra.clone());
     }
-}
-
-conversation_op!(ThreadUpdate {
-    name: "thread_update",
-    kind: Change,
-    module: "channels",
-    permission: Some(Perm::ChannelsPost),
-    destructive: false,
-    title: "Update thread",
-    description: "Rename a thread or set where it stands: a status (Open, In progress, Decided, \
-        Done, Dropped, Blocked, or your own) and a one-line outcome. Do this when a discussion \
-        lands so nobody has to reread it.",
-    emits: "thread.updated",
-    input: ThreadUpdateArguments,
-    output: ThreadValue,
-    run: talk::thread_update
-});
-
-impl Targeted for ChannelCreateArguments {
-    fn target(&self) -> Target {
-        Target::Space(parse_id(&self.project_id).unwrap_or_else(Uuid::nil))
+    if let Some(work_item_id) = spec.link_task {
+        metadata["work_item_id"] = work_item_id.to_string().into();
     }
+    audit(
+        transaction,
+        creator,
+        "conversation.thread_created",
+        parent.project_id,
+        thread_id,
+        metadata,
+    )
+    .await?;
+    Ok(CreatedThread {
+        id: thread_id,
+        name,
+        created: true,
+        status: "Open".to_owned(),
+        outcome: None,
+        parent,
+    })
 }
 
-conversation_op!(ChannelCreate {
-    name: "channel_create",
-    kind: Create,
-    module: "channels",
-    permission: Some(Perm::ChannelsCreate),
-    destructive: false,
-    title: "Create channel",
-    description: "Create a channel in a space. If an active channel with that name already \
-        exists, it's returned instead (created: false).",
-    emits: "channel.created",
-    input: ChannelCreateArguments,
-    output: ConversationValue,
-    run: channels::channel_create
-});
-
-impl Targeted for ConversationUpdateArguments {
-    fn target(&self) -> Target {
-        conversation(&self.conversation_id)
+/// `base`, or `base (2)`, `base (3)`… whichever no open thread under the
+/// parent uses (names are compared without case, as the index does).
+pub(crate) async fn unique_name(
+    transaction: &mut Transaction<'_, Postgres>,
+    parent_id: Uuid,
+    base: &str,
+) -> Result<String, AppError> {
+    let taken = sqlx::query_scalar::<_, String>(
+        r#"
+        -- visibility: names only, under a parent the caller locked and may see
+        SELECT lower(name) FROM conversations
+        WHERE parent_channel_id = $1 AND kind = 'thread' AND archived_at IS NULL
+          AND NOT auto_named
+        "#,
+    )
+    .bind(parent_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if !taken.contains(&base.to_lowercase()) {
+        return Ok(base.to_owned());
     }
-}
-
-conversation_op!(ConversationUpdate {
-    name: "conversation_update",
-    kind: Change,
-    module: "messages",
-    permission: Some(Perm::ChannelsPost),
-    destructive: true,
-    title: "Update conversation",
-    description: "Change a channel, thread or group: rename it, set a thread's status and \
-        outcome, or archive or restore a channel or thread (archived). Archiving keeps \
-        everything and is refused while a run is going there. DMs can't be changed.",
-    emits: "conversation.updated",
-    input: ConversationUpdateArguments,
-    output: ConversationValue,
-    run: channels::conversation_update
-});
-
-impl Targeted for PinSetArguments {
-    fn target(&self) -> Target {
-        conversation(&self.conversation_id)
-    }
-}
-
-conversation_op!(PinSet {
-    name: "pin_set",
-    kind: Change,
-    module: "messages",
-    permission: Some(Perm::ChannelsPost),
-    destructive: false,
-    title: "Pin or unpin",
-    description: "Pin or unpin a message, page or decision in a conversation. Pins are the \
-        conversation's brief: conversation_open shows them first.",
-    emits: "conversation.pinned",
-    input: PinSetArguments,
-    output: PinValue,
-    run: channels::pin_set
-});
-
-// ---------------------------------------------------------------------------
-// conversation_members_update and conversation_continue keep their own
-// request ids (a retry after someone else changed the group never repeats
-// the change), so the dispatcher passes the caller's through.
-
-pub(crate) struct ConversationMembersUpdate;
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct MembersInput {
-    /// The group, or a thread in it: an ID or link.
-    pub conversation_id: String,
-    /// People and agents to add: actor IDs or @handles. They can read the
-    /// group's whole history.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub add: Option<Vec<String>>,
-    /// People and agents to remove: actor IDs or @handles. Your own to leave.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remove: Option<Vec<String>>,
-    /// The group's version you last saw. Leave it out to change the current
-    /// one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_version: Option<i64>,
-}
-
-impl Targeted for MembersInput {
-    fn target(&self) -> Target {
-        conversation(&self.conversation_id)
-    }
-}
-
-impl Operation for ConversationMembersUpdate {
-    const NAME: &'static str = "conversation_members_update";
-    const KIND: OpKind = OpKind::Change;
-    const MODULE: &'static str = "messages";
-    const PERMISSION: Option<Perm> = None;
-    const IDEMPOTENCY: Idempotency = Idempotency::Command;
-    const DESTRUCTIVE: bool = true;
-    const TITLE: &'static str = "Change group members";
-    const DESCRIPTION: &'static str = "Add or remove people and agents in a group (pass the \
-        group, or a thread in it). Whoever you add can read everything said in the group so \
-        far. Remove your own @handle to leave. DMs never change; channels are open to everyone \
-        in the space.";
-    const EMITS: &'static [&'static str] = &["conversation.members_changed"];
-
-    type Input = MembersInput;
-    type Output = GroupMembersValue;
-
-    async fn run(call: &mut OpCall<'_>, input: MembersInput) -> Result<GroupMembersValue, OpError> {
-        let principal = principal_for(call.ctx, None);
-        let keyed = call.ctx.request_id.is_some();
-        let value = tool_answer(
-            groups::conversation_members(
-                call.state,
-                &principal,
-                ConversationMembersArguments {
-                    conversation_id: input.conversation_id,
-                    add: input.add,
-                    remove: input.remove,
-                    expected_version: input.expected_version,
-                    client_request_id: call.ctx.request_id.clone(),
-                },
-            )
-            .await,
-        )?;
-        if keyed {
-            call.key_honoured();
+    for number in 2..1000 {
+        let suffix = format!(" ({number})");
+        let stem = base
+            .chars()
+            .take(super::MAX_CONVERSATION_NAME_CHARACTERS - suffix.chars().count())
+            .collect::<String>();
+        let candidate = format!("{stem}{suffix}");
+        if !taken.contains(&candidate.to_lowercase()) {
+            return Ok(candidate);
         }
-        call.mark_replayed(value.idempotent_replay);
-        call.audited_by_command();
-        Ok(value)
     }
+    Err(AppError::Conflict(
+        "conversation_name",
+        "an active Conversation already uses that name",
+    ))
 }
 
-pub(crate) struct ConversationContinue;
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ContinueInput {
-    /// The group, or a thread in one: an ID or link.
-    pub conversation_id: String,
+async fn audit(
+    transaction: &mut Transaction<'_, Postgres>,
+    creator: &ThreadCreator,
+    action: &str,
+    project_id: Uuid,
+    thread_id: Uuid,
+    metadata: serde_json::Value,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, project_id, session_id, authentication_class,
+            action, target_kind, target_id, outcome, request_id, metadata,
+            channel, client_name, mcp_credential_id, mcp_oauth_grant_id,
+            external_agent_connection_id
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $14, 'conversation', $6,
+            'succeeded', $7, $8, $9, $10, $11, $12, $13
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(creator.actor_id)
+    .bind(project_id)
+    .bind(creator.session_id)
+    .bind(creator.authentication_class)
+    .bind(thread_id)
+    .bind(creator.request_id.as_deref())
+    .bind(metadata)
+    .bind(creator.channel)
+    .bind(creator.client_name.as_deref())
+    .bind(creator.mcp_credential_id)
+    .bind(creator.mcp_oauth_grant_id)
+    .bind(creator.external_agent_connection_id)
+    .bind(action)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
 }
 
-impl Targeted for ContinueInput {
-    fn target(&self) -> Target {
-        conversation(&self.conversation_id)
-    }
+/// A conversation row to insert: a thread here, or a thing's comments
+/// conversation (`open_comments`). The one `INSERT INTO conversations` for
+/// both, so every made conversation passes the same constraints.
+struct NewConversation<'a> {
+    id: Uuid,
+    project_id: Uuid,
+    kind: &'static str,
+    parent_id: Option<Uuid>,
+    origin_message_id: Option<Uuid>,
+    name: &'a str,
+    auto_named: bool,
+    visibility: &'static str,
+    subject: Option<(&'a str, Uuid)>,
+    anchor: Option<&'a serde_json::Value>,
 }
 
-impl Operation for ConversationContinue {
-    const NAME: &'static str = "conversation_continue";
-    const KIND: OpKind = OpKind::Change;
-    const MODULE: &'static str = "messages";
-    const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
-    const IDEMPOTENCY: Idempotency = Idempotency::Command;
-    const TITLE: &'static str = "Let agents continue";
-    const DESCRIPTION: &'static str = "When the agents in a group (or a thread in one) have \
-        used their turns, let them take more, like the Continue button: they get 6 more \
-        messages, and the other agents are asked to answer the latest agent message. Pass a \
-        clientRequestId so a retry doesn't grant another round.";
-    const EMITS: &'static [&'static str] = &["conversation.continued"];
+/// Inserts the row; a second comments conversation for the same thing
+/// inserts nothing (`rows_affected` is 0) and the caller reads the first.
+async fn insert(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: NewConversation<'_>,
+) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (
+            id, project_id, workspace_id, kind, parent_channel_id, origin_message_id, name,
+            auto_named, visibility, subject_kind, subject_id, anchor
+        )
+        VALUES (
+            $1, $2, (SELECT organization_id FROM projects WHERE id = $2), $3, $4, $5, $6, $7,
+            $8, $9, $10, $11
+        )
+        ON CONFLICT (subject_kind, subject_id) WHERE kind = 'comments' DO NOTHING
+        "#,
+    )
+    .bind(row.id)
+    .bind(row.project_id)
+    .bind(row.kind)
+    .bind(row.parent_id)
+    .bind(row.origin_message_id)
+    .bind(row.name)
+    .bind(row.auto_named)
+    .bind(row.visibility)
+    .bind(row.subject.map(|(kind, _)| kind))
+    .bind(row.subject.map(|(_, id)| id))
+    .bind(row.anchor)
+    .execute(&mut **transaction)
+    .await
+}
 
-    type Input = ContinueInput;
-    type Output = ContinueValue;
+/// The name every comments conversation has; the thing names the place.
+pub(crate) const COMMENTS_NAME: &str = "Comments";
 
-    async fn run(call: &mut OpCall<'_>, input: ContinueInput) -> Result<ContinueValue, OpError> {
-        let principal = principal_for(call.ctx, None);
-        let keyed = call.ctx.request_id.is_some();
-        let value = tool_answer(
-            groups::conversation_continue(
-                call.state,
-                &principal,
-                ConversationContinueArguments {
-                    conversation_id: input.conversation_id,
-                    client_request_id: call.ctx.request_id.clone(),
-                },
-            )
-            .await,
-        )?;
-        if keyed {
-            call.key_honoured();
-        }
-        call.mark_replayed(value.idempotent_replay);
-        call.audited_by_command();
-        Ok(value)
+/// A thing's comments conversation in `project_id`, made if it doesn't exist
+/// yet (C1.3). Two first comments race safely: the unique index lets one
+/// insert, and the other reads it. The caller has checked the creator may
+/// see and comment on the thing (`discussion::open_for`). Returns the id and
+/// whether this call made it.
+pub(crate) async fn open_comments(
+    transaction: &mut Transaction<'_, Postgres>,
+    creator: &ThreadCreator,
+    project_id: Uuid,
+    subject_kind: &str,
+    subject_id: Uuid,
+) -> Result<(Uuid, bool), AppError> {
+    if let Some(id) = comments_of(transaction, subject_kind, subject_id).await? {
+        return Ok((id, false));
     }
+    let id = Uuid::now_v7();
+    let inserted = insert(
+        transaction,
+        NewConversation {
+            id,
+            project_id,
+            kind: "comments",
+            parent_id: None,
+            origin_message_id: None,
+            name: COMMENTS_NAME,
+            auto_named: false,
+            visibility: "subject",
+            subject: Some((subject_kind, subject_id)),
+            anchor: None,
+        },
+    )
+    .await?;
+    if inserted.rows_affected() == 0 {
+        return comments_of(transaction, subject_kind, subject_id)
+            .await?
+            .map(|id| (id, false))
+            .ok_or(AppError::Internal("comments conversation vanished"));
+    }
+    enqueue_event(
+        transaction,
+        project_id,
+        OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
+            conversation_id: id,
+            kind: OutboxConversationKind::Comments,
+            version: 1,
+        }),
+    )
+    .await?;
+    audit(
+        transaction,
+        creator,
+        "conversation.comments_opened",
+        project_id,
+        id,
+        serde_json::json!({ "subject_kind": subject_kind, "subject_id": subject_id }),
+    )
+    .await?;
+    Ok((id, true))
+}
+
+/// The thing's comments conversation, if it has one.
+pub(crate) async fn comments_of(
+    connection: &mut sqlx::PgConnection,
+    subject_kind: &str,
+    subject_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        -- visibility: callers check the subject, which is the rule here
+        SELECT id FROM conversations
+        WHERE kind = 'comments' AND subject_kind = $1 AND subject_id = $2
+        "#,
+    )
+    .bind(subject_kind)
+    .bind(subject_id)
+    .fetch_optional(&mut *connection)
+    .await?)
 }

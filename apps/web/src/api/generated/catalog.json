@@ -231,6 +231,52 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "message.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "messages",
+    "name": "comment_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Comment"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "comment_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List comments"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "comment_thread_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Resolve comment thread"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "conversation.continued"
     ],
     "idempotent": true,
@@ -290,6 +336,68 @@
     "preview": false,
     "proposable": false,
     "title": "Update conversation"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.read_state.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "conversations_mark_read",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Mark all read"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "custom_emoji.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "custom_emoji_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Add custom emoji"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "custom_emoji_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List custom emoji"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "custom_emoji.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "custom_emoji_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Retire custom emoji"
   },
   {
     "automation": false,
@@ -783,6 +891,36 @@
     "title": "Remove message"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "message_draft_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List drafts"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "message_draft.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "message_draft_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save draft"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1084,6 +1222,36 @@
     "emits": [],
     "idempotent": false,
     "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "notification_keyword_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List keyword alerts"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "notification_keywords.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "notification_keyword_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set keyword alerts"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
     "long": true,
     "module": "workspace",
     "name": "package_export",
@@ -1151,6 +1319,20 @@
     "preview": false,
     "proposable": false,
     "title": "Remove a package"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "page_template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List page templates"
   },
   {
     "automation": true,
@@ -1759,6 +1941,52 @@
   },
   {
     "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "status_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Clear status"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "status_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List statuses"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "status_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set status"
+  },
+  {
+    "automation": true,
     "destructive": true,
     "emits": [
       "task.updated"
@@ -2135,6 +2363,20 @@
     "title": "Update task template"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "thread_followed_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List followed threads"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -2383,6 +2625,20 @@
     "preview": false,
     "proposable": false,
     "title": "Link whiteboard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "whiteboards",
+    "name": "whiteboard_template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List whiteboard templates"
   },
   {
     "automation": true,

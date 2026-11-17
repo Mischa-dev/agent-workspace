@@ -1,0 +1,11 @@
+.aw-status-text {
+  color: var(--content-fg-muted);
+  font-size: 0.85em;
+  margin-inline-start: 0.4em;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}

@@ -163,6 +163,17 @@
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/* A cell a comment thread is about: a mark in its top-right corner. */
+.aw-grid__cell.has-comment::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  content: '';
+  border-top: 7px solid var(--accent);
+  border-left: 7px solid transparent;
+  pointer-events: none;
+}
+
 .aw-grid__editor {
   position: absolute;
   inset: 0;

@@ -166,13 +166,10 @@
     "server.rs": 6
   },
   "conversation_inserts": {
-    "conversations.rs": 2,
+    "conversations.rs": 1,
+    "conversations/threads.rs": 1,
     "direct.rs": 2,
-    "launch.rs": 2,
-    "mcp/replies.rs": 1,
-    "mcp/talk.rs": 1,
-    "seed.rs": 2,
-    "work_items.rs": 1
+    "seed.rs": 2
   },
   "conversation_listings": {
     "ai/summaries.rs": 1,
@@ -223,7 +220,7 @@
     "automations.rs": 1,
     "external_agents.rs": 3,
     "external_events.rs": 3,
-    "external_execution.rs": 3,
+    "external_execution.rs": 1,
     "home.rs": 1,
     "launch.rs": 3,
     "mcp.rs": 2,

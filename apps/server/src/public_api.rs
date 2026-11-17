@@ -315,8 +315,9 @@ fn merge_identical(components: &mut Map<String, Value>, others: &mut [&mut Map<S
     }
 }
 
-/// An operation's result is the envelope: its `ok` branch and one branch
-/// per refusal, the same for every operation. Each refusal branch is
+/// An operation's result is the envelope: its `ok` branch, the refusal
+/// branch every operation shares (its `outcome` names which refusal), and
+/// for a long operation the `started` branch. Each branch but `ok` is
 /// written once in `components.schemas` and referenced, which keeps the
 /// document small as operations are added.
 fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
@@ -324,14 +325,14 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
         return;
     };
     for branch in branches {
-        let Some(outcome) = branch["properties"]["outcome"]["const"]
-            .as_str()
-            .filter(|outcome| *outcome != "ok")
-            .map(str::to_owned)
-        else {
-            continue;
+        let outcome = &branch["properties"]["outcome"];
+        let key = match outcome["const"].as_str() {
+            Some("ok") => continue,
+            Some("started") => "Started".to_owned(),
+            Some(refusal) => format!("Refusal{}", pascal(refusal)),
+            None if outcome["enum"].is_array() => "Refusal".to_owned(),
+            None => continue,
         };
-        let key = format!("Refusal{}", pascal(&outcome));
         let shared = components
             .entry(key.clone())
             .or_insert_with(|| branch.clone());
@@ -510,23 +511,23 @@ pub(crate) fn document() -> Value {
             };
             responses.insert((*status).to_owned(), response);
         }
-        paths.insert(
-            format!("/{name}"),
-            json!({
-                "post": {
-                    "operationId": name,
-                    "summary": title,
-                    "description": tool.description.as_deref().unwrap_or_default(),
-                    "tags": [tag],
-                    "x-read-only": read_only,
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/json": { "schema": input } },
-                    },
-                    "responses": responses,
-                }
-            }),
-        );
+        let mut post = json!({
+            "operationId": name,
+            "summary": title,
+            "description": tool.description.as_deref().unwrap_or_default(),
+            "tags": [tag],
+            "requestBody": {
+                "required": true,
+                "content": { "application/json": { "schema": input } },
+            },
+            "responses": responses,
+        });
+        // Only reads say so: a missing mark is a write, which keeps the
+        // document small as operations are added.
+        if read_only {
+            post["x-read-only"] = true.into();
+        }
+        paths.insert(format!("/{name}"), json!({ "post": post }));
     }
     merge_identical(&mut components, &mut [&mut paths, &mut refusals]);
     json!({

@@ -14,7 +14,7 @@ impl CoreModule for Module {
 
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::conversations::router);
-        module.operations(crate::conversations::threads::register_channel_ops);
+        module.operations(crate::conversations::thread_ops::register_channel_ops);
         module.filter(ModuleFilter::Conversations { direct: false });
         module.export(ExportPart {
             name: "channels",

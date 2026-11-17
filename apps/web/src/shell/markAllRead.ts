@@ -1,13 +1,5 @@
-import { getProjectConversationSidebar, markConversationSeen } from '../conversations/sidebarApi'
+import { callOp, newRequestId } from '../api/ops'
 import type { SidebarChannel } from '../conversations/types'
-import { getDirectOverview } from '../direct/api'
-
-/**
- * Mark every conversation you can see read: each Project's channels and
- * threads, and your DMs and groups. Each mark goes through the same
- * per-conversation endpoint the pages use, so access is checked as usual.
- * Returns how many conversations changed.
- */
 
 type Unread = { conversationId: string; highestSequence: number }
 
@@ -27,51 +19,25 @@ export function unreadInSidebar(channels: SidebarChannel[]): Unread[] {
   return found
 }
 
-/** Runs `work` over `items`, a few at a time. */
-async function inBatches<T>(items: T[], size: number, work: (item: T) => Promise<unknown>) {
-  const results: PromiseSettledResult<unknown>[] = []
-  for (let start = 0; start < items.length; start += size) {
-    results.push(...(await Promise.allSettled(items.slice(start, start + size).map(work))))
-  }
-  return results
-}
-
-async function unreadInProject(projectId: string): Promise<{ found: Unread[]; failed: number }> {
-  const sidebar = await getProjectConversationSidebar(projectId)
-  const found = unreadInSidebar(sidebar.channels)
-  // The compact list hides quiet threads; ask for the rest channel by channel.
-  const crowded = sidebar.channels.filter((channel) => channel.hasMoreThreads)
-  const expanded = await inBatches(crowded, 3, async (channel) => {
-    const full = await getProjectConversationSidebar(projectId, undefined, false, channel.id)
-    return unreadInSidebar(full.channels.filter((candidate) => candidate.id === channel.id))
-  })
+/**
+ * Mark every conversation you can read in these workspaces read, through
+ * the `conversations_mark_read` operation (C2.2): the server picks what you
+ * may read and reads it the same way opening each one does. A workspace
+ * with more than one call marks is asked again.
+ */
+export async function markAllRead(workspaceIds: string[]): Promise<{ marked: number; failed: number }> {
+  let marked = 0
   let failed = 0
-  for (const result of expanded) {
-    if (result.status === 'fulfilled') found.push(...(result.value as Unread[]))
-    else failed += 1
-  }
-  return { found, failed }
-}
-
-export async function markAllRead(projectIds: string[]): Promise<{ marked: number; failed: number }> {
-  const [direct, ...projects] = await Promise.allSettled([getDirectOverview(), ...projectIds.map(unreadInProject)])
-  const byId = new Map<string, Unread>()
-  if (direct.status === 'fulfilled') {
-    for (const conversation of direct.value.conversations) {
-      if (conversation.unread) byId.set(conversation.id, { conversationId: conversation.id, highestSequence: conversation.highestSequence })
+  for (const workspaceId of new Set(workspaceIds)) {
+    try {
+      for (let round = 0; round < 20; round += 1) {
+        const output = await callOp('conversations_mark_read', {}, { workspaceId, requestId: newRequestId() })
+        marked += output.marked
+        if (!output.more) break
+      }
+    } catch {
+      failed += 1
     }
   }
-  let failed = direct.status === 'rejected' ? 1 : 0
-  for (const result of projects) {
-    if (result.status === 'rejected') failed += 1
-    else {
-      failed += result.value.failed
-      for (const unread of result.value.found) byId.set(unread.conversationId, unread)
-    }
-  }
-  const marks = await inBatches([...byId.values()], 6, (unread) =>
-    markConversationSeen({ conversationId: unread.conversationId, highestSeenSequence: unread.highestSequence }),
-  )
-  const markFailures = marks.filter((result) => result.status === 'rejected').length
-  return { marked: marks.length - markFailures, failed: failed + markFailures }
+  return { marked, failed }
 }

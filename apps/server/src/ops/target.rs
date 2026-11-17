@@ -158,6 +158,26 @@ const KINDS: &[(&str, &str)] = &[
     ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
+    // C1.3: things with a discussion, by the same rule their comments follow.
+    // A whiteboard is the one below (K2.12).
+    (
+        "page",
+        "SELECT project.organization_id, project.id FROM project_pages page \
+         JOIN projects project ON project.id = page.project_id \
+         WHERE page.id = $1 AND subject_visible_to('page', page.id, $2)",
+    ),
+    (
+        "sheet",
+        "SELECT project.organization_id, project.id FROM sheets sheet \
+         JOIN projects project ON project.id = sheet.project_id \
+         WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2)",
+    ),
+    (
+        "record",
+        "SELECT project.organization_id, project.id FROM collection_records record \
+         JOIN projects project ON project.id = record.project_id \
+         WHERE record.id = $1 AND subject_visible_to('record', record.id, $2)",
+    ),
     // M1.6: a built module, in its space or (space NULL) the workspace.
     // Archived ones are found too, so they can be restored.
     (
@@ -324,6 +344,9 @@ fn what_of(kind: &str) -> &'static str {
         "decision" => "That decision",
         "task" => "That task",
         "run" => "That run",
+        "page" => "That page",
+        "sheet" => "That sheet",
+        "record" => "That record",
         "module" => "That module",
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",

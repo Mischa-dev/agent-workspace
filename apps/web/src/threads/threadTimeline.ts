@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { requestJson } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { normalizeTimelinePage } from '../conversations/api'
-import type { Approval, Run, Timeline } from './threadTypes'
+import type { RequestAnswer, Run, ThreadRequest, Timeline } from './threadTypes'
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object'
@@ -197,28 +197,18 @@ export function normalizeTimeline(value: unknown): Timeline {
           },
         } as Run)
       : null
-  const approvals = Array.isArray(record.approvals)
-    ? record.approvals
+  // The run's requests; answering one is offered only where the server says so.
+  const requests = Array.isArray(record.requests)
+    ? record.requests
         .map((value) => asRecord(value))
-        .filter((approval) => typeof approval.id === 'string')
-        .map(
-          (approval) =>
-            ({
-              ...approval,
-              capabilities: {
-                respond: explicitCapability(
-                  approval.capabilities,
-                  'respond',
-                ),
-              },
-            }) as Approval,
-        )
+        .filter((request) => typeof request.id === 'string' && Array.isArray(request.options))
+        .map((request) => ({ ...request, mayAnswer: request.mayAnswer === true }) as ThreadRequest)
     : []
   return {
     ...durable,
     activeRun,
     latestTerminalRun,
-    approvals,
+    requests,
     capabilities: {
       ...durable.capabilities,
       workerInvoke: explicitCapability(
@@ -257,4 +247,9 @@ export function useThread(
     routeMatches,
     timeline,
   }
+}
+
+/** The busy key of one answer to a request: an option's id, or `text`. */
+export function answerKey(requestId: string, answer: RequestAnswer) {
+  return `${requestId}:${answer.optionId ?? 'text'}`
 }

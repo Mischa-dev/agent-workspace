@@ -31,7 +31,8 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<WhiteboardUpdateElements>()
         .add::<WhiteboardUpdate>()
         .add::<WhiteboardDuplicate>()
-        .add::<WhiteboardLink>();
+        .add::<WhiteboardLink>()
+        .add::<WhiteboardTemplateList>();
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +157,12 @@ pub struct WhiteboardCreateInput {
     /// whiteboard_update_elements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operations: Option<Vec<SceneOperation>>,
+    /// Start from a template: a template board's ID, or a built-in one
+    /// (retrospective, user-journey, flowchart, two-by-two; see
+    /// whiteboard_template_list). Its drawing is copied in before any
+    /// operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_template_id: Option<String>,
 }
 
 impl Targeted for WhiteboardCreateInput {
@@ -198,6 +205,7 @@ impl Operation for WhiteboardCreate {
                 workspace_id: input.workspace_id.map(IdRef::id),
                 link_to: input.link_to,
                 operations: input.operations,
+                from_template_id: input.from_template_id,
             },
         )
         .await?;
@@ -243,6 +251,10 @@ pub struct WhiteboardUpdateInput {
     /// The board version you last read; refuses the change if it moved on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_version: Option<i64>,
+    /// Make the board a template (true), offered when anyone starts a board
+    /// from one, or an ordinary board again (false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_template: Option<bool>,
 }
 
 impl Targeted for WhiteboardUpdateInput {
@@ -282,6 +294,7 @@ impl Operation for WhiteboardUpdate {
                 deleted: input.deleted,
                 restore_revision: input.restore_revision,
                 expected_version: input.expected_version,
+                is_template: input.is_template,
             },
         )
         .await?;
@@ -412,5 +425,61 @@ impl Operation for WhiteboardLink {
             call.audited_by_command();
         }
         Ok(linked)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// whiteboard_template_list
+
+pub struct WhiteboardTemplateList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WhiteboardTemplateListInput {
+    /// A space (a project) in the workspace: its id, link or key. Leave it
+    /// out to ask about the workspace you're in.
+    #[serde(default, alias = "projectId", skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<IdRef>,
+}
+
+impl Targeted for WhiteboardTemplateListInput {
+    fn target(&self) -> Target {
+        match &self.space_id {
+            Some(space) => Target::Space(space.id()),
+            None => Target::Workspace(None),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WhiteboardTemplateListOutput {
+    /// The built-in templates, then boards marked as templates in the
+    /// workspace that you can see.
+    pub templates: Vec<super::templates::TemplateSummary>,
+}
+
+impl Operation for WhiteboardTemplateList {
+    const NAME: &'static str = "whiteboard_template_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "whiteboards";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List whiteboard templates";
+    const DESCRIPTION: &'static str = "List what a new whiteboard in a workspace can start \
+        from: the built-in templates and boards marked as templates. Pass a template's id to \
+        whiteboard_create as fromTemplateId.";
+
+    type Input = WhiteboardTemplateListInput;
+    type Output = WhiteboardTemplateListOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        _input: WhiteboardTemplateListInput,
+    ) -> Result<WhiteboardTemplateListOutput, OpError> {
+        let caller = super::Caller::from(call.ctx);
+        let workspace_id = call.ctx.workspace_id;
+        let templates = super::templates::list(call.tx().await?, &caller, workspace_id).await?;
+        Ok(WhiteboardTemplateListOutput { templates })
     }
 }

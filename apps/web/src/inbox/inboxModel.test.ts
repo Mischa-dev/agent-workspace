@@ -18,7 +18,6 @@ const base: InboxNotification = {
   at: '2026-10-16T08:00:00.000000Z',
   href: '/projects/p1/channels/c1',
   launchHref: null,
-  approval: null,
   request: null,
   batch: null,
 }
@@ -27,8 +26,9 @@ describe('inbox model', () => {
   it('puts what asks something of you first, and the rest under FYI', () => {
     const mention = { ...base, id: 'm' }
     const done = { ...base, id: 'd', kind: 'run_completed' }
-    const pending = { ...base, id: 'p', kind: 'approval_requested', approval: { id: 'a1', kind: 'approval' as const, status: 'pending', options: [] } }
-    const answered = { ...pending, id: 'x', approval: { ...pending.approval, status: 'approved' } }
+    const approval = { id: 'a1', kind: 'approval', status: 'open', title: 'Allow it?', options: [], allowText: false, answer: null }
+    const pending = { ...base, id: 'p', kind: 'request_raised', request: approval }
+    const answered = { ...pending, id: 'x', request: { ...approval, status: 'answered' } }
     expect([mention, done, pending, answered].map(needsYou)).toEqual([true, false, true, false])
     const [needs, fyi] = sectionsByNeed([done, mention, answered, pending])
     expect(needs.items.map((item) => item.id)).toEqual(['m', 'p'])

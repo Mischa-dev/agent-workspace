@@ -95,6 +95,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{id}/threads",
     "/api/v1/conversations/{id}/timeline",
     "/api/v1/conversations/{conversation_id}/agent-sessions",
+    "/api/v1/custom-emoji/{id}",
     "/api/v1/agent-runs/{run_id}",
     "/api/v1/agent-runs/{run_id}/diff",
     "/api/v1/dev/bootstrap",
@@ -400,9 +401,41 @@ fn read_only_tools(source: &str) -> BTreeSet<String> {
 // The fixture
 // ---------------------------------------------------------------------------
 
+/// Which edge one test sweeps. The three run as separate tests, each on its
+/// own pair of workspaces, so they run side by side and each stays well
+/// inside the per-test time limit as routes and tools are added.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SweptEdge {
+    Http,
+    /// MCP as A's connected app (acting as A's owner).
+    McpApp,
+    /// MCP as A's agent.
+    McpAgent,
+    Realtime,
+}
+
 #[tokio::test]
-async fn one_workspace_never_sees_another() {
-    let Some(fixture) = two_workspaces("workspace_isolation").await else {
+async fn one_workspace_never_sees_another_over_http() {
+    one_workspace_never_sees_another("workspace_isolation_http", SweptEdge::Http).await;
+}
+
+#[tokio::test]
+async fn one_workspace_never_sees_another_through_an_app() {
+    one_workspace_never_sees_another("workspace_isolation_app", SweptEdge::McpApp).await;
+}
+
+#[tokio::test]
+async fn one_workspace_never_sees_another_through_an_agent() {
+    one_workspace_never_sees_another("workspace_isolation_agent", SweptEdge::McpAgent).await;
+}
+
+#[tokio::test]
+async fn one_workspace_never_sees_another_over_realtime() {
+    one_workspace_never_sees_another("workspace_isolation_realtime", SweptEdge::Realtime).await;
+}
+
+async fn one_workspace_never_sees_another(name: &str, edge: SweptEdge) {
+    let Some(fixture) = two_workspaces(name).await else {
         return;
     };
     let TwoWorkspaces {
@@ -426,9 +459,12 @@ async fn one_workspace_never_sees_another() {
     eprintln!("B owns {} IDs", b_ids.len());
 
     let mut report = Report::default();
-    check_http(app, a, b, &b_ids, &mut report).await;
-    check_mcp(app, pool, a, b, &b_ids, &mut report).await;
-    check_realtime(app, pool, realtime, a, b, &b_ids, &mut report).await;
+    match edge {
+        SweptEdge::Http => check_http(app, a, b, &b_ids, &mut report).await,
+        SweptEdge::McpApp => check_mcp(app, pool, a, b, &b_ids, false, &mut report).await,
+        SweptEdge::McpAgent => check_mcp(app, pool, a, b, &b_ids, true, &mut report).await,
+        SweptEdge::Realtime => check_realtime(app, pool, realtime, a, b, &b_ids, &mut report).await,
+    }
 
     for note in &report.notes {
         eprintln!("note: {note}");
@@ -1839,6 +1875,13 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         linked(b),
         vec![],
     ));
+    // C2.19: a workspace's own emoji shows only to its members.
+    cases.push(case(
+        "/api/v1/custom-emoji/{id}",
+        vec![format!("/api/v1/custom-emoji/{}", a.custom_emoji)],
+        vec![format!("/api/v1/custom-emoji/{}", b.custom_emoji)],
+        vec![],
+    ));
     cases.push(case(
         "/api/v1/pages/{id}/revisions/{version}",
         vec![
@@ -1966,8 +2009,6 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "agent_profile_list",
     "agent_template_list",
     "ai_suggestions_list",
-    "approval_get",
-    "approval_list",
     "automation_history",
     "automation_list",
     "briefing_get",
@@ -2000,6 +2041,10 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "request_get",
     "launch_list",
     "message_history",
+    "message_draft_list",
+    "custom_emoji_list",
+    "comment_list",
+    "whiteboard_template_list",
     "milestone_list",
     "module_list",
     "module_open",
@@ -2007,6 +2052,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_work_get",
     "notification_list",
     "directory_list",
+    "notification_keyword_list",
     "package_export",
     "package_list",
     "package_preview",
@@ -2015,6 +2061,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "page_get",
     "page_suggestions",
     "page_list",
+    "page_template_list",
     "people_search",
     "project_export",
     "project_members",
@@ -2036,6 +2083,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "agent_usage_list",
     "workspace_search",
     "settings_get",
+    "status_list",
     "skill_get",
     "skill_list",
     "task_list",
@@ -2043,6 +2091,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "task_ready_list",
     "template_list",
     "thing_open",
+    "thread_followed_list",
     "usage_batch",
     "usage_windows",
     "view_list",
@@ -2212,6 +2261,51 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("skill_list"),
         by_project("decision_list"),
+        // C1.24: the template galleries of a space or a workspace.
+        by_project("page_template_list"),
+        case(
+            "whiteboard_template_list",
+            vec![json!({}), json!({"spaceId": a.project})],
+            vec![
+                json!({"spaceId": b.project}),
+                json!({"workspace": b.organization}),
+            ],
+            vec![],
+        ),
+        // C2.19: B's own emoji never list in A.
+        case(
+            "custom_emoji_list",
+            vec![json!({}), json!({"includeRetired": true})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C1.3: B's things' discussions never list in A.
+        case(
+            "comment_list",
+            vec![json!({"thing": {"kind": "sheet", "id": a.sheet}})],
+            vec![
+                json!({"thing": {"kind": "sheet", "id": b.sheet}}),
+                json!({"thing": {"kind": "whiteboard", "id": b.whiteboard}}),
+            ],
+            vec![],
+        ),
+        // C2.28: B's drafts never show in A, by conversation or listed.
+        case(
+            "message_draft_list",
+            vec![json!({}), json!({"conversationId": a.channel})],
+            vec![
+                json!({"conversationId": b.channel}),
+                json!({"workspace": b.organization}),
+            ],
+            vec![],
+        ),
+        // C2.15: B's accounts' statuses never show in A.
+        case(
+            "status_list",
+            vec![json!({"accounts": [a.rook]})],
+            vec![json!({"workspace": b.organization, "accounts": [b.rook]})],
+            vec![json!({"accounts": [b.rook, a.rook]})],
+        ),
         case(
             "package_export",
             vec![json!({"spaceId": "WORK"}), json!({"wholeWorkspace": true})],
@@ -2499,6 +2593,20 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
             vec![json!({"projectId": b.project})],
         ),
+        // C2.13: keywords are kept per workspace; B's never list in A.
+        case(
+            "notification_keyword_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.36: threads followed in B never list in A.
+        case(
+            "thread_followed_list",
+            vec![json!({}), json!({"openOnly": true})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         case(
             "task_list",
             vec![json!({}), json!({"projectId": "WORK"})],
@@ -2585,21 +2693,6 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"pageId": b.page}),
                 json!({"projectId": b.project, "name": format!("launch-page-{}", b.marker)}),
-            ],
-            vec![],
-        ),
-        case(
-            "approval_list",
-            vec![json!({}), json!({"projectId": "WORK"})],
-            vec![json!({"projectId": b.project})],
-            vec![],
-        ),
-        case(
-            "approval_get",
-            vec![json!({"approvalId": a.approval.to_string()})],
-            vec![
-                json!({"approvalId": b.approval.to_string()}),
-                json!({"approvalId": b.approval.to_string(), "projectId": a.project}),
             ],
             vec![],
         ),
@@ -2741,15 +2834,16 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
     ]
 }
 
-/// Every case runs as A's connected app (acting as A's owner) and as A's
-/// agent. Own calls must succeed for whoever the tool is for; for the other,
-/// only leaks count.
+/// Every case runs as A's connected app (acting as A's owner) or, with
+/// `as_agent`, as A's agent. Own calls must succeed for whoever the tool is
+/// for; for the other, only leaks count.
 async fn check_mcp(
     app: &axum::Router,
     pool: &PgPool,
     a: &World,
     b: &World,
     b_ids: &HashSet<String>,
+    as_agent: bool,
     report: &mut Report,
 ) {
     let cases = mcp_cases(a, b);
@@ -2784,6 +2878,16 @@ async fn check_mcp(
 
     // P0.23: a read-only tool changes nothing. A's rows are digested before
     // and after each tool's calls; only the columns reads may touch differ.
+    // The first read of a project's views makes its built-in ones (until
+    // T1.40 drops saved_views); read them once first, as the web does on
+    // opening a project, so that isn't counted against the first view tool.
+    let (status, body) = get_text(
+        app,
+        &a.browser,
+        &format!("/api/v1/projects/{}/views", a.project),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     let a_ids = sweep_ids(pool, a.organization).await;
     let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
     // Fingerprints first, so a write landing during the digest is caught
@@ -2793,7 +2897,10 @@ async fn check_mcp(
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
         ("A's agent", &a.agent_token, &agent_session, true),
-    ] {
+    ]
+    .into_iter()
+    .filter(|(_, _, _, is_agent)| *is_agent == as_agent)
+    {
         for case in &cases {
             let read_only_check = !READ_TOOLS_THAT_WRITE
                 .iter()

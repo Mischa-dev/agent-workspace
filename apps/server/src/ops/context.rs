@@ -108,6 +108,7 @@ pub struct OpCall<'a> {
     pub(super) tx: Option<Transaction<'static, Postgres>>,
     pub(super) audit: Option<AuditFacts>,
     pub(super) replayed: bool,
+    pub(super) start_queued_runs: bool,
     /// An `Idempotency::Command` operation made this call retry-safe
     /// (`key_honoured`).
     pub(super) keyed: bool,
@@ -137,6 +138,12 @@ impl OpCall<'_> {
     /// Say what the audit row is about (the thing made, for a create).
     pub fn audit_target(&mut self, kind: &'static str, id: Uuid, metadata: serde_json::Value) {
         self.audit = Some(AuditFacts { kind, id, metadata });
+    }
+
+    /// The write queued a run: once it commits, the scheduler looks at the
+    /// queue now rather than at its next pass.
+    pub fn start_queued_runs(&mut self) {
+        self.start_queued_runs = true;
     }
 
     /// For commands that keep their own idempotency (`Idempotency::Command`):
@@ -174,6 +181,7 @@ impl From<&OpContext> for crate::memory::Writer {
             actor_id: ctx.caller.account_id,
             actor_kind: ctx.caller.kind,
             via_grant_id: ctx.caller.via_grant_id,
+            confined_project: ctx.caller.confined_space,
         }
     }
 }

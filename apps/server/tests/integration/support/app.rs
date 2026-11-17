@@ -595,6 +595,17 @@ pub(crate) fn test_app_with(
     })
 }
 
+/// A state on a pool a fixture already holds, for driving a worker (an
+/// expiry pass, a job) directly. Its configuration names no real database.
+pub(crate) fn state_on(pool: &PgPool) -> AppState {
+    AppBuilder {
+        pool: pool.clone(),
+        url: "postgres://fixture/unused".to_owned(),
+        extra: Vec::new(),
+    }
+    .state()
+}
+
 /// Builds the app (and its state) on a test database, with any extra
 /// configuration: the one place a test assembles an `AppState`.
 pub(crate) struct AppBuilder {

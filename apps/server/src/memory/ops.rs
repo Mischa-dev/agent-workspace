@@ -16,7 +16,10 @@ use crate::ops::{
 };
 
 pub fn register_ops(registry: &mut Registry) {
-    registry.add::<DecisionRecord>().add::<DecisionList>();
+    registry
+        .add::<DecisionRecord>()
+        .add::<DecisionList>()
+        .add::<PageTemplateList>();
 }
 
 /// Record a decision.
@@ -179,5 +182,59 @@ impl Operation for DecisionList {
         )
         .await?;
         Ok(DecisionListOutput { decisions })
+    }
+}
+
+/// List what a new page can start from.
+pub struct PageTemplateList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PageTemplateListInput {
+    /// The space (a project) the new page goes in: its id, link or key.
+    #[serde(alias = "projectId")]
+    pub space_id: IdRef,
+}
+
+impl Targeted for PageTemplateListInput {
+    fn target(&self) -> Target {
+        Target::Space(self.space_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PageTemplateListOutput {
+    /// The built-in templates, then pages marked as templates in the
+    /// workspace's spaces you can see.
+    pub templates: Vec<super::templates::TemplateSummary>,
+}
+
+impl Operation for PageTemplateList {
+    const NAME: &'static str = "page_template_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "pages";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List page templates";
+    const DESCRIPTION: &'static str = "List what a new page in a space can start from: the \
+        built-in templates and pages marked as templates. Pass a template's id to page_write \
+        as fromTemplateId.";
+
+    type Input = PageTemplateListInput;
+    type Output = PageTemplateListOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: PageTemplateListInput,
+    ) -> Result<PageTemplateListOutput, OpError> {
+        let viewer = call.account_id();
+        let reach = crate::drafts::Reach {
+            connection_id: call.ctx.caller.connection_id,
+            confined_space: call.ctx.caller.confined_space,
+        };
+        let templates =
+            super::templates::list(call.tx().await?, viewer, reach, input.space_id.id()).await?;
+        Ok(PageTemplateListOutput { templates })
     }
 }

@@ -1,11 +1,20 @@
 import type { MessageReaction } from './types'
 
-export type ReactionChoice = { emoji: string; name: string; label: string }
+export type ReactionChoice = {
+  emoji: string
+  name: string
+  label: string
+  /** Other names it's found by. */
+  aliases?: readonly string[]
+  /** A workspace's own emoji, drawn from its image. */
+  imageUrl?: string
+}
 
 /**
- * The emoji people can react with, in the server's order (src/reactions.rs).
- * The server stores and returns whichever of these it accepts; the timeline
- * draws whatever emoji it gets back, so this list only drives the picker.
+ * The emoji one click away, in the server's order (src/reactions.rs): the
+ * first entries of the shared list (server/src/reactions/emoji.json), which
+ * has every standard emoji people can react with (C2.19). The timeline draws
+ * whatever it gets back, so these lists only drive the picker.
  */
 export const REACTION_CHOICES: readonly ReactionChoice[] = [
   { emoji: '👍', name: 'thumbsup', label: 'Thumbs up' },
@@ -22,6 +31,36 @@ export const REACTION_CHOICES: readonly ReactionChoice[] = [
   { emoji: '🤔', name: 'thinking', label: 'Thinking' },
 ]
 
+type EmojiEntry = { emoji: string; name: string; aliases?: string[] }
+
+/** The shared list of every standard emoji, loaded when the picker searches. */
+export function loadEmojiList(): Promise<ReactionChoice[]> {
+  return import('../../../server/src/reactions/emoji.json').then((module) => emojiChoices(module.default as EmojiEntry[]))
+}
+
+export function emojiChoices(entries: readonly EmojiEntry[]): ReactionChoice[] {
+  return entries.map((entry) => ({
+    emoji: entry.emoji,
+    name: entry.name,
+    label: entry.name.replaceAll('_', ' '),
+    aliases: entry.aliases ?? [],
+  }))
+}
+
+/** Emoji whose name or alias starts with the query, then those that contain it. */
+export function searchEmoji(choices: readonly ReactionChoice[], query: string, limit = 48): ReactionChoice[] {
+  const needle = query.trim().toLowerCase().replace(/^:+|:+$/g, '').replace(/[\s-]+/g, '_')
+  if (!needle) return choices.slice(0, limit)
+  const starts: ReactionChoice[] = []
+  const contains: ReactionChoice[] = []
+  for (const choice of choices) {
+    const names = [choice.name, ...(choice.aliases ?? [])]
+    if (choice.emoji === query.trim() || names.some((name) => name.startsWith(needle))) starts.push(choice)
+    else if (names.some((name) => name.includes(needle))) contains.push(choice)
+  }
+  return [...starts, ...contains].slice(0, limit)
+}
+
 /**
  * The reactions after you add (`reacted`) or take away one, for showing a
  * change before the server confirms it. Adding a new emoji puts it last, as
@@ -29,7 +68,7 @@ export const REACTION_CHOICES: readonly ReactionChoice[] = [
  */
 export function applyReaction(
   reactions: readonly MessageReaction[],
-  choice: Pick<ReactionChoice, 'emoji' | 'name'>,
+  choice: Pick<ReactionChoice, 'emoji' | 'name' | 'imageUrl'>,
   viewerId: string,
   reacted: boolean,
 ): MessageReaction[] {
@@ -41,7 +80,10 @@ export function applyReaction(
         reaction === existing ? { ...reaction, count: reaction.count + 1, byViewer: true } : reaction,
       )
     }
-    return [...reactions, { emoji: choice.emoji, name: choice.name, count: 1, byViewer: true, actors: [] }]
+    return [
+      ...reactions,
+      { emoji: choice.emoji, name: choice.name, count: 1, byViewer: true, actors: [], ...(choice.imageUrl ? { imageUrl: choice.imageUrl } : {}) },
+    ]
   }
   if (!existing?.byViewer) return [...reactions]
   if (existing.count <= 1) return reactions.filter((reaction) => reaction !== existing)
