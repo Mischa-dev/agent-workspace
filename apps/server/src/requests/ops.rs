@@ -330,7 +330,14 @@ impl Operation for RequestAnswer {
     async fn run(call: &mut OpCall<'_>, input: RequestAnswerInput) -> Result<RequestView, OpError> {
         let caller = call.ctx.caller.clone();
         let state = call.state;
+        let space = call.ctx.space_id;
         let tx = call.tx().await?;
+        // An answer can set a run going again: a suspended or closing
+        // workspace answers nothing, and a suspension waits for this one
+        // (the workspace is held before the request's row is locked).
+        if let Some(space) = space {
+            crate::workspace::lifecycle::hold_open_for_space(tx, space, "request_respond").await?;
+        }
         let row = super::visible(tx, input.request_id.id(), caller.account_id, true)
             .await?
             .ok_or(OpError::not_found(REQUEST))?;

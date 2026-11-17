@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -122,7 +122,11 @@ struct AddressRow {
     verification_sent_at: Option<DateTime<Utc>>,
 }
 
-async fn mail_available_for(pool: &PgPool, actor_id: Uuid) -> Result<bool, AppError> {
+async fn mail_available_for(state: &AppState, actor_id: Uuid) -> Result<bool, AppError> {
+    if state.config.server_mail.is_some() {
+        return Ok(true);
+    }
+    let pool = &state.pool;
     Ok(sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
@@ -138,14 +142,18 @@ async fn mail_available_for(pool: &PgPool, actor_id: Uuid) -> Result<bool, AppEr
     .await?)
 }
 
-async fn email_view(pool: &PgPool, principal: &AuthenticatedActor) -> Result<EmailView, AppError> {
+async fn email_view(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+) -> Result<EmailView, AppError> {
+    let pool = &state.pool;
     let row = sqlx::query_as::<_, AddressRow>(
         "SELECT address, verified_at, verification_sent_at FROM user_email_addresses WHERE user_id = $1",
     )
     .bind(principal.user_id)
     .fetch_optional(crate::db::scoped(pool))
     .await?;
-    let mail_available = mail_available_for(pool, principal.actor_id).await?;
+    let mail_available = mail_available_for(state, principal.actor_id).await?;
     Ok(match row {
         Some(row) => EmailView {
             address: Some(row.address),
@@ -170,7 +178,7 @@ async fn read_email_http(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
 ) -> Result<Json<EmailView>, AppError> {
-    Ok(Json(email_view(&state.pool, &principal).await?))
+    Ok(Json(email_view(&state, &principal).await?))
 }
 
 #[derive(Deserialize)]
@@ -203,7 +211,7 @@ async fn set_email_http(
     require_authenticated_write(&state, &headers, &principal).await?;
     let address =
         mail::normalize_address(&request.address).ok_or(AppError::Validation("address"))?;
-    if !mail_available_for(&state.pool, principal.actor_id).await? {
+    if !mail_available_for(&state, principal.actor_id).await? {
         return Err(AppError::Conflict("email", "mail isn't set up"));
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
@@ -218,7 +226,7 @@ async fn set_email_http(
         .is_some_and(|row| row.address == address && row.verified_at.is_some())
     {
         transaction.commit().await?;
-        return Ok(Json(email_view(&state.pool, &principal).await?));
+        return Ok(Json(email_view(&state, &principal).await?));
     }
     if current
         .as_ref()
@@ -251,7 +259,7 @@ async fn set_email_http(
     )
     .await?;
     transaction.commit().await?;
-    Ok(Json(email_view(&state.pool, &principal).await?))
+    Ok(Json(email_view(&state, &principal).await?))
 }
 
 async fn remove_email_http(
@@ -312,7 +320,7 @@ async fn resend_http(
         .await?;
     queue_confirmation(&mut transaction, principal.user_id).await?;
     transaction.commit().await?;
-    Ok(Json(email_view(&state.pool, &principal).await?))
+    Ok(Json(email_view(&state, &principal).await?))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -401,6 +409,7 @@ async fn verify_http(
 ) -> Result<Json<VerifiedResponse>, AppError> {
     require_allowed_origin(&state.config, &headers)?;
     if !well_formed(&request.token, VERIFY_PREFIX) {
+        state.rate_limits.note_invitation_failure().await;
         return Err(AppError::NotFound("confirmation link"));
     }
     state.rate_limits.check_invitation(&request.token).await?;
@@ -417,8 +426,14 @@ async fn verify_http(
     )
     .bind(digest(&request.token).to_vec())
     .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("confirmation link"))?;
+    .await?;
+    let (row, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(
+            transaction,
+            row.ok_or(AppError::NotFound("confirmation link")),
+        )
+        .await?;
     let (user_id, actor_id, address) = row;
     let taken = sqlx::query_scalar::<_, bool>(
         r#"
@@ -476,7 +491,7 @@ async fn reset_available_http(
     State(state): State<AppState>,
 ) -> Result<Json<ResetAvailability>, AppError> {
     Ok(Json(ResetAvailability {
-        available: mail::any_configured(&state.pool).await?,
+        available: mail::any_configured(&state).await?,
     }))
 }
 
@@ -733,7 +748,11 @@ async fn inspect_reset_http(
     require_allowed_origin(&state.config, &headers)?;
     state.rate_limits.check_invitation(&request.token).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let reset = live_reset(&mut transaction, &request.token).await?;
+    let found = live_reset(&mut transaction, &request.token).await;
+    let (reset, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     let two_factor_required =
         crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await?;
     transaction.commit().await?;
@@ -780,7 +799,11 @@ async fn complete_reset_http(
     // Check the link before spending a password hash on it.
     {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        live_reset(&mut transaction, &request.token).await?;
+        let found = live_reset(&mut transaction, &request.token).await;
+        let (_, transaction) = state
+            .rate_limits
+            .release_on_link_miss(transaction, found)
+            .await?;
         transaction.rollback().await?;
     }
     let new_phc = {
@@ -788,7 +811,11 @@ async fn complete_reset_http(
         password::hash_password(std::mem::take(&mut request.new_password)).await?
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let reset = live_reset(&mut transaction, &request.token).await?;
+    let found = live_reset(&mut transaction, &request.token).await;
+    let (reset, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     if crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await? {
         let code = request.code.as_deref().map(str::trim).unwrap_or_default();
         let factor = crate::account_security::load_factor(&mut transaction, reset.user_id)

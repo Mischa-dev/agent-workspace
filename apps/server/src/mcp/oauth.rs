@@ -142,9 +142,6 @@ struct RegistrationResponse {
     response_types: Vec<&'static str>,
 }
 
-/// Registrations that no one has authorized yet, across the server.
-const MAX_UNCLAIMED_CLIENTS: i64 = 1_024;
-
 async fn register_client(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -157,7 +154,10 @@ async fn register_client(
         .map_err(OAuthError::from)?;
     state
         .rate_limits
-        .check_oauth_ceremony(&request.client_name)
+        .check_oauth_ceremony(
+            crate::rate_limit::client_address(&state.config, &headers),
+            &request.client_name,
+        )
         .await
         .map_err(OAuthError::from)?;
     request.client_name = clean_client_name(&request.client_name);
@@ -218,7 +218,7 @@ async fn register_client(
     .fetch_one(&mut *transaction)
     .await
     .map_err(AppError::from)?;
-    if unclaimed >= MAX_UNCLAIMED_CLIENTS {
+    if unclaimed >= state.config.oauth_max_unclaimed_clients {
         return Err(OAuthError::invalid_client_metadata(
             "the local client registration limit has been reached",
         ));
@@ -327,7 +327,10 @@ async fn authorize(
     let request = parse_authorize_query(raw_query)?;
     state
         .rate_limits
-        .check_oauth_ceremony(&request.client_id)
+        .check_oauth_ceremony(
+            crate::rate_limit::client_address(&state.config, &headers),
+            &request.client_id,
+        )
         .await
         .map_err(OAuthError::from)?;
     let (client, scopes) = validate_authorize_request(&state, &request).await?;
@@ -462,7 +465,10 @@ async fn consent(
 ) -> Result<Response, OAuthError> {
     state
         .rate_limits
-        .check_oauth_ceremony(&form.client_id)
+        .check_oauth_ceremony(
+            crate::rate_limit::client_address(&state.config, &headers),
+            &form.client_id,
+        )
         .await
         .map_err(OAuthError::from)?;
     let header = HeaderValue::from_str(&form.csrf_token)
@@ -635,7 +641,7 @@ async fn token(
     } else {
         state
             .rate_limits
-            .check_oauth_ceremony(&request.client_id)
+            .check_oauth_ceremony(address, &request.client_id)
             .await
     };
     if let Err(error) = budget {
@@ -1072,11 +1078,15 @@ struct RevokeRequest {
 
 async fn revoke(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Form(request): Form<RevokeRequest>,
 ) -> Result<StatusCode, OAuthError> {
     state
         .rate_limits
-        .check_oauth_ceremony(&request.client_id)
+        .check_oauth_ceremony(
+            crate::rate_limit::client_address(&state.config, &headers),
+            &request.client_id,
+        )
         .await
         .map_err(OAuthError::from)?;
     let client_id = parse_client_id(&request.client_id)?;

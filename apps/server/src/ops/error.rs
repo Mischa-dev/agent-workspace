@@ -317,6 +317,7 @@ impl From<AppError> for OpError {
                     message: "You don't have permission to do that here.".into(),
                 }
             }
+            AppError::WorkspaceSuspended => Self::WorkspaceSuspended,
             AppError::ModuleOff { module } => Self::Denied {
                 reason: DenyReason::ModuleOff {
                     module: module.to_owned(),

@@ -654,6 +654,22 @@ pub fn repair_and_prune_worktrees(mirror: &Path, worktree: Option<&Path>) -> Res
     prune_worktrees_locked(mirror)
 }
 
+/// Removes everything the server keeps on disk for `repository_id`: its
+/// mirror and every managed worktree of it. Missing directories are fine,
+/// so a retry after a partial removal finishes the job.
+pub async fn remove_repository_data(data_root: &Path, repository_id: Uuid) -> Result<(), AppError> {
+    let data_root = absolute_runtime_path(data_root)?;
+    for area in ["repositories", "worktrees"] {
+        let directory = data_root.join(area).join(repository_id.to_string());
+        match tokio::fs::remove_dir_all(&directory).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(AppError::Internal("remove repository data")),
+        }
+    }
+    Ok(())
+}
+
 pub fn absolute_runtime_path(path: &Path) -> Result<PathBuf, AppError> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());

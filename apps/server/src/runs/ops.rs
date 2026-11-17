@@ -1578,6 +1578,47 @@ pub async fn end_by_service(
     Ok(Some(saved))
 }
 
+/// A suspended or deleting workspace runs nothing (H1.24): end every run
+/// in `workspace` that reports for itself, and tell its agent, and its host
+/// if it has one, to stop. Their reports are refused while the workspace is
+/// closed, so the service ends them rather than waiting for a confirmation.
+/// Built-in runs are stopped by their driver. How many ended.
+pub async fn end_for_closed_workspace(
+    transaction: &mut Transaction<'_, Postgres>,
+    workspace: Uuid,
+    reason: &str,
+) -> Result<usize, AppError> {
+    let runs = sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        SELECT {RUN_COLUMNS} FROM runs run
+        WHERE run.workspace_id = $1
+          AND NOT EXISTS (SELECT 1 FROM agent_runs builtin WHERE builtin.id = run.id)
+        ORDER BY run.id
+        FOR UPDATE OF run
+        "#
+    ))
+    .bind(workspace)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut ended = 0;
+    for run in runs {
+        if !run.run_state()?.is_active() {
+            continue;
+        }
+        let Some(saved) = end_by_service(transaction, run.id, RunState::Cancelled, reason).await?
+        else {
+            continue;
+        };
+        notify_agent(transaction, &saved, "run.cancel", reason).await?;
+        // Nobody asked: the workspace closed. The stop names the run's own
+        // account, as the host's command needs one.
+        crate::hosts::commands::cancel_run(transaction, &saved, saved.account_id, Some(reason))
+            .await?;
+        ended += 1;
+    }
+    Ok(ended)
+}
+
 /// What a host said about a run it was asked to start, or to stop (A1.12).
 #[derive(Clone, Debug)]
 pub enum HostAnswer {

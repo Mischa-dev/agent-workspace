@@ -228,6 +228,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
     ),
     (
+        "deleted_workspaces",
+        "the one line a deleted workspace leaves, for billing and staff: its workspace is gone (H1.24)",
+    ),
+    (
         "event_consumer_failures",
         "events a consumer of the server's log could not handle yet, by log position",
     ),
