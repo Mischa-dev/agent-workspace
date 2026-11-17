@@ -127,15 +127,6 @@ impl<T> Default for Values<T> {
     }
 }
 
-impl<T: Ord> Values<T> {
-    /// `values`, each once and in order, and with `none` no value at all.
-    pub(crate) fn new(mut values: Vec<T>, none: bool) -> Self {
-        values.sort();
-        values.dedup();
-        Self { values, none }
-    }
-}
-
 impl<T: PartialEq> Values<T> {
     /// Whether a task whose value is `value` (`None`: it has none) is named.
     fn names(&self, value: Option<&T>) -> bool {
@@ -168,12 +159,6 @@ impl<T> Default for FieldFilter<T> {
             any: None,
             not: None,
         }
-    }
-}
-
-impl<T> FieldFilter<T> {
-    pub(crate) fn new(any: Option<Values<T>>, not: Option<Values<T>>) -> Self {
-        Self { any, not }
     }
 }
 
@@ -712,126 +697,6 @@ fn resolve_board_grouping(
         })
         .collect();
     Ok((Grouping::Field(id, Some(field.field_type)), options))
-}
-
-/// Board swimlanes a saved view can keep beside the list query.
-const LANES: [&str; 5] = ["none", "assignee", "priority", "milestone", "type"];
-
-/// A view's parameter with "me" (alone or among other assignees) replaced
-/// by `reader`, whoever opens the view. A person field's "me" waits for the
-/// field's type (`Filters::resolve_field_me`): in a text field it's the word.
-pub(super) fn resolve_me(key: &str, value: &str, reader: Uuid) -> String {
-    if !matches!(key, "assigneeActorId" | "notAssigneeActorId") {
-        return value.to_owned();
-    }
-    value
-        .split(',')
-        .map(|part| {
-            if part.trim() == "me" {
-                reader.to_string()
-            } else {
-                part.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-/// A saved view's list parameters (filters, sort, grouping, board columns
-/// and lanes), read exactly as a list request reads them. "me" as an
-/// assignee stands for `reader`, whoever opens the view.
-pub(super) fn saved_query_spec(
-    params: &BTreeMap<String, String>,
-    reader: Uuid,
-) -> Result<ListSpec, AppError> {
-    let mut list = BTreeMap::new();
-    for (key, value) in params {
-        match key.as_str() {
-            "columnsBy" => {
-                Grouping::parse(value, true)?;
-            }
-            "lanes" if LANES.contains(&value.as_str()) => {}
-            "lanes" => return Err(AppError::Validation("lanes")),
-            "cursor" | "limit" => return Err(AppError::Validation("query")),
-            _ => {
-                list.insert(key.clone(), resolve_me(key, value, reader));
-            }
-        }
-    }
-    let encoded = serde_urlencoded::to_string(&list).map_err(|_| AppError::Validation("query"))?;
-    let query: TaskListQuery =
-        serde_urlencoded::from_str(&encoded).map_err(|_| AppError::Validation("query"))?;
-    Ok(ListSpec {
-        filters: Filters::parse(&query)?,
-        sort: Sort::parse(query.sort.as_deref())?,
-        grouping: query
-            .group_by
-            .as_deref()
-            .map(|value| Grouping::parse(value, false))
-            .transpose()?,
-        sort_field: None,
-    })
-}
-
-/// A saved view's filters as task_list applies them for agents: read
-/// exactly as the list page reads the view, so both see the same tasks.
-#[derive(Clone, Debug)]
-pub(crate) struct ViewFilters {
-    filters: Filters,
-    /// Whether the view decides archived tasks; not when the caller does.
-    archived_rule: bool,
-}
-
-impl ViewFilters {
-    /// `params` as the view keeps them, "me" read as `reader`.
-    pub(crate) fn parse(params: &BTreeMap<String, String>, reader: Uuid) -> Result<Self, AppError> {
-        Ok(Self {
-            filters: saved_query_spec(params, reader)?.filters,
-            archived_rule: true,
-        })
-    }
-
-    /// "me" in a person field's filter as `reader`, once the fields' types
-    /// are known.
-    pub(crate) async fn resolve_field_me(
-        &mut self,
-        pool: &PgPool,
-        project_id: Uuid,
-        reader: Uuid,
-    ) -> Result<(), AppError> {
-        self.filters
-            .resolve_field_me(pool, project_id, reader)
-            .await
-    }
-
-    /// Leaves out the view's filters on these custom fields: the caller
-    /// passed its own for them, which replace the view's.
-    pub(crate) fn replace_fields(&mut self, fields: &[Uuid]) {
-        self.filters
-            .fields
-            .retain(|clause| !fields.contains(&clause.field));
-    }
-
-    /// The caller says whether archived tasks are listed, not the view.
-    pub(crate) fn leave_archived_to_caller(&mut self) {
-        self.archived_rule = false;
-    }
-
-    /// The view lists only archived tasks.
-    pub(crate) fn archived_only(&self) -> bool {
-        self.archived_rule && self.filters.archived
-    }
-
-    /// The view's conditions on `item`, its `status` and `project`, each
-    /// starting with AND.
-    pub(crate) fn push_where(&self, builder: &mut QueryBuilder<'_, Postgres>) {
-        self.filters.push_conditions(builder, self.archived_rule);
-    }
-
-    /// Changes whenever the tasks the view matches could.
-    pub(crate) fn fingerprint(&self) -> String {
-        format!("{:?} {}", self.filters.to_params(), self.archived_rule)
-    }
 }
 
 fn parse_date(value: Option<&str>, field: &'static str) -> Result<Option<NaiveDate>, AppError> {
@@ -1585,40 +1450,6 @@ fn push_after(builder: &mut QueryBuilder<'_, Postgres>, keys: &[Key], after: Vec
         builder.push(format!(" AS {}))", key.ty));
     }
     builder.push(")");
-}
-
-/// Which of `work_item_ids` a saved view's query (or the same query inline)
-/// matches, read as `reader` would read it. Automations (X5) use a view's
-/// filters as their conditions.
-pub(crate) async fn matching_tasks(
-    pool: &PgPool,
-    project_id: Uuid,
-    params: &BTreeMap<String, String>,
-    reader: Uuid,
-    work_item_ids: Option<&[Uuid]>,
-    limit: i64,
-) -> Result<Vec<Uuid>, AppError> {
-    let mut spec = saved_query_spec(params, reader)?;
-    spec.filters
-        .resolve_field_me(pool, project_id, reader)
-        .await?;
-    let mut builder = QueryBuilder::<Postgres>::new(format!(
-        "SELECT item.id {BASE_FROM} WHERE item.project_id = "
-    ));
-    builder.push_bind(project_id);
-    if let Some(ids) = work_item_ids {
-        builder
-            .push(" AND item.id = ANY(")
-            .push_bind(ids.to_vec())
-            .push(")");
-    }
-    spec.filters.push_where(&mut builder);
-    builder.push(" ORDER BY item.created_at, item.id LIMIT ");
-    builder.push_bind(limit.clamp(1, 500));
-    Ok(builder
-        .build_query_scalar::<Uuid>()
-        .fetch_all(crate::db::scoped(pool))
-        .await?)
 }
 
 pub(super) async fn total(

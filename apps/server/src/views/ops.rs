@@ -200,8 +200,9 @@ async fn checked(
         .map_err(|message| invalid("config", message))
 }
 
-/// Tells open screens the collection's views changed; bumps its version
-/// when a shared view did.
+/// Tells open screens a shared view changed and bumps the collection's
+/// version. A personal view's change is heard by its owner alone, through
+/// the `view.changed` event its row stages.
 async fn announce(
     call: &mut OpCall<'_>,
     held: &Held,
@@ -212,9 +213,9 @@ async fn announce(
     let tx = call.tx().await?;
     if shared {
         crate::collections::touch(tx, held.project_id, held.collection_id).await?;
+        crate::outbox::enqueue_collection_updated(tx, held.project_id, held.collection_id, &[])
+            .await?;
     }
-    crate::outbox::enqueue_collection_updated(tx, held.project_id, held.collection_id, &[])
-        .await?;
     call.audit_target(
         "collection",
         held.collection_id,

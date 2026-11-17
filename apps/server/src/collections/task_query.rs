@@ -446,6 +446,22 @@ pub async fn tasks_collection(
     .await?)
 }
 
+/// A view of the space's Tasks collection that `reader` may use: a shared
+/// one, or their own.
+pub async fn usable_view(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    view_id: Uuid,
+    reader: Uuid,
+) -> Result<Option<views::View>, AppError> {
+    let Some(collection_id) = tasks_collection(connection, project_id).await? else {
+        return Ok(None);
+    };
+    Ok(views::one(connection, project_id, collection_id, view_id)
+        .await?
+        .filter(|view| view.owner_actor_id.is_none_or(|owner| owner == reader)))
+}
+
 /// Checks a query against the Tasks collection's fields: each filter suits
 /// its field, and the ids it names are this space's. The message says what
 /// would work.
@@ -465,13 +481,13 @@ pub async fn check(
     views::check_references(connection, project_id, &query.config, &definitions).await
 }
 
-/// The tasks a filter finds as `reader` reads it ("me" is them), oldest
+/// The tasks a query finds as `reader` reads it ("me" is them), oldest
 /// first, at most `limit`; with `only`, just those of them. Automations'
 /// conditions read tasks this way.
 pub async fn matching(
     connection: &mut PgConnection,
     project_id: Uuid,
-    filter: &Filter,
+    query: &TaskQuery,
     reader: Uuid,
     only: Option<&[Uuid]>,
     limit: i64,
@@ -482,14 +498,20 @@ pub async fn matching(
     let definitions =
         super::field_definitions(connection, project_id, collection_id, false).await?;
     let config = ViewConfig {
-        filters: filter.clone(),
+        filters: query.config.filters.clone(),
         sort: vec![SortRule {
             field: "number".to_owned(),
             direction: Direction::Asc,
         }],
         ..ViewConfig::default()
     };
-    let mut spec = Spec::from_config(&config, &definitions, reader);
+    let words = query
+        .search
+        .as_deref()
+        .map(|words| words.split_whitespace().map(str::to_owned).collect())
+        .unwrap_or_default();
+    let mut spec = Spec::from_config(&config, &definitions, reader).searching(words, &definitions);
+    spec.archived = query.archived;
     spec.only = only.map(<[Uuid]>::to_vec);
     let source = tasks::TasksSource {
         project_id,

@@ -1380,26 +1380,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/views",
-            Tool("view_write"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/views/{view_id}",
-            Tool("view_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/views/{view_id}",
-            Tool("view_write"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/views/{view_id}/pin",
-            Tool("view_write"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/task-templates",
             Tool("template_write"),
         ),

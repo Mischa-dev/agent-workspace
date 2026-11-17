@@ -332,6 +332,39 @@ WHERE EXISTS (
 )
 ON CONFLICT DO NOTHING;
 
+-- A rule whose conditions used a built-in saved view uses the Tasks
+-- collection's own built-in view now; any other kept its id above.
+UPDATE automation_rules rule
+SET view_id = builtin_view.id
+FROM saved_views saved
+JOIN collections collection
+  ON collection.project_id = saved.project_id AND collection.builtin = 'tasks'
+JOIN collection_views builtin_view
+  ON builtin_view.collection_id = collection.id AND builtin_view.builtin = saved.builtin
+WHERE saved.project_id = rule.project_id AND saved.id = rule.view_id
+  AND saved.builtin IS NOT NULL;
+
 DROP TABLE saved_view_pins;
 DROP TABLE saved_views;
 DROP FUNCTION task_view_config(JSONB, TEXT);
+DROP FUNCTION events_from_saved_views();
+
+-- A view changed: a shared one is heard by its space, a personal one by
+-- its owner only.
+CREATE FUNCTION events_from_collection_views() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    changed collection_views%ROWTYPE;
+BEGIN
+    IF TG_OP = 'DELETE' THEN changed := OLD; ELSE changed := NEW; END IF;
+    PERFORM stage_event(
+        'view.changed', 'fact', changed.project_id, 'view', changed.id,
+        CASE WHEN changed.owner_actor_id IS NULL THEN 'space' ELSE 'account' END,
+        changed.created_by_actor_id, NULL, changed.owner_actor_id, NULL, changed.version, '{}',
+        jsonb_build_object(
+            'collectionId', changed.collection_id,
+            'removed', TG_OP = 'DELETE'));
+    RETURN NULL;
+END $$;
+CREATE TRIGGER events_from_collection_views
+    AFTER INSERT OR DELETE OR UPDATE OF name, view_type, config, position, owner_actor_id
+    ON collection_views FOR EACH ROW EXECUTE FUNCTION events_from_collection_views();

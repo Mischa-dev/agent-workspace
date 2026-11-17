@@ -387,6 +387,10 @@ impl Spec {
             let pattern = format!("%{escaped}%");
             builder.push(" AND (record.title ILIKE ");
             builder.push_bind(pattern.clone());
+            for text in source.searched_text() {
+                builder.push(format!(" OR {text} ILIKE "));
+                builder.push_bind(pattern.clone());
+            }
             if !self.search_fields.text.is_empty() {
                 builder.push(
                     " OR EXISTS (SELECT 1 FROM jsonb_each_text(record.field_values) \

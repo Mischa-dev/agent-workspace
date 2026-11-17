@@ -1908,9 +1908,20 @@ pub fn push_condition(
             sql_type,
             category,
         } if *sql_type == "timestamptz" && field.behaves_as() == FieldType::Date => {
-            // A time filters by its day (UTC), as a date field does.
-            let day = format!("(({expr}) AT TIME ZONE 'UTC')::date");
-            push_column_condition(builder, &day, "date", category.as_deref(), clause, today);
+            // A time filters by its day (UTC), as a date field does, unless
+            // a comparison names a moment ("changed since 14:00").
+            let moment = matches!(
+                clause.op,
+                FieldOp::Gt | FieldOp::Gte | FieldOp::Lt | FieldOp::Lte
+            ) && clause.values.first().is_some_and(|value| {
+                chrono::DateTime::parse_from_rfc3339(value.trim()).is_ok()
+            });
+            if moment {
+                push_column_condition(builder, expr, sql_type, None, clause, today);
+            } else {
+                let day = format!("(({expr}) AT TIME ZONE 'UTC')::date");
+                push_column_condition(builder, &day, "date", category.as_deref(), clause, today);
+            }
         }
         Accessor::Column {
             expr,

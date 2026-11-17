@@ -277,9 +277,9 @@ pub static LABEL_CHANGED: EventType = fact(
 );
 pub static VIEW_CHANGED: EventType = fact(
     "view.changed",
-    "tasks",
+    "collections",
     Some("view"),
-    "A saved view was added, changed or removed",
+    "A view of a collection was added, changed or removed",
 );
 pub static FIELD_CHANGED: EventType = fact(
     "field.changed",
