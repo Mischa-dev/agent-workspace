@@ -21,6 +21,7 @@ use std::{collections::HashMap, time::Duration};
 use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::watch;
+use uuid::Uuid;
 
 use super::{LOGGED_EVENT_COLUMNS, LoggedEvent};
 use crate::{
@@ -79,6 +80,12 @@ pub trait Consumer: Send + Sync {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EventFilter<'a> {
     pub types: Option<&'a [&'a str]>,
+    /// Only these workspaces' events (R19: one cursor over every workspace
+    /// a connection reaches, in the one global position order); every
+    /// workspace's when None.
+    pub workspaces: Option<&'a [Uuid]>,
+    /// With `workspaces`, also the direct scope's (DMs and groups).
+    pub direct: bool,
 }
 
 /// Events after `after`, oldest first, that pass `filter`. For consumers
@@ -96,11 +103,16 @@ pub async fn read(
     Ok(sqlx::query_as::<_, LoggedEvent>(&format!(
         "SELECT {LOGGED_EVENT_COLUMNS} FROM events \
          WHERE position > $1 AND ($3::text[] IS NULL OR type = ANY($3)) \
+           AND ($4::uuid[] IS NULL OR workspace_id = ANY($4) \
+                OR ($5 AND workspace_id = $6)) \
          ORDER BY position LIMIT $2"
     ))
     .bind(after)
     .bind(limit.clamp(1, 5000))
     .bind(types)
+    .bind(filter.workspaces)
+    .bind(filter.direct)
+    .bind(super::DIRECT_SCOPE_ID)
     .fetch_all(&mut *connection)
     .await?)
 }
@@ -165,6 +177,7 @@ impl<C: Consumer> Runner<C> {
             &mut transaction,
             &EventFilter {
                 types: self.consumer.types(),
+                ..EventFilter::default()
             },
             cursor,
             limit,

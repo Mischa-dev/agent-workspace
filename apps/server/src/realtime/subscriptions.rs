@@ -122,6 +122,9 @@ pub(crate) struct SubscriptionSet {
     /// Restricted root conversations (DMs, groups, private channels) it
     /// may read.
     pub restricted: HashSet<Uuid>,
+    /// Those of `restricted` that are DMs and groups: the direct scope's
+    /// (R20), which a stream asks for apart from any workspace.
+    pub direct: HashSet<Uuid>,
 }
 
 impl SubscriptionSet {
@@ -225,9 +228,9 @@ pub(crate) async fn compute(
         .map(|holding| holding.space)
         .collect::<HashSet<_>>();
     // Restricted roots it belongs to, each passed through the one gate.
-    let restricted = sqlx::query_scalar::<_, Uuid>(
+    let roots = sqlx::query_as::<_, (Uuid, bool)>(
         r#"
-        SELECT conversation.id
+        SELECT conversation.id, conversation.kind IN ('dm', 'group')
         FROM conversation_members member
         JOIN conversations conversation ON conversation.id = member.conversation_id
         WHERE member.actor_id = $1
@@ -238,14 +241,19 @@ pub(crate) async fn compute(
     )
     .bind(account)
     .fetch_all(&mut *connection)
-    .await?
-    .into_iter()
-    .collect::<HashSet<_>>();
+    .await?;
+    let direct = roots
+        .iter()
+        .filter(|(_, direct)| *direct)
+        .map(|(root, _)| *root)
+        .collect::<HashSet<_>>();
+    let restricted = roots.into_iter().map(|(root, _)| root).collect();
     Ok(SubscriptionSet {
         account,
         workspaces,
         spaces,
         restricted,
+        direct,
     })
 }
 
@@ -278,6 +286,7 @@ mod tests {
             workspaces: HashSet::from([workspace]),
             spaces: HashSet::from([space]),
             restricted: HashSet::from([group]),
+            ..SubscriptionSet::default()
         };
         let other_workspace = Uuid::now_v7();
         for (audience, space_of, workspace_of, heard) in [
@@ -355,6 +364,7 @@ mod tests {
             workspaces: HashSet::from([workspace]),
             spaces: HashSet::from([space]),
             restricted: HashSet::new(),
+            ..SubscriptionSet::default()
         };
         let mut membership = route(RouteAudience::Space, Some(space), workspace);
         membership.event_type = "space.member.changed".to_owned();

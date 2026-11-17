@@ -11,7 +11,11 @@
 //! along as they happen; a heartbeat every 15 seconds keeps idle streams
 //! open.
 
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::Arc,
+    time::Duration,
+};
 
 use futures_util::Stream;
 use tokio::sync::broadcast::{Receiver, error::RecvError};
@@ -19,7 +23,7 @@ use uuid::Uuid;
 
 use super::{
     hub::{LiveState, RealtimeDelivery, access_changed, live_frames, subscription_for},
-    subscriptions::{Hearing, Route, SubscriptionSet},
+    subscriptions::{Hearing, Route, RouteAudience, SubscriptionSet},
     wire::RESUME_LIMIT,
 };
 use crate::{AppState, error::AppError, events::LoggedEvent};
@@ -38,6 +42,47 @@ pub struct FollowSpec {
     pub actor_kind: String,
     /// Narrows what the account may hear (A2: event kinds, reasons).
     pub filter: Arc<dyn Fn(&LoggedEvent) -> bool + Send + Sync>,
+    /// Which of its workspaces the stream carries (R19); every workspace
+    /// the account is in when None. One cursor walks them all in the log's
+    /// one order, and each event names its workspace.
+    pub workspaces: Option<HashSet<Uuid>>,
+    /// Whether it carries DMs and groups too (the direct scope, R20).
+    pub direct: bool,
+}
+
+impl FollowSpec {
+    /// Every workspace the account is in, and its DMs and groups.
+    pub fn everything(
+        account_id: Uuid,
+        actor_kind: impl Into<String>,
+        filter: Arc<dyn Fn(&LoggedEvent) -> bool + Send + Sync>,
+    ) -> Self {
+        Self {
+            account_id,
+            actor_kind: actor_kind.into(),
+            filter,
+            workspaces: None,
+            direct: true,
+        }
+    }
+
+    /// Whether the stream asked for this event's scope: the direct scope's
+    /// (a DM or group, or anything K4.23 files under its id) only when it
+    /// includes DMs, any other only when it names its workspace.
+    fn asked_for(&self, event: &LoggedEvent, route: &Route, set: &SubscriptionSet) -> bool {
+        let direct = event.workspace_id == crate::events::DIRECT_SCOPE_ID
+            || matches!(
+                route.audience,
+                RouteAudience::Conversation { root, restricted: true } if set.direct.contains(&root)
+            );
+        if direct {
+            self.direct
+        } else {
+            self.workspaces
+                .as_ref()
+                .is_none_or(|workspaces| workspaces.contains(&event.workspace_id))
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -163,6 +208,9 @@ impl Follower {
             return Ok(false);
         };
         let set = self.set.as_ref().expect("set worked out");
+        if !self.spec.asked_for(event, &route, set) {
+            return Ok(false);
+        }
         let heard = match set.hears(&route) {
             Hearing::Yes => true,
             Hearing::No => false,

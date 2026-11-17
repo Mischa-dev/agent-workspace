@@ -220,6 +220,14 @@ impl<'a> NewEvent<'a> {
 /// The largest payload an event may carry.
 pub const MAX_PAYLOAD_BYTES: usize = 8192;
 
+/// The direct scope's fixed id (rulings R19, R20): DMs and groups belong to
+/// the people in them, not to a workspace, and K4.23's reserved
+/// `organizations` row with this id holds them. Its events are heard only
+/// by a conversation's participants or one account (a CHECK on the log
+/// refuses a workspace or space audience), and a reader asks for them
+/// apart from any workspace.
+pub const DIRECT_SCOPE_ID: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_d1ec);
+
 /// Stages one event in the change's transaction; the sequencer gives it a
 /// position once the transaction commits, and a rollback leaves nothing.
 pub async fn emit(

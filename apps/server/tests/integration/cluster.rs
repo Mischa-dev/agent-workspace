@@ -1919,11 +1919,7 @@ async fn follow_catches_up_then_goes_live_without_gaps() {
     });
     let mut stream = Box::pin(follow(
         cluster.instance(1).state().clone(),
-        FollowSpec {
-            account_id: owner,
-            actor_kind: "human".to_owned(),
-            filter: task_updates.clone(),
-        },
+        FollowSpec::everything(owner, "human", task_updates.clone()),
         start,
     ));
     // The rest while it catches up, on both instances, with others' events
@@ -1960,11 +1956,7 @@ async fn follow_catches_up_then_goes_live_without_gaps() {
     // Too far back: refetch, then follow from the head.
     let mut stale = Box::pin(follow(
         cluster.instance(0).state().clone(),
-        FollowSpec {
-            account_id: owner,
-            actor_kind: "human".to_owned(),
-            filter: task_updates,
-        },
+        FollowSpec::everything(owner, "human", task_updates),
         -1,
     ));
     match stale.next().await {
@@ -1972,6 +1964,156 @@ async fn follow_catches_up_then_goes_live_without_gaps() {
         other => panic!("expected a resync: {other:?}"),
     }
     assert!(stale.next().await.is_none(), "the stream ends after it");
+    cluster.finish().await;
+}
+
+/// K3.24: one cursor walks every workspace a stream asks for, in the log's
+/// one order, each event naming its workspace; the direct scope's events
+/// come only to a stream that asks for DMs and groups; and the log refuses
+/// a direct-scope event a workspace or a space would hear.
+#[tokio::test]
+async fn one_stream_walks_several_workspaces_and_the_direct_scope() {
+    use agent_workspace_server::{
+        events::{Audience, DIRECT_SCOPE_ID},
+        realtime::follow::{FollowItem, FollowSpec, follow},
+        workspace::lifecycle::{self, NewWorkspace},
+    };
+    use futures_util::StreamExt;
+
+    let Some(cluster) = cluster("k3_24_streams", 1).await else {
+        return;
+    };
+    let project = log_project(&cluster).await;
+    let first = cluster.organization_id;
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM project_memberships WHERE project_id = $1",
+    )
+    .bind(project)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("owner");
+    let (second, third) = {
+        let mut transaction = cluster.pool.begin().await.expect("begin");
+        let mut made = Vec::new();
+        for name in ["Second", "Third"] {
+            let workspace = NewWorkspace {
+                name: name.into(),
+                slug: None,
+            };
+            made.push(
+                lifecycle::create(&mut transaction, owner, workspace)
+                    .await
+                    .expect("workspace"),
+            );
+        }
+        let (second, third) = (made[0], made[1]);
+        transaction.commit().await.expect("commit");
+        (second, third)
+    };
+    let start = {
+        let mut connection = cluster.pool.acquire().await.expect("connection");
+        events::head(&mut connection).await.expect("head")
+    };
+    let to = |workspace: Uuid, audience: Audience| NewEvent {
+        workspace_id: Some(workspace),
+        space_id: None,
+        audience,
+        ..NewEvent::thing(&catalog::TASK_UPDATED, project, "task", Uuid::now_v7())
+    };
+    // One of each, in one order: the first workspace's space, the second
+    // and third workspaces, the owner's direct scope, then the first again.
+    let mut transaction = cluster.pool.begin().await.expect("begin");
+    let in_first = stage(&mut transaction, project).await;
+    transaction.commit().await.expect("commit");
+    let mut written = vec![in_first];
+    for event in [
+        to(second, Audience::Workspace),
+        to(third, Audience::Workspace),
+        to(DIRECT_SCOPE_ID, Audience::Account(owner)),
+    ] {
+        let mut transaction = cluster.pool.begin().await.expect("begin");
+        written.push(events::emit(&mut transaction, event).await.expect("emit"));
+        transaction.commit().await.expect("commit");
+    }
+    let mut transaction = cluster.pool.begin().await.expect("begin");
+    written.push(stage(&mut transaction, project).await);
+    transaction.commit().await.expect("commit");
+    let last = written[4];
+
+    let task_updates = std::sync::Arc::new(|event: &events::LoggedEvent| {
+        event.event_type == catalog::TASK_UPDATED.name
+    });
+    let heard = |spec: FollowSpec| {
+        let state = cluster.instance(0).state().clone();
+        async move {
+            let mut stream = Box::pin(follow(state, spec, start));
+            let mut seen = Vec::new();
+            loop {
+                match tokio::time::timeout(Duration::from_secs(30), stream.next()).await {
+                    Ok(Some(Ok(FollowItem::Event(event)))) => {
+                        seen.push((event.position, event.id, event.workspace_id));
+                        if event.id == last {
+                            return seen;
+                        }
+                    }
+                    Ok(Some(Ok(FollowItem::Heartbeat | FollowItem::Live(_)))) => {}
+                    other => panic!("the stream stopped: {other:?} after {seen:?}"),
+                }
+            }
+        }
+    };
+    let ids = |seen: &[(i64, Uuid, Uuid)]| seen.iter().map(|(_, id, _)| *id).collect::<Vec<_>>();
+    let in_order = |seen: &[(i64, Uuid, Uuid)]| seen.windows(2).all(|pair| pair[0].0 < pair[1].0);
+
+    // Two workspaces, no DMs: the first and second only, in log order.
+    let two = heard(FollowSpec {
+        workspaces: Some(HashSet::from([first, second])),
+        direct: false,
+        ..FollowSpec::everything(owner, "human", task_updates.clone())
+    })
+    .await;
+    assert_eq!(ids(&two), vec![written[0], written[1], written[4]]);
+    assert!(in_order(&two), "in log order");
+    assert_eq!(
+        two.iter()
+            .map(|(_, _, workspace)| *workspace)
+            .collect::<Vec<_>>(),
+        vec![first, second, first],
+        "each names its workspace"
+    );
+
+    // Everything: all three workspaces and the direct scope, one order.
+    let all = heard(FollowSpec::everything(owner, "human", task_updates.clone())).await;
+    assert_eq!(ids(&all), written);
+    assert!(in_order(&all), "in log order");
+    assert_eq!(all[3].2, DIRECT_SCOPE_ID, "the direct scope names itself");
+
+    // DMs and the first workspace only.
+    let direct = heard(FollowSpec {
+        workspaces: Some(HashSet::from([first])),
+        ..FollowSpec::everything(owner, "human", task_updates)
+    })
+    .await;
+    assert_eq!(ids(&direct), vec![written[0], written[3], written[4]]);
+
+    // Nobody's workspace or space hears the direct scope.
+    for event in [
+        to(DIRECT_SCOPE_ID, Audience::Workspace),
+        NewEvent {
+            space_id: Some(project),
+            ..to(DIRECT_SCOPE_ID, Audience::Space)
+        },
+    ] {
+        let mut transaction = cluster.pool.begin().await.expect("begin");
+        let error = events::emit(&mut transaction, event)
+            .await
+            .expect_err("refused");
+        assert!(
+            format!("{error:?}").contains("event_staging_direct_scope_audience"),
+            "{error:?}"
+        );
+        transaction.rollback().await.expect("rollback");
+    }
     cluster.finish().await;
 }
 
