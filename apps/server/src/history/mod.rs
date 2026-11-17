@@ -204,7 +204,7 @@ fn list_sql(kind: &str) -> Option<String> {
             SELECT entry.sequence AS version, {at} AS at,
                    COALESCE(activity.actor_id, comment.author_actor_id) AS actor_id,
                    NULL::uuid AS via_id,
-                   CASE WHEN entry.comment_id IS NOT NULL THEN 'Commented'
+                   CASE WHEN entry.message_id IS NOT NULL THEN 'Commented'
                         ELSE initcap(replace(COALESCE(activity.kind, entry.kind), '_', ' ')) END
                        AS summary,
                    ARRAY(SELECT jsonb_object_keys(
@@ -212,7 +212,8 @@ fn list_sql(kind: &str) -> Option<String> {
                             THEN activity.payload->'changes' ELSE '{{}}'::jsonb END)) AS changed
             FROM work_item_timeline_entries entry
             LEFT JOIN work_item_activity activity ON activity.id = entry.activity_id
-            LEFT JOIN work_item_comments comment ON comment.id = entry.comment_id
+            -- visibility: the author of a comment on a task the reader may see
+            LEFT JOIN messages comment ON comment.id = entry.message_id
             WHERE entry.work_item_id = $1
             "#,
             at = at("entry.created_at")

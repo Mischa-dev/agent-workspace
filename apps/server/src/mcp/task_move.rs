@@ -105,6 +105,12 @@ pub(super) async fn task_move(
         source: command_actor(principal, source_project_id),
         target: command_actor(principal, target_project_id),
         surface: Surface::Mcp,
+        poster: super::talk::message_actor(principal).ok().map(|actor| {
+            (
+                actor,
+                crate::conversations::threads::ThreadCreator::mcp(principal),
+            )
+        }),
     };
     if arguments.preview == Some(true) {
         if arguments.snapshot.is_some()

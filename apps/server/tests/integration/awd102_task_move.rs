@@ -29,7 +29,7 @@ async fn target_rows(setup: &Setup, project: &str) -> String {
     let mut text = String::new();
     for query in [
         "SELECT row_to_json(activity)::text FROM work_item_activity activity WHERE project_id = $1::uuid",
-        "SELECT row_to_json(comment)::text FROM work_item_comments comment WHERE project_id = $1::uuid",
+        "SELECT row_to_json(comment)::text FROM messages comment WHERE project_id = $1::uuid",
         "SELECT row_to_json(audit)::text FROM audit_events audit WHERE project_id = $1::uuid",
         &format!(
             "SELECT row_to_json(event)::text FROM {n} event WHERE event.payload::text LIKE '%' || $1 || '%'",
@@ -58,7 +58,7 @@ async fn footprint(setup: &Setup) -> Vec<i64> {
     let mut counts = Vec::new();
     for table in [
         "work_items",
-        "work_item_comments",
+        "messages",
         "work_item_activity",
         "work_item_key_aliases",
         "work_item_move_receipts",

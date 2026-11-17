@@ -156,11 +156,11 @@ impl Operation for CommentCreate {
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Comment";
-    const DESCRIPTION: &'static str = "Comment on a sheet, whiteboard or record: in its comment \
-        stream, in a thread of its discussion (threadId), or in a new thread about a place in it \
-        (anchor: a cell or range, board elements, a field) or about the whole thing (newThread). \
-        Whoever can see the thing sees its comments. Mentioned agents are asked to reply there. \
-        Comment on tasks with task_comment and on pages with page_comment for now.";
+    const DESCRIPTION: &'static str = "Comment on a page, sheet, whiteboard, record or task: in its \
+        comment stream, in a thread of its discussion (threadId), or in a new thread about a \
+        place in it (anchor: words in a page block, a cell or range, board elements, a field) or \
+        about the whole thing (newThread). Whoever can see the thing sees its comments. \
+        Mentioned agents are asked to reply there.";
     const EMITS: &'static [&'static str] = &["message.created"];
 
     type Input = CommentCreateInput;
@@ -360,7 +360,7 @@ impl Operation for CommentList {
             .home(connection, thing_id, viewer)
             .await?
             .ok_or(OpError::not_found("That thing"))?;
-        let accepts_comments = subject.open && home.accepts_comments;
+        let accepts_comments = home.accepts_comments;
         let Some(conversation_id) =
             crate::conversations::threads::comments_of(connection, kind.as_str(), thing_id).await?
         else {

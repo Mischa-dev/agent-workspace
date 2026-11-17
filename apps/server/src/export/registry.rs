@@ -60,7 +60,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("conversation_id", "conversations"),
                     ("work_item_id", "work_items"),
                     ("message_id", "messages"),
-                    ("comment_id", "work_item_comments"),
                     ("uploaded_by_actor_id", "actors"),
                     ("removed_by_actor_id", "actors"),
                 ],
@@ -744,7 +743,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
     ExportDecl {
         module: "tasks",
         version: 1,
-        after: &["projects", "channels"],
+        after: &["projects", "channels", "messages"],
         kinds: &[
             KindDecl {
                 kind: "work_item_acceptance_criteria",
@@ -766,46 +765,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("work_item_id", "work_items"),
                     ("actor_id", "actors"),
                     ("via_oauth_grant_id", "mcp_oauth_grants"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_comment_mentions",
-                table: "work_item_comment_mentions",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("comment_id", "work_item_comments"),
-                    ("actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_comment_revisions",
-                table: "work_item_comment_revisions",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("comment_id", "work_item_comments"),
-                    ("written_by_actor_id", "actors"),
-                    ("via_oauth_grant_id", "mcp_oauth_grants"),
-                    ("redacted_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_comments",
-                table: "work_item_comments",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("author_actor_id", "actors"),
-                    ("via_oauth_grant_id", "mcp_oauth_grants"),
-                    ("removed_by_actor_id", "actors"),
-                    ("reply_to_comment_id", "work_item_comments"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -931,7 +890,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("project_id", "projects"),
                     ("work_item_id", "work_items"),
                     ("activity_id", "work_item_activity"),
-                    ("comment_id", "work_item_comments"),
+                    ("message_id", "messages"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -978,10 +937,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "runtime state of this server (queues, leases, retries)",
             ),
             (
-                "work_item_comment_references",
-                "a cache or index derived from other rows, rebuilt on import",
-            ),
-            (
                 "work_item_move_receipts",
                 "runtime state of this server (queues, leases, retries)",
             ),
@@ -996,20 +951,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
         version: 1,
         after: &["projects"],
         kinds: &[
-            KindDecl {
-                kind: "project_page_comments",
-                table: "project_page_comments",
-                references: &[
-                    ("project_id", "projects"),
-                    ("page_id", "project_pages"),
-                    ("thread_id", "project_page_comments"),
-                    ("author_actor_id", "actors"),
-                    ("via_oauth_grant_id", "mcp_oauth_grants"),
-                    ("resolved_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
             KindDecl {
                 kind: "project_page_documents",
                 table: "project_page_documents",
@@ -1369,7 +1310,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("conversation_id", "conversations"),
                     ("message_id", "messages"),
                     ("work_item_id", "work_items"),
-                    ("comment_id", "work_item_comments"),
                     ("agent_run_id", "runs"),
                     ("pull_request_id", "github_pull_requests"),
                 ],

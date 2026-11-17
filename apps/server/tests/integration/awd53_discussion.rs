@@ -235,8 +235,11 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         .as_str()
         .expect("thread")
         .to_owned();
+    agent_workspace_server::events::catch_up(&setup.pool)
+        .await
+        .expect("catch up with the log");
     let notified = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM notifications WHERE kind = 'page_comment' AND subject_id = $1::uuid",
+        "SELECT count(*) FROM notifications WHERE kind = 'thing_comment' AND detail->>'subjectId' = $1",
     )
     .bind(&page)
     .fetch_one(&setup.pool)

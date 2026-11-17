@@ -39,6 +39,7 @@ mod backup_restore;
 mod bug_report_links;
 mod bug_sweep;
 mod built_modules;
+mod c1_comments_migration;
 mod cluster;
 mod cluster_support;
 mod compat_clients;

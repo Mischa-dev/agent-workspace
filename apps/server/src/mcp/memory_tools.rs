@@ -434,11 +434,16 @@ pub(super) async fn page_get(
         let (open_comments, pending_suggestions) = sqlx::query_as::<_, (i64, i64)>(
             r#"
             SELECT
-                (SELECT count(*) FROM project_page_comments
-                 WHERE page_id = $1 AND thread_id = id AND resolved_at IS NULL
-                   AND EXISTS (SELECT 1 FROM project_page_comments reply
-                               WHERE reply.thread_id = project_page_comments.id
-                                 AND reply.deleted_at IS NULL)),
+                -- visibility: a count of the page's open threads, for a reader of the page
+                (SELECT count(*) FROM conversations comments
+                 JOIN conversations thread
+                   ON thread.parent_channel_id = comments.id AND thread.kind = 'thread'
+                 WHERE comments.kind = 'comments' AND comments.subject_kind = 'page'
+                   AND comments.subject_id = $1
+                   AND lower(COALESCE(thread.thread_status, '')) <> 'resolved'
+                   AND EXISTS (SELECT 1 FROM messages reply
+                               WHERE reply.conversation_id = thread.id
+                                 AND reply.removed_at IS NULL)),
                 (SELECT count(*) FROM project_page_suggestions
                  WHERE page_id = $1 AND status = 'pending')
             "#,

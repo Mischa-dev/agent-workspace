@@ -445,28 +445,41 @@ async fn mentioned_events(
         )
         .await;
     assert_eq!(page["outcome"], "ok", "{page}");
-    page["value"]["events"]
+    let mut found = Vec::new();
+    for event in page["value"]["events"]
         .as_array()
         .expect("events")
         .iter()
-        .filter(|event| event["type"] == "comment.mentioned")
-        .map(|event| {
-            let data = &event["data"];
-            assert!(!event.to_string().contains("thoughts"), "ids only: {event}");
-            (
-                data["commentKind"].as_str().expect("kind").to_owned(),
-                data["commentId"]
-                    .as_str()
-                    .and_then(|id| id.parse().ok())
-                    .expect("comment"),
-                data["thing"]["id"].as_str().expect("thing").to_owned(),
-            )
-        })
-        .collect()
+        .filter(|event| event["type"] == "message.mentioned")
+    {
+        assert!(!event.to_string().contains("thoughts"), "ids only: {event}");
+        let data = &event["data"];
+        let message: Uuid = data["messageId"]
+            .as_str()
+            .and_then(|id| id.parse().ok())
+            .expect("message");
+        // The thing the comment is on.
+        let (kind, thing) = sqlx::query_as::<_, (String, Uuid)>(
+            r#"
+            SELECT COALESCE(parent.subject_kind, place.subject_kind),
+                   COALESCE(parent.subject_id, place.subject_id)
+            FROM messages message
+            JOIN conversations place ON place.id = message.conversation_id
+            LEFT JOIN conversations parent ON parent.id = place.parent_channel_id
+            WHERE message.id = $1
+            "#,
+        )
+        .bind(message)
+        .fetch_one(pool)
+        .await
+        .expect("the comment's thing");
+        found.push((kind, message, thing.to_string()));
+    }
+    found
 }
 
 /// C1.1: a task or page comment that mentions an agent tells it with one
-/// `comment.mentioned` event, carrying the thing's and the comment's ids and
+/// `message.mentioned` event (comments are messages since C1.4), carrying ids and
 /// no words; an agent not in the project, and the author, get none. A task
 /// comment is one path for the web and agent tools.
 #[tokio::test]
@@ -530,7 +543,7 @@ async fn comments_that_mention_agents_tell_them() {
         Uuid::parse_str(posted["comment"]["id"].as_str().expect("comment")).expect("id");
     let events = mentioned_events(app, pool, rook).await;
     assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!(events[0].0, "work_item_comment");
+    assert_eq!(events[0].0, "task");
     assert_eq!(events[0].1, comment_id);
     assert_eq!(events[0].2, task_id);
 
@@ -575,7 +588,7 @@ async fn comments_that_mention_agents_tell_them() {
     let page_comment = created["id"].as_str().expect("comment").to_owned();
     let events = mentioned_events(app, pool, rook).await;
     assert_eq!(events.len(), 2, "{events:?}");
-    assert_eq!(events[1].0, "page_comment");
+    assert_eq!(events[1].0, "page");
     assert_eq!(events[1].1.to_string(), page_comment);
     assert_eq!(events[1].2, page_id);
     assert!(mentioned_events(app, pool, kite).await.is_empty());

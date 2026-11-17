@@ -147,11 +147,11 @@ async fn task_comments_are_edited_by_their_author_and_deleted_by_author_or_admin
     }
     let left = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT (SELECT count(*) FROM work_item_comment_revisions
-                WHERE comment_id = $1 AND plain_text IS NOT NULL)
+        SELECT (SELECT count(*) FROM message_revisions
+                WHERE message_id = $1 AND plain_text IS NOT NULL)
              + (SELECT count(*) FROM idempotency_keys
                 WHERE response_body::text LIKE '%sk-test-123%')
-             + (SELECT count(*) FROM work_item_comment_mentions WHERE comment_id = $1)
+             + (SELECT count(*) FROM message_mentions WHERE message_id = $1)
         "#,
     )
     .bind(comment.parse::<Uuid>().expect("comment id"))

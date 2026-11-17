@@ -2525,7 +2525,6 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
                     'size', file.byte_size,
                     'width', file.image_width,
                     'height', file.image_height,
-                    'commentId', file.comment_id,
                     'uploadedBy', file.uploaded_by_actor_id,
                     'createdAt', file.created_at::text
                 ) ORDER BY file.position, file.id

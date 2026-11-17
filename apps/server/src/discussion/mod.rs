@@ -92,13 +92,6 @@ pub(crate) async fn open_for(
     thing_id: Uuid,
 ) -> Result<(Uuid, Uuid), AppError> {
     let subject = kind.subject();
-    if !subject.open {
-        return Err(AppError::Refused {
-            field: "thing",
-            message: "Comment on a task with task_comment and on a page with page_comment; \
-                      they move to comment_create later.",
-        });
-    }
     let home = subject
         .home(transaction, thing_id, creator.actor_id)
         .await?
@@ -129,9 +122,24 @@ pub(crate) async fn follow(
     thing_id: Uuid,
     project_id: Uuid,
 ) -> Result<(), AppError> {
-    let Some(comments_id) = threads::comments_of(transaction, kind.as_str(), thing_id).await?
-    else {
-        return Ok(());
+    hand_over(transaction, kind, thing_id, thing_id, project_id)
+        .await
+        .map(|_| ())
+}
+
+/// Gives a thing's discussion to another thing of the same kind in
+/// `project_id` (a task moved to another space is a new task there, C1.4),
+/// moving it as [`follow`] does. Returns the comments conversation, if
+/// there was one. The new thing has no discussion yet.
+pub(crate) async fn hand_over(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    kind: SubjectKind,
+    from: Uuid,
+    to: Uuid,
+    project_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    let Some(comments_id) = threads::comments_of(transaction, kind.as_str(), from).await? else {
+        return Ok(None);
     };
     sqlx::query("SELECT set_config('aw.discussion_move', 'on', true)")
         .execute(&mut **transaction)
@@ -149,17 +157,22 @@ pub(crate) async fn follow(
     .bind(comments_id)
     .execute(&mut **transaction)
     .await?;
-    let moved =
-        sqlx::query("UPDATE conversations SET project_id = $2 WHERE id = $1 AND project_id <> $2")
-            .bind(comments_id)
-            .bind(project_id)
-            .execute(&mut **transaction)
-            .await;
+    let moved = sqlx::query(
+        r#"
+        UPDATE conversations SET project_id = $3, subject_id = $2
+        WHERE id = $1 AND (project_id <> $3 OR subject_id <> $2)
+        "#,
+    )
+    .bind(comments_id)
+    .bind(to)
+    .bind(project_id)
+    .execute(&mut **transaction)
+    .await;
     sqlx::query("SELECT set_config('aw.discussion_move', 'off', true)")
         .execute(&mut **transaction)
         .await?;
     match moved {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(Some(comments_id)),
         // Something tied to the old space hangs off the discussion (an
         // agent's run that can't move with it).
         Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23503") => {
@@ -250,6 +263,18 @@ pub(crate) async fn post(
             (thread_id, "thread", Some(thread_id))
         }
     };
+    // A task's comment files were uploaded to the task (`?for=comment`);
+    // they go with the comment's conversation now.
+    if kind == SubjectKind::Task {
+        crate::files::rehome_comment_uploads(
+            &mut transaction,
+            thing_id,
+            conversation_id,
+            actor.actor_id,
+            attachments,
+        )
+        .await?;
+    }
     let href = href_of_conversation(&mut transaction, comments_id).await?;
     transaction.commit().await?;
 

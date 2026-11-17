@@ -2099,13 +2099,11 @@ async fn an_app_moderates_only_within_its_agent_limit() {
         .parse::<Uuid>()
         .expect("UUID");
     let removed = move |pool: sqlx::PgPool| async move {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT removed_at IS NOT NULL FROM work_item_comments WHERE id = $1",
-        )
-        .bind(comment)
-        .fetch_one(&pool)
-        .await
-        .expect("comment")
+        sqlx::query_scalar::<_, bool>("SELECT removed_at IS NOT NULL FROM messages WHERE id = $1")
+            .bind(comment)
+            .fetch_one(&pool)
+            .await
+            .expect("comment")
     };
 
     // Bea's app may see and edit tasks, but not moderate.
@@ -4379,7 +4377,7 @@ async fn comment_references_show_titles_only_with_see_tasks() {
     let (status, editors) = create_role(
         &setup,
         &setup.browser,
-        json!({"name": "Commenters", "baseRole": "member", "permissions": ["tasks.edit"]}),
+        json!({"name": "Commenters", "baseRole": "member", "permissions": ["tasks.edit", "channels.post"]}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{editors}");
@@ -5371,7 +5369,9 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
             sqlx::query_scalar::<_, i64>(
                 r#"
                 SELECT count(*) FROM task_rows item
-                LEFT JOIN work_item_comments comment ON comment.work_item_id = item.id
+                LEFT JOIN conversations comments
+                  ON comments.kind = 'comments' AND comments.subject_id = item.id
+                LEFT JOIN messages comment ON comment.conversation_id = comments.id
                 WHERE item.project_id = $1
                   AND (strpos(item.description, $2) > 0 OR strpos(comment.content::text, $2) > 0)
                 "#,

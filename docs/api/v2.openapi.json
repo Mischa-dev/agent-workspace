@@ -4758,7 +4758,7 @@
     },
     "/api/v2/w/{workspace}/ops/comment_create": {
       "post": {
-        "description": "Comment on a sheet, whiteboard or record: in its comment stream, in a thread of its discussion (threadId), or in a new thread about a place in it (anchor: a cell or range, board elements, a field) or about the whole thing (newThread). Whoever can see the thing sees its comments. Mentioned agents are asked to reply there. Comment on tasks with task_comment and on pages with page_comment for now.",
+        "description": "Comment on a page, sheet, whiteboard, record or task: in its comment stream, in a thread of its discussion (threadId), or in a new thread about a place in it (anchor: words in a page block, a cell or range, board elements, a field) or about the whole thing (newThread). Whoever can see the thing sees its comments. Mentioned agents are asked to reply there.",
         "operationId": "comment_create",
         "parameters": [
           {

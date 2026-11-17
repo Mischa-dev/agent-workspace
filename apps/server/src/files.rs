@@ -2,9 +2,11 @@
 //!
 //! A file is uploaded into one place, a conversation or a task, by someone
 //! who may post there. A message's files wait, seen only by their uploader,
-//! until the message is sent with their IDs (`attach_to_message`); a
-//! comment's the same way (`attach_to_comment`). Files uploaded to a task
-//! itself are attached at once. Unsent uploads are cleaned up after a day.
+//! until the message is sent with their IDs (`attach_to_message`). A task
+//! comment is a message (C1.4): its files are uploaded to the task and move
+//! to the comment's conversation when it is posted
+//! (`rehome_comment_uploads`). Files uploaded to a task itself are attached
+//! at once. Unsent uploads are cleaned up after a day.
 //!
 //! Reading a file checks its place every time (`readable_file`): a message's
 //! file needs the project, `conversation_visible_to` and the message not
@@ -63,7 +65,7 @@ pub struct FileView {
     pub width: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<i32>,
-    /// The task comment it belongs to, for a task's files.
+    /// The task comment it belongs to, in a task's files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment_id: Option<Uuid>,
     pub uploaded_by: Uuid,
@@ -109,7 +111,7 @@ impl FileRow {
 }
 
 const FILE_COLUMNS: &str = r#"
-    file.id, file.project_id, file.work_item_id, file.comment_id,
+    file.id, file.project_id, file.work_item_id, NULL::uuid AS comment_id,
     file.uploaded_by_actor_id, file.name, file.content_type, file.byte_size,
     file.storage_key, file.image_width, file.image_height, file.thumbnail_key,
     file.attached_at::text AS attached_at, file.created_at::text AS created_at
@@ -251,9 +253,16 @@ pub(crate) async fn task_files(
     project_id: Uuid,
     work_item_id: Uuid,
 ) -> Result<Vec<FileRow>, AppError> {
+    // A comment's files are its message's, in the task's comments.
+    let columns = FILE_COLUMNS.replace("NULL::uuid AS comment_id", "file.message_id AS comment_id");
     let sql = format!(
-        "SELECT {FILE_COLUMNS} FROM files file
-         WHERE file.project_id = $6 AND file.work_item_id = $1
+        "SELECT {columns} FROM files file
+         WHERE file.project_id = $6
+           AND (file.work_item_id = $1 OR file.conversation_id = (
+               -- visibility: READABLE checks each comment file's conversation
+               SELECT place.id FROM conversations place
+               WHERE place.kind = 'comments' AND place.subject_kind = 'task'
+                 AND place.subject_id = $1))
            AND file.attached_at IS NOT NULL AND {READABLE}
          ORDER BY file.created_at, file.position, file.id"
     );
@@ -717,41 +726,35 @@ pub(crate) async fn attach_to_message(
     in_order(rows, file_ids)
 }
 
-/// Attaches the author's unsent uploads on this task to a new comment.
-pub(crate) async fn attach_to_comment(
+/// Moves the author's unsent uploads for a comment on this task (`?for=
+/// comment`) into the conversation the comment is posted in, so the send
+/// pipeline attaches them as the message's (C1.4). Anything else in the
+/// list is left for `attach_to_message` to refuse.
+pub(crate) async fn rehome_comment_uploads(
     transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
     work_item_id: Uuid,
-    comment_id: Uuid,
+    conversation_id: Uuid,
     author: Uuid,
     file_ids: &[Uuid],
-) -> Result<Vec<FileView>, AppError> {
+) -> Result<(), AppError> {
     if file_ids.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
-    check_attachment_ids(file_ids)?;
-    let rows = sqlx::query_as::<_, FileRow>(&format!(
+    sqlx::query(
         r#"
-        UPDATE files AS file
-        SET comment_id = $1, attached_at = now(), position = chosen.position - 1
-        FROM unnest($2::uuid[]) WITH ORDINALITY AS chosen(id, position)
-        WHERE file.id = chosen.id
-          AND file.project_id = $3
-          AND file.work_item_id = $4
-          AND file.uploaded_by_actor_id = $5
-          AND file.attached_at IS NULL
-          AND file.removed_at IS NULL
-        RETURNING {FILE_COLUMNS}
-        "#
-    ))
-    .bind(comment_id)
-    .bind(file_ids)
-    .bind(project_id)
+        UPDATE files
+        SET conversation_id = $2, work_item_id = NULL
+        WHERE id = ANY($3) AND work_item_id = $1 AND uploaded_by_actor_id = $4
+          AND attached_at IS NULL AND removed_at IS NULL
+        "#,
+    )
     .bind(work_item_id)
+    .bind(conversation_id)
+    .bind(file_ids)
     .bind(author)
-    .fetch_all(&mut **transaction)
+    .execute(&mut **transaction)
     .await?;
-    in_order(rows, file_ids)
+    Ok(())
 }
 
 fn check_attachment_ids(file_ids: &[Uuid]) -> Result<(), AppError> {
@@ -797,30 +800,10 @@ pub(crate) async fn forget_message_files(
     Ok(())
 }
 
-/// A deleted task comment's files stop showing at once; their bytes are
-/// deleted by the next cleanup.
-pub(crate) async fn forget_comment_files(
-    transaction: &mut Transaction<'_, Postgres>,
-    comment_id: Uuid,
-    removed_by: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        UPDATE files SET removed_at = now(), removed_by_actor_id = $2
-        WHERE comment_id = $1 AND removed_at IS NULL
-        "#,
-    )
-    .bind(comment_id)
-    .bind(removed_by)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
-}
-
 /// Removes a file: an unsent upload by its uploader, or a task's own file by
 /// anyone who may edit the task (checked by the caller, `may_edit_task`, so
-/// an archived task or a viewer can't). Message and comment files go with
-/// their message or comment instead.
+/// an archived task or a viewer can't). Message files (a task comment's
+/// too) go with their message instead.
 pub(crate) async fn remove_file(
     transaction: &mut Transaction<'_, Postgres>,
     row: &FileRow,
@@ -829,22 +812,21 @@ pub(crate) async fn remove_file(
 ) -> Result<(), AppError> {
     // Decided on the row as it is now, locked: an upload sent with a message
     // a moment ago is the message's, not an unsent upload any more.
-    let Some((attached, work_item_id, comment_id, uploader)) =
-        sqlx::query_as::<_, (bool, Option<Uuid>, Option<Uuid>, Uuid)>(
-            r#"
-            SELECT attached_at IS NOT NULL, work_item_id, comment_id, uploaded_by_actor_id
+    let Some((attached, work_item_id, uploader)) = sqlx::query_as::<_, (bool, Option<Uuid>, Uuid)>(
+        r#"
+            SELECT attached_at IS NOT NULL, work_item_id, uploaded_by_actor_id
             FROM files WHERE id = $1 AND removed_at IS NULL
             FOR UPDATE
             "#,
-        )
-        .bind(row.id)
-        .fetch_optional(&mut **transaction)
-        .await?
+    )
+    .bind(row.id)
+    .fetch_optional(&mut **transaction)
+    .await?
     else {
         return Ok(());
     };
     let allowed = if attached {
-        work_item_id.is_some() && comment_id.is_none() && may_edit_task
+        work_item_id.is_some() && may_edit_task
     } else {
         uploader == actor
     };
