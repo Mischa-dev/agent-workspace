@@ -103,8 +103,8 @@ pub(crate) async fn ask_for_replies(
         // retain their existing delivery and turn rules below.
         // Loop guard: an agent's channel message wakes no agent until A2.8's
         // chain depth.
-        if message.author_kind != "human" {
-            // kind-check: mechanical (loop guard on wake-ups)
+        let from_person = message.author_kind == "human"; // kind-check: mechanical (loop guard on wake-ups)
+        if !from_person {
             return Ok(());
         }
         if !message.mentioned_actor_ids.is_empty() {
@@ -890,9 +890,12 @@ pub(crate) async fn continue_conversation_in(
     .bind(conversation_id)
     .fetch_optional(&mut **transaction)
     .await?;
+    // An agent's last word passes the turn to the next agent.
+    let agent_spoke_last = latest
+        .as_ref()
+        .is_some_and(|(_, _, kind)| kind == "external_agent"); // kind-check: mechanical (turn passing)
     if let Some((message_id, author_actor_id, author_kind)) = &latest
-        && author_kind == "external_agent"
-    // kind-check: mechanical (an agent's last word passes the turn to the next agent)
+        && agent_spoke_last
     {
         ask(
             transaction,
