@@ -179,6 +179,51 @@ async fn any_emoji_and_the_workspaces_own() {
     let reactions = entry["message"]["reactions"].as_array().expect("reactions");
     assert_eq!(reactions.len(), 2, "{reactions:?}");
     let image = format!("/api/v1/custom-emoji/{parrot}");
+
+    // The name is reused for a new image. By name, a reaction takes the new
+    // one; the old one stays its own reaction, which the owner joins by its
+    // id, but only where it is already.
+    let again = tool(
+        app,
+        &desk.token,
+        &desk.session,
+        "custom_emoji_create",
+        json!({"name": "partyparrot", "imageBase64": PNG_BASE64, "clientRequestId": "parrot-2"}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    let new_parrot = again["value"]["id"].as_str().expect("id").to_owned();
+    let reacted = react(&messages[0], ":partyparrot:").await;
+    assert_eq!(reacted["outcome"], "ok", "{reacted}");
+    let join = |message: &str, emoji: &str| {
+        world.owner.browser.request(
+            "PUT",
+            &format!("/api/v1/conversations/{channel}/messages/{message}/reactions/{emoji}"),
+            None,
+            Value::Null,
+        )
+    };
+    let (status, joined) = send(app, join(&messages[0], &parrot)).await;
+    assert_eq!(status, StatusCode::OK, "{joined}");
+    let parrots = joined["reactions"]
+        .as_array()
+        .expect("reactions")
+        .iter()
+        .filter(|reaction| reaction["name"] == "partyparrot")
+        .map(|reaction| {
+            (
+                reaction["customEmojiId"].as_str().expect("id").to_owned(),
+                reaction["count"].as_i64(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        parrots,
+        vec![(parrot.clone(), Some(2)), (new_parrot.clone(), Some(1))],
+        "{joined}"
+    );
+    let (status, refused) = send(app, join(&messages[1], &parrot)).await;
+    assert!(status.is_client_error(), "{status}: {refused}");
     assert!(
         reactions
             .iter()
