@@ -88,6 +88,13 @@ pub const ENTRIES: &[Entry] = &[
         "comment.mentioned",
     ),
     entry(
+        "run.start",
+        "run",
+        true,
+        "You were given a run to start",
+        "run.start",
+    ),
+    entry(
         "run.cancel",
         "run",
         true,

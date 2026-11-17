@@ -1077,6 +1077,8 @@ pub(crate) async fn profile_worker(
 #[derive(Clone, Debug, FromRow)]
 pub(crate) struct ProfileSettings {
     pub id: Uuid,
+    /// The profile's agent account.
+    pub actor_id: Uuid,
     pub harness: Option<String>,
     pub environment_id: Option<Uuid>,
     pub run_defaults: Value,
@@ -1143,7 +1145,7 @@ pub(crate) async fn profile_settings(
 ) -> Result<Option<ProfileSettings>, AppError> {
     Ok(sqlx::query_as::<_, ProfileSettings>(
         r#"
-        SELECT id, harness, environment_id, run_defaults, instructions, allowed_tools
+        SELECT id, actor_id, harness, environment_id, run_defaults, instructions, allowed_tools
         FROM agent_profiles WHERE id = $1 AND enabled
         "#,
     )
@@ -1159,7 +1161,7 @@ pub(crate) async fn profile_for_actor(
 ) -> Result<Option<ProfileSettings>, AppError> {
     Ok(sqlx::query_as::<_, ProfileSettings>(
         r#"
-        SELECT id, harness, environment_id, run_defaults, instructions, allowed_tools
+        SELECT id, actor_id, harness, environment_id, run_defaults, instructions, allowed_tools
         FROM agent_profiles WHERE actor_id = $1 AND enabled
         "#,
     )

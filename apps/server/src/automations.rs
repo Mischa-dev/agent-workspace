@@ -2511,7 +2511,7 @@ impl Context {
             && let Some(run_id) = subject.agent_run_id
         {
             let run_task = sqlx::query_scalar::<_, Uuid>(
-                "SELECT work_item_id FROM launches WHERE agent_run_id = $1 AND project_id = $2 LIMIT 1",
+                "SELECT work_item_id FROM launches WHERE run_id = $1 AND project_id = $2 LIMIT 1",
             )
             .bind(run_id)
             .bind(rule.project_id)
@@ -2905,6 +2905,7 @@ async fn run_action(
                     queue: false,
                     dialog: false,
                     agent_profile_id: *agent_profile_id,
+                    agent_account_id: None,
                 },
                 "automation",
                 idempotency,

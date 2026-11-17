@@ -232,6 +232,12 @@ pub static RUN_FINISHED: EventType = fact(
     "A run finished, failed or was stopped",
 )
 .automatable();
+pub static RUN_START_ASKED: EventType = addressed(
+    "run.start",
+    "runs",
+    Some("run"),
+    "The agent was asked to start a run it was given",
+);
 pub static RUN_CANCEL_ASKED: EventType = addressed(
     "run.cancel",
     "runs",
@@ -600,6 +606,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,
+        &RUN_START_ASKED,
         &RUN_CANCEL_ASKED,
         &REQUEST_RAISED,
         &REQUEST_ANSWERED,

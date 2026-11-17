@@ -465,7 +465,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     let (run_id, conversation_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         SELECT run.id, run.conversation_id FROM launches launch
-        JOIN agent_runs run ON run.id = launch.agent_run_id
+        JOIN agent_runs run ON run.id = launch.run_id
         WHERE launch.work_item_id = $1
         "#,
     )
@@ -615,7 +615,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     launch::drain(&state).await.expect("drain");
     let prompt = sqlx::query_scalar::<_, String>(
         r#"
-        SELECT run.prompt FROM launches launch JOIN agent_runs run ON run.id = launch.agent_run_id
+        SELECT run.prompt FROM launches launch JOIN agent_runs run ON run.id = launch.run_id
         WHERE launch.work_item_id = $1
         "#,
     )
@@ -956,7 +956,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
             r#"
         SELECT launch.state, launch.status_reason, run.made_through_app
         FROM launches launch
-        LEFT JOIN agent_runs run ON run.id = launch.agent_run_id
+        LEFT JOIN agent_runs run ON run.id = launch.run_id
         WHERE launch.id = $1
         "#,
         )
