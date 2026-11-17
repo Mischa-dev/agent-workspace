@@ -566,6 +566,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "scheduled_message_update",
     "session_bind",
     "settings_set",
+    "sidebar_item_move",
+    "sidebar_section_set",
     "status_delete",
     "status_set",
     "task_claim",
@@ -6222,6 +6224,18 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "notification_keyword_set",
             json!({"keywords": ["net launch"]}),
             vec![json!({"workspace": b.organization, "keywords": ["net launch"]})],
+        ),
+        // C2.9: sidebar sections are the caller's own, in the workspace
+        // called; B's conversations never go in them.
+        mcp_case(
+            "sidebar_section_set",
+            json!({"name": "Net section"}),
+            vec![json!({"workspace": b.organization, "name": "Net section"})],
+        ),
+        mcp_case(
+            "sidebar_item_move",
+            json!({"conversationId": a.channel, "starred": true}),
+            vec![json!({"conversationId": b.channel, "starred": true})],
         ),
         // H1.24: deleting a workspace, or keeping it, only ever acts on the
         // caller's own. A's own call would stop every later case here;

@@ -655,6 +655,24 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 text_references: &[],
                 exclude: &[],
             },
+            KindDecl {
+                kind: "sidebar_sections",
+                table: "sidebar_sections",
+                references: &[("account_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "sidebar_items",
+                table: "sidebar_items",
+                references: &[
+                    ("section_id", "sidebar_sections"),
+                    ("account_id", "actors"),
+                    ("conversation_id", "conversations"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
         ],
         not_exported: &[(
             "reply_requests",

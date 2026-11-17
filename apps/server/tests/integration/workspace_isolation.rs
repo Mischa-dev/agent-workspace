@@ -2078,6 +2078,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_work",
     "notification_list",
     "notification_keyword_list",
+    "sidebar_list",
     "package_export",
     "package_list",
     "package_preview",
@@ -2664,6 +2665,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         // C2.13: keywords are kept per workspace; B's never list in A.
         case(
             "notification_keyword_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.9: sidebar sections are kept per workspace; B's never list in A.
+        case(
+            "sidebar_list",
             vec![json!({})],
             vec![json!({"workspace": b.organization})],
             vec![],

@@ -1393,6 +1393,52 @@
     "title": "Change scheduled message"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "sidebar.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "sidebar_item_move",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Move in sidebar"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "sidebar_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List sidebar sections"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "sidebar.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "sidebar_section_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set sidebar section"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

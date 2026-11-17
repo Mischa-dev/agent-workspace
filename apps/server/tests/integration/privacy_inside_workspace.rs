@@ -2529,6 +2529,10 @@ async fn channel_writes_keep_to_private_channels() {
             "channel_update",
             json!({"channelId": secret, "topic": "Mine now"}),
         ),
+        (
+            "sidebar_item_move",
+            json!({"conversationId": secret, "starred": true}),
+        ),
     ] {
         let (status, body) = op(&omar.browser, name, input).await;
         assert!(!status.is_success(), "{name}: {body}");

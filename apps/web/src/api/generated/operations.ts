@@ -198,6 +198,14 @@ export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
 
+export type SectionShow = "all" | "unread"
+
+export type SectionSort = "manual" | "alpha" | "recent"
+
+export type SidebarItem = { conversationId: string; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
+
+export type SidebarSection = { collapsed: boolean; id: string; items: SidebarItem[]; kind: string; name: string; position: number; show: string; sort: string; version: number }
+
 export type SortWrite = { direction?: Direction; field: string }
 
 export type StatusView = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
@@ -592,6 +600,18 @@ export type ScheduledMessageUpdateInput = { cancel?: boolean | null; id: string;
 
 export type ScheduledMessageUpdateOutput = { canceled: boolean; scheduled?: ScheduledLine | null }
 
+export type SidebarItemMoveInput = { conversationId: string; position?: number | null; sectionId?: string | null; starred?: boolean | null }
+
+export type SidebarItemMoveOutput = { sections: SidebarSection[] }
+
+export type SidebarListInput = Record<string, never>
+
+export type SidebarListOutput = { sections: SidebarSection[] }
+
+export type SidebarSectionSetInput = { collapsed?: boolean | null; delete?: boolean | null; expectedVersion?: number | null; name?: string | null; position?: number | null; sectionId?: string | null; show?: SectionShow | null; sort?: SectionSort | null }
+
+export type SidebarSectionSetOutput = { sections: SidebarSection[] }
+
 export type StatusDeleteInput = { account?: string | null; workspaceOnly?: boolean }
 
 export type StatusDeleteOutput = { cleared: boolean }
@@ -788,6 +808,9 @@ export type Operations = {
   schedule_list: { input: ScheduleListInput; output: ScheduleListOutput }
   schedule_update: { input: ScheduleUpdateInput; output: ScheduleUpdateOutput }
   scheduled_message_update: { input: ScheduledMessageUpdateInput; output: ScheduledMessageUpdateOutput }
+  sidebar_item_move: { input: SidebarItemMoveInput; output: SidebarItemMoveOutput }
+  sidebar_list: { input: SidebarListInput; output: SidebarListOutput }
+  sidebar_section_set: { input: SidebarSectionSetInput; output: SidebarSectionSetOutput }
   status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
   status_list: { input: StatusListInput; output: StatusListOutput }
   status_set: { input: StatusSetInput; output: StatusSetOutput }

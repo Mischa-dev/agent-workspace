@@ -223,6 +223,15 @@ pub async fn stage(
             None,
             Some(p.actor_id),
         ),
+        P::SidebarChanged(p) => (
+            &catalog::SIDEBAR_CHANGED,
+            "account",
+            p.actor_id,
+            None,
+            Audience::Account(p.actor_id),
+            None,
+            Some(p.actor_id),
+        ),
         P::AccountStatusChanged(p) => (
             &catalog::ACCOUNT_STATUS_CHANGED,
             "account",

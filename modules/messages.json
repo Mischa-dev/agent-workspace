@@ -34,6 +34,9 @@
     "notification_keyword_list": "query",
     "notification_keyword_set": "change",
     "thread_followed_list": "query",
+    "sidebar_list": "query",
+    "sidebar_section_set": "change",
+    "sidebar_item_move": "change",
     "comment_create": "create",
     "comment_list": "query",
     "comment_thread_update": "change",
@@ -54,7 +57,7 @@
     "/api/v1/scheduled-messages*",
     "/api/v1/reply-requests/*"
   ],
-  "events": { "emits": ["conversation.created", "conversation.updated", "conversation.archived", "conversation.member.removed", "conversation.reply_requests_changed", "conversation.read", "message.created", "message.mentioned", "message.edited", "message.removed", "message.reactions_changed", "conversation.pins_changed", "message_draft.changed", "notification_keywords.changed"], "listens": [] },
+  "events": { "emits": ["conversation.created", "conversation.updated", "conversation.archived", "conversation.member.removed", "conversation.reply_requests_changed", "conversation.read", "message.created", "message.mentioned", "message.edited", "message.removed", "message.reactions_changed", "conversation.pins_changed", "message_draft.changed", "notification_keywords.changed", "sidebar.changed"], "listens": [] },
   "notifications": [
     "mention",
     "conversation_message",

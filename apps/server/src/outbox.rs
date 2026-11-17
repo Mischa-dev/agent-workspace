@@ -375,6 +375,14 @@ pub struct NotificationKeywordsChangedPayload {
     pub actor_id: Uuid,
 }
 
+/// Someone's sidebar sections changed (C2.9). Their id only, delivered to
+/// them alone; their other tabs read their sidebar again over HTTP.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SidebarChangedPayload {
+    pub actor_id: Uuid,
+}
+
 /// A workspace's lifecycle changed (H1.24): suspended, resumed, deletion
 /// scheduled or kept. Ids and the state only; open screens refetch the
 /// session. Delivered in the workspace's own space.
@@ -416,6 +424,7 @@ pub enum OutboxEventPayload {
     CustomEmojiChanged(CustomEmojiChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
+    SidebarChanged(SidebarChangedPayload),
     WorkspaceLifecycleChanged(WorkspaceLifecycleChangedPayload),
 }
 
@@ -448,6 +457,7 @@ impl OutboxEventPayload {
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
+            Self::SidebarChanged(_) => "sidebar.changed",
             Self::WorkspaceLifecycleChanged(_) => "workspace.lifecycle.changed",
         }
     }
@@ -483,6 +493,7 @@ impl OutboxEventPayload {
             | Self::CustomEmojiChanged(_)
             | Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
+            | Self::SidebarChanged(_)
             | Self::WorkspaceLifecycleChanged(_) => None,
         }
     }
@@ -498,6 +509,7 @@ impl OutboxEventPayload {
             Self::AccountManagersChanged(payload) => Some(payload.actor_id),
             Self::MessageDraftChanged(payload) => Some(payload.actor_id),
             Self::NotificationKeywordsChanged(payload) => Some(payload.actor_id),
+            Self::SidebarChanged(payload) => Some(payload.actor_id),
             _ => None,
         }
     }
@@ -517,9 +529,9 @@ impl OutboxEventPayload {
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
             Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
-            Self::MessageDraftChanged(_) | Self::NotificationKeywordsChanged(_) => {
-                OutboxResourceKind::Account
-            }
+            Self::MessageDraftChanged(_)
+            | Self::NotificationKeywordsChanged(_)
+            | Self::SidebarChanged(_) => OutboxResourceKind::Account,
             Self::AccountManagersChanged(_) | Self::AccountStatusChanged(_) => {
                 OutboxResourceKind::Account
             }
@@ -568,6 +580,7 @@ impl OutboxEventPayload {
             // Keyed by its writer, like notifications.
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
+            Self::SidebarChanged(payload) => payload.actor_id,
             Self::WorkspaceLifecycleChanged(payload) => payload.project_id,
         }
     }
@@ -702,6 +715,7 @@ impl OutboxEventPayload {
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
+            Self::SidebarChanged(payload) => serde_json::to_value(payload),
             Self::WorkspaceLifecycleChanged(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
@@ -788,6 +802,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "notification_keywords.changed" => Self::NotificationKeywordsChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "sidebar.changed" => Self::SidebarChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "project.modules.updated" => Self::ProjectModulesUpdated(

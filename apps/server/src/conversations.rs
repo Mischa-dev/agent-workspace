@@ -1,6 +1,7 @@
 // K2.7: the message operations.
 pub mod channel_ops;
 pub mod ops;
+pub mod sidebar_ops;
 
 use std::{
     cmp::Reverse,

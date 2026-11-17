@@ -8,7 +8,11 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::support::{app::send, callers::Person, world::WorldBuilder};
+use super::support::{
+    app::send,
+    callers::{Call, Caller, Person},
+    world::WorldBuilder,
+};
 
 fn text(value: &str) -> Value {
     json!({ "version": 1, "nodes": [{ "type": "text", "text": value }] })
@@ -472,4 +476,203 @@ async fn in_sidebar(app: &axum::Router, who: &Person, project: &str, channel: &s
     .await
     .to_string()
     .contains(channel)
+}
+
+/// C2.9: sidebar sections are each account's own. Losing access hides an
+/// item and keeps its row, and an agent arranges its own as people do.
+#[tokio::test]
+async fn sidebar_sections_keep_to_what_you_can_see() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .agent("rook", "member")
+        .dm("lena", "mara")
+        .private_group("ops", &["lena", "mara"])
+        .build("c2_9_sidebar_sections")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let lena = &world.people["lena"];
+    let mara = &world.people["mara"];
+    let rook = &world.agents["rook"];
+    let dm = world.conversations["lena+mara"].clone();
+    let ops = world.conversations["ops"].clone();
+    let op = |by: &Person, name: &str, input: Value| {
+        let key = Uuid::now_v7().to_string();
+        by.browser
+            .request("POST", &format!("/api/v2/ops/{name}"), Some(&key), input)
+    };
+    let section = |sidebar: &Value, name: &str| {
+        sidebar["value"]["sections"]
+            .as_array()
+            .expect("sections")
+            .iter()
+            .find(|section| section["name"] == name)
+            .cloned()
+    };
+    let items = |section: &Value| {
+        section["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| item["conversationId"].as_str().expect("id").to_owned())
+            .collect::<Vec<_>>()
+    };
+
+    // Lena names a section, puts the group in it and stars the DM.
+    let (status, made) = send(
+        app,
+        op(lena, "sidebar_section_set", json!({"name": "Launch"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let launch = section(&made, "Launch").expect("Launch")["id"].clone();
+    let (status, moved) = send(
+        app,
+        op(
+            lena,
+            "sidebar_item_move",
+            json!({"conversationId": ops, "sectionId": launch}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    let (status, starred) = send(
+        app,
+        op(
+            lena,
+            "sidebar_item_move",
+            json!({"conversationId": dm, "starred": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{starred}");
+    let sections = starred["value"]["sections"].as_array().expect("sections");
+    assert_eq!(sections[0]["kind"], "starred", "{starred}");
+    assert_eq!(items(&sections[0]), vec![dm.clone()]);
+    assert_eq!(
+        items(&section(&starred, "Launch").expect("Launch")),
+        vec![ops.clone()]
+    );
+    // The same name twice is refused, whatever its case.
+    let (status, twice) = send(
+        app,
+        op(lena, "sidebar_section_set", json!({"name": "launch"})),
+    )
+    .await;
+    assert!(!status.is_success(), "{twice}");
+
+    // They're Lena's own: Mara has none, and can't use Lena's section.
+    let (status, theirs) = send(app, op(mara, "sidebar_list", json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{theirs}");
+    assert_eq!(theirs["value"]["sections"], json!([]), "{theirs}");
+    let (status, refused) = send(
+        app,
+        op(
+            mara,
+            "sidebar_item_move",
+            json!({"conversationId": ops, "sectionId": launch}),
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{refused}");
+
+    // Lena leaves the group: it drops out of her section, and its row stays
+    // for when she's back.
+    sqlx::query("DELETE FROM conversation_members WHERE conversation_id = $1 AND actor_id = $2")
+        .bind(Uuid::parse_str(&ops).expect("ops"))
+        .bind(lena.actor)
+        .execute(pool)
+        .await
+        .expect("lena leaves");
+    let (status, after) = send(app, op(lena, "sidebar_list", json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert!(
+        items(&section(&after, "Launch").expect("Launch")).is_empty(),
+        "{after}"
+    );
+    assert!(!after.to_string().contains(&ops), "{after}");
+    let kept = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM sidebar_items WHERE account_id = $1 AND conversation_id = $2",
+    )
+    .bind(lena.actor)
+    .bind(Uuid::parse_str(&ops).expect("ops"))
+    .fetch_one(pool)
+    .await
+    .expect("kept");
+    assert_eq!(kept, 1);
+    // Nor can she put it back while she can't see it.
+    let (status, hidden) = send(
+        app,
+        op(
+            lena,
+            "sidebar_item_move",
+            json!({"conversationId": ops, "starred": true}),
+        ),
+    )
+    .await;
+    assert!(!status.is_success(), "{hidden}");
+
+    // Removing a section puts what was in it back where it was.
+    let starred_id = sections[0]["id"].clone();
+    let (status, removed) = send(
+        app,
+        op(
+            lena,
+            "sidebar_section_set",
+            json!({"sectionId": starred_id, "delete": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert!(section(&removed, "Starred").is_none(), "{removed}");
+
+    // An agent stars a channel for itself, as a person does.
+    let work = world.project("WORK");
+    let (status, made) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/channels"),
+            Some("c2-9-lobby"),
+            json!({"name": "lobby", "autoJoin": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let general = made["conversation"]["id"]
+        .as_str()
+        .expect("lobby")
+        .to_owned();
+    let (_, starred) = rook
+        .call(
+            app,
+            Call::Tool {
+                name: "sidebar_item_move",
+                arguments: json!({"conversationId": general, "starred": true}),
+            },
+        )
+        .await;
+    assert_eq!(starred["outcome"], "ok", "{starred}");
+    let (_, listed) = rook
+        .call(
+            app,
+            Call::Tool {
+                name: "sidebar_list",
+                arguments: json!({}),
+            },
+        )
+        .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(
+        listed["value"]["sections"][0]["items"][0]["conversationId"],
+        general.as_str(),
+        "{listed}"
+    );
+
+    world.finish().await;
 }
