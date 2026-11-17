@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { useWorkspace } from '../app/workspace'
 import { useAuthenticatedSession } from '../auth/session'
 import { useShellPage } from '../shell/shellStore'
 import { Banner, Button, ButtonLink, ErrorState, PageHeader, SelectField, TextField, describeError, showToast } from '../ui'
@@ -30,12 +31,23 @@ export function CreateProjectPage() {
   )
   const [name, setName] = useState('')
   const [typedKey, setTypedKey] = useState<string | null>(null)
-  const [organizationId, setOrganizationId] = useState(creatableOrganizations[0]?.id ?? '')
+  // The new project goes in the workspace in the address when the person can
+  // create there; switching workspace on this page moves the form with it.
+  const addressed = useWorkspace()?.id ?? null
+  const preferredId = (creatableOrganizations.find((organization) => organization.id === addressed) ?? creatableOrganizations[0])?.id ?? ''
+  const [organizationId, setOrganizationId] = useState(preferredId)
+  const [followed, setFollowed] = useState(addressed)
   const [idempotencyKey] = useState(newIdempotencyKey)
   const [error, setError] = useState<string | null>(null)
   const [templateId, setTemplateId] = useState('')
   // A preset for the new project's layout; none follows the workspace's default.
   const [preset, setPreset] = useState<string | null>(null)
+  if (followed !== addressed) {
+    setFollowed(addressed)
+    setOrganizationId(preferredId)
+    setTemplateId('')
+    setPreset(null)
+  }
   const templates = useQuery({
     queryKey: viewKeys.projectTemplates(organizationId),
     queryFn: () => listProjectTemplates(organizationId),
