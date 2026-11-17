@@ -19,6 +19,7 @@ const OLD_WORKSPACE_ROUTES = [
   '/search',
   '/inbox',
   '/later',
+  '/threads',
   '/my-work',
   '/runs',
   '/runs/:runId',

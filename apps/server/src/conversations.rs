@@ -39,6 +39,9 @@ use crate::{
     replies::{self, ReplyRequestView},
 };
 
+pub mod followed;
+pub(crate) mod threads;
+
 // A valid v1 Message can contain 20,000 four-byte Unicode scalar values plus
 // bounded AST structure. Keep the transport cap above that exact domain
 // maximum while remaining far below Axum's general default.
@@ -130,9 +133,13 @@ pub(crate) struct ConversationAccessRow {
 impl ConversationAccessRow {
     /// The kind whose reply rules and members apply: a thread under a DM or
     /// group behaves like its parent.
+    /// A thing's comments (and threads in them) follow a thread's reply
+    /// rules (C1.3): a person's mention asks the agent, and agents already
+    /// working there are asked about follow-ups.
     pub(crate) fn effective_kind(&self) -> &str {
         match (self.kind.as_str(), self.parent_kind.as_deref()) {
             ("thread", Some(parent @ ("dm" | "group"))) => parent,
+            ("comments", _) => "thread",
             (kind, _) => kind,
         }
     }
@@ -512,6 +519,39 @@ struct ChannelListItem {
     highest_sequence: i64,
     read_state: ReadStateView,
     unread: bool,
+    #[serde(flatten)]
+    counts: UnreadCounts,
+}
+
+/// What a list row says about unread beyond the flag (C2.3): DMs and groups
+/// show the number, channels a number only for mentions; a muted row is
+/// never bold or counted.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UnreadCounts {
+    pub unread_messages: i64,
+    pub mentions: i64,
+    pub muted: bool,
+}
+
+impl UnreadCounts {
+    /// The row's flag and counts; a conversation missing from the summary
+    /// (archived, or no longer readable) is read.
+    pub(crate) fn of(
+        summary: &std::collections::HashMap<Uuid, crate::read_state::UnreadRow>,
+        id: Uuid,
+    ) -> (bool, Self) {
+        summary.get(&id).map_or((false, Self::default()), |row| {
+            (
+                row.unread,
+                Self {
+                    unread_messages: row.unread_messages,
+                    mentions: row.mentions,
+                    muted: row.muted,
+                },
+            )
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -741,6 +781,8 @@ struct SidebarThreadRow {
     parent_archived_at: Option<String>,
     version: i64,
     highest_sequence: i64,
+    /// The newest message (R1): only messages make a thread unread.
+    last_message_sequence: i64,
     highest_seen_sequence: i64,
     latest_activity_sequence: i64,
     latest_run_state: Option<String>,
@@ -773,6 +815,8 @@ struct SidebarChannelView {
     highest_sequence: i64,
     highest_seen_sequence: i64,
     unread: bool,
+    #[serde(flatten)]
+    counts: UnreadCounts,
     threads: Vec<SidebarThreadView>,
     hidden_thread_count: usize,
     has_more_threads: bool,
@@ -860,10 +904,20 @@ async fn list_channels(
     .bind(MAX_CHANNELS_PER_PROJECT)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    let summary = crate::db::scoped_one(&state.pool, async |connection| {
+        crate::read_state::unread_by_conversation(
+            connection,
+            principal.actor_id,
+            crate::read_state::UnreadScope::Space(project_id),
+        )
+        .await
+    })
+    .await?;
     let channels = rows
         .into_iter()
         .map(|row| {
             let highest_sequence = row.highest_sequence;
+            let (unread, counts) = UnreadCounts::of(&summary, row.id);
             let read_state = ReadStateView {
                 highest_seen_sequence: row.highest_seen_sequence,
                 version: row.read_version,
@@ -883,8 +937,9 @@ async fn list_channels(
                     parent_kind: None,
                 },
                 highest_sequence,
-                unread: highest_sequence > read_state.highest_seen_sequence,
+                unread,
                 read_state,
+                counts,
             }
         })
         .collect();
@@ -1084,89 +1139,27 @@ async fn create_thread(
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
 
-    let mut origin_text = None;
-    if let Some(origin_message_id) = command.origin_message_id {
-        let origin = sqlx::query_as::<_, (bool, String)>(
-            r#"
-            SELECT removed_at IS NOT NULL, plain_text
-            FROM messages
-            WHERE id = $1
-              AND project_id = $2
-              AND conversation_id = $3
-            "#,
-        )
-        .bind(origin_message_id)
-        .bind(channel.project_id)
-        .bind(channel.id)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        match origin {
-            None => return Err(AppError::Validation("Thread origin Message")),
-            Some((true, _)) => return Err(AppError::Conflict("message", "removed")),
-            Some((false, text)) => origin_text = Some(text),
-        }
-    }
-    let auto_named = command.name.is_none();
+    let creator = threads::ThreadCreator::browser(&principal, &headers)?;
     let name = match &command.name {
-        Some(name) => name.clone(),
-        None => origin_text
-            .as_deref()
-            .and_then(thread_name_from_text)
-            .unwrap_or_else(|| UNNAMED_THREAD.to_owned()),
+        Some(name) => threads::ThreadName::Given(name.clone()),
+        None => threads::ThreadName::Derived,
     };
-
-    let thread_id = Uuid::now_v7();
-    let inserted = sqlx::query(
-        r#"
-        INSERT INTO conversations (
-            id, project_id, workspace_id, kind, parent_channel_id, origin_message_id, name,
-            auto_named
-        )
-        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4, $5, $6)
-        "#,
-    )
-    .bind(thread_id)
-    .bind(channel.project_id)
-    .bind(channel.id)
-    .bind(command.origin_message_id)
-    .bind(&name)
-    .bind(auto_named)
-    .execute(&mut *transaction)
-    .await;
-    map_conversation_insert(inserted)?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_read_states (
-            project_id, conversation_id, actor_id, highest_seen_sequence
-        )
-        VALUES ($1, $2, $3, 0)
-        "#,
-    )
-    .bind(channel.project_id)
-    .bind(thread_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    enqueue_event(
+    let created = match threads::create(
         &mut transaction,
-        channel.project_id,
-        OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
-            conversation_id: thread_id,
-            kind: OutboxConversationKind::Thread,
-            version: 1,
-        }),
+        &creator,
+        channel.id,
+        threads::ThreadSpec::new(name).opened_from(command.origin_message_id),
     )
-    .await?;
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        channel.project_id,
-        "conversation.thread_created",
-        thread_id,
-        serde_json::json!({"parent_channel_id": channel.id}),
-    )
-    .await?;
+    .await
+    {
+        Ok(created) => created,
+        Err(AppError::NotFound("message")) => {
+            return Err(AppError::Validation("Thread origin Message"));
+        }
+        Err(error) => return Err(error),
+    };
+    let thread_id = created.id;
+    let name = created.name;
     let body = ConversationCreateResponse {
         conversation: ConversationView {
             id: thread_id,
@@ -1274,7 +1267,7 @@ pub(crate) async fn thread_summaries(
         SELECT thread.id, thread.name, thread.thread_status AS status,
                thread.thread_outcome AS outcome, thread.origin_message_id,
                thread.next_entry_sequence - 1 AS message_count,
-               thread.next_entry_sequence - 1 > COALESCE(read_state.highest_seen_sequence, 0)
+               thread.last_message_sequence > COALESCE(read_state.highest_seen_sequence, 0)
                    AS unread,
                thread.archived_at IS NOT NULL AS archived,
                COALESCE(last_entry.created_at, thread.created_at)::text AS last_activity_at,
@@ -1927,6 +1920,30 @@ pub(crate) async fn append_message_command_with(
     .bind(message_id)
     .execute(&mut *transaction)
     .await?;
+    // R2: your own message never makes the conversation unread, on every
+    // path that sends (web, agent tools, apps, push reply, scheduled,
+    // forward).
+    crate::read_state::mark_seen(
+        &mut transaction,
+        conversation.project_id,
+        conversation.id,
+        actor.actor_id,
+        sequence,
+    )
+    .await?;
+    // C2.5: posting in a thread, or being mentioned in it, follows it.
+    if conversation.kind == "thread" {
+        let followers = std::iter::once(actor.actor_id)
+            .chain(mentioned_actor_ids.iter().copied())
+            .collect::<Vec<_>>();
+        crate::notification_settings::follow_automatically(
+            &mut transaction,
+            conversation.project_id,
+            conversation.id,
+            &followers,
+        )
+        .await?;
+    }
     if conversation.kind == "thread" {
         refresh_auto_thread_names(
             &mut transaction,
@@ -2447,16 +2464,26 @@ pub(crate) async fn enqueue_external_message_events(
     .bind(conversation.id)
     .fetch_all(&mut **transaction)
     .await?;
-    // Stored with the event: today's shape, which the web and resolve read.
-    let path = Target::conversation(
-        conversation.project_id,
-        &conversation.kind,
-        conversation.id,
-        None,
-        !matches!(conversation.kind.as_str(), "thread" | "channel"),
-        true,
-    )
-    .legacy_path();
+    // A comment opens on its thing (C1.3); anything else at its address,
+    // stored with the event in today's shape, which the web and resolve read.
+    let subject_href = if conversation.kind == "comments"
+        || conversation.parent_kind.as_deref() == Some("comments")
+    {
+        crate::discussion::href_of_conversation(transaction, conversation.id).await?
+    } else {
+        None
+    };
+    let path = subject_href.unwrap_or_else(|| {
+        Target::conversation(
+            conversation.project_id,
+            &conversation.kind,
+            conversation.id,
+            None,
+            !matches!(conversation.kind.as_str(), "thread" | "channel"),
+            true,
+        )
+        .legacy_path()
+    });
     for (connection_id, _) in connections {
         enqueue_external_event(
             transaction,
@@ -2863,8 +2890,6 @@ pub(crate) enum UnreadFrom {
 pub(crate) struct ReadMarkChange {
     pub highest_seen_sequence: i64,
     pub version: i64,
-    /// The conversation's newest entry.
-    pub highest_sequence: i64,
 }
 
 /// Make `from` and everything after it unread for this actor, to come back to
@@ -2892,7 +2917,6 @@ pub(crate) async fn mark_unread_from(
         true,
     )
     .await?;
-    let highest_sequence = conversation.next_entry_sequence - 1;
     let first_unread = match from {
         // The newest message, not the newest entry: a run's or worker's
         // event after it would otherwise leave every message read.
@@ -2943,7 +2967,6 @@ pub(crate) async fn mark_unread_from(
                     .as_ref()
                     .map_or(0, |row| row.highest_seen_sequence),
                 version: unchanged.as_ref().map_or(0, |row| row.version),
-                highest_sequence,
             });
         }
     };
@@ -2984,7 +3007,6 @@ pub(crate) async fn mark_unread_from(
     Ok(ReadMarkChange {
         highest_seen_sequence: row.highest_seen_sequence,
         version: row.version,
-        highest_sequence,
     })
 }
 
@@ -3428,6 +3450,17 @@ async fn project_conversation_sidebar(
     if access.project_archived {
         return Err(AppError::NotFound("project"));
     }
+    // C2.1: the space that holds DMs and groups has no channels, and its
+    // threads belong to their DM or group: being in it shows nobody theirs.
+    if is_direct_project(&state.pool, project_id).await? {
+        return Ok(Json(SidebarResponse {
+            project_id,
+            channels: Vec::new(),
+            capabilities: SidebarCapabilities {
+                create_channel: false,
+            },
+        }));
+    }
     let include_archived = query.include_archived.unwrap_or(false);
     let channels = sqlx::query_as::<_, SidebarChannelRow>(
         r#"
@@ -3468,6 +3501,7 @@ async fn project_conversation_sidebar(
             parent.archived_at::text AS parent_archived_at,
             thread.version,
             thread.next_entry_sequence - 1 AS highest_sequence,
+            thread.last_message_sequence,
             COALESCE(read_state.highest_seen_sequence, 0) AS highest_seen_sequence,
             COALESCE(
                 (extract(epoch FROM latest_entry.created_at) * 1000000)::bigint,
@@ -3533,6 +3567,15 @@ async fn project_conversation_sidebar(
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
 
+    let summary = crate::db::scoped_one(&state.pool, async |connection| {
+        crate::read_state::unread_by_conversation(
+            connection,
+            principal.actor_id,
+            crate::read_state::UnreadScope::Space(project_id),
+        )
+        .await
+    })
+    .await?;
     let expanded_channel_id = query.expanded_channel_id;
     let selected_channel_id = query.selected_channel_id;
     let thread_views = project_sidebar_threads(
@@ -3546,6 +3589,7 @@ async fn project_conversation_sidebar(
         .map(|channel| {
             let (threads, hidden_thread_count) =
                 thread_views.get(&channel.id).cloned().unwrap_or_default();
+            let (unread, counts) = UnreadCounts::of(&summary, channel.id);
             SidebarChannelView {
                 id: channel.id,
                 name: channel.name,
@@ -3553,7 +3597,8 @@ async fn project_conversation_sidebar(
                 version: channel.version,
                 highest_sequence: channel.highest_sequence,
                 highest_seen_sequence: channel.highest_seen_sequence,
-                unread: channel.highest_sequence > channel.highest_seen_sequence,
+                unread,
+                counts,
                 threads,
                 hidden_thread_count,
                 has_more_threads: hidden_thread_count > 0,
@@ -3681,7 +3726,7 @@ fn thread_attention(row: &SidebarThreadRow) -> ThreadAttention {
                 label: "Run completed",
             }
         }
-        _ if row.highest_sequence > row.highest_seen_sequence => ThreadAttention {
+        _ if row.last_message_sequence > row.highest_seen_sequence => ThreadAttention {
             kind: "unread",
             label: "Unread Messages",
         },
@@ -3690,6 +3735,20 @@ fn thread_attention(row: &SidebarThreadRow) -> ThreadAttention {
             label: "Seen",
         },
     }
+}
+
+/// Whether a project is the hidden one that holds a workspace's DMs and
+/// groups (until K4 moves them to the direct scope).
+async fn is_direct_project(pool: &sqlx::PgPool, project_id: Uuid) -> Result<bool, AppError> {
+    let kind = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, String>("SELECT kind FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(&mut *connection)
+            .await
+    })
+    .await?;
+    // The hidden one is the only stored kind that isn't a space.
+    Ok(kind.is_some_and(|kind| crate::spaces::SpaceKind::from_stored(&kind).is_none()))
 }
 
 async fn authorized_project(
@@ -3993,7 +4052,7 @@ pub(crate) async fn lock_conversation_for(
             r#"
             SELECT archived_at IS NULL
             FROM conversations
-            WHERE id = $1 AND project_id = $2 AND kind IN ('channel', 'dm', 'group')
+            WHERE id = $1 AND project_id = $2 AND kind IN ('channel', 'dm', 'group', 'comments')
             FOR SHARE
             "#,
         )
@@ -4847,7 +4906,8 @@ pub(crate) async fn refresh_auto_thread_names(
     conversation_id: Uuid,
     started_from: Option<Uuid>,
     only_unnamed: bool,
-) -> Result<(), AppError> {
+) -> Result<i64, AppError> {
+    let mut renamed = 0;
     let threads = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
         r#"
         SELECT id, name, origin_message_id FROM conversations
@@ -4912,6 +4972,7 @@ pub(crate) async fn refresh_auto_thread_names(
         .fetch_optional(&mut **transaction)
         .await?;
         if let Some(version) = version {
+            renamed += 1;
             enqueue_event(
                 transaction,
                 project_id,
@@ -4925,7 +4986,7 @@ pub(crate) async fn refresh_auto_thread_names(
             .await?;
         }
     }
-    Ok(())
+    Ok(renamed)
 }
 
 pub(crate) fn normalize_conversation_name(value: &str) -> Result<String, AppError> {
@@ -5089,6 +5150,7 @@ mod tests {
             parent_archived_at: None,
             version: 1,
             highest_sequence: 8,
+            last_message_sequence: 8,
             highest_seen_sequence: 4,
             latest_activity_sequence: 8,
             latest_run_state: state.map(str::to_owned),

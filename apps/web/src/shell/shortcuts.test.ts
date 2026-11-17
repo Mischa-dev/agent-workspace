@@ -42,7 +42,10 @@ describe('keyboard shortcuts', () => {
     expect(press(key('ArrowDown', { altKey: true, shiftKey: true }))).toBe('next-unread')
     expect(press(key('ArrowUp', { altKey: true, shiftKey: true }))).toBe('previous-unread')
     expect(press(key('Escape', { shiftKey: true, target: composer }))).toBe('mark-all-read')
-    expect(press(key('Escape'))).toBeNull()
+    expect(press(key('Escape', { target: composer }))).toBe('mark-read')
+    expect(press(key('Escape'))).toBe('mark-read')
+    expect(press(key('a', { ctrlKey: true, shiftKey: true, target: composer }))).toBe('all-unreads')
+    expect(press(key('t', { metaKey: true, shiftKey: true }))).toBe('all-threads')
     expect(press(key('ArrowDown'))).toBeNull()
     wrap.remove()
     // Any other field keeps ⌥↑ and ⌥↓ for moving the cursor, so a page being edited stays put.
@@ -50,6 +53,7 @@ describe('keyboard shortcuts', () => {
     document.body.appendChild(editor)
     expect(press(key('ArrowDown', { altKey: true, target: editor }))).toBeNull()
     expect(press(key('Escape', { shiftKey: true, target: editor }))).toBeNull()
+    expect(press(key('Escape', { target: editor }))).toBeNull()
     editor.remove()
     // A menu or dialog keeps its own arrows.
     const menu = document.createElement('div')

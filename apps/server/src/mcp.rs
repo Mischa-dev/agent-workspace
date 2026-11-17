@@ -113,6 +113,7 @@ mod sheet_tools;
 mod talk;
 mod task_batch;
 mod workspace_template_tools;
+pub(crate) use common::content_from_text;
 pub(crate) use task_batch::{ImportTask, create_for_import};
 pub(crate) mod task_commands;
 mod task_drafts;
@@ -1827,7 +1828,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create or edit a page: what's true now for the project (or, with projectId \"workspace\", the whole workspace), in Markdown. Edits replace the text and keep every earlier version, so restoreVersion can undo one. Pass expectedVersion when editing. A page with skillDescription is a skill: instructions agents load with skill_get when that one line says they apply. A line `[label](/path \"embed\")` shows the task, page, whiteboard, thread, task list or collection view at that address live.",
+        description = "Create or edit a page: what's true now for the project (or, with projectId \"workspace\", the whole workspace), in Markdown. Edits replace the text and keep every earlier version, so restoreVersion can undo one. Pass expectedVersion when editing. A page with skillDescription is a skill: instructions agents load with skill_get when that one line says they apply. A line `[label](/path \"embed\")` shows the task, page, whiteboard, thread, task list or collection view at that address live. fromTemplateId starts a page from a template (page_list marks them isTemplate) with its date, author and project filled in.",
         annotations(
             title = "Write page",
             read_only_hint = false,

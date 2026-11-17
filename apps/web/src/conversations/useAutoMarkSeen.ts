@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { markConversationSeen } from './api'
+import { MARK_READ_EVENT } from './markReadEvent'
 
 /** The newest sequence a page has shown for one conversation. */
 export interface ShownSequence {
@@ -83,4 +84,22 @@ export function useAutoMarkSeen(input: AutoMarkInput, onMarked: () => unknown) {
         if (shown.current?.conversationId === conversationId) shown.current = previous
       })
   }, [conversationId, highestSequence, highestSeenSequence, onMarked, ready])
+
+  // Esc (C2.30): read everything here now, even after "Mark unread from here".
+  const latest = useRef({ conversationId, highestSequence, highestSeenSequence, onMarked, ready })
+  useEffect(() => {
+    latest.current = { conversationId, highestSequence, highestSeenSequence, onMarked, ready }
+  })
+  useEffect(() => {
+    const onMarkRead = () => {
+      const now = latest.current
+      if (!now.ready || now.highestSequence <= now.highestSeenSequence) return
+      shown.current = { conversationId: now.conversationId, sequence: now.highestSequence }
+      void markConversationSeen({ conversationId: now.conversationId, highestSeenSequence: now.highestSequence })
+        .then(() => now.onMarked())
+        .catch(() => undefined)
+    }
+    window.addEventListener(MARK_READ_EVENT, onMarkRead)
+    return () => window.removeEventListener(MARK_READ_EVENT, onMarkRead)
+  }, [])
 }

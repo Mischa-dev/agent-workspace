@@ -117,3 +117,23 @@ a.aw-later__title:hover {
     min-height: 44px;
   }
 }
+
+/* C2.28: a draft leads back to its conversation. */
+.aw-later__draft {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.aw-later__draft span {
+  overflow: hidden;
+  color: var(--content-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-later__draft small {
+  color: var(--content-fg-muted);
+}

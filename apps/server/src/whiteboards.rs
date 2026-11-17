@@ -20,6 +20,7 @@ pub mod ops;
 pub mod render;
 pub mod scene;
 pub mod store;
+pub mod templates;
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -104,6 +105,8 @@ pub struct BoardSummary {
     pub updated_by_kind: Option<String>,
     pub deleted: bool,
     pub link_count: i64,
+    /// A template: offered when anyone starts a board from a template.
+    pub is_template: bool,
 }
 
 impl BoardSummary {
@@ -145,7 +148,8 @@ const SUMMARY_SELECT: &str = r#"
              AS updated_by_kind,
            board.deleted_at IS NOT NULL AS deleted,
            (SELECT count(*) FROM whiteboard_links link WHERE link.whiteboard_id = board.id)
-             AS link_count
+             AS link_count,
+           board.is_template
     FROM whiteboards board
     JOIN organizations organization ON organization.id = board.organization_id
     JOIN projects project ON project.id = board.project_id
@@ -456,13 +460,26 @@ pub async fn duplicate(
             original.chars().take(MAX_TITLE - 8).collect::<String>()
         ))?,
     };
-    let id = create(
+    copy_into(
         transaction,
         caller,
+        whiteboard_id,
         Placement::Project(source.project_id),
         &title,
     )
-    .await?;
+    .await
+}
+
+/// Makes a board at `placement` with a copy of another board's scene and
+/// images. The caller has checked they may see the source.
+async fn copy_into(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    whiteboard_id: Uuid,
+    placement: Placement,
+    title: &str,
+) -> Result<Uuid, AppError> {
+    let id = create(transaction, caller, placement, title).await?;
     sqlx::query(
         r#"
         INSERT INTO whiteboard_elements (
@@ -516,6 +533,8 @@ pub struct BoardChange {
     pub project_id: Option<Option<Uuid>>,
     /// Move the board to the trash (true) or bring it back (false).
     pub deleted: Option<bool>,
+    /// Make the board a template (true) or an ordinary board again (false).
+    pub is_template: Option<bool>,
     /// Refuse the change if someone else changed the board since.
     pub expected_version: Option<i64>,
 }
@@ -541,12 +560,14 @@ pub async fn change(
     change: &BoardChange,
 ) -> Result<(), AppError> {
     let board = access(transaction, caller, whiteboard_id, true).await?;
-    let (version, title, project_id, deleted) = sqlx::query_as::<_, (i64, String, Uuid, bool)>(
-        "SELECT version, title, project_id, deleted_at IS NOT NULL FROM whiteboards WHERE id = $1 FOR UPDATE",
-    )
-    .bind(whiteboard_id)
-    .fetch_one(&mut **transaction)
-    .await?;
+    let (version, title, project_id, deleted, is_template) =
+        sqlx::query_as::<_, (i64, String, Uuid, bool, bool)>(
+            "SELECT version, title, project_id, deleted_at IS NOT NULL, is_template \
+             FROM whiteboards WHERE id = $1 FOR UPDATE",
+        )
+        .bind(whiteboard_id)
+        .fetch_one(&mut **transaction)
+        .await?;
     if let Some(expected) = change.expected_version
         && expected != version
     {
@@ -572,7 +593,12 @@ pub async fn change(
         }
     }
     let new_deleted = change.deleted.unwrap_or(deleted);
-    if new_title == title && new_project == project_id && new_deleted == deleted {
+    let new_template = change.is_template.unwrap_or(is_template);
+    if new_title == title
+        && new_project == project_id
+        && new_deleted == deleted
+        && new_template == is_template
+    {
         return Ok(());
     }
     sqlx::query(
@@ -581,7 +607,8 @@ pub async fn change(
         SET title = $2, project_id = $3,
             deleted_at = CASE WHEN $4 THEN COALESCE(deleted_at, now()) ELSE NULL END,
             deleted_by_actor_id = CASE WHEN $4 THEN COALESCE(deleted_by_actor_id, $5) ELSE NULL END,
-            version = version + 1, updated_by_actor_id = $5, updated_at = now()
+            version = version + 1, updated_by_actor_id = $5, updated_at = now(),
+            is_template = $6
         WHERE id = $1
         "#,
     )
@@ -590,12 +617,14 @@ pub async fn change(
     .bind(new_project)
     .bind(new_deleted)
     .bind(caller.actor_id)
+    .bind(new_template)
     .execute(&mut **transaction)
     .await?;
     let action = match (deleted, new_deleted) {
         (false, true) => "whiteboard.deleted",
         (true, false) => "whiteboard.restored",
         _ if new_project != project_id => "whiteboard.moved",
+        _ if new_template != is_template => "whiteboard.template_set",
         _ => "whiteboard.renamed",
     };
     audit(

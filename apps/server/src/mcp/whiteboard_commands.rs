@@ -116,6 +116,7 @@ pub(crate) struct NewBoard {
     pub workspace_id: Option<Uuid>,
     pub link_to: Option<LinkArgument>,
     pub operations: Option<Vec<Operation>>,
+    pub from_template_id: Option<String>,
 }
 
 pub(crate) async fn create(
@@ -139,6 +140,7 @@ pub(crate) async fn create(
                 workspace_id: workspace_id.map(|id| id.to_string()),
                 link_to: board.link_to,
                 operations: board.operations,
+                from_template_id: board.from_template_id,
                 client_request_id: ctx.request_id.clone(),
             },
         )
@@ -153,6 +155,7 @@ pub(crate) struct BoardUpdate {
     pub deleted: Option<bool>,
     pub restore_revision: Option<i32>,
     pub expected_version: Option<i64>,
+    pub is_template: Option<bool>,
 }
 
 pub(crate) async fn update(
@@ -174,6 +177,7 @@ pub(crate) async fn update(
                 deleted: change.deleted,
                 restore_revision: change.restore_revision,
                 expected_version: change.expected_version,
+                is_template: change.is_template,
             },
         )
         .await,

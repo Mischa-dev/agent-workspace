@@ -201,7 +201,7 @@ pub(super) fn weekly(used_percent: u16, resets_in: chrono::Duration) -> UsageWin
     }
 }
 
-fn device_keys() -> Value {
+pub(super) fn device_keys() -> Value {
     let device = aws_lc_rs::agreement::PrivateKey::generate(&aws_lc_rs::agreement::ECDH_P256)
         .expect("device key");
     let public = device.compute_public_key().expect("device public key");
@@ -212,13 +212,13 @@ fn device_keys() -> Value {
     json!({"p256dh": b64(public.as_ref()), "auth": b64(&[9_u8; 16])})
 }
 
-fn push_jobs() -> JobRegistry {
+pub(super) fn push_jobs() -> JobRegistry {
     let mut registry = JobRegistry::new();
     push::register_jobs(&mut registry);
     registry
 }
 
-fn options() -> WorkerOptions {
+pub(super) fn options() -> WorkerOptions {
     WorkerOptions {
         concurrency: 1,
         poll_interval: Duration::from_millis(20),

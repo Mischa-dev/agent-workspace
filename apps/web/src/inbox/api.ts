@@ -18,7 +18,7 @@ export function invalidateInbox(queryClient: QueryClient) {
 }
 
 export type InboxView = 'inbox' | 'unread' | 'snoozed' | 'archived'
-export type InboxCategory = 'all' | 'mentions' | 'tasks' | 'runs' | 'pull_requests' | 'usage'
+export type InboxCategory = 'all' | 'mentions' | 'threads' | 'tasks' | 'runs' | 'pull_requests' | 'usage'
 export type InboxAction = 'read' | 'unread' | 'archive' | 'restore' | 'snooze' | 'unsnooze'
 
 export type InboxApproval = {
@@ -379,6 +379,7 @@ const NEEDS_YOU_KINDS = new Set([
   'mention',
   'comment_mention',
   'conversation_message',
+  'direct_message',
   'assigned',
   'approval_requested',
   'request_raised',
@@ -388,6 +389,8 @@ const NEEDS_YOU_KINDS = new Set([
   'checks_failed',
   'scheduled_send_failed',
   'reminder',
+  'connection_problem',
+  'budget_warning',
 ])
 
 /** Whether a notification asks something of you; an approval someone already answered no longer does. */

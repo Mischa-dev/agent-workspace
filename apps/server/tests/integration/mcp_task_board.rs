@@ -1824,3 +1824,146 @@ async fn a_claim_waits_behind_a_write_to_its_column() {
     let claim = claim.await.expect("claim");
     assert_eq!(claim["outcome"], "ok", "{claim}");
 }
+
+/// A credential held to one project copies templates from that project
+/// only, even when the person can see templates in their other projects.
+#[tokio::test]
+async fn a_project_scoped_credential_copies_templates_only_from_its_project() {
+    let Some(setup) = setup("mcp_board_scoped_template").await else {
+        return;
+    };
+    let app = &setup.app;
+    let home = create_project(&setup, "HOME", "Home").await;
+    create_project(&setup, "SECRET", "Secret").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let mut templates = Vec::new();
+    for project in ["HOME", "SECRET"] {
+        let written = tool(
+            app,
+            &codex,
+            &session,
+            "page_write",
+            json!({
+                "projectId": project,
+                "title": format!("{project} template"),
+                "body": format!("{project} body"),
+                "isTemplate": true,
+                "clientRequestId": format!("template-{project}"),
+            }),
+        )
+        .await;
+        assert_eq!(written["outcome"], "ok", "{written}");
+        templates.push(written["value"]["id"].as_str().expect("page").to_owned());
+    }
+    let scoped = mcp::issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            project_id: home.parse().expect("home ID"),
+            actor_id: owner(&setup, &home).await,
+            client_name: "scoped-test".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("issue credential")
+    .token;
+    let scoped_session = initialize(app, &scoped).await.expect("scoped MCP");
+    let at_home = tool(
+        app,
+        &scoped,
+        &scoped_session,
+        "page_write",
+        json!({
+            "projectId": "HOME",
+            "fromTemplateId": templates[0],
+            "clientRequestId": "from-home",
+        }),
+    )
+    .await;
+    assert_eq!(at_home["outcome"], "ok", "{at_home}");
+    assert!(at_home.to_string().contains("HOME body"), "{at_home}");
+    let from_secret = tool(
+        app,
+        &scoped,
+        &scoped_session,
+        "page_write",
+        json!({
+            "projectId": "HOME",
+            "fromTemplateId": templates[1],
+            "clientRequestId": "from-secret",
+        }),
+    )
+    .await;
+    assert_ne!(from_secret["outcome"], "ok", "{from_secret}");
+    assert!(
+        !from_secret.to_string().contains("SECRET body"),
+        "{from_secret}"
+    );
+}
+
+/// The same credential lists the person's drafts in its project only.
+#[tokio::test]
+async fn a_project_scoped_credential_lists_drafts_only_from_its_project() {
+    let Some(setup) = setup("mcp_board_scoped_drafts").await else {
+        return;
+    };
+    let app = &setup.app;
+    let home = create_project(&setup, "HOME", "Home").await;
+    create_project(&setup, "SECRET", "Secret").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    for project in ["HOME", "SECRET"] {
+        let created = tool(
+            app,
+            &codex,
+            &session,
+            "channel_create",
+            json!({"projectId": project, "name": "general"}),
+        )
+        .await;
+        assert_eq!(created["outcome"], "ok", "{created}");
+        let channel = created["value"]["id"].as_str().expect("channel").to_owned();
+        let saved = tool(
+            app,
+            &codex,
+            &session,
+            "message_draft_set",
+            json!({"conversationId": channel, "draft": {"text": format!("{project} draft")}}),
+        )
+        .await;
+        assert_eq!(saved["outcome"], "ok", "{saved}");
+    }
+    let everywhere = tool(app, &codex, &session, "message_draft_list", json!({})).await;
+    assert!(
+        everywhere.to_string().contains("SECRET draft"),
+        "{everywhere}"
+    );
+
+    let scoped = mcp::issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            project_id: home.parse().expect("home ID"),
+            actor_id: owner(&setup, &home).await,
+            client_name: "scoped-test".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("issue credential")
+    .token;
+    let scoped_session = initialize(app, &scoped).await.expect("scoped MCP");
+    let listed = tool(
+        app,
+        &scoped,
+        &scoped_session,
+        "message_draft_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(listed.to_string().contains("HOME draft"), "{listed}");
+    assert!(!listed.to_string().contains("SECRET draft"), "{listed}");
+}

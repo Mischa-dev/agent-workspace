@@ -1,5 +1,7 @@
 import { Suspense, lazy, useRef, useState } from 'react'
 
+import { useAuthenticatedSession } from '../auth/session'
+import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience } from '../experience/layout'
 
 import { FieldEditor } from '../fields/FieldEditor'
@@ -37,7 +39,10 @@ export function RecordPanel({
   recordId: string
 }) {
   const record = useRecord(projectId, body.collection.id, recordId)
-  const linkedFrom = useProjectExperience(projectId).shows('page.references')
+  const experience = useProjectExperience(projectId)
+  const linkedFrom = experience.shows('page.references')
+  const showComments = experience.shows('thing.comments')
+  const viewerId = useAuthenticatedSession().user.actorId
   const [editing, setEditing] = useState<{ field: FieldDefinition; anchor: HTMLElement } | null>(null)
   const picked = useRef<string | null>(null)
   const close = <IconButton icon="x" label="Close" onClick={onClose} size="sm" />
@@ -196,6 +201,11 @@ export function RecordPanel({
         <Suspense fallback={null}>
           <ReferencedIn id={current.id} kind="record" />
         </Suspense>
+      ) : null}
+      {showComments ? (
+        <section aria-label="Comments" className="aw-recordpanel__comments">
+          <ThingCommentsPanel kind="record" thingId={current.id} viewerId={viewerId} />
+        </section>
       ) : null}
       <History entries={history} types={new Map(body.fields.map((field) => [field.id, field.type]))} />
       {editing ? (

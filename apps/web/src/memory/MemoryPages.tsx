@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { opQuery } from '../api/ops'
 import { readLocal, writeLocal } from '../app/localDrafts'
 import { toastError } from '../app/mutations'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
@@ -29,6 +30,7 @@ import {
   Row,
   RowList,
   Section,
+  SelectField,
   StatusChip,
   TextField,
   describeError,
@@ -226,6 +228,12 @@ function PagesList({ projectId, space }: { projectId: string; space?: boolean })
   )
 }
 
+/** A built-in template's title without its variables: "Meeting notes {{date}}" is "Meeting notes". */
+function templateLabel(title: string) {
+  const label = title.replace(/\{\{\s*project\s*\}\}/gi, 'Project').replace(/\s*\{\{[^}]*\}\}/g, '').trim()
+  return label || title
+}
+
 /** Names a new page and opens it in the editor; the first page is the guide unless you say otherwise. */
 function NewPageDialog({
   hasGuide,
@@ -244,14 +252,21 @@ function NewPageDialog({
   const queryClient = useQueryClient()
   const [title, setTitle] = useState(initialTitle)
   const [guide, setGuide] = useState(!hasGuide)
+  const [template, setTemplate] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const templates = useQuery(opQuery('page_template_list', { spaceId: projectId }))
+  // A page from a template can keep the template's title.
+  const ready = Boolean(title.trim() || template)
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!title.trim() || busy) return
+    if (!ready || busy) return
     setBusy(true)
     setError(null)
-    void createPage(projectId, { title: title.trim(), body: '', isGuide: guide })
+    const input = template
+      ? { title: title.trim() || undefined, fromTemplateId: template, isGuide: guide }
+      : { title: title.trim(), body: '', isGuide: guide }
+    void createPage(projectId, input)
       .then(async (page) => {
         await queryClient.invalidateQueries({ queryKey: memoryKeys.pages(projectId) })
         navigate(`${pagesHref(projectId)}/${encodeURIComponent(page.id)}?edit=1`)
@@ -270,7 +285,7 @@ function NewPageDialog({
           <Button onClick={onClose} variant="secondary">
             Cancel
           </Button>
-          <Button busy={busy} disabled={!title.trim()} type="submit" variant="primary">
+          <Button busy={busy} disabled={!ready} type="submit" variant="primary">
             Create page
           </Button>
         </>
@@ -281,11 +296,26 @@ function NewPageDialog({
       title="New page"
     >
       {error ? <Banner tone="danger">{error}</Banner> : null}
+      {templates.data && templates.data.templates.length > 0 ? (
+        <SelectField
+          hint={template ? 'Its date, author and project are filled in for you.' : undefined}
+          label="Start from"
+          onChange={(event) => setTemplate(event.target.value)}
+          value={template}
+        >
+          <option value="">A blank page</option>
+          {templates.data.templates.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.builtIn ? templateLabel(option.title) : `${option.title} · ${option.projectName ?? ''}`}
+            </option>
+          ))}
+        </SelectField>
+      ) : null}
       <TextField
         label="Title"
         maxLength={200}
         onChange={(event) => setTitle(event.target.value)}
-        placeholder={hasGuide ? 'Theming, How we deploy…' : 'Project guide'}
+        placeholder={template ? 'The template’s title' : hasGuide ? 'Theming, How we deploy…' : 'Project guide'}
         value={title}
       />
       {space ? null : (
@@ -580,6 +610,7 @@ function PageEditor({
   const [body, setBody] = useState(restored?.body ?? page.body)
   const [note, setNote] = useState(restored?.note ?? '')
   const [guide, setGuide] = useState(page.isGuide)
+  const [isTemplate, setIsTemplate] = useState(page.isTemplate)
   const [skill, setSkill] = useState(page.skillDescription !== null)
   const [skillDescription, setSkillDescription] = useState(page.skillDescription ?? '')
   const [busy, setBusy] = useState(false)
@@ -617,6 +648,7 @@ function PageEditor({
       title: title.trim(),
       body,
       isGuide: guide,
+      isTemplate,
       skillDescription: skill ? skillDescription.trim() : '',
       expectedVersion: expected,
       note: note.trim() || undefined,
@@ -677,6 +709,12 @@ function PageEditor({
           onChange={setGuide}
         />
       )}
+      <Checkbox
+        checked={isTemplate}
+        description="New pages can start from a copy of it, with {{date}}, {{author}} and {{project}} filled in."
+        label="Use it as a template"
+        onChange={setIsTemplate}
+      />
       <Checkbox
         checked={skill}
         description="Agents see the list of skills in a project and follow one when its description fits their work."

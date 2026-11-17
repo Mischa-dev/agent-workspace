@@ -6,10 +6,12 @@ export default {
   routes: [
     { path: '/inbox', space: 'home', page: () => import('./InboxPage').then((module) => ({ default: module.InboxPage })) },
     { path: '/later', space: 'home', page: () => import('../later/LaterPage').then((module) => ({ default: module.LaterPage })) },
+    { path: '/threads', space: 'home', page: () => import('./ThreadsPage').then((module) => ({ default: module.ThreadsPage })) },
   ],
   sidebar: [
     // Inbox shows wherever its module is on: no layout hides it.
     { id: 'inbox', space: 'home', rank: 10, icon: 'inbox', label: 'Inbox', path: '/inbox', badge: 'inbox' },
+    { id: 'threads', space: 'home', rank: 20, part: 'workspace.threads', icon: 'messages', label: 'Threads', path: '/threads' },
     { id: 'later', space: 'home', rank: 30, part: 'workspace.later', icon: 'bookmark', label: 'Later', path: '/later' },
   ],
   palette: [
@@ -22,6 +24,15 @@ export default {
       shortcut: 'G I',
       keywords: ['notifications', 'mentions', 'needs you'],
       path: '/inbox',
+    },
+    {
+      id: 'g:threads',
+      space: 'workspace',
+      rank: 20,
+      label: 'Threads',
+      icon: 'messages',
+      keywords: ['followed', 'replies', 'discussions'],
+      path: '/threads',
     },
     {
       id: 'g:later',

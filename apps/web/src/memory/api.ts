@@ -5,6 +5,8 @@ export type PageSummary = {
   id: string
   title: string
   isGuide: boolean
+  /** A template: offered in "New page" as something to start from. */
+  isTemplate: boolean
   /** Set when the page is a skill agents load: when to use it. */
   skillDescription: string | null
   version: number
@@ -35,6 +37,7 @@ export type Page = {
   title: string
   body: string
   isGuide: boolean
+  isTemplate: boolean
   skillDescription: string | null
   version: number
   createdAt: string
@@ -49,6 +52,9 @@ export type PageInput = {
   title?: string
   body?: string
   isGuide?: boolean
+  isTemplate?: boolean
+  /** Start the new page from this template (a template page's id or a built-in's name). */
+  fromTemplateId?: string
   /** One line saying when agents should use it; an empty string stops it being a skill. */
   skillDescription?: string
   expectedVersion?: number
@@ -115,8 +121,8 @@ export function importPage(projectId: string, file: File) {
   })
 }
 
-/** Where a page downloads as Markdown or a Word document. */
-export function pageExportHref(pageId: string, format: 'markdown' | 'docx') {
+/** Where a page downloads as Markdown, a Word document or a PDF. */
+export function pageExportHref(pageId: string, format: 'markdown' | 'docx' | 'pdf') {
   return apiUrl(`/api/v1/pages/${encodeURIComponent(pageId)}/export?format=${format}`)
 }
 

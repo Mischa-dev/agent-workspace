@@ -7,6 +7,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
+import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
+import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { useTheme } from '../theme/themeContext'
@@ -20,6 +22,7 @@ import {
   IconButton,
   Menu,
   PageSkeleton,
+  SidePanel,
   StatusChip,
   actorKind,
   describeError,
@@ -82,7 +85,10 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   })
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [editors, setEditors] = useState<Editor[]>([])
-  const [panel, setPanel] = useState<'links' | 'history' | 'rename' | 'purge' | null>(null)
+  const [panel, setPanel] = useState<'links' | 'history' | 'rename' | 'purge' | 'comments' | null>(null)
+  // A board in a project follows the project's layout; one outside any follows the workspace's.
+  const projectExperience = useProjectExperience(detail.data?.whiteboard.projectId)
+  const workspaceExperience = useWorkspaceExperience(detail.data?.whiteboard.projectId ? null : detail.data?.whiteboard.organizationId)
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null)
   const now = useNow()
   usePageTitle(detail.data?.whiteboard.title ?? null)
@@ -100,6 +106,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   }
   const { whiteboard, canEdit, links } = detail.data
   const editable = canEdit && !whiteboard.deleted
+  const showComments = (whiteboard.projectId ? projectExperience : workspaceExperience).shows('thing.comments')
   // Who else has drawn here lately; you're not in your own list.
   const others = (editors.length ? editors : scene.data.recentEditors).filter((editor) => editor.actorId && editor.actorId !== viewerId)
   const agents = others.filter((editor) => actorKind(editor.kind) === 'agent' && now - new Date(editor.at).getTime() < DRAWING_MS)
@@ -116,6 +123,13 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
       .catch((reason: unknown) =>
         toastError(deleted ? 'The whiteboard wasn’t moved to the trash' : 'The whiteboard wasn’t restored', reason),
       )
+  const setTemplate = (isTemplate: boolean) =>
+    updateWhiteboard(whiteboard.id, { isTemplate })
+      .then(() => {
+        void refresh()
+        showToast({ tone: 'success', title: isTemplate ? 'New whiteboards can start from this one' : 'No longer a template' })
+      })
+      .catch((reason: unknown) => toastError('The whiteboard wasn’t changed', reason))
   const duplicate = () =>
     duplicateWhiteboard(whiteboard.id)
       .then((copy) => {
@@ -155,6 +169,11 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             <span className="aw-sr-only">Recently edited by {others.map((editor) => editor.name).join(', ')}</span>
           </span>
         ) : null}
+        {showComments ? (
+          <Button icon="messages" onClick={() => setPanel(panel === 'comments' ? null : 'comments')} size="sm">
+            Comments
+          </Button>
+        ) : null}
         <Button icon="link" onClick={() => setPanel('links')} size="sm">
           {links.length ? `Linked (${links.length})` : 'Link'}
         </Button>
@@ -163,6 +182,12 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             { label: 'Rename', icon: 'pencil', disabled: !editable, onSelect: () => setPanel('rename') },
             { label: 'History', icon: 'clock', onSelect: () => setPanel('history') },
             { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate() },
+            {
+              label: whiteboard.isTemplate ? 'Stop using as a template' : 'Use as a template',
+              icon: 'copy',
+              disabled: !editable,
+              onSelect: () => void setTemplate(!whiteboard.isTemplate),
+            },
             { separator: true },
             ...(whiteboard.deleted
               ? [
@@ -214,6 +239,11 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
           />
         </Suspense>
       </div>
+      {showComments && panel === 'comments' ? (
+        <SidePanel onClose={() => setPanel(null)} title="Comments">
+          <ThingCommentsPanel kind="whiteboard" thingId={whiteboard.id} viewerId={viewerId} />
+        </SidePanel>
+      ) : null}
       <LinksDialog canEdit={canEdit} detail={detail.data} onClose={() => setPanel(null)} open={panel === 'links'} />
       <HistoryDialog canEdit={editable} detail={detail.data} onClose={() => setPanel(null)} open={panel === 'history'} />
       <RenameDialog board={whiteboard} onClose={() => setPanel(null)} open={panel === 'rename'} />

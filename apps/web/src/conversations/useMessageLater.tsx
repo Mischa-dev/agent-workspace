@@ -87,10 +87,12 @@ export function useMessageLater({
     const saved = markOf(message)
     return (
       <IconButton
+        data-message-key="s"
         icon="bookmark"
         label={saved ? 'Remove from Later' : 'Save for later'}
         onClick={() => (saved ? unsave(message, saved) : void save(message).catch(failed('It wasn’t saved for later')))}
         pressed={Boolean(saved)}
+        shortcut="S"
         size="sm"
       />
     )
@@ -129,5 +131,8 @@ export function useMessageLater({
     )
   ) : null
 
-  return { saveButton, shareItems, remindItems, dialogs }
+  /** Opens "Create task" for a message (T on a focused message), where tasks are on. */
+  const openTask = tasks ? (message: ConversationMessage) => setOpen({ kind: 'task', message }) : undefined
+
+  return { saveButton, shareItems, remindItems, openTask, dialogs }
 }

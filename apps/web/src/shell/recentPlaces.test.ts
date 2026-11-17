@@ -74,8 +74,8 @@ describe('mark all read', () => {
       attentionLabel: '',
     })
     const channels: SidebarChannel[] = [
-      { id: 'c1', name: 'general', archivedAt: null, highestSequence: 5, highestSeenSequence: 5, unread: false, threads: [thread('t1', 9, 3), thread('t2', 2, 2)], hasMoreThreads: false },
-      { id: 'c2', name: 'random', archivedAt: null, highestSequence: 7, highestSeenSequence: 1, unread: true, threads: [], hasMoreThreads: false },
+      { id: 'c1', name: 'general', archivedAt: null, highestSequence: 5, highestSeenSequence: 5, unread: false, unreadMessages: 0, mentions: 0, muted: false, threads: [thread('t1', 9, 3), thread('t2', 2, 2)], hasMoreThreads: false },
+      { id: 'c2', name: 'random', archivedAt: null, highestSequence: 7, highestSeenSequence: 1, unread: true, unreadMessages: 6, mentions: 0, muted: false, threads: [], hasMoreThreads: false },
     ]
     expect(unreadInSidebar(channels)).toEqual([
       { conversationId: 't1', highestSequence: 9 },
