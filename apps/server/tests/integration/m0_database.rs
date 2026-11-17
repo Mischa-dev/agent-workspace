@@ -134,6 +134,14 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         .expect("rollback invariant transaction");
 
     let terminal_run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        terminal_run_id,
+        first.thread_id,
+        first.execution_worker_id,
+        "interrupted",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -250,6 +258,14 @@ async fn insert_active_run(
     seed: &agent_workspace_server::seed::DevSeed,
     run_id: Uuid,
 ) -> Result<(), sqlx::Error> {
+    crate::support::builtin_run_record(
+        &mut **transaction,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "working",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

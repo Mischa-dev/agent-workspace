@@ -107,6 +107,14 @@ done
     .await
     .expect("insert active provider Session");
     let run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "working",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -187,6 +195,14 @@ done
         .execute(&pool)
         .await
         .expect("reactivate provider Session for repeat-crash fixture");
+    crate::support::builtin_run_record(
+        &pool,
+        reentered_run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "recovering",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -295,6 +311,14 @@ done
         .await
         .expect("activate exact completed-turn provider Session");
     let completed_recovery_run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        completed_recovery_run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "working",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -376,6 +400,14 @@ done
         .await
         .expect("reactivate provider Session for mismatched-turn recovery");
     let mismatched_recovery_run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        mismatched_recovery_run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "working",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -432,6 +464,14 @@ done
 
     let queued_run_id = Uuid::now_v7();
     let scheduler_claim_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        queued_run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "queued",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

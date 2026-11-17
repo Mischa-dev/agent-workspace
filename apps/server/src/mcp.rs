@@ -5947,10 +5947,7 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
     // afterTaskId) are left out on purpose: an anchor must never pick the
     // project a task is created in.
     ("taskId", "SELECT project_id FROM work_items WHERE id = $1"),
-    (
-        "runId",
-        "SELECT run.space_id FROM runs run WHERE run.id = $1 AND run_visible_to(run.id, $2)",
-    ),
+    ("runId", crate::runs::store::SPACE_OF_VISIBLE_RUN),
     (
         "threadId",
         "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",

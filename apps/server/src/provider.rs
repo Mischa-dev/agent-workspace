@@ -191,11 +191,14 @@ async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, 
     .await?;
     let value = serde_json::to_value(&resolved)
         .map_err(|_| AppError::Internal("serialize run settings"))?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query("UPDATE agent_runs SET config = $2 WHERE id = $1 AND config = '{}'::jsonb")
         .bind(run_id)
-        .bind(value)
-        .execute(crate::db::scoped(&state.pool))
+        .bind(&value)
+        .execute(&mut *transaction)
         .await?;
+    crate::runs::builtin::settings_chosen(&mut *transaction, run_id, &value).await?;
+    transaction.commit().await?;
     run_config(state, run_id).await
 }
 
@@ -846,7 +849,10 @@ async fn drive_turn(
                     | HarnessEvent::Ignored => {}
                 }
             }
-            () = sleep(Duration::from_millis(500)) => {
+            // Stop arrives as a wake on the control channel from whichever
+            // server took it (`hosts::builtin::transition`); the check every
+            // second is the safety net for a lost wake or no listener.
+            () = stop_wake(&state) => {
                 if stopping() {
                     provider.shutdown().await;
                     return Ok(());
@@ -882,6 +888,22 @@ async fn drive_turn(
                 return Ok(());
             }
         }
+    }
+}
+
+/// Wait until a stopped run should be looked at: a wake on the control
+/// channel, or a second at most.
+async fn stop_wake(state: &AppState) {
+    let cluster = state.supervisors.cluster();
+    let woken = async {
+        match &cluster {
+            Some(cluster) => cluster.released().await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        () = sleep(Duration::from_secs(1)) => {}
+        () = woken => {}
     }
 }
 

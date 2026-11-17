@@ -1318,7 +1318,7 @@ fn authorize_management(
     access: &AccessRow,
     project_id: Uuid,
 ) -> Result<(), AppError> {
-    let kind = crate::api::parse_actor_kind(&principal.actor_kind)?;
+    let kind = crate::hosts::builtin::http::parse_actor_kind(&principal.actor_kind)?;
     if management_allowed(principal.actor_id, kind, true, access, project_id) {
         Ok(())
     } else {

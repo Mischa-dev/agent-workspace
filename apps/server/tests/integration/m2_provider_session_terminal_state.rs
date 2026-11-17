@@ -382,6 +382,14 @@ impl TestHarness {
 
 async fn insert_working_run(harness: &TestHarness, provider_session_id: Uuid) -> Uuid {
     let run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &harness.pool,
+        run_id,
+        harness.seed.thread_id,
+        harness.seed.execution_worker_id,
+        "working",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

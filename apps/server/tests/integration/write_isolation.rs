@@ -1571,6 +1571,14 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         run_threads.push(thread);
     }
     let failed_run = Uuid::now_v7();
+    let net_worker =
+        sqlx::query_scalar::<_, Uuid>("SELECT execution_worker_id FROM agent_runs WHERE id = $1")
+            .bind(world.run)
+            .fetch_one(pool)
+            .await
+            .expect("worker");
+    crate::support::builtin_run_record(pool, failed_run, run_threads[2], net_worker, "failed")
+        .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -2275,6 +2283,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .await
         .expect("approval thread");
         let run = Uuid::now_v7();
+        crate::support::builtin_run_record(pool, run, thread, worker, "failed").await;
         sqlx::query(
             r#"
             INSERT INTO agent_runs (
@@ -2328,6 +2337,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await
     .expect("retry thread");
     let retry_run = Uuid::now_v7();
+    crate::support::builtin_run_record(pool, retry_run, retry_thread, worker, "failed").await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -2999,6 +3009,7 @@ async fn answering_an_approval_on_a_run_that_cant_be_admitted_is_a_conflict() {
         .expect("thread");
         let run = Uuid::now_v7();
         // Made failed (no admission check), then blocked, as `spares` does.
+        crate::support::builtin_run_record(pool, run, thread, worker, "failed").await;
         sqlx::query(
             r#"
             INSERT INTO agent_runs (

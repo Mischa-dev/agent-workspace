@@ -524,6 +524,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     .execute(&pool)
     .await
     .expect("complete archive-blocking run");
+    crate::support::builtin_run_moved(&pool, active_run_id, "completed").await;
 
     let archive = app
         .clone()
@@ -1000,6 +1001,14 @@ async fn insert_active_run_fixture(pool: &PgPool, project_id: Uuid, owner_actor_
     .execute(&mut *transaction)
     .await
     .expect("insert Thread");
+    crate::support::builtin_run_record(
+        &mut *transaction,
+        run_id,
+        thread_id,
+        execution_worker_id,
+        "working",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

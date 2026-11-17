@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use agent_workspace_server::{
     config::AppConfig,
     domain::RunState as Legacy,
-    runs::{self, RunState},
+    runs,
     seed::{DevSeed, dev_seed},
 };
 use sqlx::{PgPool, migrate::Migrator};
@@ -98,6 +98,26 @@ pub(super) async fn insert_run(
 ) -> Uuid {
     let id = Uuid::now_v7();
     let terminal = matches!(state, "completed" | "failed" | "canceled" | "interrupted");
+    // Once the built-in host keeps its runs' records itself (no mirror
+    // trigger), the record comes first.
+    let keeps_its_record = sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('runs') IS NOT NULL \
+            AND NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'agent_runs_mirror' \
+                 AND tgrelid = 'agent_runs'::regclass)",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("schema");
+    if keeps_its_record {
+        crate::support::builtin_run_record(
+            pool,
+            id,
+            seed.thread_id,
+            seed.execution_worker_id,
+            state,
+        )
+        .await;
+    }
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -314,31 +334,14 @@ async fn existing_runs_usage_and_events_are_carried_across_once() {
 }
 
 #[tokio::test]
-async fn the_mirror_keeps_runs_equal_to_built_in_runs() {
-    let Some((pool, full, root)) = schema_before_runs("a1_record_mirror").await else {
+async fn a_built_in_run_keeps_its_record() {
+    let Some((pool, full, root)) = schema_before_runs("a1_record_builtin").await else {
         return;
     };
     full.run(&pool).await.expect("migrate");
     let seed = seed(&pool, &root).await;
 
-    // The SQL mapping and the Rust one agree, state by state.
-    for legacy in Legacy::ALL {
-        for reason in [None, Some(runs::state::STOPPED_BY_REQUESTER)] {
-            let sql = sqlx::query_scalar::<_, String>("SELECT runs_state_from_legacy($1, $2)")
-                .bind(legacy.to_string())
-                .bind(reason)
-                .fetch_one(&pool)
-                .await
-                .expect("map");
-            assert_eq!(
-                sql,
-                RunState::from_legacy(legacy, reason).as_str(),
-                "{legacy} {reason:?}"
-            );
-        }
-    }
-
-    let run = insert_run(&pool, &seed, "queued", None, "Mirror me").await;
+    let run = insert_run(&pool, &seed, "queued", None, "Keep my record").await;
     assert_eq!(run_state(&pool, run).await.0, "queued");
     let version = |pool: PgPool| async move {
         sqlx::query_scalar::<_, i64>("SELECT version FROM runs WHERE id = $1")
@@ -348,18 +351,23 @@ async fn the_mirror_keeps_runs_equal_to_built_in_runs() {
             .expect("version")
     };
     let first = version(pool.clone()).await;
+    let move_to = |next: Legacy, reason: Option<&'static str>| {
+        let pool = pool.clone();
+        async move {
+            let mut transaction = pool.begin().await.expect("begin");
+            agent_workspace_server::hosts::builtin::transition(&mut transaction, run, next, reason)
+                .await
+                .unwrap_or_else(|error| panic!("move to {next}: {error:?}"));
+            transaction.commit().await.expect("commit");
+        }
+    };
     for (legacy, expected) in [
-        ("starting", "starting"),
-        ("working", "working"),
-        ("blocked", "waiting"),
-        ("recovering", "working"),
+        (Legacy::Starting, "starting"),
+        (Legacy::Working, "working"),
+        (Legacy::Blocked, "waiting"),
+        (Legacy::Recovering, "working"),
     ] {
-        sqlx::query("UPDATE agent_runs SET state = $2, updated_at = now() WHERE id = $1")
-            .bind(run)
-            .bind(legacy)
-            .execute(&pool)
-            .await
-            .unwrap_or_else(|error| panic!("move to {legacy}: {error}"));
+        move_to(legacy, None).await;
         assert_eq!(run_state(&pool, run).await.0, expected, "after {legacy}");
     }
     assert_eq!(
@@ -403,19 +411,14 @@ async fn the_mirror_keeps_runs_equal_to_built_in_runs() {
     .fetch_one(&pool)
     .await
     .expect("recorded activity");
+    // After the state changes' own entries in the log.
+    assert!(seq > 1, "{seq}");
     assert_eq!(
-        (kind.as_str(), seq, name.as_deref()),
-        ("interrupt", 1, Some("approval_requested"))
+        (kind.as_str(), name.as_deref()),
+        ("interrupt", Some("approval_requested"))
     );
 
-    sqlx::query(
-        "UPDATE agent_runs SET state = 'interrupted', failure_reason = $2, finished_at = now() WHERE id = $1",
-    )
-    .bind(run)
-    .bind(runs::state::STOPPED_BY_REQUESTER)
-    .execute(&pool)
-    .await
-    .expect("stop");
+    move_to(Legacy::Interrupted, Some(runs::state::STOPPED_BY_REQUESTER)).await;
     let (state, _, finished) = run_state(&pool, run).await;
     assert_eq!((state.as_str(), finished), ("cancelled", true));
 

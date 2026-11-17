@@ -357,6 +357,8 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
     .await
     .expect("insert run thread");
     let run = Uuid::now_v7();
+    crate::support::builtin_run_record(&pool, run, run_thread, seed.execution_worker_id, "failed")
+        .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -383,6 +385,7 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         .execute(&pool)
         .await
         .expect("block run");
+    crate::support::builtin_run_moved(&pool, run, "blocked").await;
     let refused = post_json(
         &application,
         &cookie,
@@ -399,6 +402,7 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         .execute(&pool)
         .await
         .expect("finish run");
+    crate::support::builtin_run_moved(&pool, run, "failed").await;
 
     let archived = post_json(
         &application,

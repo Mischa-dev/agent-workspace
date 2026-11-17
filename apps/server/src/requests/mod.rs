@@ -918,6 +918,21 @@ async fn holds_addressed_role(
     .await?)
 }
 
+/// The space a request lives in, unlocked and unchecked: only for holding
+/// its workspace open before the request's row is locked.
+pub async fn space_of(
+    executor: impl sqlx::PgExecutor<'_>,
+    request_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT space_id FROM requests WHERE id = $1")
+            .bind(request_id)
+            .fetch_optional(executor)
+            .await?
+            .flatten(),
+    )
+}
+
 /// Who may answer an open request they can see: an account it names; else
 /// a holder of one of the roles it names who has its permission; else,
 /// when it names nobody, anyone with its permission there. Never the
@@ -930,8 +945,10 @@ pub async fn may_answer(
     if row.status != "open" || row.raised_by_account_id == caller.account_id {
         return Ok(false);
     }
+    // Being asked by name still needs what answering it needs now: a
+    // sponsor who has lost `runs.approve` no longer approves their run.
     if row.addressed_account_ids.contains(&caller.account_id) {
-        return Ok(true);
+        return holds(transaction, caller, row, true).await;
     }
     if !row.addressed_role_keys.is_empty() {
         return Ok(

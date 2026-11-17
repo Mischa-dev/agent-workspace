@@ -1,6 +1,6 @@
 //! The built-in host: the agents this server runs itself (A1 section 3.11).
-//! Its detail row is `agent_runs`, which the mirror triggers copy into
-//! `runs` until A1.22. Everything that writes that detail row from outside
+//! Its detail row is `agent_runs`; it keeps the run's record in `runs`
+//! itself (`runs::builtin`). Everything that writes that detail row from outside
 //! the provider machinery goes through here:
 //!
 //! - A1.10, one run creation path: the browser and MCP start and retry, the
@@ -16,13 +16,14 @@ use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 pub mod capacity;
+pub mod http;
 pub mod requests;
 
 use crate::{
     AppState,
-    api::RunSetup,
     domain::RunState,
     error::AppError,
+    hosts::builtin::http::RunSetup,
     outbox,
     provider::run_config::RunConfig,
     runs::{ACTIVE_RUN_STATES, run_cap},
@@ -142,6 +143,24 @@ pub(crate) async fn create(
     new: NewRun<'_>,
 ) -> Result<Created, AppError> {
     let run_id = Uuid::now_v7();
+    let settings = serde_json::to_value(new.config)
+        .map_err(|_| AppError::Internal("serialize run settings"))?;
+    crate::runs::builtin::open(
+        transaction,
+        &crate::runs::builtin::NewBuiltinRun {
+            id: run_id,
+            project_id: new.project_id,
+            execution_worker_id: new.setup.execution_worker_id,
+            prompt: new.prompt,
+            from_request: new.external_execution_request_id.is_some(),
+            conversation_id: new.conversation_id,
+            requested_by: new.requested_by,
+            sponsored_by: new.sponsored_by,
+            predecessor_run_id: new.predecessor_run_id,
+            settings: &settings,
+        },
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -166,10 +185,7 @@ pub(crate) async fn create(
     .bind(new.prompt)
     .bind(&new.authorization)
     .bind(new.prompt_message_id)
-    .bind(
-        serde_json::to_value(new.config)
-            .map_err(|_| AppError::Internal("serialize run settings"))?,
-    )
+    .bind(&settings)
     .bind(new.made_through_app)
     .execute(&mut **transaction)
     .await?;
@@ -196,8 +212,8 @@ pub(crate) async fn create(
 
 /// Lock a built-in run for a change, returning its state. Take it before
 /// anything else about the run: every write to it (a claim, a step, a state)
-/// locks this row first and its `runs` record second, through the mirror,
-/// so taking them the other way round deadlocks.
+/// locks this row first and its `runs` record second, so taking them the
+/// other way round deadlocks.
 pub async fn lock(
     transaction: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
@@ -231,7 +247,14 @@ pub async fn transition(
     }
 
     let terminal = next.is_terminal();
-    sqlx::query(
+    let (failure_reason, started_at, finished_at) = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         r#"
         UPDATE agent_runs
            SET state = $2,
@@ -243,13 +266,25 @@ pub async fn transition(
                finished_at = CASE WHEN $4 THEN now() ELSE finished_at END,
                updated_at = now()
          WHERE id = $1
+        RETURNING failure_reason, started_at, finished_at
         "#,
     )
     .bind(run_id)
     .bind(next.to_string())
     .bind(reason)
     .bind(terminal)
-    .execute(&mut **transaction)
+    .fetch_one(&mut **transaction)
+    .await?;
+    crate::runs::builtin::moved(
+        transaction,
+        run_id,
+        crate::runs::builtin::Moved {
+            state: next,
+            failure_reason: failure_reason.as_deref(),
+            started_at,
+            finished_at,
+        },
+    )
     .await?;
 
     crate::runs::steps::record_new(
@@ -266,6 +301,10 @@ pub async fn transition(
     .await?;
 
     if terminal {
+        // Its driver, wherever it runs, hears at once that it should stop.
+        sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
+            .execute(&mut **transaction)
+            .await?;
         // What it still asked for is withdrawn (A1.14).
         crate::requests::withdraw_for_run(transaction, run_id).await?;
         crate::runs::finished::announce(transaction, run_id).await?;

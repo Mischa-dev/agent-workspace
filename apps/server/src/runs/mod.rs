@@ -1,8 +1,8 @@
 //! The run service (A1). It owns the run record every agent gets, whoever
 //! runs it: `runs`, `run_activities`, `run_usage` and `usage_reports`
 //! (`state` for where a run is, `store` for its rows). The built-in host
-//! keeps its detail in `agent_runs`, mirrored into `runs` by a trigger, and
-//! writes its steps straight into the run's log (`steps`).
+//! keeps its detail in `agent_runs` and writes its runs' records
+//! (`builtin`) and steps (`steps`) itself.
 //!
 //! It also holds what the run, approval and GitHub job cores share between
 //! the browser and MCP (docs/plans/mcp-tools.md, Phase 4): who is calling,
@@ -27,6 +27,7 @@ use crate::{
 
 pub mod activities;
 pub mod brief;
+pub mod builtin;
 pub mod credentials;
 pub mod finished;
 #[cfg(test)]
@@ -79,8 +80,8 @@ pub const SPACE_OF_RUN: &str = "SELECT conversation.project_id FROM agent_runs r
 pub(crate) async fn active_in_workspace(
     transaction: &mut Transaction<'_, Postgres>,
     workspace: Uuid,
-) -> Result<Vec<crate::api::RunToStop>, AppError> {
-    sqlx::query_as::<_, crate::api::RunToStop>(
+) -> Result<Vec<crate::hosts::builtin::http::RunToStop>, AppError> {
+    sqlx::query_as::<_, crate::hosts::builtin::http::RunToStop>(
         r#"
         SELECT run.id AS run_id, conversation.project_id, run.conversation_id
         FROM agent_runs run

@@ -6,11 +6,11 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    api::select_run_setup,
     auth::AuthenticatedActor,
     domain::allocate_conversation_sequence,
     error::{ApiPath, AppError},
     external_events::enqueue_external_event,
+    hosts::builtin::http::select_run_setup,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     mcp::McpPrincipal,
     message_content::MessageContent,

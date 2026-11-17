@@ -584,6 +584,14 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     // A run asks a question. Any member who may answer requests answers it,
     // another agent included, and the waiting run goes on.
     let question_run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        question_run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "blocked",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -1135,6 +1143,14 @@ async fn sponsored_run_cancelled_when_a_party_loses_start_runs(party: SponsoredP
     .await
     .expect("insert the busy Thread");
     let busy_run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        busy_run_id,
+        busy_thread_id,
+        seed.execution_worker_id,
+        "blocked",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -1178,6 +1194,45 @@ async fn sponsored_run_cancelled_when_a_party_loses_start_runs(party: SponsoredP
         .expect("approval id")
         .parse::<Uuid>()
         .expect("approval UUID");
+    // A sponsor who no longer holds `runs.approve` can't approve it, though
+    // the request is addressed to them by name.
+    let role = |role: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE project_memberships SET role = $3 WHERE project_id = $1 AND actor_id = $2",
+            )
+            .bind(seed.project_id)
+            .bind(seed.human_actor_id)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .expect("change the sponsor's role");
+        }
+    };
+    let held_role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(seed.human_actor_id)
+    .fetch_one(&pool)
+    .await
+    .expect("sponsor's role");
+    role("viewer".to_owned()).await;
+    let refused = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            "/api/v2/ops/request_respond",
+            &cookie,
+            &csrf,
+            "admission-sponsored-approval-as-viewer",
+            json!({"requestId":approval_id.to_string(),"optionId":"approve"}),
+        ))
+        .await
+        .expect("approval response");
+    assert_ne!(refused.status(), StatusCode::OK, "a viewer approved a run");
+    role(held_role).await;
     let run_id = approve_sponsorship(
         &application,
         &pool,
@@ -2009,6 +2064,14 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     .execute(&mut *fixture)
     .await
     .expect("prepare repository");
+    crate::support::builtin_run_record(
+        &mut *fixture,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "blocked",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

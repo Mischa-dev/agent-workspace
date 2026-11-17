@@ -58,7 +58,17 @@ pub async fn raise(
     let options = options
         .iter()
         .take(8)
-        .map(|(id, label)| {
+        .enumerate()
+        .map(|(index, (id, label))| {
+            // A harness may name an option by its whole label; a request's
+            // option ids are short, so a long one gets a number. The driver
+            // answers a question with the label, so nothing is lost.
+            let id = if id.trim().is_empty() || id.chars().count() > 40 {
+                format!("option-{}", index + 1)
+            } else {
+                id.clone()
+            };
+            let label = label.chars().take(200).collect::<String>();
             let mut option = json!({"id": id, "label": label});
             if ask == Ask::Approval && matches!(id.as_str(), "approve" | "deny") {
                 option["style"] = Value::String(id.clone());
@@ -171,7 +181,7 @@ pub async fn settled(
             }),
         )
         .await?;
-        crate::api::retain_run_workspace(transaction, run_id).await?;
+        crate::hosts::builtin::http::retain_run_workspace(transaction, run_id).await?;
         crate::provider::idle_provider_session_for_terminal_run(transaction, run_id).await?;
         let interrupted = crate::runs::steps::record_new(
             transaction,

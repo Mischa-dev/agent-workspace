@@ -529,6 +529,14 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     .execute(&pool)
     .await
     .expect("insert publication Git worktree");
+    crate::support::builtin_run_record(
+        &pool,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "completed",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

@@ -990,6 +990,7 @@ async fn build_workspace(
     .await
     .expect("run thread");
     let run = Uuid::now_v7();
+    crate::support::builtin_run_record(pool, run, run_thread, worker, "failed").await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

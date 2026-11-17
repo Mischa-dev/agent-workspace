@@ -126,14 +126,25 @@ async fn a_denied_approval_stops_the_run_and_its_other_requests() {
     let run_id = blocked_run(pool, &seed, "builtin-deny").await;
     let approval =
         crate::support::requests::approval(pool, run_id, "builtin-deny", "Force-push main?").await;
+    // A harness may name an option by its whole label, longer than a
+    // request's option ids go: it gets a number and keeps its label.
+    let long = "release/".repeat(12);
     let question = crate::support::requests::question(
         pool,
         run_id,
         "builtin-deny-question",
         "Which branch?",
-        &[("main", "main")],
+        &[("main", "main"), (&long, &long)],
     )
     .await;
+    let options =
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT options FROM requests WHERE id = $1")
+            .bind(question)
+            .fetch_one(pool)
+            .await
+            .expect("question options");
+    assert_eq!(options[1]["id"], "option-2", "{options}");
+    assert_eq!(options[1]["label"], long.as_str(), "{options}");
 
     let (status, denied) = send(
         &setup.app,

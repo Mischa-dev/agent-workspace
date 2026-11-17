@@ -61,6 +61,14 @@ async fn failed_run_acknowledgement_is_private_durable_and_actor_scoped() {
 
     let run_id = Uuid::now_v7();
     let mut transaction = pool.begin().await.expect("attention transaction");
+    crate::support::builtin_run_record(
+        &mut *transaction,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "failed",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

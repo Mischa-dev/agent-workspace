@@ -475,6 +475,17 @@ async fn answer_request(
     text: Option<&str>,
 ) -> Result<(), AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    // An answer can set a run going again: a suspended or closing workspace
+    // answers nothing, held before the request's row is locked, as
+    // `request_respond` does.
+    if let Some(space) = crate::requests::space_of(&mut *transaction, request_id).await? {
+        crate::workspace::lifecycle::hold_open_for_space(
+            &mut transaction,
+            space,
+            "request_respond",
+        )
+        .await?;
+    }
     let row = crate::requests::visible(&mut transaction, request_id, actor_id, true)
         .await?
         .ok_or(AppError::NotFound("notification_action"))?;

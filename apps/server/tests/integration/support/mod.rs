@@ -33,3 +33,65 @@ pub(crate) const NOTICES: &str = "(SELECT id AS event_id, legacy_type AS event_t
                  space_id, thing_id, audience_account_id, audience, payload, created_at \
           FROM event_staging) logged \
     WHERE legacy_type IS NOT NULL)";
+
+/// The run record of a built-in run a test writes by hand (the server opens
+/// it with `runs::builtin::open`). Call it before inserting the run's
+/// `agent_runs` row, whose id references it; `state` is the built-in state
+/// the test gives that row.
+pub(crate) async fn builtin_run_record(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: uuid::Uuid,
+    conversation_id: uuid::Uuid,
+    execution_worker_id: uuid::Uuid,
+    state: &str,
+) {
+    let built_in = state
+        .parse::<agent_workspace_server::domain::RunState>()
+        .expect("a built-in run state");
+    let state = agent_workspace_server::runs::state::RunState::from_legacy(built_in, None);
+    sqlx::query(
+        r#"
+        INSERT INTO runs (
+            id, workspace_id, space_id, account_id, title, cause_kind, conversation_id,
+            state, finished_at
+        )
+        SELECT $1, project.organization_id, project.id, worker.actor_id, 'Run', 'thread',
+               conversation.id, $4, CASE WHEN $5 THEN now() END
+          FROM conversations conversation
+          JOIN projects project ON project.id = conversation.project_id
+          JOIN execution_workers worker ON worker.id = $3
+         WHERE conversation.id = $2
+        "#,
+    )
+    .bind(run_id)
+    .bind(conversation_id)
+    .bind(execution_worker_id)
+    .bind(state.as_str())
+    .bind(state.is_terminal())
+    .execute(executor)
+    .await
+    .expect("built-in run record");
+}
+
+/// Move a built-in run's record to the built-in state a test set by hand on
+/// its `agent_runs` row (the server moves both through
+/// `hosts::builtin::transition`).
+pub(crate) async fn builtin_run_moved(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: uuid::Uuid,
+    state: &str,
+) {
+    let built_in = state
+        .parse::<agent_workspace_server::domain::RunState>()
+        .expect("a built-in run state");
+    let state = agent_workspace_server::runs::state::RunState::from_legacy(built_in, None);
+    sqlx::query(
+        "UPDATE runs SET state = $2, finished_at = CASE WHEN $3 THEN now() END WHERE id = $1",
+    )
+    .bind(run_id)
+    .bind(state.as_str())
+    .bind(state.is_terminal())
+    .execute(executor)
+    .await
+    .expect("built-in run moved");
+}
