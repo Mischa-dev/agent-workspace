@@ -45,6 +45,7 @@ export const PART_IDS = [
   'tech.task_keys',
   'tech.run_usage',
   'tech.ids',
+  'thing.activity',
   'home.working_now',
   'home.capacity',
   'workspace.my_work',
