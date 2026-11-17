@@ -214,6 +214,51 @@
     "title": "Update field"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "history_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List history"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.version_restored",
+      "whiteboard.version_restored"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "history_restore",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Restore a version"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "history_show",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Show a version"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

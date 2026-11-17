@@ -62,7 +62,7 @@ use super::{
     agent_interface::{Browser, initialize},
     mcp_admin::Setup,
     message_edits::{say, text},
-    write_isolation::{digest_changes, digest_ignoring},
+    write_isolation::{digest_changes, digest_ignoring, refresh_digest, table_fingerprints},
 };
 
 pub(super) use super::support::two_workspaces::{
@@ -215,6 +215,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/search",
     "/api/v1/settings/effective",
     "/api/v1/settings/registry",
+    "/api/v1/things/{id}",
     "/api/v1/things/{kind}/{id}",
     "/api/v1/usage",
     "/api/v1/usage/accounts/{account_id}",
@@ -266,8 +267,16 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
 const MCP_EXCLUSIONS: &[(&str, &str)] = &[];
 
 /// Columns a read may legitimately change: when a credential or grant was
-/// last used, and when a connection last shook hands.
-const READ_TOUCHES: &[&str] = &["last_used_at", "last_seen_at", "last_handshake_at"];
+/// last used, and when a connection last shook hands. A touch (at most every
+/// five minutes) moves the row's `updated_at` with it, so a suite that runs
+/// longer than that saw a read "change" a credential; a real write always
+/// changes a column besides `updated_at`, so leaving it out loses nothing.
+const READ_TOUCHES: &[&str] = &[
+    "last_used_at",
+    "last_seen_at",
+    "last_handshake_at",
+    "updated_at",
+];
 
 /// Tools marked read-only that change rows anyway, each with why. The list
 /// only shrinks: fix the tool (or its hint) and take it off.
@@ -1384,6 +1393,22 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/things/{id}",
+            vec![
+                format!("/api/v1/things/{}", a.task),
+                format!("/api/v1/things/{}", a.page),
+                format!("/api/v1/things/{}", a.project_whiteboard),
+            ],
+            vec![
+                format!("/api/v1/things/{}", b.task),
+                format!("/api/v1/things/{}", b.page),
+                format!("/api/v1/things/{}", b.thread),
+                format!("/api/v1/things/{}", b.dm),
+                format!("/api/v1/things/{}", b.whiteboard),
+            ],
+            vec![],
+        ),
+        case(
             "/api/v1/things/{kind}/{id}",
             vec![
                 format!("/api/v1/things/task/{}", a.task),
@@ -1940,6 +1965,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "external_event_poll",
     "file_list",
     "file_read",
+    "history_list",
+    "history_show",
     "collection_list",
     "collection_describe",
     "record_query",
@@ -2632,6 +2659,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![],
         ),
+        // K3.19: any thing's history by id alone.
+        case(
+            "history_list",
+            vec![json!({"thing": a.page})],
+            vec![json!({"thing": b.page})],
+            vec![],
+        ),
+        case(
+            "history_show",
+            vec![json!({"thing": a.page, "version": 1})],
+            vec![json!({"thing": b.page, "version": 1})],
+            vec![],
+        ),
     ]
 }
 
@@ -2680,6 +2720,9 @@ async fn check_mcp(
     // and after each tool's calls; only the columns reads may touch differ.
     let a_ids = sweep_ids(pool, a.organization).await;
     let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
+    // Fingerprints first, so a write landing during the digest is caught
+    // by the next refresh rather than missed.
+    let mut fingerprints = table_fingerprints(pool).await;
     let mut a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
@@ -2689,7 +2732,7 @@ async fn check_mcp(
             let read_only_check = !READ_TOOLS_THAT_WRITE
                 .iter()
                 .any(|(tool, _)| *tool == case.tool);
-            let before = std::mem::take(&mut a_rows);
+            let before = a_rows.clone();
             for arguments in &case.own {
                 report.mcp_calls += 1;
                 let (status, body) =
@@ -2737,7 +2780,8 @@ async fn check_mcp(
                     b_ids,
                 );
             }
-            a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
+            fingerprints =
+                refresh_digest(pool, &a_list, READ_TOUCHES, &fingerprints, &mut a_rows).await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(
@@ -2844,8 +2888,9 @@ pub(super) async fn list_tools(app: &axum::Router, token: &str, session: &str) -
 // Realtime
 // ---------------------------------------------------------------------------
 
-/// A subscribes over the real WebSocket, then the outbox publisher starts:
-/// the whole fixture's backlog (both workspaces) is broadcast, B changes a
+/// A subscribes over the real WebSocket, then the outbox publisher and the
+/// log's tail start: the whole fixture's backlog (both workspaces) is
+/// delivered from the start of the log, B changes a
 /// few more things, and A posts a sentinel message. A must see its sentinel
 /// and nothing of B's.
 async fn check_realtime(
@@ -2891,6 +2936,7 @@ async fn check_realtime(
         outbox_worker_id(),
         publisher_stopped,
     ));
+    let (stop_log, log) = crate::support::live::follow_log(pool, realtime, Some(0)).await;
 
     // More changes in B while A listens.
     let b_setup = Setup {
@@ -3017,6 +3063,8 @@ async fn check_realtime(
 
     let _ = stop_publisher.send(true);
     let _ = publisher.await;
+    let _ = stop_log.send(true);
+    let _ = log.await;
     let _ = socket.close(None).await;
     let _ = stop_server.send(());
     let _ = server.await;

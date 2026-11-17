@@ -91,7 +91,17 @@ pub struct AppConfig {
     /// from `/client-config`.
     pub live_origin: Option<String>,
     pub database_url: SecretString,
+    /// The session connection the wake listener uses (K5.4): the main URL
+    /// unless `AGENT_WORKSPACE_DATABASE_LISTEN_URL` names another (straight
+    /// at PostgreSQL when the main URL goes through a transaction pooler).
+    /// None when it is `off`: the instance runs on its polls alone.
+    pub database_listen_url: Option<SecretString>,
     pub database_max_connections: u32,
+    /// Prepared statements each connection keeps
+    /// (`AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE`, default 100). 0 when the
+    /// database URL goes through a transaction-mode pooler, which can't keep
+    /// a connection's statements between transactions (ruling R24).
+    pub database_statement_cache: usize,
     pub data_root: PathBuf,
     pub data_quota_bytes: u64,
     pub minimum_free_bytes: u64,
@@ -158,6 +168,12 @@ pub struct AppConfig {
     /// Cloudflare). Unset, nothing is read from the request for the
     /// caller's address and there are no per-address limits.
     pub client_address_header: Option<String>,
+    /// The operator's name for this instance (K5.2), shown with the
+    /// server's instances; never taken from the machine.
+    pub instance_label: Option<String>,
+    /// How long a lease lives unless renewed (K5.2): renewed every third,
+    /// given up by its holder after two thirds.
+    pub lease_ttl: Duration,
     /// How each access area decides while it moves onto `access` (K1 §4.3):
     /// `AGENT_WORKSPACE_ACCESS_<AREA>=old|compare|new`, each area's default
     /// from `access::compare::AREAS`.
@@ -594,6 +610,31 @@ impl AppConfig {
             }
         }
         let client_address_header = client_address_header(values)?;
+        let instance_label = Some(optional(values, "INSTANCE_LABEL", "").trim().to_owned())
+            .filter(|label| !label.is_empty());
+        if instance_label
+            .as_deref()
+            .is_some_and(|label| label.chars().count() > 80 || label.chars().any(char::is_control))
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}INSTANCE_LABEL"),
+                reason: "use at most 80 characters".into(),
+            });
+        }
+        let database_statement_cache = parse::<usize>(values, "DATABASE_STATEMENT_CACHE", "100")?;
+        if database_statement_cache > 10_000 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DATABASE_STATEMENT_CACHE"),
+                reason: "must be between 0 and 10000".into(),
+            });
+        }
+        let lease_seconds = parse::<u64>(values, "LEASE_SECONDS", "15")?;
+        if !(2..=300).contains(&lease_seconds) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}LEASE_SECONDS"),
+                reason: "must be between 2 and 300".into(),
+            });
+        }
         let access_modes = access_modes(values)?;
         let directory_dir = values
             .get(&format!("{PREFIX}DIRECTORY_DIR"))
@@ -639,9 +680,17 @@ impl AppConfig {
             allowed_origins,
             webhook_trusted_origins,
             public_origin,
+            database_listen_url: crate::realtime::wake::listen_url(
+                values
+                    .get(&format!("{PREFIX}DATABASE_LISTEN_URL"))
+                    .map(String::as_str),
+                &database_url,
+            )
+            .map(SecretString::new),
             live_origin,
             database_url: SecretString::new(database_url),
             database_max_connections,
+            database_statement_cache,
             data_root,
             data_quota_bytes,
             minimum_free_bytes,
@@ -672,6 +721,8 @@ impl AppConfig {
             link_previews,
             secrets_key_missing,
             client_address_header,
+            instance_label,
+            lease_ttl: Duration::from_secs(lease_seconds),
             access_modes,
             directory_dir,
             directory_urls,

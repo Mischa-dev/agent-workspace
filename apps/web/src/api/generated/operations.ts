@@ -76,6 +76,10 @@ export type FormWrite = { fields?: FormFieldWrite[]; intro?: string | null; than
 
 export type HandoffNote = { at: string; by: string; note: string; via?: string | null }
 
+export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
+
+export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
+
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
 export type HostOwnerChoice = "person" | "workspace"
@@ -257,6 +261,18 @@ export type FieldListOutput = { canManage: boolean; fields: FieldView[] }
 export type FieldUpdateInput = { archived?: boolean | null; description?: string | null; expectedVersion?: number | null; field?: string | null; name?: string | null; options?: OptionInput[] | null; position?: number | null; projectId: string; target?: string | null; type?: string | null }
 
 export type FieldUpdateOutput = { changedFields: string[]; created: boolean; field: FieldView; note?: string | null }
+
+export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
+
+export type HistoryListOutput = { caps: HistoryCaps; entries: HistoryEntry[]; kind: string }
+
+export type HistoryRestoreInput = { expectedVersion: number; thing: string; version: number }
+
+export type HistoryRestoreOutput = { kind: string; restored: number; version: number }
+
+export type HistoryShowInput = { thing: string; version: number }
+
+export type HistoryShowOutput = { content: unknown; kind: string; version: number }
 
 export type HostAgentBindInput = { accountId: string; hostAgentRef: string; hostId: string }
 
@@ -565,6 +581,9 @@ export type Operations = {
   field_create: { input: FieldCreateInput; output: FieldCreateOutput }
   field_list: { input: FieldListInput; output: FieldListOutput }
   field_update: { input: FieldUpdateInput; output: FieldUpdateOutput }
+  history_list: { input: HistoryListInput; output: HistoryListOutput }
+  history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
+  history_show: { input: HistoryShowInput; output: HistoryShowOutput }
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
   host_agent_unbind: { input: HostAgentUnbindInput; output: HostAgentUnbindOutput }
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }

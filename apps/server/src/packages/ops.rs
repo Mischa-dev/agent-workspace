@@ -350,6 +350,15 @@ pub(super) async fn install_planned(
     let writer = crate::memory::Writer::from(ctx);
     let tx = call.tx().await?;
 
+    // One install at a time per workspace, taken before the plan is read
+    // again: two installs that both planned to create the same thing can't
+    // both record it as theirs. (No key update, so writes that only point at
+    // the workspace aren't held up.)
+    sqlx::query("SELECT id FROM organizations WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(workspace)
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| OpError::logged(PackageInstall::NAME, &error.into()))?;
     // The plan the preview showed, read again in this transaction.
     let package = &origin.package;
     let plan = install::plan(tx, workspace, actor, package, &place).await?;

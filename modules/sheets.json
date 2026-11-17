@@ -15,11 +15,19 @@
     "sheet_write": "change"
   },
   "routes": ["/api/v1/projects/{project_id}/sheets*"],
-  "events": { "emits": [], "listens": [] },
+  "events": { "emits": ["sheet.updated"], "listens": [] },
   "notifications": [],
-  "search": [],
+  "search": ["sheets"],
   "automations": { "triggers": [], "actions": [] },
-  "things": [],
+  "things": [
+    {
+      "kind": "sheet",
+      "one": "Sheet",
+      "many": "Sheets",
+      "href": "/projects/{projectId}/sheets/{id}",
+      "fields": [{ "id": "updatedAt", "label": "Edited", "type": "date" }]
+    }
+  ],
   "links": [],
   "embeds": [],
   "web": { "folder": "sheets" },

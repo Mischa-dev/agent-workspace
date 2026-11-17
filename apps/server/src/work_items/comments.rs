@@ -699,7 +699,7 @@ async fn edit_comment_http(
     ApiPath((project_id, work_item_id, comment_id)): ApiPath<(Uuid, Uuid, Uuid)>,
     ApiJson(request): ApiJson<EditCommentRequest>,
 ) -> Result<Json<EditCommentResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (locked, _) = lock_for_change(
@@ -741,7 +741,7 @@ async fn remove_comment_http(
     principal: AuthenticatedActor,
     ApiPath((project_id, work_item_id, comment_id)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<RemoveCommentResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (locked, moderator) = lock_for_change(
         &mut transaction,

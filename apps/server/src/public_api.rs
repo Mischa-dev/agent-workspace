@@ -76,15 +76,19 @@ async fn call(
     body: &[u8],
 ) -> Result<Response, AppError> {
     let authentication_key = mcp::exact_bearer_token(headers).unwrap_or("invalid");
-    state.rate_limits.check_mcp_auth(authentication_key)?;
+    state.rate_limits.check_mcp_auth(authentication_key).await?;
     let Some(principal) = mcp::resolve_bearer_principal(state, headers).await? else {
-        state.rate_limits.note_mcp_auth_failure();
+        state.rate_limits.note_mcp_auth_failure().await;
         return Err(AppError::AuthenticationRequired);
     };
-    state.rate_limits.note_mcp_auth_success(authentication_key);
     state
         .rate_limits
-        .check_mcp_request(principal.credential_id)?;
+        .note_mcp_auth_success(authentication_key)
+        .await;
+    state
+        .rate_limits
+        .check_mcp_request(principal.credential_id)
+        .await?;
     if body.len() > MAX_BODY_BYTES {
         return Err(AppError::PayloadTooLarge);
     }
@@ -410,29 +414,25 @@ pub(crate) fn document() -> Value {
                 json!({ "$ref": format!("#/components/schemas/{key}") })
             })
             .unwrap_or_else(|| json!({ "type": "object" }));
-        let mut responses = Map::new();
-        responses.insert(
-            "200".to_owned(),
-            json!({
-                "description": "The result. Its `outcome` says whether it worked.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
-        );
-        // A refusal is the operation's own result with its `outcome`: one
-        // response per operation that its refusing statuses point at, so the
-        // document stays small as tools are added. The introduction says
+        // The result, for success and refusal alike: one response per
+        // operation that its 200 and its refusing statuses all point at, so
+        // the document stays small as tools are added. The introduction says
         // what each status means.
-        let refused = format!("{}Refused", pascal(&name));
+        let mut responses = Map::new();
+        let result = format!("{}Result", pascal(&name));
         refusals.insert(
-            refused.clone(),
+            result.clone(),
             json!({
-                "description": "Refused: the status and the result's `outcome` and `message` say why.",
-                "content": { "application/json": { "schema": output.clone() } },
+                "description": "The result. Its `outcome` says whether it worked; on a refusal, \
+                    the status, `outcome` and `message` say why.",
+                "content": { "application/json": { "schema": output } },
             }),
         );
+        let own = json!({ "$ref": format!("#/components/responses/{result}") });
+        responses.insert("200".to_owned(), own.clone());
         for (status, _) in ERROR_STATUSES {
             let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
-                json!({ "$ref": format!("#/components/responses/{refused}") })
+                own.clone()
             } else {
                 // The same for every operation, so referenced rather than
                 // repeated, which keeps the document small as tools are added.

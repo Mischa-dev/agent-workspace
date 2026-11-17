@@ -7,5 +7,6 @@
 pub(crate) mod app;
 pub(crate) mod callers;
 pub(crate) mod db;
+pub(crate) mod live;
 pub(crate) mod two_workspaces;
 pub(crate) mod world;

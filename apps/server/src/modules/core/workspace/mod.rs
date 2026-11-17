@@ -16,5 +16,6 @@ impl CoreModule for Module {
         module.operations(crate::packages::ops::register_ops);
         module.operations(crate::packages::directory_ops::register_ops);
         module.operations(crate::modules::built::ops::register_ops);
+        module.operations(crate::history::ops::register_ops);
     }
 }

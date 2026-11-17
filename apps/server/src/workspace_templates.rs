@@ -1650,7 +1650,7 @@ async fn apply_route(
     ApiJson(request): ApiJson<ApplyRequest>,
 ) -> Result<axum::response::Response, AppError> {
     use axum::response::IntoResponse;
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
     if !may_use(caller) {
@@ -1710,7 +1710,7 @@ async fn save_route(
     ApiPath(organization_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<SaveRequest>,
 ) -> Result<(StatusCode, Json<TemplateView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let name = normalize_name(&request.name).ok_or(AppError::Validation("name"))?;
     let description =
         normalize_description(&request.description).ok_or(AppError::Validation("description"))?;
@@ -1749,7 +1749,7 @@ async fn remove_route(
     principal: AuthenticatedActor,
     ApiPath((organization_id, template_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
     if !may_use(caller) {

@@ -761,6 +761,19 @@ impl Target {
     }
 }
 
+/// A module switch's write drops the switches the route layer keeps for
+/// the workspace (AWD-97), on every instance once it commits (K5.5).
+async fn forget_module_switches(
+    transaction: &mut Transaction<'_, Postgres>,
+    target: Target,
+    key: &str,
+) -> Result<(), AppError> {
+    if key.starts_with("modules.") {
+        crate::modules::gate::forget_everywhere(transaction, target.organization_id()).await?;
+    }
+    Ok(())
+}
+
 /// Set `key` at `target`. With `expected_version`, refuse if someone else
 /// changed it first (0 means "it isn't set yet"). Returns the new version.
 /// The caller has checked who may write.
@@ -777,6 +790,7 @@ pub async fn set(
         return Err(AppError::Validation("setting scope"));
     }
     definition.validate(&value)?;
+    forget_module_switches(transaction, target, key).await?;
     let current = current_version(transaction, target, key).await?;
     if let Some(expected) = expected_version
         && expected != current.unwrap_or(0)
@@ -845,6 +859,7 @@ pub async fn reset(
     expected_version: Option<i64>,
 ) -> Result<bool, AppError> {
     let definition = definition(key).ok_or(AppError::NotFound("setting"))?;
+    forget_module_switches(transaction, target, key).await?;
     let current = current_version(transaction, target, definition.key).await?;
     if let Some(expected) = expected_version
         && expected != current.unwrap_or(0)
@@ -1375,7 +1390,7 @@ async fn set_value(
     ApiPath(key): ApiPath<String>,
     ApiJson(request): ApiJson<SetRequest>,
 ) -> Result<Json<WriteResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
     if has_own_routes(definition.key) {
         return Err(AppError::Validation("setting key"));
@@ -1427,7 +1442,7 @@ async fn reset_value(
     ApiPath(key): ApiPath<String>,
     ApiJson(request): ApiJson<ResetRequest>,
 ) -> Result<Json<WriteResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
     if has_own_routes(definition.key) {
         return Err(AppError::Validation("setting key"));
