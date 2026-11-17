@@ -160,6 +160,54 @@ pub async fn settings_chosen(
     Ok(())
 }
 
+/// Where a built-in run is, locked for a change: its host state, thread and
+/// space. `None` when there is no such run.
+pub struct Place {
+    pub state: BuiltinState,
+    pub conversation_id: Uuid,
+    pub space_id: Uuid,
+}
+
+pub async fn lock_place(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<Option<Place>, AppError> {
+    let row = sqlx::query_as::<_, (String, Uuid, Uuid)>(
+        r#"
+        SELECT run.state, run.conversation_id, conversation.project_id
+        -- visibility: the run's own thread, to write its steps
+        FROM agent_runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        WHERE run.id = $1
+        FOR UPDATE OF run
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    row.map(|(state, conversation_id, space_id)| {
+        Ok(Place {
+            state: state.parse::<BuiltinState>()?,
+            conversation_id,
+            space_id,
+        })
+    })
+    .transpose()
+}
+
+/// A built-in run's host state, if there is such a run.
+pub async fn state_of(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: Uuid,
+) -> Result<Option<BuiltinState>, AppError> {
+    sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_optional(executor)
+        .await?
+        .map(|state| state.parse::<BuiltinState>())
+        .transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::title_from_prompt;

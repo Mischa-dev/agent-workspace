@@ -362,7 +362,7 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
             };
             let option = styled(request, style).ok_or(AppError::NotFound("notification_action"))?;
             if !retried {
-                answer_request(state, actor.actor_id, request.id, Some(option), None).await?;
+                answer_request(state, &token, action, request.id, Some(option), None).await?;
             }
             if action == NotificationAction::Approve {
                 "approved"
@@ -407,7 +407,7 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
                         return Err(AppError::NotFound("notification_action"));
                     }
                     if !retried {
-                        answer_request(state, actor.actor_id, request.id, None, Some(text)).await?;
+                        answer_request(state, &token, action, request.id, None, Some(text)).await?;
                     }
                     "answered"
                 }
@@ -470,10 +470,13 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
 }
 
 /// Answer a request as the token's person, with the same checks as
-/// `request_respond`: they must still see it and be one it asks.
+/// `request_respond`: they must still see it and be one it asks. The token
+/// is marked used in the same transaction, so a retry after the answer
+/// committed is recognised as that answer, never refused as a second one.
 async fn answer_request(
     state: &AppState,
-    actor_id: Uuid,
+    token: &TokenRow,
+    action: NotificationAction,
     request_id: Uuid,
     option_id: Option<&str>,
     text: Option<&str>,
@@ -490,6 +493,7 @@ async fn answer_request(
         )
         .await?;
     }
+    let actor_id = token.actor_id;
     let row = crate::requests::visible(&mut transaction, request_id, actor_id, true)
         .await?
         .ok_or(AppError::NotFound("notification_action"))?;
@@ -505,6 +509,13 @@ async fn answer_request(
             AnswerError::NotYours => AppError::NotFound("notification_action"),
             AnswerError::App(error) => error,
         })?;
+    sqlx::query(
+        "UPDATE notification_action_tokens SET used_action = $2, used_at = COALESCE(used_at, now()) WHERE id = $1",
+    )
+    .bind(token.id)
+    .bind(action.as_str())
+    .execute(&mut *transaction)
+    .await?;
     transaction.commit().await?;
     Ok(())
 }
