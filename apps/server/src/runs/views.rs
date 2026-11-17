@@ -123,7 +123,7 @@ const SUMMARY_SELECT: &str = r#"
     LEFT JOIN task_rows task
       ON task.id = task_link.work_item_id AND task.archived_at IS NULL
     LEFT JOIN LATERAL (
-        SELECT {TOTALS} FROM agent_run_usage WHERE agent_run_id = run.id
+        SELECT {TOTALS} FROM run_usage WHERE run_id = run.id
     ) usage ON true
 "#;
 
@@ -278,17 +278,18 @@ pub async fn run_detail(
         .bind(run_id)
         .fetch_one(&mut *transaction)
         .await?;
-    let total = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM agent_run_events WHERE agent_run_id = $1",
-    )
-    .bind(run_id)
-    .fetch_one(&mut *transaction)
-    .await?;
+    let total =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM run_activities WHERE run_id = $1")
+            .bind(run_id)
+            .fetch_one(&mut *transaction)
+            .await?;
     let mut steps = sqlx::query_as::<_, RunStep>(
         r#"
-        SELECT id, kind, summary, payload, created_at FROM agent_run_events
-        WHERE agent_run_id = $1
-        ORDER BY created_at DESC, id DESC
+        SELECT id, COALESCE(payload->>'step', kind) AS kind, summary, payload,
+               occurred_at AS created_at
+          FROM run_activities
+         WHERE run_id = $1
+         ORDER BY seq DESC
         LIMIT $2
         "#,
     )
@@ -303,8 +304,8 @@ pub async fn run_detail(
                COALESCE(sum((payload->'tests'->>'passed')::bigint), 0)::bigint,
                COALESCE(sum((payload->'tests'->>'failed')::bigint), 0)::bigint,
                COALESCE(sum((payload->'tests'->>'skipped')::bigint), 0)::bigint
-        FROM agent_run_events
-        WHERE agent_run_id = $1 AND kind = 'test_result'
+        FROM run_activities
+        WHERE run_id = $1 AND payload->>'step' = 'test_result'
         "#,
     )
     .bind(run_id)
@@ -312,9 +313,9 @@ pub async fn run_detail(
     .await?;
     let last_failed = sqlx::query_scalar::<_, Option<i64>>(
         r#"
-        SELECT (payload->'tests'->>'failed')::bigint FROM agent_run_events
-        WHERE agent_run_id = $1 AND kind = 'test_result'
-        ORDER BY created_at DESC, id DESC LIMIT 1
+        SELECT (payload->'tests'->>'failed')::bigint FROM run_activities
+        WHERE run_id = $1 AND payload->>'step' = 'test_result'
+        ORDER BY seq DESC LIMIT 1
         "#,
     )
     .bind(run_id)
@@ -323,11 +324,15 @@ pub async fn run_detail(
     .flatten();
     let usage_by_model = sqlx::query_as::<_, ModelUsage>(
         r#"
-        SELECT model, input_tokens, output_tokens, cached_input_tokens,
-               COALESCE(estimated_cost, reported_cost_usd) AS cost,
-               CASE WHEN estimated_cost IS NOT NULL THEN currency
-                    WHEN reported_cost_usd IS NOT NULL THEN 'USD' END AS currency
-        FROM agent_run_usage WHERE agent_run_id = $1
+        SELECT model, sum(input_tokens)::bigint AS input_tokens,
+               sum(output_tokens)::bigint AS output_tokens,
+               sum(cached_input_tokens)::bigint AS cached_input_tokens,
+               sum(COALESCE(estimated_cost, reported_cost)) AS cost,
+               min(CASE WHEN estimated_cost IS NOT NULL THEN currency
+                        WHEN reported_cost IS NOT NULL THEN COALESCE(reported_currency, 'USD')
+                   END) AS currency
+        FROM run_usage WHERE run_id = $1
+        GROUP BY model
         ORDER BY model
         "#,
     )
@@ -531,22 +536,24 @@ pub async fn usage_report(
     let days = query.days.unwrap_or(30).clamp(1, MAX_USAGE_DAYS);
     let since = Utc::now().date_naive() - chrono::Duration::days(days - 1);
     let filter = r#"
-        FROM agent_run_usage usage
-        JOIN agent_runs run ON run.id = usage.agent_run_id
-        JOIN projects project ON project.id = usage.project_id
-        LEFT JOIN provider_accounts account ON account.id = usage.provider_account_id
-        WHERE conversation_visible_to(run.conversation_id, $1)
+        FROM run_usage usage
+        JOIN runs run ON run.id = usage.run_id
+        JOIN projects project ON project.id = usage.space_id
+        LEFT JOIN agent_runs builtin ON builtin.id = run.id
+        LEFT JOIN execution_profiles profile ON profile.id = builtin.execution_profile_id
+        LEFT JOIN provider_accounts account ON account.id = profile.provider_account_id
+        WHERE (run.conversation_id IS NULL OR conversation_visible_to(run.conversation_id, $1))
           AND actor_can_access_project($1, NULL, project.id)
           AND usage.usage_date >= $2
-          AND ($3::uuid IS NULL OR usage.organization_id = $3)
-          AND ($4::uuid IS NULL OR usage.project_id = $4)
-          AND NOT (usage.project_id = ANY($5))
+          AND ($3::uuid IS NULL OR usage.workspace_id = $3)
+          AND ($4::uuid IS NULL OR usage.space_id = $4)
+          AND NOT (usage.space_id = ANY($5))
     "#;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let rows = sqlx::query_as::<_, UsageRow>(&format!(
         r#"
         SELECT {key} AS key, COALESCE({label}, 'Unknown') AS label,
-               count(DISTINCT usage.agent_run_id) AS runs,
+               count(DISTINCT usage.run_id) AS runs,
                {TOTALS}
         {filter}
         GROUP BY 1, 2
@@ -574,7 +581,7 @@ pub async fn usage_report(
             usage: UsageTotals,
         }
         let total = sqlx::query_as::<_, Total>(&format!(
-            "SELECT count(DISTINCT usage.agent_run_id) AS runs, {TOTALS} {filter}"
+            "SELECT count(DISTINCT usage.run_id) AS runs, {TOTALS} {filter}"
         ))
         .bind(viewer)
         .bind(since)

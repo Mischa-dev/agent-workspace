@@ -2273,3 +2273,165 @@ async fn only_holders_of_workspace_delete_may_delete_or_keep_it() {
     assert_eq!(body["outcome"], "ok", "the owner keeps it: {status} {body}");
     assert_eq!(lifecycle().await, "active");
 }
+
+/// A2.11: a follow-up is its account's alone, and only about what that
+/// account can see. Another member can't change, cancel or list it, nor set
+/// one about a DM they aren't in.
+#[tokio::test]
+async fn follow_ups_are_their_accounts_own() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("privacy_schedules")
+        .await
+    else {
+        return;
+    };
+    let rook = world.agents["rook"].actor;
+    let schedule = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO agent_schedules (id, workspace_id, account_id, note, next_due_at) \
+         VALUES ($1, $2, $3, 'Rook checks back', now() + interval '1 day')",
+    )
+    .bind(schedule)
+    .bind(world.organization)
+    .bind(rook)
+    .execute(world.pool())
+    .await
+    .expect("rook's follow-up");
+    let (status, dm) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": rook }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{dm}");
+    let dm = dm["conversation"]["id"].as_str().expect("DM").to_owned();
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let lena = &world.people["lena"].browser;
+    for (name, key, body) in [
+        (
+            "schedule_update",
+            "s-1",
+            json!({ "scheduleId": schedule, "cancel": true }),
+        ),
+        (
+            "schedule_create",
+            "s-2",
+            json!({ "inMinutes": 30, "about": dm }),
+        ),
+    ] {
+        let (status, body) =
+            send(&world.app, lena.request("POST", &op(name), Some(key), body)).await;
+        assert_ne!(body["outcome"], "ok", "{name}: {status} {body}");
+    }
+    let (_, listed) = send(
+        &world.app,
+        lena.request("POST", &op("schedule_list"), None, json!({})),
+    )
+    .await;
+    assert!(
+        !listed.to_string().contains(&schedule.to_string()),
+        "{listed}"
+    );
+    let state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_schedules WHERE id = $1")
+        .bind(schedule)
+        .fetch_one(world.pool())
+        .await
+        .expect("state");
+    assert_eq!(state, "active");
+    world.finish().await;
+}
+
+/// A2: an account's delivery connections are its own and its managers'.
+/// Another member can't add one for an agent, change, re-key or remove its
+/// connection, or list them; the owner, who manages every agent, can.
+#[tokio::test]
+async fn only_an_account_and_its_managers_touch_its_connections() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("privacy_connections")
+        .await
+    else {
+        return;
+    };
+    let rook = world.agents["rook"].actor;
+    let connection = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM agent_connections WHERE account_id = $1 AND is_default \
+             AND source_connection_id IS NULL",
+    )
+    .bind(rook)
+    .fetch_one(world.pool())
+    .await
+    .expect("rook's connection");
+    // Its default, and the one for its credential.
+    let untouched = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM agent_connections WHERE account_id = $1",
+    )
+    .bind(rook)
+    .fetch_one(world.pool())
+    .await
+    .expect("count");
+    assert_eq!(untouched, 2);
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let lena = &world.people["lena"].browser;
+    for (name, key, body) in [
+        (
+            "connection_create",
+            "l-1",
+            json!({ "account": rook, "name": "Lena's" }),
+        ),
+        (
+            "connection_update",
+            "l-2",
+            json!({ "connectionId": connection, "name": "Lena's" }),
+        ),
+        (
+            "connection_secret_rotate",
+            "l-3",
+            json!({ "connectionId": connection }),
+        ),
+        (
+            "connection_remove",
+            "l-4",
+            json!({ "connectionId": connection }),
+        ),
+        ("connection_list", "l-5", json!({ "account": rook })),
+    ] {
+        let (status, body) =
+            send(&world.app, lena.request("POST", &op(name), Some(key), body)).await;
+        assert_ne!(body["outcome"], "ok", "{name}: {status} {body}");
+        assert!(
+            !body.to_string().contains(&connection.to_string()),
+            "{name}: {body}"
+        );
+    }
+    let unchanged = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM agent_connections WHERE account_id = $1 AND state = 'active' AND version = 1",
+    )
+    .bind(rook)
+    .fetch_one(world.pool())
+    .await
+    .expect("count");
+    assert_eq!(unchanged, untouched, "rook's connections are as they were");
+    let (status, body) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &op("connection_list"),
+            Some("o-1"),
+            json!({ "account": rook }),
+        ),
+    )
+    .await;
+    assert_eq!(body["outcome"], "ok", "{status} {body}");
+    assert!(body.to_string().contains(&connection.to_string()), "{body}");
+    world.finish().await;
+}

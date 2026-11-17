@@ -198,6 +198,9 @@ async fn an_agent_asks_a_person_and_hears_their_answer() {
 
     // The answer goes back to Scout: an event naming the request, and the
     // request itself.
+    agent_workspace_server::events::catch_up(&setup.pool)
+        .await
+        .expect("sequence events");
     let events = scout_call(
         "external_event_poll",
         json!({"limit": 50, "waitSeconds": 0}),

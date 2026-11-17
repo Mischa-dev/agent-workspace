@@ -5,13 +5,12 @@ use agent_workspace_server::{
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
     domain::RunState,
-    external_events::enqueue_external_event,
     hosts::builtin::transition as transition_run,
     mcp::MCP_PATH,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    retention, router,
+    router,
     seed::dev_seed,
 };
 use axum::{
@@ -342,6 +341,9 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .await
         .expect("human mention response");
     assert_eq!(human_mention.status(), StatusCode::CREATED);
+    agent_workspace_server::events::catch_up(&pool)
+        .await
+        .expect("sequence events");
     let first_poll = call_mcp_tool(
         &application,
         &first_token,
@@ -350,14 +352,17 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         json!({"limit":10,"waitSeconds":0}),
     )
     .await;
-    assert_eq!(first_poll["outcome"], "events");
-    assert_eq!(first_poll["events"][0]["kind"], "connection.created");
+    assert_eq!(first_poll["outcome"], "events", "{first_poll}");
     assert_eq!(
-        first_poll["events"][0]["resourceId"],
-        connection_id.to_string()
+        first_poll["events"][0]["kind"], "message.mentioned",
+        "{first_poll}"
     );
-    assert_eq!(first_poll["events"][1]["kind"], "message.mentioned");
-    assert!(first_poll["events"][1].get("body").is_none());
+    assert_eq!(first_poll["events"][0]["resourceKind"], "message");
+    assert!(first_poll["events"][0].get("body").is_none());
+    assert!(
+        !first_poll.to_string().contains("Please inspect"),
+        "ids only: {first_poll}"
+    );
     let first_cursor = first_poll["nextCursor"]
         .as_str()
         .expect("external event cursor")
@@ -537,22 +542,24 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .await
         .expect("browser Work Item comment response");
     assert_eq!(browser_comment.status(), StatusCode::CREATED);
-    let browser_event_kinds = sqlx::query_scalar::<_, String>(
+    // The assignee is told the task is theirs, on its own; the update and
+    // the comment reach it as the task's own events (it follows the task).
+    agent_workspace_server::events::catch_up(&pool)
+        .await
+        .expect("sequence events");
+    let addressed = sqlx::query_scalar::<_, String>(
         r#"
-        SELECT string_agg(kind, ',' ORDER BY sequence)
-        FROM external_agent_events
-        WHERE connection_id = $1 AND resource_id = $2
+        SELECT string_agg(type, ',' ORDER BY position)
+        FROM events
+        WHERE audience_account_id = $1 AND thing_id = $2
         "#,
     )
-    .bind(connection_id)
+    .bind(actor_id)
     .bind(browser_work_item_id)
     .fetch_one(&pool)
     .await
-    .expect("browser Work Item external events");
-    assert_eq!(
-        browser_event_kinds,
-        "work_item.assigned,work_item.changed,work_item.changed"
-    );
+    .expect("addressed task events");
+    assert_eq!(addressed, "task.assigned");
 
     let second_created = application
         .clone()
@@ -586,6 +593,14 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     // A run asks a question. Any member who may answer requests answers it,
     // another agent included, and the waiting run goes on.
     let question_run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        question_run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "blocked",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -783,11 +798,23 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         )
         .await
         .expect("finish sponsored run");
+        // As the driver does after each move.
+        agent_workspace_server::outbox::enqueue_agent_run_updated(
+            &mut terminal_transaction,
+            seed.project_id,
+            seed.thread_id,
+            sponsored_run_id,
+        )
+        .await
+        .expect("announce the run's end");
     }
     terminal_transaction
         .commit()
         .await
         .expect("commit terminal run transition");
+    agent_workspace_server::events::catch_up(&pool)
+        .await
+        .expect("sequence events");
     let sponsored_events = call_mcp_tool(
         &application,
         &first_token,
@@ -796,13 +823,6 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         json!({"afterCursor":first_cursor,"limit":100,"waitSeconds":0}),
     )
     .await;
-    assert!(
-        sponsored_events["events"]
-            .as_array()
-            .expect("sponsored events")
-            .iter()
-            .any(|event| event["kind"] == "external_execution.approved")
-    );
     let event_kinds = sponsored_events["events"]
         .as_array()
         .expect("M9 event list")
@@ -815,7 +835,10 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         "request.answered",
         "agent_run.terminal",
     ] {
-        assert!(event_kinds.contains(&expected), "missing event {expected}");
+        assert!(
+            event_kinds.contains(&expected),
+            "missing event {expected}: {event_kinds:?}"
+        );
     }
     terminate_mcp(&application, &first_token, &session_id).await;
     terminate_mcp(&application, &second_token, &second_session_id).await;
@@ -862,7 +885,12 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         json!({"afterCursor":first_poll["nextCursor"],"limit":10,"waitSeconds":0}),
     )
     .await;
-    assert_eq!(old_cursor_after_rotation["outcome"], "invalid_request");
+    // The cursor is the connection's, not the credential's: a rotated
+    // credential reads on from where the old one stopped.
+    assert_eq!(
+        old_cursor_after_rotation["outcome"], "events",
+        "{old_cursor_after_rotation}"
+    );
     terminate_mcp(&application, &second_token, &second_session).await;
 
     let disabled = application
@@ -921,56 +949,6 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     assert_eq!(removed["connection"]["version"], 5);
     assert_mcp_auth(&application, &third_token, StatusCode::UNAUTHORIZED).await;
 
-    let expired_resource_id = Uuid::now_v7();
-    let retained_resource_id = Uuid::now_v7();
-    let mut event_transaction = pool.begin().await.expect("begin retention fixture");
-    for resource_id in [expired_resource_id, retained_resource_id] {
-        enqueue_external_event(
-            &mut event_transaction,
-            connection_id,
-            seed.project_id,
-            "connection.test",
-            "Connector retention fixture changed",
-            "external_agent_connection",
-            resource_id,
-            &format!("/projects/{}/settings", seed.project_id),
-        )
-        .await
-        .expect("enqueue retention fixture");
-    }
-    event_transaction
-        .commit()
-        .await
-        .expect("commit retention fixture");
-    sqlx::query(
-        "UPDATE external_agent_events SET created_at=now()-interval '40 days', expires_at=now()-interval '10 days' WHERE resource_id=$1",
-    )
-    .bind(expired_resource_id)
-    .execute(&pool)
-    .await
-    .expect("expire retention fixture");
-    let dry_run = retention::clean_external_events(&pool, false)
-        .await
-        .expect("dry-run external event retention");
-    assert_eq!(dry_run.mode, "dry_run");
-    assert_eq!(dry_run.expired_candidates, 1);
-    assert_eq!(dry_run.removed_events, 0);
-    let applied = retention::clean_external_events(&pool, true)
-        .await
-        .expect("apply external event retention");
-    assert_eq!(applied.mode, "apply");
-    assert_eq!(applied.removed_events, 1);
-    assert_eq!(applied.remaining_expired_events, 0);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM external_agent_events WHERE resource_id=$1",
-        )
-        .bind(retained_resource_id)
-        .fetch_one(&pool)
-        .await
-        .expect("retained external event count"),
-        1
-    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM external_agent_connections WHERE id=$1",
@@ -1138,6 +1116,14 @@ async fn sponsored_run_cancelled_when_a_party_loses_start_runs(party: SponsoredP
     .await
     .expect("insert the busy Thread");
     let busy_run_id = Uuid::now_v7();
+    crate::support::builtin_run_record(
+        &pool,
+        busy_run_id,
+        busy_thread_id,
+        seed.execution_worker_id,
+        "blocked",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -1181,6 +1167,45 @@ async fn sponsored_run_cancelled_when_a_party_loses_start_runs(party: SponsoredP
         .expect("approval id")
         .parse::<Uuid>()
         .expect("approval UUID");
+    // A sponsor who no longer holds `runs.approve` can't approve it, though
+    // the request is addressed to them by name.
+    let role = |role: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE project_memberships SET role = $3 WHERE project_id = $1 AND actor_id = $2",
+            )
+            .bind(seed.project_id)
+            .bind(seed.human_actor_id)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .expect("change the sponsor's role");
+        }
+    };
+    let held_role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(seed.human_actor_id)
+    .fetch_one(&pool)
+    .await
+    .expect("sponsor's role");
+    role("viewer".to_owned()).await;
+    let refused = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            "/api/v2/ops/request_respond",
+            &cookie,
+            &csrf,
+            "admission-sponsored-approval-as-viewer",
+            json!({"requestId":approval_id.to_string(),"optionId":"approve"}),
+        ))
+        .await
+        .expect("approval response");
+    assert_ne!(refused.status(), StatusCode::OK, "a viewer approved a run");
+    role(held_role).await;
     let run_id = approve_sponsorship(
         &application,
         &pool,
@@ -2013,6 +2038,14 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     .execute(&mut *fixture)
     .await
     .expect("prepare repository");
+    crate::support::builtin_run_record(
+        &mut *fixture,
+        run_id,
+        seed.thread_id,
+        seed.execution_worker_id,
+        "blocked",
+    )
+    .await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (

@@ -155,10 +155,6 @@ export function ApprovalCard({
   const [answer, setAnswer] = useState('')
   const question = approval.kind !== 'approval'
   const agent = runAgent(run)
-  const styled = (style: string) =>
-    approval.options.find((option) => (option.style ?? option.id) === style)
-  const allow = styled('approve')
-  const deny = styled('deny')
   const send = (reply: RequestAnswer) => onRespond(approval.id, reply)
   return (
     <section aria-labelledby={`approval-${approval.id}`} className="aw-card aw-approval is-open">
@@ -174,7 +170,7 @@ export function ApprovalCard({
         </StatusChip>
       </header>
       <p className="aw-approval__summary">{approval.title}</p>
-      {canRespond && question ? (
+      {canRespond ? (
         <form
           className="aw-approval__answer-form"
           onSubmit={(event) => {
@@ -184,15 +180,21 @@ export function ApprovalCard({
           }}
         >
           {approval.options.length > 0 ? (
-            <div aria-label="Suggested answers" className="aw-card__actions" role="group">
-              {/* A suggested answer is an answer: it sends straight away. */}
+            <div
+              aria-label={question ? 'Suggested answers' : 'Answers'}
+              className="aw-card__actions"
+              role="group"
+            >
+              {/* An offered answer is an answer: it sends straight away. */}
               {approval.options.map((option) => (
                 <Button
                   busy={busyAction === answerKey(approval.id, { optionId: option.id })}
                   disabled={Boolean(busyAction)}
                   key={option.id}
                   onClick={() => send({ optionId: option.id })}
-                  size="sm"
+                  size={question ? 'sm' : undefined}
+                  type="button"
+                  variant={(option.style ?? option.id) === 'approve' ? 'primary' : undefined}
                 >
                   {option.label}
                 </Button>
@@ -224,29 +226,6 @@ export function ApprovalCard({
             </>
           ) : null}
         </form>
-      ) : null}
-      {canRespond && !question ? (
-        <footer className="aw-card__actions">
-          {allow ? (
-            <Button
-              busy={busyAction === answerKey(approval.id, { optionId: allow.id })}
-              disabled={Boolean(busyAction)}
-              onClick={() => send({ optionId: allow.id })}
-              variant="primary"
-            >
-              {allow.label}
-            </Button>
-          ) : null}
-          {deny ? (
-            <Button
-              busy={busyAction === answerKey(approval.id, { optionId: deny.id })}
-              disabled={Boolean(busyAction)}
-              onClick={() => send({ optionId: deny.id })}
-            >
-              {deny.label}
-            </Button>
-          ) : null}
-        </footer>
       ) : null}
       {!canRespond ? <p className="aw-approval__note">This waits on whoever it asks; they answer it here or from their inbox.</p> : null}
     </section>

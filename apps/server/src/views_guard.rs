@@ -35,7 +35,6 @@ const ENGINE: &[&str] = &["src/views/", "src/fields/", "src/fields.rs"];
 /// definition goes; never raise one or add a file.
 const ALLOWED: &[(&str, usize)] = &[
     // Cursors over other lists (runs, external events), not views.
-    ("src/external_events.rs", 1),
     ("src/runs/pages.rs", 1),
     // The old task list engine's saved views, until T1.39.
     ("src/work_items/views.rs", 1),

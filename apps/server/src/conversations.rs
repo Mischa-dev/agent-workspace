@@ -24,7 +24,6 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     domain::allocate_conversation_sequence,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
-    external_events::enqueue_external_event,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, IdempotencyReservation, RequestHash},
     message_content::{MessageContent, MessageContentError},
     outbox::{
@@ -2057,7 +2056,6 @@ pub(crate) async fn append_message_command_with(
             conversation_kind: conversation.effective_kind(),
             message_id,
             author_actor_id: actor.actor_id,
-            author_kind: &actor.actor_kind,
             mentioned_actor_ids: &mentioned_actor_ids,
         },
     )
@@ -2383,8 +2381,9 @@ pub(crate) async fn lock_message_conversation(
     Ok(row)
 }
 
-/// Tell mentioned agents' connections they were mentioned. Only agents who
-/// can see the conversation are told.
+/// Tells each mentioned account it was mentioned (`message.mentioned`, heard
+/// by that account alone). Only accounts that can see the conversation now
+/// are told, and delivery checks again when it reads the event.
 pub(crate) async fn enqueue_external_message_events(
     transaction: &mut Transaction<'_, Postgres>,
     conversation: &ConversationAccessRow,
@@ -2395,72 +2394,38 @@ pub(crate) async fn enqueue_external_message_events(
     if mentioned_actor_ids.is_empty() {
         return Ok(());
     }
-    // Historical migration tests intentionally exercise this command path on
-    // pre-M9 schemas. The durable Message is still valid there; external-agent
-    // delivery begins only once the M9 connection table has been installed.
-    let external_connections_available = sqlx::query_scalar::<_, bool>(
-        "SELECT to_regclass('external_agent_connections') IS NOT NULL",
-    )
-    .fetch_one(&mut **transaction)
-    .await?;
-    if !external_connections_available {
-        return Ok(());
-    }
-    let connections = sqlx::query_as::<_, (Uuid, Uuid)>(
+    let mentioned = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT connection.id, connection.actor_id
-        FROM external_agent_connections connection
-        JOIN actors actor ON actor.id = connection.actor_id
-        JOIN project_memberships membership
-          ON membership.project_id = $1
-         AND membership.actor_id = connection.actor_id
-        WHERE agent_connection_can_access(connection.id, $1)
-          AND connection.actor_id = ANY($2)
-          AND connection.actor_id <> $3
-          AND connection.status = 'active'
+        SELECT actor.id
+        FROM actors actor
+        WHERE actor.id = ANY($1)
+          AND actor.id <> $2
           AND actor.status = 'active'
-          AND membership.enabled
-          AND conversation_visible_to($4, connection.actor_id)
-        ORDER BY connection.id
-        FOR SHARE OF connection, actor, membership
+          AND conversation_visible_to($3, actor.id)
+        ORDER BY actor.id
         "#,
     )
-    .bind(conversation.project_id)
     .bind(mentioned_actor_ids)
     .bind(author_actor_id)
     .bind(conversation.id)
     .fetch_all(&mut **transaction)
     .await?;
-    // A comment opens on its thing (C1.3); anything else at its address,
-    // stored with the event in today's shape, which the web and resolve read.
-    let subject_href = if conversation.kind == "comments"
-        || conversation.parent_kind.as_deref() == Some("comments")
-    {
-        crate::discussion::href_of_conversation(transaction, conversation.id).await?
-    } else {
-        None
-    };
-    let path = subject_href.unwrap_or_else(|| {
-        Target::conversation(
-            conversation.project_id,
-            &conversation.kind,
-            conversation.id,
-            None,
-            !matches!(conversation.kind.as_str(), "thread" | "channel"),
-            true,
-        )
-        .legacy_path()
-    });
-    for (connection_id, _) in connections {
-        enqueue_external_event(
+    for account in mentioned {
+        crate::events::emit(
             transaction,
-            connection_id,
-            conversation.project_id,
-            "message.mentioned",
-            "You were mentioned in a Message",
-            "message",
-            message_id,
-            &path,
+            crate::events::NewEvent::thing(
+                &crate::events::catalog::MESSAGE_MENTIONED,
+                conversation.project_id,
+                "message",
+                message_id,
+            )
+            .access_thing(conversation.id)
+            .audience(crate::events::Audience::Account(account))
+            .actor(author_actor_id)
+            .payload(serde_json::json!({
+                "conversationId": conversation.id,
+                "messageId": message_id,
+            })),
         )
         .await?;
     }

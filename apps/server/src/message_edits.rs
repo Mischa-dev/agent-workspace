@@ -632,7 +632,6 @@ pub(crate) async fn apply_edit(
             conversation_kind: locked.conversation.effective_kind(),
             message_id: locked.id,
             author_actor_id: actor.actor_id,
-            author_kind: &actor.actor_kind,
             mentioned_actor_ids: &newly_mentioned,
         },
     )

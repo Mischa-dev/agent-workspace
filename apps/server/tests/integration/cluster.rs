@@ -500,8 +500,8 @@ async fn events_arrive_with_listen_off() {
 /// A run's state and how many times it was recovered.
 async fn recovered(pool: &sqlx::PgPool, run: Uuid) -> (String, i64) {
     sqlx::query_as::<_, (String, i64)>(
-        "SELECT state, (SELECT count(*) FROM agent_run_events \
-                        WHERE agent_run_id = run.id AND kind = 'recovery') \
+        "SELECT state, (SELECT count(*) FROM run_activities \
+                        WHERE run_id = run.id AND payload->>'step' = 'recovery') \
          FROM agent_runs run WHERE id = $1",
     )
     .bind(run)

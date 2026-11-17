@@ -18,8 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     error::AppError,
-    external_events::enqueue_external_work_item_event,
-    work_item_commands::{CommandActor, enqueue_update, notify_watching_agents, record_audit_for},
+    work_item_commands::{CommandActor, enqueue_update, record_audit_for},
 };
 
 pub const MAX_STATUSES: usize = 30;
@@ -827,16 +826,6 @@ async fn move_tasks(
     .await?;
     for (work_item_id, version) in &moved {
         enqueue_update(transaction, actor.project_id, *work_item_id, *version).await?;
-        enqueue_external_work_item_event(
-            transaction,
-            actor.project_id,
-            *work_item_id,
-            None,
-            "work_item.changed",
-            "An assigned Work Item changed",
-        )
-        .await?;
-        notify_watching_agents(transaction, actor, *work_item_id).await?;
     }
     Ok(moved.len())
 }

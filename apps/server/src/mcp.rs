@@ -918,7 +918,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "People only. When the agents in a group (or a thread in one) have used their turns, let them take more, like the web app's Continue button: they get 6 more messages, and the other agents are asked to answer the latest agent message. Pass a clientRequestId so a retry doesn't grant another round.",
+        description = "When the replies in a conversation have used their turns or gone as deep as the space allows, let them take another round, like the web app's Continue button: the turns come back and, in a DM or group, the other members who take reply requests are asked to answer the latest message by one. Needs the replies.steer permission there. Pass a clientRequestId so a retry doesn't grant another round.",
         annotations(
             title = "Let agents continue",
             read_only_hint = false,
@@ -1300,7 +1300,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "People: ask an agent again about a reply request that expired, was released or was stopped, as the Retry button on its status line does. It goes back in the agent's inbox and the agent is woken. The agent must still be able to answer there.",
+        description = "Ask an account again about a reply request that expired, was released or was stopped, as the Retry button on its status line does. It goes back in the agent's inbox and the agent is woken. The agent must still be able to answer there.",
         annotations(
             title = "Retry agent",
             read_only_hint = false,
@@ -1319,7 +1319,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "People: stop an agent's work on a reply request, as the Stop button on its status line does. Its follow-ups queued behind it stop too. The agent hears at once, and its next call on the request is refused.",
+        description = "Stop an account's work on a reply request, as the Stop button on its status line does. Its follow-ups queued behind it stop too. The agent hears at once, and its next call on the request is refused.",
         annotations(
             title = "Stop agent",
             read_only_hint = false,
@@ -5477,10 +5477,7 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
     // afterTaskId) are left out on purpose: an anchor must never pick the
     // project a task is created in.
     ("taskId", "SELECT project_id FROM work_items WHERE id = $1"),
-    (
-        "runId",
-        "SELECT run.space_id FROM runs run WHERE run.id = $1 AND run_visible_to(run.id, $2)",
-    ),
+    ("runId", crate::runs::store::SPACE_OF_VISIBLE_RUN),
     (
         "threadId",
         "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",

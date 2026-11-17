@@ -14,8 +14,8 @@ use super::{
 };
 use crate::{
     AppState,
-    api::{StartRunRequest, interrupt_run_in, retry_run_in, start_run_in},
     error::AppError,
+    hosts::builtin::http::{StartRunRequest, interrupt_run_in, retry_run_in, start_run_in},
     idempotency::IdempotencyKey,
     policy::ActorKind,
     runs::{RunCaller, brief},

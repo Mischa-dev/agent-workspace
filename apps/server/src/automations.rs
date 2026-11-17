@@ -2900,12 +2900,12 @@ async fn run_action(
                             .await
                             .map_err(database)?
                             .ok_or_else(|| database(AppError::NotFound("agent_run")))?;
-                    let (_, started) = crate::api::start_run_in(
+                    let (_, started) = crate::hosts::builtin::http::start_run_in(
                         state,
                         &caller,
                         acting.via_grant_id,
                         conversation_id,
-                        crate::api::StartRunRequest {
+                        crate::hosts::builtin::http::StartRunRequest {
                             prompt,
                             repository_id: Some(repository_id),
                             config: None,

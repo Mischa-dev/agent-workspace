@@ -1030,6 +1030,7 @@ async fn build_workspace(
     .await
     .expect("run thread");
     let run = Uuid::now_v7();
+    crate::support::builtin_run_record(pool, run, run_thread, worker, "failed").await;
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
@@ -1067,35 +1068,33 @@ async fn build_workspace(
 
     // W12: what the run did and cost, an agent profile made from a
     // template, and a harness the workspace registered (a connected runner).
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_events (id, agent_run_id, event_key, kind, summary, payload)
-        VALUES ($1, $2, 'note:isolation', 'agent_note', $3, $4)
-        "#,
+    let mut transaction = pool.begin().await.expect("run step transaction");
+    agent_workspace_server::runs::steps::record(
+        &mut transaction,
+        run,
+        "note:isolation",
+        "agent_note",
+        &format!("Looking around{m}"),
+        json!({ "text": format!("Looking around{m}") }),
     )
-    .bind(Uuid::now_v7())
-    .bind(run)
-    .bind(format!("Looking around{m}"))
-    .bind(json!({ "text": format!("Looking around{m}") }))
-    .execute(pool)
     .await
     .expect("run step");
-    sqlx::query(
-        r#"
-        INSERT INTO agent_run_usage (
-            agent_run_id, model, organization_id, project_id, provider_account_id,
-            adapter_kind, usage_date, input_tokens, output_tokens, cached_input_tokens,
-            estimated_cost, currency
-        )
-        VALUES ($1, $2, $3, $4::uuid, $5, 'codex', current_date, 100, 50, 10, 0.25, 'USD')
-        "#,
+    transaction.commit().await.expect("commit run step");
+    agent_workspace_server::runs::usage::add_builtin(
+        pool,
+        run,
+        &agent_workspace_server::runs::usage::BuiltinTokens {
+            model: format!("model{m}"),
+            backend: "codex".to_owned(),
+            date: chrono::Utc::now().date_naive(),
+            input_tokens: 100,
+            output_tokens: 50,
+            cached_input_tokens: 10,
+            estimated_cost: Some(0.25),
+            currency: Some("USD".to_owned()),
+            reported_cost_usd: None,
+        },
     )
-    .bind(run)
-    .bind(format!("model{m}"))
-    .bind(organization)
-    .bind(&project)
-    .bind(provider_account)
-    .execute(pool)
     .await
     .expect("run usage");
     let uri = format!("/api/v1/projects/{project}/agent-profiles");

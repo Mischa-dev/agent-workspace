@@ -494,7 +494,20 @@ async fn pipeline<O: Operation>(
             audit_row(tx, &ctx, kind, id, metadata).await?;
         }
         if let Some(reservation) = reservation.as_ref() {
-            idempotency::complete(tx, reservation, answer.status, &answer.body).await?;
+            // A secret shown once is never kept for a replay (it would sit
+            // in plain text beside the request id).
+            let mut stored = answer.body.clone();
+            if let Some(value) = stored
+                .get_mut("value")
+                .and_then(|value| value.as_object_mut())
+            {
+                for field in O::SHOWN_ONCE {
+                    if value.contains_key(*field) {
+                        value.insert((*field).to_owned(), serde_json::Value::Null);
+                    }
+                }
+            }
+            idempotency::complete(tx, reservation, answer.status, &stored).await?;
         }
     }
     if let Some(tx) = call.tx.take() {

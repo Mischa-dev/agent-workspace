@@ -3,10 +3,6 @@
 # The list only shrinks. Format: file::function | reason
 ai/summaries.rs::thread | summarises one thread the caller opened after a conversation_readable_by check
 api.rs::development_bootstrap | development-only seeding, not reachable in production
-api.rs::fetch_run | reads a run by id after the run access check; joins the thread for its project
-api.rs::guard_conversation_mutation | locks a parent channel by id inside a write the caller is already authorised for
-api.rs::retry_run_in | reads whether a run's prompt message was removed, by id, after the run access check
-api.rs::select_run_setup_for | locks the thread a run starts in, by id, after the run access check
 automations.rs::message_contains | a rule's trigger test on one message by id, run as the rule's maker, who was checked when the event fired
 conversations.rs::append_message_command_with | the send pipeline: reads back the message it just wrote
 conversations.rs::enqueue_external_message_events | builds events for one written message; each recipient is checked when it reads
@@ -16,7 +12,10 @@ conversations.rs::set_conversation_archived | locks a conversation and its threa
 direct.rs::conversation_response | answers about the DM or group the caller just opened or joined (members only)
 direct.rs::direct_overview | the caller's own DM list, joined through their conversation_members rows; K4.4 moves it onto the rule
 direct.rs::open_dm_in | finds the DM for a pair key the caller is one half of
-hosts/builtin/mod.rs::notify_sponsoring_agents | a worker telling a run's requesting agent its run finished; no text
+hosts/builtin/http.rs::fetch_run | reads a run by id after the run access check; joins the thread for its project
+hosts/builtin/http.rs::guard_conversation_mutation | locks a parent channel by id inside a write the caller is already authorised for
+hosts/builtin/http.rs::retry_run_in | reads whether a run's prompt message was removed, by id, after the run access check
+hosts/builtin/http.rs::select_run_setup_for | locks the thread a run starts in, by id, after the run access check
 launch.rs::launch_from_tag | reads the message that tagged an agent, by id, inside the send pipeline
 launch.rs::queue_tag_launches | reads a just-written message's author by id, inside the send pipeline
 link_previews.rs::refresh_messages | a worker refreshing previews on messages by id; no text leaves it

@@ -893,7 +893,7 @@ struct WorkWithWorkerRequest {
 #[serde(rename_all = "camelCase")]
 struct WorkWithWorkerResponse {
     thread_id: Uuid,
-    run: crate::api::StartRunResponse,
+    run: crate::hosts::builtin::http::StartRunResponse,
 }
 
 #[derive(Debug, FromRow)]
@@ -1579,7 +1579,7 @@ async fn work_with_worker(
         };
         let thread_id = thread.id;
 
-        let setup = crate::api::select_run_setup(
+        let setup = crate::hosts::builtin::http::select_run_setup(
             &mut transaction,
             project_id,
             thread_id,
@@ -1634,12 +1634,12 @@ async fn work_with_worker(
     );
     // The same creation path as every other start (A1.10), not the HTTP
     // handler: the run is admitted, capped and given defaults by one rule.
-    let (_, run) = crate::api::start_run_in(
+    let (_, run) = crate::hosts::builtin::http::start_run_in(
         &state,
         &principal,
         None,
         thread_id,
-        crate::api::StartRunRequest {
+        crate::hosts::builtin::http::StartRunRequest {
             prompt: provider_prompt,
             repository_id: Some(repository_id),
             config: None,

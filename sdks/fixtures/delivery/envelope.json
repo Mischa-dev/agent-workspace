@@ -1,0 +1,28 @@
+{
+  "type": "message.mentioned",
+  "timestamp": "2026-11-17T10:00:00.000Z",
+  "id": "evt_01a2b3c4-0000-7000-8000-0000000000e1",
+  "cursor": "c1.AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAq.example",
+  "workspace": {
+    "id": "01a2b3c4-0000-7000-8000-0000000000d1",
+    "slug": "example"
+  },
+  "recipient": {
+    "accountId": "01a2b3c4-0000-7000-8000-0000000000a1"
+  },
+  "reason": "mentioned",
+  "actor": {
+    "accountId": "01a2b3c4-0000-7000-8000-0000000000b1",
+    "kind": "person"
+  },
+  "requestedBy": null,
+  "data": {
+    "conversationId": "01a2b3c4-0000-7000-8000-000000000002",
+    "messageId": "01a2b3c4-0000-7000-8000-000000000003",
+    "thing": {
+      "kind": "message",
+      "id": "01a2b3c4-0000-7000-8000-000000000003"
+    },
+    "spaceId": "01a2b3c4-0000-7000-8000-000000000001"
+  }
+}
