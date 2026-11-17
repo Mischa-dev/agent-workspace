@@ -332,7 +332,13 @@ async fn pipeline<O: Operation>(
         serde_json::from_value::<O::Input>(input).map_err(|error| decode_error(&error))?;
     // The input as the operation reads it: what the request id is held to.
     let canonical = serde_json::to_value(&decoded).map_err(|_| OpError::Unavailable)?;
-    let target = decoded.target();
+    let target = match decoded.target() {
+        Target::Workspace(None) if O::HELD_SPACE_BY_DEFAULT => request
+            .caller
+            .confined_space
+            .map_or(Target::Workspace(None), Target::Space),
+        target => target,
+    };
     let writes = O::KIND.writes();
 
     let mut connection = state

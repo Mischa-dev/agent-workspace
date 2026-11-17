@@ -125,6 +125,10 @@ pub trait Operation: Send + Sync + 'static {
     const LONG: bool = false;
     /// Accepts `preview: true`: runs and rolls back.
     const PREVIEW: bool = false;
+    /// A call that names no space acts in the space a space-held
+    /// credential is held to, and is authorized there (not against the
+    /// workspace).
+    const HELD_SPACE_BY_DEFAULT: bool = false;
     /// Removes or overwrites something a person would miss.
     const DESTRUCTIVE: bool = false;
     /// Offered as an automation action. Writes are by default.

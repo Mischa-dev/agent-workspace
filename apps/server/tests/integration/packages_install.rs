@@ -352,6 +352,63 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
             .expect("collections");
     assert_eq!(collections, 1);
 
+    // A package whose module holds the collection it reused: removing it
+    // archives the module, and the collection stays as it was, in sight.
+    let tracker = json!({
+        "format": "agent-workspace-package/1",
+        "id": "tracker",
+        "version": "1.0.0",
+        "name": "Tracker",
+        "target": "space",
+        "contents": [
+            {"kind": "collection", "key": "bugs", "body": {
+                "name": "Bugs", "titleName": "Name", "fields": [], "views": []}},
+            {"kind": "module", "key": "tracker", "body": {
+                "name": "Tracker", "parts": [{"kind": "collection", "key": "bugs"}]}}
+        ],
+    });
+    let preview = tool(
+        &world,
+        "rook",
+        "package_preview",
+        json!({"package": tracker, "target": target}),
+    )
+    .await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
+    let installed = tool(
+        &world,
+        "rook",
+        "package_install",
+        json!({"package": tracker, "target": target,
+               "planHash": preview["value"]["planHash"], "clientRequestId": "tracker"}),
+    )
+    .await;
+    assert_eq!(installed["outcome"], "ok", "{installed}");
+    let removed = tool(
+        &world,
+        "rook",
+        "package_remove",
+        json!({"installId": installed["value"]["installId"], "parts": "archive",
+               "clientRequestId": "tracker-remove"}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    let (archived, shown) = sqlx::query_as::<_, (bool, bool)>(
+        "SELECT archived_at IS NOT NULL, module_part_on('collection', id) \
+         FROM collections WHERE name = 'Bugs'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("bugs");
+    assert!(!archived && shown, "the reused collection stays in sight");
+    let module_archived = sqlx::query_scalar::<_, bool>(
+        "SELECT archived_at IS NOT NULL FROM modules WHERE name = 'Tracker'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("module");
+    assert!(module_archived);
+
     // Holding roles.manage in the space isn't holding it in the workspace,
     // whose roles a package changes.
     let steward = Uuid::parse_str(&world.roles["Steward"]).expect("role");
@@ -533,5 +590,89 @@ async fn a_space_install_and_template_show_only_to_its_members() {
         shown["value"]["templates"][0]["key"], "closed_helper",
         "{shown}"
     );
+    world.finish().await;
+}
+
+/// A package that makes its own space plans against the space the install
+/// will really use: one the installer made before, never another person's
+/// space that happens to have the same key and name.
+#[tokio::test]
+async fn a_new_space_is_planned_as_the_install_makes_it() {
+    let Some(world) = WorldBuilder::default()
+        .project("STU")
+        .connected_app("desk")
+        .build("m19_new_space_landing")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool().clone();
+    let theirs = world.project("STU").to_owned();
+    // STU (name STU) is a space the installer is in but doesn't own.
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'member' \
+         WHERE project_id = $1::uuid AND actor_id = $2",
+    )
+    .bind(&theirs)
+    .bind(world.owner.actor)
+    .execute(&pool)
+    .await
+    .expect("someone else's space");
+    // It already has a Feedback collection.
+    let made = tool(
+        &world,
+        "desk",
+        "collection_write",
+        json!({"projectId": theirs, "name": "Feedback"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let package = json!({
+        "format": "agent-workspace-package/1",
+        "id": "studio",
+        "version": "1.0.0",
+        "name": "Studio",
+        "target": "space",
+        "contents": [
+            {"kind": "space", "key": "studio", "body": {"name": "STU", "key": "STU"}},
+            {"kind": "collection", "key": "feedback", "body": {
+                "name": "Feedback", "titleName": "Name", "fields": [], "views": []}}
+        ],
+    });
+    let preview = tool(
+        &world,
+        "desk",
+        "package_preview",
+        json!({"package": package}),
+    )
+    .await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
+    assert!(
+        preview["value"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|line| line["action"] == "create"),
+        "another person's space is never planned against: {preview}"
+    );
+    let installed = tool(
+        &world,
+        "desk",
+        "package_install",
+        json!({"package": package, "planHash": preview["value"]["planHash"],
+               "clientRequestId": "studio-new"}),
+    )
+    .await;
+    assert_eq!(installed["outcome"], "ok", "{installed}");
+    let landed = installed["value"]["spaceId"].as_str().expect("space");
+    assert_ne!(landed, theirs);
+    let feedback = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM collections WHERE name = 'Feedback' AND project_id = $1::uuid",
+    )
+    .bind(landed)
+    .fetch_one(&pool)
+    .await
+    .expect("feedback");
+    assert_eq!(feedback, 1);
     world.finish().await;
 }

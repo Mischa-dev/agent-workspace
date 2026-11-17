@@ -621,6 +621,25 @@ pub async fn collection_parts(
     .await?)
 }
 
+/// Detaches every part but `kept` (and its nav entries): those objects
+/// live on as plain ones. A package's removal keeps only what its install
+/// made in the module it archives, so nothing it reused is hidden with it.
+pub async fn detach_all_but(
+    connection: &mut PgConnection,
+    module: &ModuleRow,
+    kept: &[Uuid],
+) -> Result<u64, AppError> {
+    Ok(sqlx::query(
+        "DELETE FROM module_parts WHERE module_id = $1 AND part_kind <> 'nav' \
+         AND NOT (object_id = ANY($2))",
+    )
+    .bind(module.id)
+    .bind(kept)
+    .execute(&mut *connection)
+    .await?
+    .rows_affected())
+}
+
 /// Archives a module. With `keep`, its parts are detached and live on as
 /// plain objects; with `archive`, they stay its parts and are hidden with
 /// it until `restore`.

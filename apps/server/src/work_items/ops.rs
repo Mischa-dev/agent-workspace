@@ -150,8 +150,9 @@ impl Targeted for TaskCreateInput {
         match (self.parent_id, self.project_id) {
             (Some(parent), _) => Target::thing("task", parent.id()),
             (None, Some(space)) => Target::Space(space.id()),
-            // A connection held to one space makes it there; anyone else
-            // is asked which space.
+            // A connection held to one space makes it there (the
+            // dispatcher locates it in that space); anyone else is asked
+            // which space.
             (None, None) => Target::Workspace(None),
         }
     }
@@ -163,6 +164,7 @@ impl Operation for TaskCreate {
     const MODULE: &'static str = "tasks";
     const PERMISSION: Option<Perm> = Some(Perm::TasksCreate);
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    const HELD_SPACE_BY_DEFAULT: bool = true;
     const TITLE: &'static str = "Create task";
     const DESCRIPTION: &'static str = "Create a task in a space, or a subtask (parentId). \
         Optional: status and type by name, labels, acceptanceCriteria (a list), assignee (me or \

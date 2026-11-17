@@ -670,10 +670,15 @@ impl Operation for PackageRemove {
                     }
                 }
             }
+            // What the install made, of any kind: only those stay in the
+            // modules it archives; anything it reused is detached first, so
+            // it stays as it was.
+            let made_ids = made.values().flatten().copied().collect::<Vec<Uuid>>();
             for id in made.get("module").cloned().unwrap_or_default() {
                 if let Some(module) = crate::modules::built::get(tx, workspace, id).await?
                     && module.archived_at.is_none()
                 {
+                    crate::modules::built::detach_all_but(tx, &module, &made_ids).await?;
                     crate::modules::built::archive(tx, &module, false).await?;
                     archived += 1;
                 }

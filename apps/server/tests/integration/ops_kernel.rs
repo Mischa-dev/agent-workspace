@@ -213,7 +213,13 @@ async fn the_kernel_replays_refuses_and_hides_what_it_should() {
                 .as_array()
                 .expect("branches")
                 .iter()
-                .any(|branch| branch["properties"]["outcome"]["const"] == outcome),
+                .any(|branch| {
+                    let named = &branch["properties"]["outcome"];
+                    named["const"] == outcome
+                        || named["enum"]
+                            .as_array()
+                            .is_some_and(|outcomes| outcomes.contains(&outcome))
+                }),
             "{answer}"
         );
     };

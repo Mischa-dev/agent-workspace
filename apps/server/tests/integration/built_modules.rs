@@ -165,6 +165,26 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     };
     assert_eq!(form(token.clone()).await.0, StatusCode::OK);
 
+    // A page joins the module as a part.
+    let page = tool(
+        &world,
+        "builder",
+        "page_write",
+        json!({"projectId": "WORK", "title": "Playtest notes", "body": "Zeppelin tips."}),
+    )
+    .await;
+    assert_eq!(page["outcome"], "ok", "{page}");
+    let page_id = page["value"]["id"].as_str().expect("page").to_owned();
+    let linked = tool(
+        &world,
+        "builder",
+        "module_part_link",
+        json!({"moduleId": module_id, "part": {"kind": "page", "id": page_id},
+               "clientRequestId": "page-in"}),
+    )
+    .await;
+    assert_eq!(linked["outcome"], "ok", "{linked}");
+
     // Off: the records vanish from queries, search and the thing's page,
     // the form is turned off and the automation holds its run.
     let off = tool(
@@ -199,6 +219,30 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     )
     .await;
     assert_ne!(opened["outcome"], "ok", "{opened}");
+    // Its page too: not listed, not readable, not searchable, not writable.
+    let pages = tool(&world, "builder", "page_list", json!({"projectId": "WORK"})).await;
+    assert!(!pages.to_string().contains(&page_id), "{pages}");
+    let read = tool(&world, "builder", "page_get", json!({"pageId": page_id})).await;
+    assert_ne!(read["outcome"], "ok", "{read}");
+    let found = tool(
+        &world,
+        "builder",
+        "search",
+        json!({"query": "zeppelin tips", "kinds": ["pages"]}),
+    )
+    .await;
+    assert!(!found.to_string().contains(&page_id), "{found}");
+    let written = tool(
+        &world,
+        "builder",
+        "page_write",
+        json!({"pageId": page_id, "body": "Changed while off."}),
+    )
+    .await;
+    assert!(
+        written["outcome"] != "ok" && written["outcome"] != "applied",
+        "{written}"
+    );
     let (status, closed) = form(token.clone()).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{closed}");
     assert!(closed.to_string().contains("turned off"), "{closed}");
@@ -227,6 +271,9 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     let back = tool(&world, "builder", "record_query", query.clone()).await;
     assert_eq!(back["value"]["total"], 1, "{back}");
     assert_eq!(form(token).await.0, StatusCode::OK);
+    let read = tool(&world, "builder", "page_get", json!({"pageId": page_id})).await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert!(read.to_string().contains("Zeppelin tips."), "{read}");
 
     // Taking the collection out and putting it back tells its readers each
     // time (open tabs refetch what a module's switch hides or shows).

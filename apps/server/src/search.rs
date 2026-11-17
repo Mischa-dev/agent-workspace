@@ -384,6 +384,7 @@ const PAGES_SQL: &str = r#"
     WHERE page.search_vector @@ query.q
       AND page.project_id = ANY($2)
       AND page.archived_at IS NULL
+      AND module_part_on('page', page.id) AND module_part_on('skill', page.id)
       AND $4::uuid IS NULL
       AND ($5::uuid IS NULL OR page.updated_by_actor_id = $5)
       AND ($6::timestamptz IS NULL OR page.updated_at >= $6)

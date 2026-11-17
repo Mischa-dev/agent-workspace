@@ -1055,21 +1055,20 @@ fn limit_matches(wanted: Option<&[String]>, held: Option<&[&'static str]>) -> bo
     }
 }
 
-/// The starter project: one the caller owns with the template's key and
-/// name, or a new one (with a number added to the key when it's taken).
-/// Returns it and whether it's new.
-async fn starter_project(
-    transaction: &mut Transaction<'_, Postgres>,
-    caller: Standing,
+/// The space an earlier use of this template (or package) made for the
+/// same person: theirs to own, with this name and this key or a numbered
+/// one (ENG2 when ENG was taken). A space of that key someone else owns is
+/// never reused; the use makes a new one with the next free key. Preview
+/// and install read it the same way.
+pub(crate) async fn reusable_starter(
+    connection: &mut sqlx::PgConnection,
     organization_id: Uuid,
-    project: &TemplateProject,
-) -> Result<(Uuid, bool), ApplyError> {
-    let name = crate::projects::normalize_project_name(&project.name)?;
-    let key = crate::projects::normalize_project_key(&project.key)?;
-    let candidates = key_candidates(&key);
-    // A project made by an earlier use may carry a numbered key (ENG2 when
-    // ENG was taken), so any of the candidates counts.
-    let existing = sqlx::query_scalar::<_, Uuid>(
+    actor_id: Uuid,
+    name: &str,
+    key: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let candidates = key_candidates(key);
+    sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT project.id
         FROM projects project
@@ -1084,9 +1083,31 @@ async fn starter_project(
     )
     .bind(organization_id)
     .bind(&candidates)
-    .bind(caller.actor_id)
-    .bind(&name)
-    .fetch_optional(&mut **transaction)
+    .bind(actor_id)
+    .bind(name)
+    .fetch_optional(connection)
+    .await
+}
+
+/// The starter project: one the caller owns with the template's key and
+/// name, or a new one (with a number added to the key when it's taken).
+/// Returns it and whether it's new.
+async fn starter_project(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: Standing,
+    organization_id: Uuid,
+    project: &TemplateProject,
+) -> Result<(Uuid, bool), ApplyError> {
+    let name = crate::projects::normalize_project_name(&project.name)?;
+    let key = crate::projects::normalize_project_key(&project.key)?;
+    let candidates = key_candidates(&key);
+    let existing = reusable_starter(
+        &mut **transaction,
+        organization_id,
+        caller.actor_id,
+        &name,
+        &key,
+    )
     .await?;
     if let Some(id) = existing {
         return Ok((id, false));
