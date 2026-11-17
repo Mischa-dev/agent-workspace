@@ -4,6 +4,7 @@ pub mod access;
 pub mod account;
 pub mod account_security;
 pub mod accounts;
+pub mod addresses;
 pub mod agent_docs;
 pub mod agent_parity;
 pub mod agent_profiles;
@@ -61,7 +62,6 @@ pub mod launch;
 pub mod layouts;
 pub mod limits;
 pub mod link_previews;
-pub mod links;
 pub mod mail;
 pub mod maintenance_lease;
 pub mod mcp;
@@ -112,6 +112,7 @@ pub mod server;
 pub mod server_status;
 pub mod settings;
 pub mod sheets;
+pub mod spaces;
 pub mod statuses;
 pub mod storage_admission;
 #[cfg(test)]
@@ -136,7 +137,6 @@ pub mod work_item_planning;
 pub mod work_item_workflow;
 pub mod work_items;
 pub mod workspace;
-pub mod workspace_space;
 pub mod workspace_templates;
 
 use std::sync::Arc;
@@ -210,10 +210,10 @@ pub fn router(state: AppState) -> Router {
         .merge(mail::http::router())
         .merge(workspace::router())
         .merge(workspace::slug::router())
+        .merge(addresses::resolve::router())
         .merge(roles::router())
         .merge(workspace_templates::router())
         .merge(server_status::router())
-        .merge(access::http::router())
         .merge(onboarding::router())
         .merge(audit_log::router())
         .merge(search::router())
@@ -234,6 +234,11 @@ pub fn router(state: AppState) -> Router {
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             modules::gate::refuse_off_modules,
+        ))
+        // A suspended or deleting workspace refuses v1 writes (H1.24).
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            workspace::lifecycle::refuse_writes_when_closed,
         ))
         .fallback_service(
             ServeDir::new(web_root)

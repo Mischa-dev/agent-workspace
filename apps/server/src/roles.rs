@@ -91,28 +91,14 @@ pub fn router() -> Router<AppState> {
 // What someone may do
 
 /// What a membership lets someone do: their role's permissions, cut down by
-/// an agent limit when an app or agent is acting for them. Agents never get
-/// the people-only permissions. Later layers (modules, AWD-75) join here.
-pub(crate) fn effective(
-    grant: RoleGrant,
-    limit: Option<PermissionSet>,
-    kind: ActorKind,
-) -> PermissionSet {
+/// an agent limit when an app or agent is acting for them. The same for
+/// every kind of account. Later layers (modules, AWD-75) join here.
+pub(crate) fn effective(grant: RoleGrant, limit: Option<PermissionSet>) -> PermissionSet {
     let mut permissions = grant.permissions();
     if let Some(limit) = limit {
         permissions = permissions.intersect(limit.union(PermissionSet::required()));
     }
-    if kind != ActorKind::Human {
-        permissions = without_people_only(permissions);
-    }
     permissions
-}
-
-pub(crate) fn without_people_only(permissions: PermissionSet) -> PermissionSet {
-    PERMISSIONS
-        .iter()
-        .filter(|info| info.people_only)
-        .fold(permissions, |set, info| set.without(info.permission))
 }
 
 /// A limit as stored: NULL is no limit.
@@ -196,7 +182,7 @@ pub(crate) async fn app_access(
             .union(PermissionSet::required());
         limits.organizations.insert(row.scope_id, limit);
         if let Ok(grant) = RoleGrant::stored(&row.role, row.role_permissions.as_deref()) {
-            union = union.union(effective(grant, Some(limit), ActorKind::Human));
+            union = union.union(effective(grant, Some(limit)));
         }
     }
     for row in &projects {
@@ -214,7 +200,7 @@ pub(crate) async fn app_access(
         if let Ok(grant) = RoleGrant::stored(&row.role, row.role_permissions.as_deref())
             && grant.role() != MembershipRole::Worker
         {
-            union = union.union(effective(grant, Some(limit), ActorKind::Human));
+            union = union.union(effective(grant, Some(limit)));
         }
     }
     Ok(AppAccess { limits, union })
@@ -243,7 +229,7 @@ pub(crate) async fn agent_union(
         .filter_map(|(role, permissions)| RoleGrant::stored(role, permissions.as_deref()).ok())
         .filter(|grant| grant.role() != MembershipRole::Worker)
         .fold(PermissionSet::EMPTY, |set, grant| {
-            set.union(effective(grant, None, ActorKind::ExternalAgent))
+            set.union(effective(grant, None))
         }))
 }
 
@@ -277,31 +263,25 @@ pub(crate) async fn project_holding(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<PermissionSet>, AppError> {
-    let Some((kind, role, role_permissions)) =
-        sqlx::query_as::<_, (String, String, Option<Vec<String>>)>(
-            r#"
-            SELECT actor.kind, membership.role, workspace_role_permissions(membership.role_id)
+    let Some((role, role_permissions)) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
+        r#"
+            SELECT membership.role, workspace_role_permissions(membership.role_id)
             FROM project_memberships membership
             JOIN actors actor ON actor.id = membership.actor_id
             WHERE membership.project_id = $1 AND membership.actor_id = $2
               AND membership.enabled AND actor.status = 'active'
             "#,
-        )
-        .bind(project_id)
-        .bind(actor_id)
-        .fetch_optional(&mut *connection)
-        .await?
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut *connection)
+    .await?
     else {
         return Ok(None);
     };
-    let kind = if kind == "human" {
-        ActorKind::Human
-    } else {
-        ActorKind::ExternalAgent
-    };
     let grant = RoleGrant::stored(&role, role_permissions.as_deref())?;
     let limit = current_agent_limit(actor_id, MembershipScope::Project(project_id));
-    Ok(Some(project_checked(effective(grant, limit, kind))))
+    Ok(Some(project_checked(effective(grant, limit))))
 }
 
 /// The permissions of `set` that a project checks, leaving out the
@@ -349,7 +329,7 @@ pub(crate) async fn standing(
         actor_id,
         kind,
         role: grant.role(),
-        permissions: effective(grant, limit, kind),
+        permissions: effective(grant, limit),
     })
 }
 
@@ -369,12 +349,23 @@ pub(crate) async fn issuer_still_grants(
         Err(AppError::NotFound(_)) => return Ok(false),
         Err(error) => return Err(error),
     };
+    // A starting role is read as it is now, an admin's edits included.
+    let role_id = match role_id {
+        Some(role_id) => Some(role_id),
+        None => {
+            crate::invitations::engine::starting_role_id(connection, organization_id, role).await?
+        }
+    };
     let invited =
         sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
             .bind(role_id)
             .fetch_one(&mut *connection)
             .await?;
     let invited = RoleGrant::stored(role, invited.as_deref())?;
+    // Admin-tier roles come only from an owner.
+    if invited.role() == MembershipRole::Admin && !issuer.is_owner() {
+        return Ok(false);
+    }
     Ok(issuer.may(Permission::MembersInvite)
         && invited.permissions().is_subset_of(issuer.permissions))
 }
@@ -429,6 +420,8 @@ struct RoleRow {
     name: String,
     description: String,
     permissions: Vec<String>,
+    /// A starting role an admin edited (K1.10).
+    customized: bool,
     agent_limit: Option<Vec<String>>,
     defaults: Value,
     /// Modules off for holders (AWD-75).
@@ -445,13 +438,23 @@ impl RoleRow {
         MembershipRole::parse(&self.base_role).ok_or(AppError::Internal("stored base role"))
     }
 
-    /// What the role lets holders do.
+    /// What the role lets holders do: a starting role nobody edited holds
+    /// its defaults; an edited one (K1.10) and a custom one what was ticked.
     fn grant(&self) -> Result<RoleGrant, AppError> {
-        Ok(if self.built_in {
+        Ok(if self.built_in && !self.customized {
             RoleGrant::built_in(self.base()?)
         } else {
             RoleGrant::stored(&self.base_role, Some(&self.permissions))?
         })
+    }
+
+    /// Whether its permissions can be edited: any role but the owner's
+    /// (owners hold everything) and the hidden worker's.
+    fn permissions_editable(&self) -> bool {
+        !matches!(
+            self.base(),
+            Ok(MembershipRole::Owner | MembershipRole::Worker) | Err(_)
+        )
     }
 
     fn defaults(&self) -> RoleDefaults {
@@ -505,26 +508,22 @@ pub(crate) struct RoleCapabilities {
 /// What `caller` may do to a role.
 fn role_capabilities(caller: Standing, row: &RoleRow) -> RoleCapabilities {
     let base_is_high = matches!(row.base_role.as_str(), "owner" | "admin");
-    let manage = caller.kind == ActorKind::Human
-        && caller.may(Permission::RolesManage)
-        && (!base_is_high || caller.is_owner());
+    let manage = caller.may(Permission::RolesManage) && (!base_is_high || caller.is_owner());
     let within_caller = row
         .grant()
         .is_ok_and(|grant| grant.permissions().is_subset_of(caller.permissions));
     RoleCapabilities {
         edit: manage,
-        edit_permissions: manage && !row.built_in,
+        edit_permissions: manage && row.permissions_editable(),
         remove: manage
             && !row.built_in
             && !row.is_default
             && row.workspace_holders + row.project_holders == 0,
-        assign: caller.kind == ActorKind::Human
-            && caller.may(Permission::MembersManage)
+        assign: caller.may(Permission::MembersManage)
             && row.key != "owner"
             && (!base_is_high || caller.is_owner())
             && within_caller,
-        invite: caller.kind == ActorKind::Human
-            && matches!(caller.role, MembershipRole::Owner | MembershipRole::Admin)
+        invite: matches!(caller.role, MembershipRole::Owner | MembershipRole::Admin)
             && caller.may(Permission::MembersInvite)
             && row.key != "owner"
             && (!base_is_high || caller.is_owner())
@@ -561,7 +560,8 @@ fn role_view(caller: Standing, row: RoleRow) -> Result<RoleView, AppError> {
 
 const ROLE_SELECT: &str = r#"
     SELECT role.id, role.key, role.built_in, role.base_role, role.name, role.description,
-           role.permissions, role.agent_limit, role.defaults, role.modules_off, role.is_default,
+           role.permissions, role.customized, role.agent_limit, role.defaults, role.modules_off,
+           role.is_default,
            role.version,
            role.updated_at,
            (SELECT count(*) FROM organization_memberships holder
@@ -584,7 +584,8 @@ const ROLE_SELECT: &str = r#"
 "#;
 
 const ROLE_ORDER: &str = "ORDER BY role.built_in DESC, \
-     CASE role.key WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'member' THEN 2 WHEN 'viewer' THEN 3 ELSE 4 END, \
+     CASE role.key WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'member' THEN 2 WHEN 'viewer' THEN 3 \
+     WHEN 'guest' THEN 4 ELSE 5 END, \
      lower(role.name), role.id";
 
 async fn role_rows(
@@ -592,7 +593,9 @@ async fn role_rows(
     organization_id: Uuid,
 ) -> Result<Vec<RoleRow>, AppError> {
     Ok(sqlx::query_as::<_, RoleRow>(&format!(
-        "{ROLE_SELECT} WHERE role.organization_id = $1 {ROLE_ORDER}"
+        // The hidden worker role (K1.10) is nobody's to see or give; the
+        // guest role's screens and grants come with K1.27.
+        "{ROLE_SELECT} WHERE role.organization_id = $1 AND role.tier NOT IN ('worker', 'guest') {ROLE_ORDER}"
     ))
     .bind(organization_id)
     .fetch_all(&mut *connection)
@@ -605,7 +608,8 @@ async fn role_row(
     role_id: Uuid,
 ) -> Result<RoleRow, AppError> {
     sqlx::query_as::<_, RoleRow>(&format!(
-        "{ROLE_SELECT} WHERE role.organization_id = $1 AND role.id = $2"
+        "{ROLE_SELECT} WHERE role.organization_id = $1 AND role.id = $2 \
+         AND role.tier NOT IN ('worker', 'guest')"
     ))
     .bind(organization_id)
     .bind(role_id)
@@ -624,7 +628,7 @@ pub(crate) async fn find_role(
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT id FROM workspace_roles
-        WHERE organization_id = $1
+        WHERE organization_id = $1 AND tier NOT IN ('worker', 'guest')
           AND (id::text = $2 OR key = lower($2) OR lower(name) = lower($2))
         ORDER BY built_in DESC
         LIMIT 1
@@ -674,7 +678,12 @@ pub(crate) struct PermissionEntry {
     pub scope: &'static str,
     /// The built-in roles that hold it.
     pub built_in: Vec<&'static str>,
-    pub people_only: bool,
+    /// For a level: the kind of thing it is on (`task`, `page`, ...).
+    /// `None` for a capability.
+    pub thing_kind: Option<&'static str>,
+    /// For a level: `see`, `comment`, `suggest`, `edit_own`, `edit` or
+    /// `manage`. A higher level holds every lower one on the same kind.
+    pub level: Option<&'static str>,
     pub required: bool,
 }
 
@@ -703,7 +712,8 @@ pub(crate) fn catalogue() -> (Vec<ModuleEntry>, Vec<PermissionEntry>) {
                 .zip(info.built_in)
                 .filter_map(|(role, held)| held.then_some(role))
                 .collect(),
-            people_only: info.people_only,
+            thing_kind: info.level.map(|(kind, _)| kind),
+            level: info.level.map(|(_, level)| level.key()),
             required: info.required,
         })
         .collect();
@@ -1002,7 +1012,7 @@ pub(crate) struct RoleInput {
 
 /// Whether `caller` may make or change roles based on `base`.
 fn may_define(caller: Standing, base: MembershipRole) -> Result<(), AppError> {
-    if caller.kind != ActorKind::Human || !caller.may(Permission::RolesManage) {
+    if !caller.may(Permission::RolesManage) {
         return Err(AppError::Forbidden);
     }
     if matches!(base, MembershipRole::Owner | MembershipRole::Admin) && !caller.is_owner() {
@@ -1011,14 +1021,17 @@ fn may_define(caller: Standing, base: MembershipRole) -> Result<(), AppError> {
     Ok(())
 }
 
-/// A custom role's permissions: known keys, within its base, and within
-/// what the caller holds.
+/// A custom role's permissions: known keys, closed under level implication
+/// (holding a level holds the lower ones, K1.9), within its base, and
+/// within what the caller holds.
 fn custom_permissions(
     caller: Standing,
     base: MembershipRole,
     keys: &[String],
 ) -> Result<PermissionSet, AppError> {
-    let permissions = permission_keys(keys)?.union(PermissionSet::required());
+    let permissions = permission_keys(keys)?
+        .union(PermissionSet::required())
+        .implied();
     if !permissions.is_subset_of(PermissionSet::built_in(base)) {
         return Err(AppError::Refused {
             field: "permissions",
@@ -1127,7 +1140,7 @@ pub(crate) async fn create(
             !taken.contains(candidate)
                 && !matches!(
                     candidate.as_str(),
-                    "owner" | "admin" | "member" | "viewer" | "worker"
+                    "owner" | "admin" | "member" | "viewer" | "guest" | "worker"
                 )
         })
         .unwrap_or_else(|| format!("role-{}", Uuid::now_v7().simple()));
@@ -1232,6 +1245,7 @@ pub(crate) async fn change(
     lock_roles(transaction, organization_id).await?;
     let row = role_row(transaction, organization_id, role_id).await?;
     let base = row.base()?;
+    let row_editable = row.permissions_editable();
     may_define(caller, base)?;
     if let Some(expected) = change.expected_version
         && expected != row.version
@@ -1254,12 +1268,14 @@ pub(crate) async fn change(
         .map(role_description)
         .transpose()?
         .unwrap_or_else(|| before.description.clone());
+    // K1.10: starting roles are editable too, except the owner's (owners
+    // hold everything) and the hidden worker's.
     let permissions = match change.permissions.as_deref() {
         None => None,
-        Some(_) if before.built_in => {
+        Some(_) if !row_editable => {
             return Err(AppError::Refused {
                 field: "permissions",
-                message: "Built-in roles keep their permissions. Duplicate one to change them.",
+                message: "The Owner role always holds everything.",
             });
         }
         Some(keys) => Some(custom_permissions(caller, base, keys)?.keys()),
@@ -1315,6 +1331,7 @@ pub(crate) async fn change(
         r#"
         UPDATE workspace_roles
         SET name = $3, description = $4, permissions = COALESCE($5, permissions),
+            customized = customized OR (built_in AND $5 IS NOT NULL),
             agent_limit = $6, defaults = $7, is_default = $8, updated_by_actor_id = $9,
             modules_off = $10, version = version + 1, updated_at = now()
         WHERE organization_id = $1 AND id = $2
@@ -1430,7 +1447,7 @@ async fn lock_target(
 ) -> Result<TargetRow, AppError> {
     sqlx::query_as::<_, TargetRow>(&format!(
         r#"
-        SELECT actor.kind, membership.role, membership.role_id, held.name AS role_name,
+        SELECT actor.kind, membership.role, custom_role_id(membership.role_id) AS role_id, held.name AS role_name,
                membership.enabled, membership.version, membership.agent_limit
         FROM organization_memberships membership
         JOIN actors actor ON actor.id = membership.actor_id
@@ -1490,7 +1507,7 @@ pub(crate) async fn assign(
     apply_to_projects: bool,
     expected_version: Option<i64>,
 ) -> Result<Assignment, AppError> {
-    if caller.kind != ActorKind::Human || !caller.may(Permission::MembersManage) {
+    if !caller.may(Permission::MembersManage) {
         return Err(AppError::Forbidden);
     }
     if actor_id == caller.actor_id {
@@ -1532,14 +1549,6 @@ pub(crate) async fn assign(
     }
     if (target.role == "admin" || base == MembershipRole::Admin) && !caller.is_owner() {
         return Err(AppError::Forbidden);
-    }
-    if target.kind == "external_agent"
-        && !matches!(base, MembershipRole::Member | MembershipRole::Viewer)
-    {
-        return Err(AppError::Refused {
-            field: "roleId",
-            message: "Agents can hold roles based on Member or Viewer.",
-        });
     }
     if !grant.permissions().is_subset_of(caller.permissions) {
         return Err(AppError::Forbidden);
@@ -1668,7 +1677,7 @@ async fn apply_to_their_projects(
 ) -> Result<(Vec<Uuid>, Vec<SkippedProject>), AppError> {
     let memberships = sqlx::query_as::<_, TheirProject>(
         r#"
-        SELECT membership.project_id, membership.role, membership.role_id,
+        SELECT membership.project_id, membership.role, custom_role_id(membership.role_id) AS role_id,
                caller_membership.role AS caller_role,
                workspace_role_permissions(caller_membership.role_id) AS caller_permissions,
                COALESCE(caller_membership.enabled, false) AS caller_enabled
@@ -1930,7 +1939,7 @@ pub(crate) async fn permissions_of(
 ) -> Result<PermissionsView, AppError> {
     let workspace = sqlx::query_as::<_, HeldRow>(&format!(
         r#"
-        SELECT actor.kind, membership.role, membership.role_id, held.name AS role_name,
+        SELECT actor.kind, membership.role, custom_role_id(membership.role_id) AS role_id, held.name AS role_name,
                workspace_role_permissions(membership.role_id) AS role_permissions,
                held.agent_limit AS role_limit, membership.agent_limit AS personal_limit
         FROM organization_memberships membership
@@ -1955,14 +1964,14 @@ pub(crate) async fn permissions_of(
         .union(PermissionSet::required());
     let scope = |row: &HeldRow, limit: PermissionSet| -> Result<ScopePermissions, AppError> {
         let grant = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?;
-        let own = effective(grant, None, kind);
+        let own = effective(grant, None);
         Ok(ScopePermissions {
             role: row.role.clone(),
             role_id: row.role_id,
             role_name: row.role_name.clone().unwrap_or_else(|| row.role.clone()),
             permissions: own.keys(),
             for_apps: if kind == ActorKind::Human {
-                effective(grant, Some(limit), kind).keys()
+                effective(grant, Some(limit)).keys()
             } else {
                 own.keys()
             },
@@ -1973,7 +1982,7 @@ pub(crate) async fn permissions_of(
         Some(project_id) => {
             let row = sqlx::query_as::<_, HeldRow>(&format!(
                 r#"
-                SELECT actor.kind, membership.role, membership.role_id, held.name AS role_name,
+                SELECT actor.kind, membership.role, custom_role_id(membership.role_id) AS role_id, held.name AS role_name,
                        workspace_role_permissions(membership.role_id) AS role_permissions,
                        held.agent_limit AS role_limit, NULL::text[] AS personal_limit
                 FROM project_memberships membership
@@ -2241,6 +2250,30 @@ async fn read_permissions(
     ))
 }
 
+/// Start-up reconcile (K1.10): every role row's effective permissions
+/// follow the catalogue, so a key a migration adds reaches the starting
+/// roles nobody edited and every custom role's closure. Only rows whose
+/// value differs are written (`workspace_roles_effective` recomputes them),
+/// so it is safe on every start. Returns how many rows changed.
+pub async fn reconcile(pool: &sqlx::PgPool) -> Result<u64, sqlx::Error> {
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    let changed = sqlx::query(
+        r#"
+        UPDATE workspace_roles role SET updated_at = role.updated_at
+        WHERE role.effective_permissions IS DISTINCT FROM CASE
+            WHEN role.built_in AND (NOT role.customized OR role.tier IN ('owner', 'worker'))
+                THEN starting_role_permissions(role.key)
+            ELSE role_closed_permissions(role.permissions, role.base_role)
+        END
+        "#,
+    )
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    transaction.commit().await?;
+    Ok(changed)
+}
+
 /// Built-in role keys and what each holds, for the equivalence test.
 #[cfg(test)]
 pub(crate) fn built_in_table() -> std::collections::HashMap<&'static str, PermissionSet> {
@@ -2328,16 +2361,18 @@ mod tests {
     }
 
     #[test]
-    fn only_owners_define_admin_roles_and_agents_never_do() {
+    fn only_owners_define_admin_roles_and_an_agent_by_its_role() {
         assert!(may_define(caller(MembershipRole::Owner), MembershipRole::Admin).is_ok());
         assert!(may_define(caller(MembershipRole::Admin), MembershipRole::Admin).is_err());
         assert!(may_define(caller(MembershipRole::Admin), MembershipRole::Member).is_ok());
         assert!(may_define(caller(MembershipRole::Member), MembershipRole::Viewer).is_err());
+        // K1.13: the kind of account changes nothing; the role decides.
         let agent = Standing {
             kind: ActorKind::ExternalAgent,
-            ..caller(MembershipRole::Owner)
+            ..caller(MembershipRole::Admin)
         };
-        assert!(may_define(agent, MembershipRole::Member).is_err());
+        assert!(may_define(agent, MembershipRole::Member).is_ok());
+        assert!(may_define(agent, MembershipRole::Admin).is_err());
     }
 
     #[test]
@@ -2346,18 +2381,14 @@ mod tests {
         let limited = effective(
             grant,
             Some(PermissionSet::EMPTY.with(Permission::TasksView)),
-            ActorKind::Human,
         );
         assert!(limited.contains(Permission::ProjectsView));
         assert!(limited.contains(Permission::TasksView));
         assert!(!limited.contains(Permission::TasksEdit));
-        let admin = effective(
-            RoleGrant::built_in(MembershipRole::Admin),
-            None,
-            ActorKind::ExternalAgent,
-        );
-        assert!(!admin.contains(Permission::RolesManage));
-        assert!(!admin.contains(Permission::AgentsManage));
+        // Every kind of account gets what its role holds (K1.14a).
+        let admin = effective(RoleGrant::built_in(MembershipRole::Admin), None);
+        assert!(admin.contains(Permission::RolesManage));
+        assert!(admin.contains(Permission::AgentsManage));
     }
 
     #[test]
@@ -2371,7 +2402,15 @@ mod tests {
                 .map(|key| (*key).to_owned())
                 .collect::<Vec<_>>();
             let permissions = custom_permissions(owner, base, &keys).expect("valid in the test");
-            assert_eq!(permissions.keys(), point.permissions, "{}", point.key);
+            // Saved closed under level implication (K1.9).
+            assert_eq!(
+                permissions,
+                PermissionSet::from_keys(&point.permissions[..])
+                    .union(PermissionSet::required())
+                    .implied(),
+                "{}",
+                point.key
+            );
             for key in point.agent_limit.iter().flatten() {
                 assert!(Permission::from_key(key).is_some(), "{key}");
             }

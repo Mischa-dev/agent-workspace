@@ -107,6 +107,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/inbox/summary",
     "/api/v1/link-previews/{id}/image",
     "/api/v1/later",
+    "/api/v1/links/resolve",
     "/api/v1/my-work",
     "/api/v1/notification-settings",
     "/api/v1/organizations/{organization_id}",
@@ -129,7 +130,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/secrets",
     "/api/v1/organizations/{organization_id}/workspace-templates",
     "/api/v1/organizations/{organization_id}/server",
-    "/api/v1/organizations/{organization_id}/server/access-disagreements",
     "/api/v1/pages/{id}",
     "/api/v1/pages/{id}/discussion",
     "/api/v1/pages/{id}/document",
@@ -988,21 +988,27 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
-            "/api/v1/organizations/{organization_id}/server/access-disagreements",
-            vec![format!(
-                "/api/v1/organizations/{}/server/access-disagreements",
-                a.organization
-            )],
-            vec![format!(
-                "/api/v1/organizations/{}/server/access-disagreements",
-                b.organization
-            )],
-            vec![],
-        ),
-        case(
             "/api/v1/workspaces/by-slug/{slug}",
             vec![format!("/api/v1/workspaces/by-slug/{}", a.slug)],
             vec![format!("/api/v1/workspaces/by-slug/{}", b.slug)],
+            vec![],
+        ),
+        // K4.18: an old address of B's never resolves for A, not even to
+        // B's workspace slug.
+        case(
+            "/api/v1/links/resolve",
+            vec![format!(
+                "/api/v1/links/resolve?path=/projects/{}/work-items/{}",
+                a.project, a.task
+            )],
+            vec![
+                format!(
+                    "/api/v1/links/resolve?path=/projects/{}/work-items/{}",
+                    b.project, b.task
+                ),
+                format!("/api/v1/links/resolve?path=/w/{}/inbox", b.slug),
+                format!("/api/v1/links/resolve?path=/messages/{}", b.channel),
+            ],
             vec![],
         ),
         case(
@@ -1999,6 +2005,7 @@ fn mcp_case_names() -> BTreeSet<String> {
 const MCP_CASE_TOOLS: &[&str] = &[
     "agent_list",
     "agent_profile_list",
+    "agent_template_list",
     "ai_suggestions_list",
     "approval_get",
     "approval_list",
@@ -2017,6 +2024,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "file_read",
     "history_list",
     "history_show",
+    "invite_link_list",
     "collection_list",
     "collection_describe",
     "formula_preview",
@@ -2040,11 +2048,14 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "whiteboard_template_list",
     "milestone_list",
     "module_list",
+    "module_open",
     "my_permissions",
     "my_work",
     "notification_list",
     "notification_keyword_list",
     "package_export",
+    "package_list",
+    "package_preview",
     "page_blocks",
     "page_comments",
     "page_get",
@@ -2319,6 +2330,12 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"spaceId": b.project}), json!({"spaceId": b.space})],
             vec![],
         ),
+        case(
+            "module_open",
+            vec![json!({"moduleId": a.module.to_string()})],
+            vec![json!({"moduleId": b.module.to_string()})],
+            vec![],
+        ),
         by_project("milestone_list"),
         by_project("task_ready_list"),
         by_project("dependency_graph"),
@@ -2349,6 +2366,16 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case("webhook_list", vec![json!({})], vec![], vec![]),
+        // K4.26: another workspace's invitation links are out of reach.
+        case(
+            "invite_link_list",
+            vec![
+                json!({}),
+                json!({"workspace": a.organization, "includeInactive": true}),
+            ],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         // A1.11: another workspace's hosts are out of reach.
         case(
             "host_list",
@@ -2418,6 +2445,20 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         ),
         by_project("settings_get"),
         by_project("module_list"),
+        by_project("package_list"),
+        by_project("agent_template_list"),
+        case(
+            "package_preview",
+            vec![json!({"package": {
+                "format": "agent-workspace-package/1", "id": "own_tiny", "version": "1.0.0",
+                "name": "Tiny", "target": "space", "contents": []},
+                "target": {"spaceId": a.project}})],
+            vec![json!({"package": {
+                "format": "agent-workspace-package/1", "id": "net_tiny", "version": "1.0.0",
+                "name": "Tiny", "target": "space", "contents": []},
+                "target": {"spaceId": b.project}})],
+            vec![],
+        ),
         case(
             "thing_open",
             vec![
@@ -2861,12 +2902,22 @@ async fn check_mcp(
 
     // P0.23: a read-only tool changes nothing. A's rows are digested before
     // and after each tool's calls; only the columns reads may touch differ.
+    // The first read of a project's views makes its built-in ones (until
+    // T1.40 drops saved_views); read them once first, as the web does on
+    // opening a project, so that isn't counted against the first view tool.
+    let (status, body) = get_text(
+        app,
+        &a.browser,
+        &format!("/api/v1/projects/{}/views", a.project),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     let a_ids = sweep_ids(pool, a.organization).await;
-    let a_pattern = a_ids.iter().cloned().collect::<Vec<_>>().join("|");
+    let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
     // Fingerprints first, so a write landing during the digest is caught
     // by the next refresh rather than missed.
     let mut fingerprints = table_fingerprints(pool).await;
-    let mut a_rows = digest_ignoring(pool, &a_pattern, READ_TOUCHES).await;
+    let mut a_rows = digest_ignoring(pool, &a_list, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
         ("A's agent", &a.agent_token, &agent_session, true),
@@ -2927,7 +2978,7 @@ async fn check_mcp(
                 );
             }
             fingerprints =
-                refresh_digest(pool, &a_pattern, READ_TOUCHES, &fingerprints, &mut a_rows).await;
+                refresh_digest(pool, &a_list, READ_TOUCHES, &fingerprints, &mut a_rows).await;
             let changes = digest_changes(&before, &a_rows);
             if read_only_check && !changes.is_empty() {
                 report.failures.push(format!(

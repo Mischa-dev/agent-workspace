@@ -23,7 +23,10 @@ use super::{
     manifest,
     state::ProjectModules,
 };
-use crate::error::AppError;
+use crate::{
+    addresses::{Addresses, Linker, Target},
+    error::AppError,
+};
 
 /// The most links one thing shows.
 const MAX_LINKS: usize = 200;
@@ -43,9 +46,8 @@ pub struct Viewer<'a> {
     /// role narrowing it), for things across a workspace, which no project's
     /// modules decide.
     pub workspaces: &'a BTreeMap<Uuid, ModuleSet>,
-    /// Whether things across a workspace (boards with no project) can show:
-    /// not for a credential confined to one project.
-    pub workspace_boards: bool,
+    /// How the server writes the things' links.
+    pub addresses: Addresses,
 }
 
 /// The kinds this server can open as things.
@@ -99,17 +101,42 @@ fn href(kind: &str, id: Uuid, project_id: Option<Uuid>, parent_id: Option<Uuid>)
 }
 
 impl ThingRow {
-    fn into_thing(self) -> Thing {
-        let module = manifest::of_thing(&self.kind).map_or_else(String::new, |m| m.id.clone());
-        Thing {
+    /// The thing's path in today's shape.
+    fn legacy_href(&self) -> String {
+        match self.parent_id {
             // AWD-75: a DM or group's thread opens beside its conversation,
             // as talk::thread_path links it, not under Channels.
-            href: match self.parent_id {
-                Some(parent) if self.kind == "thread" && self.direct => {
-                    format!("/messages/{parent}?thread={}", self.id)
-                }
-                _ => href(&self.kind, self.id, self.project_id, self.parent_id),
-            },
+            Some(parent) if self.kind == "thread" && self.direct => Target::Direct {
+                id: parent,
+                thread: Some(self.id),
+            }
+            .legacy_path(),
+            _ => href(&self.kind, self.id, self.project_id, self.parent_id),
+        }
+    }
+
+    /// The thing's path as this server writes links.
+    async fn href(
+        &self,
+        connection: &mut PgConnection,
+        linker: &mut Linker,
+    ) -> Result<String, AppError> {
+        let legacy = self.legacy_href();
+        match (self.project_id, self.organization_id) {
+            (Some(space), _) => linker.legacy_in_space(connection, space, &legacy).await,
+            (None, Some(workspace)) if self.kind == "whiteboard" => {
+                linker
+                    .path_in(connection, workspace, &Target::Whiteboard(self.id))
+                    .await
+            }
+            _ => Ok(legacy),
+        }
+    }
+
+    fn into_thing(self, href: String) -> Thing {
+        let module = manifest::of_thing(&self.kind).map_or_else(String::new, |m| m.id.clone());
+        Thing {
+            href,
             id: self.id,
             module,
             kind: self.kind,
@@ -173,9 +200,8 @@ const WHITEBOARDS_SQL: &str = r#"
     FROM whiteboards board
     LEFT JOIN users maker ON maker.actor_id = board.created_by_actor_id
     WHERE board.id = ANY($1) AND board.deleted_at IS NULL
-      -- A board across a workspace only for a viewer not confined to one
-      -- project ($4), as whiteboards::access has it.
-      AND ((board.project_id IS NULL AND $4) OR board.project_id = ANY($2))
+      -- Every board lives in a space (K4.10), the workspace's own included.
+      AND board.project_id = ANY($2)
       AND whiteboard_visible_to(board.id, $3)
 "#;
 
@@ -223,6 +249,8 @@ const RECORDS_SQL: &str = r#"
       ON editor.project_id = record.project_id AND editor.actor_id = record.updated_by_actor_id
     WHERE record.id = ANY($1) AND record.project_id = ANY($2)
       AND record.archived_at IS NULL AND collection.archived_at IS NULL
+      -- M1.6: a built module switched off hides its collections' records.
+      AND module_part_on('collection', collection.id)
       -- A task's record (the built-in Tasks collection) is the task.
       AND collection.builtin IS NULL
 "#;
@@ -359,13 +387,12 @@ async fn resolve(
         return Ok(Vec::new());
     }
     // The binds are positional and shared by every resolver: $1 the ids,
-    // $2 the viewer's projects, $3 the viewer, $4 whether things across a
-    // workspace show. Each query declares the prefix it uses — tasks,
-    // pages and projects stop at $2 (their visibility is the project
-    // filter itself), decisions and conversations also consult the
-    // viewer at $3, and whiteboards take $4 as well — and Postgres
-    // rejects a bind the query doesn't declare, so bind exactly the
-    // prefix the query asks for.
+    // $2 the viewer's projects, $3 the viewer. Each query declares the
+    // prefix it uses — tasks, pages and projects stop at $2 (their
+    // visibility is the project filter itself), decisions, conversations
+    // and whiteboards also consult the viewer at $3 — and Postgres rejects
+    // a bind the query doesn't declare, so bind exactly the prefix the
+    // query asks for.
     let declared = declared_params(sql);
     let mut query = sqlx::query_as::<_, ThingRow>(sql)
         .bind(ids)
@@ -377,18 +404,19 @@ async fn resolve(
     if declared >= 3 {
         query = query.bind(viewer.actor_id);
     }
-    if declared >= 4 {
-        query = query.bind(viewer.workspace_boards);
-    }
     let rows = query.fetch_all(&mut *connection).await?;
-    let mut things = rows
+    let mut linker = Linker::new(viewer.addresses);
+    let mut things = Vec::with_capacity(rows.len());
+    for row in rows
         .into_iter()
         // A conversation id can come back as any conversation kind; keep
         // the kind asked for, except that "conversation" asks for any.
         .filter(|row| kind == "conversation" || row.kind == kind)
         .filter(|row| shown(viewer, row))
-        .map(ThingRow::into_thing)
-        .collect::<Vec<_>>();
+    {
+        let href = row.href(connection, &mut linker).await?;
+        things.push(row.into_thing(href));
+    }
     with_envelope(connection, &mut things).await?;
     Ok(things)
 }
@@ -669,7 +697,7 @@ pub async fn links(
         task_projects: viewer.task_projects,
         modules: ModuleSet::all(),
         workspaces: viewer.workspaces,
-        workspace_boards: viewer.workspace_boards,
+        addresses: viewer.addresses,
     };
     let mut others = Vec::new();
     for kind in KINDS {
@@ -745,7 +773,7 @@ mod tests {
             ("task", 2),
             ("page", 2),
             ("decision", 3),
-            ("whiteboard", 4),
+            ("whiteboard", 3),
             ("thread", 3),
             ("channel", 3),
             ("conversation", 3),

@@ -5,7 +5,6 @@
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use uuid::Uuid;
 
 use super::{MAX_KEYWORDS, normalize};
 use crate::ops::{
@@ -127,14 +126,7 @@ impl Operation for NotificationKeywordSet {
         super::replace(tx, workspace, account, &keywords).await?;
         // Their other devices hear of it (their id only) in the same
         // transaction. The envelope needs a space: the workspace's own.
-        let space = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM projects WHERE organization_id = $1 \
-             ORDER BY (kind = 'workspace') DESC, created_at LIMIT 1",
-        )
-        .bind(workspace)
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(crate::error::AppError::from)?;
+        let space = crate::spaces::workspace::ensure(tx, workspace).await?;
         crate::outbox::enqueue_typed(
             tx,
             space,

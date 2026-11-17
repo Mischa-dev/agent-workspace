@@ -117,7 +117,7 @@ impl From<Row> for Dashboard {
 }
 
 const COLUMNS: &str =
-    "id, project_id, name, description, owner_actor_id, tiles, position, version, updated_at";
+    "id, space_id AS project_id, name, description, owner_actor_id, tiles, position, version, updated_at";
 
 /// The dashboards of a project `reader` sees: the shared ones in order,
 /// then their own.
@@ -128,7 +128,7 @@ pub async fn visible(
 ) -> Result<Vec<Dashboard>, AppError> {
     let rows = sqlx::query_as::<_, Row>(&format!(
         "SELECT {COLUMNS} FROM dashboards \
-         WHERE project_id = $1 AND (owner_actor_id IS NULL OR owner_actor_id = $2) \
+         WHERE space_id = $1 AND (owner_actor_id IS NULL OR owner_actor_id = $2) \
          ORDER BY owner_actor_id IS NOT NULL, position, lower(name), id"
     ))
     .bind(project_id)
@@ -148,7 +148,7 @@ pub async fn one(
 ) -> Result<Option<Dashboard>, AppError> {
     let row = sqlx::query_as::<_, Row>(&format!(
         "SELECT {COLUMNS} FROM dashboards \
-         WHERE project_id = $1 AND id = $2 AND (owner_actor_id IS NULL OR owner_actor_id = $3){}",
+         WHERE space_id = $1 AND id = $2 AND (owner_actor_id IS NULL OR owner_actor_id = $3){}",
         if lock { " FOR UPDATE" } else { "" }
     ))
     .bind(project_id)
@@ -192,13 +192,13 @@ pub async fn create(
 ) -> Result<Written, AppError> {
     let (count, position) = sqlx::query_as::<_, (i64, i32)>(
         "SELECT count(*), COALESCE(max(position) + 1, 0) FROM dashboards \
-         WHERE project_id = $1 AND owner_actor_id IS NOT DISTINCT FROM $2",
+         WHERE space_id = $1 AND owner_actor_id IS NOT DISTINCT FROM $2",
     )
     .bind(new.project_id)
     .bind(new.owner_actor_id)
     .fetch_one(&mut *connection)
     .await?;
-    let all = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM dashboards WHERE project_id = $1")
+    let all = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM dashboards WHERE space_id = $1")
         .bind(new.project_id)
         .fetch_one(&mut *connection)
         .await?;
@@ -206,7 +206,7 @@ pub async fn create(
         return Ok(Written::Full);
     }
     let inserted = sqlx::query_as::<_, Row>(&format!(
-        "INSERT INTO dashboards (id, workspace_id, project_id, name, description, owner_actor_id, \
+        "INSERT INTO dashboards (id, workspace_id, space_id, name, description, owner_actor_id, \
          tiles, position, created_by_actor_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
          RETURNING {COLUMNS}"
     ))
@@ -248,7 +248,7 @@ pub async fn change(
          description = COALESCE($4, description), tiles = COALESCE($5, tiles), \
          owner_actor_id = CASE WHEN $6 THEN NULL ELSE owner_actor_id END, \
          version = version + 1, updated_at = now() \
-         WHERE project_id = $1 AND id = $2 RETURNING {COLUMNS}"
+         WHERE space_id = $1 AND id = $2 RETURNING {COLUMNS}"
     ))
     .bind(current.project_id)
     .bind(current.id)
@@ -267,7 +267,7 @@ pub async fn change(
 
 /// Removes a dashboard (its tiles go with it; the views they named stay).
 pub async fn remove(connection: &mut PgConnection, current: &Dashboard) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM dashboards WHERE project_id = $1 AND id = $2")
+    sqlx::query("DELETE FROM dashboards WHERE space_id = $1 AND id = $2")
         .bind(current.project_id)
         .bind(current.id)
         .execute(&mut *connection)

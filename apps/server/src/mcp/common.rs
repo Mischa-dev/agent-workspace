@@ -140,6 +140,22 @@ impl<T> ToolResult<T> {
                 Self::denied("You don't have permission to do that here.")
             }
             AppError::PayloadTooLarge => Self::invalid("text", "That's too long."),
+            // H1.24: refused where the write lands, as `run_tool` refuses.
+            AppError::WorkspaceSuspended => Self::PermissionDenied {
+                message: "This workspace is suspended or being deleted, so it can't be used. \
+                          Its owners can see why in its settings."
+                    .to_owned(),
+                retry_category: Some("do_not_retry".to_owned()),
+            },
+            // A budget charged where the call lands, such as the
+            // workspace's shared one (H1.1).
+            AppError::RateLimited {
+                retry_after_seconds,
+            } => Self::TemporarilyUnavailable {
+                message: format!(
+                    "Too many calls just now. Try again in {retry_after_seconds} seconds."
+                ),
+            },
             error => {
                 tracing::error!(
                     operation,
@@ -332,7 +348,7 @@ pub(super) async fn insert_audit(
 /// bad value in plain words instead of failing to parse the call. Pair it
 /// with `#[schemars(with = "Option<String>")]`: the input schema stays a
 /// plain string, without an anyOf.
-pub(super) fn string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+pub(crate) fn string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

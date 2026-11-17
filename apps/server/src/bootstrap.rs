@@ -311,8 +311,8 @@ pub async fn bootstrap_admin(
     }
 
     let selection = select_actor_and_organization(&mut transaction, &command).await?;
-    let (actor_id, organization_id, adopted_existing_actor) = match selection {
-        Some(candidate) => (candidate.actor_id, candidate.organization_id, true),
+    let (actor_id, organization_id, created) = match selection {
+        Some(candidate) => (candidate.actor_id, candidate.organization_id, None),
         None => {
             let organization_name =
                 command
@@ -330,35 +330,54 @@ pub async fn bootstrap_admin(
                         .await?
                 }
             };
-            let actor_id = Uuid::now_v7();
-            let organization_id = Uuid::now_v7();
-            sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'human')")
-                .bind(actor_id)
-                .execute(&mut *transaction)
-                .await?;
-            sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
-                .bind(organization_id)
-                .bind(organization_name)
-                .bind(organization_slug)
-                .execute(&mut *transaction)
-                .await?;
-            (actor_id, organization_id, false)
+            // One way to create a person (K1.29).
+            let person = crate::accounts::create_person(
+                &mut transaction,
+                crate::accounts::NewPerson {
+                    login_name: &command.login_name,
+                    display_name: &command.display_name,
+                    default_workspace: None,
+                    created_by: None,
+                    claimed: true,
+                },
+            )
+            .await?;
+            let organization_id = crate::workspace::lifecycle::create(
+                &mut transaction,
+                person.account_id,
+                crate::workspace::lifecycle::NewWorkspace {
+                    name: organization_name.clone(),
+                    slug: Some(organization_slug),
+                },
+            )
+            .await
+            .map_err(|error| match error {
+                AppError::Database(error) => BootstrapError::Database(error),
+                other => BootstrapError::Application(other),
+            })?;
+            (person.account_id, organization_id, Some(person.user_id))
         }
     };
-
-    let user_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO users (id, actor_id, login_name, display_name)
-        VALUES ($1, $2, $3, $4)
-        "#,
-    )
-    .bind(user_id)
-    .bind(actor_id)
-    .bind(&command.login_name)
-    .bind(&command.display_name)
-    .execute(&mut *transaction)
-    .await?;
+    let (adopted_existing_actor, user_id) = match created {
+        Some(user_id) => (false, user_id),
+        None => {
+            // An M0 owner's account gets its sign-in.
+            let user_id = Uuid::now_v7();
+            sqlx::query(
+                r#"
+                INSERT INTO users (id, actor_id, login_name, display_name)
+                VALUES ($1, $2, $3, $4)
+                "#,
+            )
+            .bind(user_id)
+            .bind(actor_id)
+            .bind(&command.login_name)
+            .bind(&command.display_name)
+            .execute(&mut *transaction)
+            .await?;
+            (true, user_id)
+        }
+    };
     sqlx::query(
         r#"
         INSERT INTO user_password_credentials (user_id, password_phc)

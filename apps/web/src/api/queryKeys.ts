@@ -23,6 +23,8 @@ export const queryKeys = {
   /** Search results, by query and the project they're narrowed to. */
   searchAll: ['search'] as const,
   search: (query: string, projectId: string | undefined) => ['search', query, projectId] as const,
+  /** One workspace as Settings › General reads it (its lifecycle too). */
+  workspace: (organizationId: string) => ['organization', organizationId] as const,
   /** A workspace's module switches (Settings › Modules). */
   workspaceModules: (organizationId: string) => ['organization', organizationId, 'modules'] as const,
   /** Which project a task key opens. */

@@ -26,10 +26,12 @@ pub const WORKSPACE_ID: &str = "workspace_id";
 
 /// Workspace-owned tables and their tenant column.
 pub const TENANT_TABLES: &[(&str, &str)] = &[
+    ("account_claims", WORKSPACE_ID),
     ("agent_approvals", WORKSPACE_ID),
     ("agent_profiles", ORGANIZATION_ID),
     ("agent_run_acknowledgements", WORKSPACE_ID),
     ("agent_run_events", WORKSPACE_ID),
+    ("agent_templates", WORKSPACE_ID),
     ("agent_run_usage", ORGANIZATION_ID),
     ("agent_runs", WORKSPACE_ID),
     ("agent_sessions", ORGANIZATION_ID),
@@ -95,6 +97,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("harness_catalog_refreshes", ORGANIZATION_ID),
     ("harness_models", ORGANIZATION_ID),
     ("host_commands", WORKSPACE_ID),
+    ("invite_tokens", WORKSPACE_ID),
     ("launches", ORGANIZATION_ID),
     ("layout_presets", ORGANIZATION_ID),
     ("link_previews", ORGANIZATION_ID),
@@ -112,6 +115,9 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("message_work_item_references", WORKSPACE_ID),
     ("messages", WORKSPACE_ID),
     ("module_installs", WORKSPACE_ID),
+    ("module_nav", WORKSPACE_ID),
+    ("module_parts", WORKSPACE_ID),
+    ("modules", WORKSPACE_ID),
     ("notification_action_tokens", ORGANIZATION_ID),
     ("notification_keywords", WORKSPACE_ID),
     ("notification_channel_preferences", ORGANIZATION_ID),
@@ -123,6 +129,9 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("operation_alias_usage", WORKSPACE_ID),
     ("organization_actor_profiles", ORGANIZATION_ID),
     ("organization_memberships", ORGANIZATION_ID),
+    ("package_installs", WORKSPACE_ID),
+    ("package_objects", WORKSPACE_ID),
+    ("packages", WORKSPACE_ID),
     ("project_counters", WORKSPACE_ID),
     ("project_decisions", WORKSPACE_ID),
     ("project_environments", ORGANIZATION_ID),
@@ -221,10 +230,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
 pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     ("_sqlx_migrations", "the schema's migration ledger"),
     (
-        "access_disagreements",
-        "the server's log of where the old and new access checks differ during K1's cutover; a row names a workspace when there is one",
-    ),
-    (
         "account_managers",
         "who manages an agent or app account: accounts and their naming are server-wide (R19)",
     ),
@@ -235,6 +240,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "actors",
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
+    ),
+    (
+        "deleted_workspaces",
+        "the one line a deleted workspace leaves, for billing and staff: its workspace is gone (H1.24)",
     ),
     (
         "event_consumer_failures",
@@ -302,6 +311,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the server's own key history, not any workspace's",
     ),
     (
+        "mcp_ended_sessions",
+        "digests of MCP session ids their clients ended; a session belongs to a connection, not a workspace (K5.7)",
+    ),
+    (
         "server_instances",
         "the server processes sharing this database and their heartbeats (K5.2)",
     ),
@@ -312,10 +325,6 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "thing_kinds",
         "the kinds of thing the server knows: a kind is the server's, not a workspace's (K3.10)",
-    ),
-    (
-        "things_backfill",
-        "how far the server's registry backfill got per source table",
     ),
     (
         "user_email_addresses",

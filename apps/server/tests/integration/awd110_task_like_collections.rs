@@ -43,7 +43,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
         json!({"projectId": "WORK", "collection": "Chores", "title": "Water the plants", "clientRequestId": "chore"}),
     )
     .await;
-    assert_eq!(chore["outcome"], "applied", "{chore}");
+    assert_eq!(chore["outcome"], "ok", "{chore}");
     let chores = call(
         "record_query",
         json!({"projectId": "WORK", "collection": "Chores"}),
@@ -59,7 +59,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
         json!({"projectId": "WORK", "title": "Plain task", "clientRequestId": "plain"}),
     )
     .await;
-    assert_eq!(plain["outcome"], "applied", "{plain}");
+    assert_eq!(plain["outcome"], "ok", "{plain}");
 
     let made = call(
         "collection_write",
@@ -161,7 +161,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
         }),
     )
     .await;
-    assert_eq!(reported["outcome"], "applied", "{reported}");
+    assert_eq!(reported["outcome"], "ok", "{reported}");
     let (loops, loops_collection, loops_values) = sqlx::query_as::<_, (Uuid, Option<Uuid>, Value)>(
         "SELECT id, collection_id, field_values FROM task_rows \
              WHERE project_id = $1::uuid AND title = 'Login loops'",
@@ -239,7 +239,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
         json!({"taskId": crash.to_string(), "fields": {"Severity": "Low"}, "expectedVersion": version}),
     )
     .await;
-    assert_eq!(updated["outcome"], "applied", "{updated}");
+    assert_eq!(updated["outcome"], "ok", "{updated}");
 
     // Many at once: each task takes its own collection's fields, and a
     // field another collection has is refused.

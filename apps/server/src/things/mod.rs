@@ -9,7 +9,6 @@
 //! `modules::things`, per kind, with the viewer's access; this module finds
 //! the kind first, so callers no longer need it.
 
-pub mod backfill;
 pub mod kind;
 
 use std::collections::{BTreeMap, HashMap};

@@ -74,7 +74,7 @@ pub(super) struct MessageHistoryArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct EditedMessage {
+pub struct EditedMessage {
     pub conversation_id: String,
     pub message_id: String,
     /// Pass as expectedRevision next time.
@@ -96,7 +96,7 @@ pub(super) struct EditedMessage {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RemovedMessage {
+pub struct RemovedMessage {
     pub conversation_id: String,
     pub message_id: String,
     pub removed_at: String,
@@ -116,7 +116,7 @@ pub(super) struct RemovedMessage {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MessageHistoryValue {
+pub struct MessageHistoryValue {
     pub conversation_id: String,
     pub message_id: String,
     /// The current revision.
@@ -129,7 +129,7 @@ pub(super) struct MessageHistoryValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RevisionItem {
+pub struct RevisionItem {
     pub revision: i32,
     /// Empty when redacted.
     pub text: String,
@@ -487,7 +487,7 @@ pub(super) struct MessagePreviewHideArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct HiddenPreviews {
+pub struct HiddenPreviews {
     pub message_id: String,
     /// How many previews this call hid; 0 when they were hidden already.
     pub hidden: u64,

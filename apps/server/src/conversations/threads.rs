@@ -511,10 +511,13 @@ async fn insert(
     sqlx::query(
         r#"
         INSERT INTO conversations (
-            id, project_id, kind, parent_channel_id, origin_message_id, name, auto_named,
-            visibility, subject_kind, subject_id, anchor
+            id, project_id, workspace_id, kind, parent_channel_id, origin_message_id, name,
+            auto_named, visibility, subject_kind, subject_id, anchor
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES (
+            $1, $2, (SELECT organization_id FROM projects WHERE id = $2), $3, $4, $5, $6, $7,
+            $8, $9, $10, $11
+        )
         ON CONFLICT (subject_kind, subject_id) WHERE kind = 'comments' DO NOTHING
         "#,
     )

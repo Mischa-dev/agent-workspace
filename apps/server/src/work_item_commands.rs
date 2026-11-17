@@ -389,14 +389,15 @@ pub async fn lock_membership(
     // lock a foreign key takes, so a write that only adds rows pointing at
     // the project (a sheet's cells under `share_membership`) never waits
     // for it, nor it for them.
-    Ok(sqlx::query_as::<_, ProjectMembership>(concat!(
+    let membership = sqlx::query_as::<_, ProjectMembership>(concat!(
         membership_select!(),
         "FOR NO KEY UPDATE OF project\n        FOR UPDATE OF membership\n        FOR SHARE OF organization_membership, actor"
     ))
     .bind(project_id)
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
-    .await?)
+    .await?;
+    open_for_writes(transaction, project_id, membership).await
 }
 
 /// `lock_membership` for a write that changes one document's content and
@@ -412,14 +413,34 @@ pub async fn share_membership(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<ProjectMembership>, AppError> {
-    Ok(sqlx::query_as::<_, ProjectMembership>(concat!(
+    let membership = sqlx::query_as::<_, ProjectMembership>(concat!(
         membership_select!(),
         "FOR SHARE OF membership, organization_membership, actor"
     ))
     .bind(project_id)
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
-    .await?)
+    .await?;
+    open_for_writes(transaction, project_id, membership).await
+}
+
+/// H1.24: every write locks its membership through one of the two above
+/// first, from any edge, so a suspended or deleting workspace refuses them
+/// all here.
+async fn open_for_writes(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    membership: Option<ProjectMembership>,
+) -> Result<Option<ProjectMembership>, AppError> {
+    if membership.is_some() {
+        crate::workspace::lifecycle::ensure_open_for_space(
+            &mut *transaction,
+            project_id,
+            "task_write",
+        )
+        .await?;
+    }
+    Ok(membership)
 }
 
 /// `lock_membership` without its locks, for a check that writes nothing

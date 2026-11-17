@@ -291,18 +291,34 @@ pub async fn decide_suggestion(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let writer = memory::browser_writer(&principal)?;
     let project_id = memory::page_project(&state.pool, page_id).await?;
-    memory::project_access(
-        &mut *transaction,
-        writer.actor_id,
-        writer.actor_kind,
+    // Anyone who may at least suggest here may withdraw their own;
+    // accepting and rejecting need edit access to the page (K1.12).
+    let caller = crate::access::Caller::person(writer.actor_id, writer.actor_kind);
+    let _may_write = crate::access::write_mode(
+        &mut transaction,
+        &caller,
+        "page",
         project_id,
-        Action::PageEdit,
+        true,
+        Some("pages"),
     )
-    .await
+    .await?
     .map_err(|_| AppError::NotFound("page"))?;
+    let creator = suggestions::page_creator(&mut transaction, page_id).await?;
+    let may_edit = crate::access::write_mode(
+        &mut transaction,
+        &caller,
+        "page",
+        project_id,
+        creator == Some(writer.actor_id),
+        Some("pages"),
+    )
+    .await?
+    .is_ok_and(|grant| grant.mode == crate::access::WriteMode::Direct);
     let decided = suggestions::decide(
         &mut transaction,
         writer,
+        may_edit,
         page_id,
         suggestion_id,
         request.decision,

@@ -103,7 +103,7 @@ async fn a_task_made_any_way_is_one_task_created_by_its_maker() {
             },
         )
         .await;
-    assert_eq!(made["outcome"], "applied", "{made}");
+    assert_eq!(made["outcome"], "ok", "{made}");
     let task = task_titled(&pool, &project, "From an agent").await;
     let facts = created(&pool, task).await;
     assert_eq!(facts.len(), 1, "{facts:?}");
@@ -119,7 +119,7 @@ async fn a_task_made_any_way_is_one_task_created_by_its_maker() {
             },
         )
         .await;
-    assert_eq!(made["outcome"], "applied", "{made}");
+    assert_eq!(made["outcome"], "ok", "{made}");
     let task = task_titled(&pool, &project, "From an app").await;
     let facts = created(&pool, task).await;
     assert_eq!(facts.len(), 1, "{facts:?}");

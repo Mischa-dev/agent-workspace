@@ -119,11 +119,16 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
     };
     report.push(
         Level::Ok,
-        match mail_workspaces {
-            0 => "email isn't set up (no password reset emails or email notifications); an owner \
-                  sets it in Settings > Workspace > Email"
+        match (&config.server_mail, mail_workspaces) {
+            (Some(mail), count) => format!(
+                "account email goes out through the server's own transport ({}:{}); {count} \
+                 workspace(s) send their own notification email",
+                mail.smtp.host, mail.smtp.port
+            ),
+            (None, 0) => "email isn't set up (no password reset emails or email notifications); \
+                  set AGENT_WORKSPACE_MAIL_URL, or an owner sets it in Settings > Workspace > Email"
                 .to_owned(),
-            count => format!("{count} workspace(s) send email"),
+            (None, count) => format!("{count} workspace(s) send email"),
         },
     );
     let (level, line) = crate::server_status::backup_line(&config.data_root);
@@ -148,7 +153,7 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
         Err(_) => report.push(Level::Warn, "couldn't measure the app data folder"),
     }
 
-    let known: Vec<(i64, Vec<u8>, String)> = sqlx::migrate!()
+    let known: Vec<(i64, Vec<u8>, String)> = migrator()
         .iter()
         .filter(|migration| !migration.migration_type.is_down_migration())
         .map(|migration| {
@@ -271,6 +276,22 @@ pub fn compare_migrations(
         }
     }
     plan
+}
+
+/// The migrations this release carries.
+fn migrator() -> sqlx::migrate::Migrator {
+    sqlx::migrate!()
+}
+
+/// The newest migration this release carries: the schema version it
+/// expects (readiness, K5.7).
+pub fn expected_schema_version() -> i64 {
+    migrator()
+        .iter()
+        .filter(|migration| !migration.migration_type.is_down_migration())
+        .map(|migration| migration.version)
+        .max()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

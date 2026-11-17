@@ -203,7 +203,7 @@ fn view(row: LinkRow, can_manage: bool) -> LinkView {
     }
 }
 
-fn normalize_name(value: &str) -> Result<String, AppError> {
+pub(crate) fn normalize_name(value: &str) -> Result<String, AppError> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 80 || value.chars().any(char::is_control) {
         return Err(AppError::Validation("name"));
@@ -257,7 +257,24 @@ pub(crate) async fn checked_form(
     collection_id: Uuid,
     form: &FormConfig,
 ) -> Result<Result<FormConfig, String>, AppError> {
-    let collection = crate::collections::get(pool, project_id, collection_id)
+    checked_form_in(
+        &mut *crate::db::scoped_tx(pool).await?,
+        project_id,
+        collection_id,
+        form,
+    )
+    .await
+}
+
+/// `checked_form` on the caller's connection or transaction, which sees a
+/// collection made earlier in it (a built module's inline parts, M1.6).
+pub(crate) async fn checked_form_in(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    form: &FormConfig,
+) -> Result<Result<FormConfig, String>, AppError> {
+    let collection = crate::collections::get(&mut *connection, project_id, collection_id)
         .await?
         .ok_or(AppError::NotFound("collection"))?;
     if collection.archived {
@@ -265,13 +282,9 @@ pub(crate) async fn checked_form(
             "The collection is archived. Restore it to take answers.".to_owned(),
         ));
     }
-    let definitions = crate::collections::field_definitions(
-        &mut *crate::db::scoped_tx(pool).await?,
-        project_id,
-        collection_id,
-        false,
-    )
-    .await?;
+    let definitions =
+        crate::collections::field_definitions(&mut *connection, project_id, collection_id, false)
+            .await?;
     Ok(collection_forms::check(form, &definitions))
 }
 
@@ -381,8 +394,7 @@ async fn manageable(pool: &PgPool, caller: &Caller, link_id: Uuid) -> Result<Lin
     let rights = project_rights(pool, caller, row.project_id)
         .await
         .map_err(|_| AppError::NotFound("bug_report_link"))?;
-    if caller.actor_kind != ActorKind::Human
-        || (row.collection_id.is_none() && !rights.tasks)
+    if (row.collection_id.is_none() && !rights.tasks)
         || !(rights.admin || row.owner_actor_id == caller.actor_id)
     {
         return Err(AppError::NotFound("bug_report_link"));
@@ -459,16 +471,37 @@ pub(crate) async fn create(
         (None, Some(_)) => return Err(AppError::Validation("collectionId")),
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let (link_id, token) = insert_link(&mut transaction, caller, project_id, &name, form).await?;
+    transaction.commit().await?;
+    let row = fetch(&state.pool, link_id).await?;
+    let is_form = row.collection_id.is_some();
+    Ok(LinkWithUrl {
+        link: view(row, true),
+        url: link_url(state, &token),
+        form_url: is_form.then(|| form_url(state, &token)),
+    })
+}
+
+/// Inserts a link (a form when `form` names its collection and checked
+/// questions) in the caller's transaction, with its audit row. The caller
+/// has checked who may. Returns the link and its token, shown once.
+pub(crate) async fn insert_link(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    caller: &Caller,
+    project_id: Uuid,
+    name: &str,
+    form: Option<(Uuid, FormConfig)>,
+) -> Result<(Uuid, String), AppError> {
     let organization_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT organization_id FROM projects WHERE id = $1 FOR UPDATE",
     )
     .bind(project_id)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     let count =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM bug_report_links WHERE project_id = $1")
             .bind(project_id)
-            .fetch_one(&mut *transaction)
+            .fetch_one(&mut **transaction)
             .await?;
     if count >= MAX_PER_PROJECT {
         return Err(AppError::Validation("bug_report_links.limit"));
@@ -487,7 +520,7 @@ pub(crate) async fn create(
     .bind(organization_id)
     .bind(project_id)
     .bind(caller.actor_id)
-    .bind(&name)
+    .bind(name)
     .bind(digest(&token))
     .bind(hint(&token))
     .bind(form.as_ref().map(|(collection_id, _)| *collection_id))
@@ -497,10 +530,10 @@ pub(crate) async fn create(
             .transpose()
             .map_err(|_| AppError::Internal("serialize form"))?,
     )
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     events::audit(
-        &mut *transaction,
+        &mut **transaction,
         caller,
         organization_id,
         Some(project_id),
@@ -510,14 +543,7 @@ pub(crate) async fn create(
         json!({ "name": name, "collection": form.as_ref().map(|(collection_id, _)| collection_id) }),
     )
     .await?;
-    transaction.commit().await?;
-    let row = fetch(&state.pool, link_id).await?;
-    let is_form = row.collection_id.is_some();
-    Ok(LinkWithUrl {
-        link: view(row, true),
-        url: link_url(state, &token),
-        form_url: is_form.then(|| form_url(state, &token)),
-    })
+    Ok((link_id, token))
 }
 
 pub(crate) async fn update(
@@ -867,6 +893,8 @@ fn priority(value: Option<&str>) -> Option<String> {
 struct ReportLink {
     id: Uuid,
     project_id: Uuid,
+    /// The link's workspace, whose public-submission budget it spends.
+    organization_id: Uuid,
     owner_actor_id: Uuid,
     name: String,
     state: String,
@@ -875,6 +903,8 @@ struct ReportLink {
     form: Option<Value>,
     /// Signs the pages a form renders (T1.29); never leaves the server.
     render_key: Vec<u8>,
+    /// M1.6: false when a built module holding it is switched off.
+    module_on: bool,
 }
 
 /// Why the maker can't add tasks (or a form's records) through it any
@@ -949,12 +979,16 @@ async fn receive(
     }
     let link = sqlx::query_as::<_, ReportLink>(
         r#"
-        SELECT link.id, link.project_id, link.owner_actor_id, link.name, link.state,
+        SELECT link.id, link.project_id,
+               (SELECT project.organization_id FROM projects project
+                WHERE project.id = link.project_id) AS organization_id,
+               link.owner_actor_id, link.name, link.state,
                (SELECT item_type.name FROM work_item_types item_type
                 WHERE item_type.project_id = link.project_id AND item_type.enabled
                   AND lower(item_type.name) = 'bug'
                 LIMIT 1) AS bug_type,
-               link.collection_id, link.form, link.render_key
+               link.collection_id, link.form, link.render_key,
+               module_part_on('form', link.id) AS module_on
         FROM bug_report_links link
         WHERE link.token_digest = $1
         "#,
@@ -963,6 +997,10 @@ async fn receive(
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("bug_report_link"))?;
+    // M1.6: a form in a built module that is switched off is turned off.
+    if !link.module_on {
+        return Ok(refused(StatusCode::FORBIDDEN, "This form is turned off."));
+    }
     if link.state != "active" {
         return Ok(refused(
             StatusCode::FORBIDDEN,
@@ -973,6 +1011,12 @@ async fn receive(
             },
         ));
     }
+    // H1.1: every link of one workspace shares its budget, so one
+    // workspace's flood doesn't need a server-wide ceiling.
+    state
+        .rate_limits
+        .check_workspace_public_submission(link.organization_id)
+        .await?;
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
@@ -1008,7 +1052,8 @@ async fn receive(
                 AppError::Internal("bug report task_create call")
             }
         })?;
-    if result.get("outcome").and_then(Value::as_str) != Some("applied") {
+    // task_create is an operation (K2.13): it answers in the envelope.
+    if result.get("outcome").and_then(Value::as_str) != Some("ok") {
         let outcome = result
             .get("outcome")
             .and_then(Value::as_str)
@@ -1020,7 +1065,8 @@ async fn receive(
             .unwrap_or("The task couldn't be created.");
         return Ok(refused(crate::public_api::status_for(&result), message));
     }
-    let duplicate = result
+    let created = &result["value"];
+    let duplicate = created
         .get("idempotentReplay")
         .and_then(Value::as_bool)
         .unwrap_or(false);
@@ -1045,7 +1091,7 @@ async fn receive(
         status,
         Json(json!({
             "ok": true,
-            "task": result.get("key"),
+            "task": created.get("key"),
             "duplicate": duplicate,
         })),
     )
@@ -1380,18 +1426,32 @@ async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> 
             Option<Uuid>,
             Option<Value>,
             Vec<u8>,
+            bool,
         ),
     >(
-        "SELECT id, project_id, name, state, collection_id, form, render_key FROM bug_report_links WHERE token_digest = $1",
+        "SELECT id, project_id, name, state, collection_id, form, render_key, \
+         module_part_on('form', id) FROM bug_report_links WHERE token_digest = $1",
     )
     .bind(&token_digest)
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?;
-    let Some((link_id, project_id, name, link_state, Some(collection_id), Some(form), render_key)) =
-        row
+    let Some((
+        link_id,
+        project_id,
+        name,
+        link_state,
+        Some(collection_id),
+        Some(form),
+        render_key,
+        module_on,
+    )) = row
     else {
         return Ok(refused(StatusCode::NOT_FOUND, "There's no form here."));
     };
+    // M1.6: a form in a built module that is switched off is turned off.
+    if !module_on {
+        return Ok(refused(StatusCode::FORBIDDEN, "This form is turned off."));
+    }
     let form = serde_json::from_value::<FormConfig>(form).unwrap_or_default();
     let collection = crate::collections::get(&state.pool, project_id, collection_id).await?;
     let Some(collection) = collection.filter(|collection| !collection.archived) else {

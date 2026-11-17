@@ -68,7 +68,7 @@ pub(crate) struct World {
     pub(crate) comment: Uuid,
     pub(crate) page: String,
     /// A comment thread on `page` (AWD-53), and two edits the agent
-    /// suggested to it, pending: the page is a person's.
+    /// suggested to it (it asks to suggest: its role edits), pending.
     pub(crate) page_thread: Uuid,
     pub(crate) page_suggestions: [Uuid; 2],
     pub(crate) repository: Uuid,
@@ -105,6 +105,10 @@ pub(crate) struct World {
     pub(crate) link_preview: Uuid,
     /// The workspace's own emoji (C2.19), added by `rook`.
     pub(crate) custom_emoji: Uuid,
+    /// A built module (M1.6) in the project, holding nothing.
+    pub(crate) module: Uuid,
+    /// A package install (M1.9) in the project, that made nothing.
+    pub(crate) package_install: Uuid,
 }
 
 /// The app on a fresh schema with workspaces A and B built, signed in as
@@ -112,6 +116,10 @@ pub(crate) struct World {
 pub(crate) struct TwoWorkspaces {
     pub(crate) app: axum::Router,
     pub(crate) pool: PgPool,
+    /// The state behind `app`, for tests that run a job's work directly.
+    pub(crate) state: AppState,
+    /// Where uploaded files' bytes live.
+    pub(crate) data_root: std::path::PathBuf,
     pub(crate) realtime: RealtimeHub,
     pub(crate) a: World,
     pub(crate) b: World,
@@ -267,13 +275,14 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     config.minimum_free_bytes = 0;
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     let realtime = RealtimeHub::new(8192);
-    let app = router(AppState {
+    let state = AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: realtime.clone(),
         supervisors: supervisors.clone(),
-    });
+    };
+    let app = router(state.clone());
 
     // Workspace A: the first owner, through the normal bootstrap.
     let a_owner = bootstrap_admin(
@@ -313,6 +322,8 @@ pub(crate) async fn two_workspaces_with(name: &str, github: bool) -> Option<TwoW
     Some(TwoWorkspaces {
         app,
         pool,
+        state,
+        data_root: data_root.clone(),
         realtime,
         a,
         b,
@@ -874,7 +885,7 @@ async fn build_workspace(
             &agent_token,
             &agent_session,
             "page_edit",
-            json!({"pageId": page, "edits": [{"op": "append", "markdown": format!("Launch suggestion {index}{m}")}]}),
+            json!({"pageId": page, "suggest": true, "edits": [{"op": "append", "markdown": format!("Launch suggestion {index}{m}")}]}),
         )
         .await;
         let suggested = structured(&suggested);
@@ -1658,6 +1669,45 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("custom emoji");
+    let module = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO modules (id, workspace_id, space_id, module_key, name, created_by_actor_id)
+        SELECT $1, $2, $3::uuid, 'local.tracker', $4, actor_id
+        FROM organization_memberships WHERE organization_id = $2 AND role = 'owner' LIMIT 1
+        "#,
+    )
+    .bind(module)
+    .bind(organization)
+    .bind(&project)
+    .bind(format!("Tracker{m}"))
+    .execute(pool)
+    .await
+    .expect("built module");
+    let package_install = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        WITH package AS (
+            INSERT INTO packages (id, workspace_id, package_key, version, name, document, digest, source)
+            VALUES ($1, $2, 'fixture', '1.0.0', 'Fixture', '{}'::jsonb, 'sha256:0', 'upload')
+            RETURNING id
+        )
+        INSERT INTO package_installs (
+            id, workspace_id, space_id, package_id, state, plan, plan_hash, installed_by_actor_id
+        )
+        SELECT $3, $2, $4::uuid, package.id, 'installed', '[]'::jsonb, 'sha256:0', membership.actor_id
+        FROM package, organization_memberships membership
+        WHERE membership.organization_id = $2 AND membership.role = 'owner'
+        LIMIT 1
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(organization)
+    .bind(package_install)
+    .bind(&project)
+    .execute(pool)
+    .await
+    .expect("package install");
 
     World {
         marker,
@@ -1709,6 +1759,8 @@ async fn build_workspace(
         task_file,
         link_preview,
         custom_emoji,
+        module,
+        package_install,
     }
 }
 
@@ -1764,7 +1816,9 @@ pub(crate) async fn sweep_ids(pool: &PgPool, organization: Uuid) -> HashSet<Stri
           AND parent.data_type = 'uuid'
           AND parent.column_name IN (
               'organization_id', 'project_id', 'conversation_id', 'work_item_id',
-              'agent_run_id', 'actor_id', 'repository_id', 'page_id', 'message_id'
+              'agent_run_id', 'actor_id', 'repository_id', 'page_id', 'message_id',
+              -- K4.3 (G6): the names new tables use (ruling R1).
+              'workspace_id', 'space_id'
           )
         ORDER BY 1, 2
         "#,

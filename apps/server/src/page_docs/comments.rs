@@ -453,7 +453,10 @@ pub async fn create(
         notification.detail = serde_json::json!({
             "pageCommentId": id,
             "threadId": thread_id,
-            "href": format!("/projects/{}/pages/{page_id}#comment-{thread_id}", page.project_id),
+            "href": format!(
+                "{}#comment-{thread_id}",
+                crate::addresses::Target::page(page.project_id, page_id).legacy_path()
+            ),
         });
         notify(transaction, &notification).await?;
     }

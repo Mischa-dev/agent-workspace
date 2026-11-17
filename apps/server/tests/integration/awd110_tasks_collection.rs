@@ -38,7 +38,7 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
             json!({"projectId": project, "title": title, "clientRequestId": title.replace([' ', '\''], "-")}),
         )
         .await;
-        assert_eq!(made["outcome"], "applied", "{made}");
+        assert_eq!(made["outcome"], "ok", "{made}");
     }
     sqlx::query(
         "UPDATE work_items SET priority = 'high' \
@@ -293,7 +293,7 @@ async fn a_tasks_record_changes_as_its_task() {
         json!({"projectId": "WORK", "title": "Fix the bridge", "clientRequestId": "bridge"}),
     )
     .await;
-    assert_eq!(made["outcome"], "applied", "{made}");
+    assert_eq!(made["outcome"], "ok", "{made}");
     let (_, listed) = send(
         app,
         setup.browser.request(

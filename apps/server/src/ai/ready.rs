@@ -16,6 +16,7 @@ use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 use crate::{
+    addresses::{Addresses, Target},
     error::AppError,
     settings::{self, SettingsContext},
     work_item_planning::Reader,
@@ -32,6 +33,7 @@ const MIN_DESCRIPTION: i32 = 40;
 struct Row {
     id: Uuid,
     project_id: Uuid,
+    workspace_id: Uuid,
     key: String,
     title: String,
     status_name: String,
@@ -52,7 +54,8 @@ struct Row {
 }
 
 const ROW_SELECT: &str = r#"
-    SELECT item.id, item.project_id, project.project_key || '-' || item.number AS key,
+    SELECT item.id, item.project_id, project.organization_id AS workspace_id,
+           project.project_key || '-' || item.number AS key,
            item.title, status.name AS status_name, status.semantic_category AS status_category,
            status.semantic_category IN ('completed', 'canceled') AS finished,
            item.priority, item.estimate, item.due_date,
@@ -173,15 +176,15 @@ struct Loaded {
 }
 
 async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded, AppError> {
-    let mut rows = sqlx::query_as::<_, Row>(&format!(
+    let mut rows = crate::db::scoped_one(pool, async |connection| { sqlx::query_as::<_, Row>(&format!(
         "{ROW_SELECT} WHERE item.project_id = $1 AND item.archived_at IS NULL ORDER BY item.number LIMIT $2"
     ))
     .bind(project_id)
     .bind(MAX_TASKS)
-    .fetch_all(pool)
-    .await?;
-    let edges = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, bool)>(
-        r#"
+    .fetch_all(connection).await }).await?;
+    let edges = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, bool)>(
+            r#"
         SELECT dependency.blocking_work_item_id, dependency.blocked_work_item_id,
                dependency.blocking_project_id, dependency.project_id,
                dependency.blocking_project_id = dependency.project_id
@@ -207,11 +210,13 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
         WHERE (dependency.project_id = $1 OR dependency.blocking_project_id = $1)
           AND blocking.archived_at IS NULL AND blocked.archived_at IS NULL
         "#,
-    )
-    .bind(project_id)
-    .bind(reader.actor_id)
-    .bind(reader.connection_id)
-    .fetch_all(pool)
+        )
+        .bind(project_id)
+        .bind(reader.actor_id)
+        .bind(reader.connection_id)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     let mut visible_edges = Vec::new();
     let mut hidden_blockers: HashMap<Uuid, usize> = HashMap::new();
@@ -247,10 +252,13 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
     if !external.is_empty() {
         let ids = external.into_iter().collect::<Vec<_>>();
         rows.extend(
-            sqlx::query_as::<_, Row>(&format!("{ROW_SELECT} WHERE item.id = ANY($1)"))
-                .bind(&ids)
-                .fetch_all(pool)
-                .await?,
+            crate::db::scoped_one(pool, async |connection| {
+                sqlx::query_as::<_, Row>(&format!("{ROW_SELECT} WHERE item.id = ANY($1)"))
+                    .bind(&ids)
+                    .fetch_all(connection)
+                    .await
+            })
+            .await?,
         );
     }
     Ok(Loaded {
@@ -261,19 +269,22 @@ async fn load(pool: &PgPool, reader: Reader, project_id: Uuid) -> Result<Loaded,
 }
 
 async fn run_place(pool: &PgPool, project_id: Uuid) -> Result<RunPlace, AppError> {
-    let (organization_id, repositories) = sqlx::query_as::<_, (Uuid, i64)>(
-        r#"
+    let (organization_id, repositories) = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, (Uuid, i64)>(
+            r#"
         SELECT project.organization_id,
                (SELECT count(*) FROM repositories repository
                  WHERE repository.project_id = project.id AND repository.enabled
                    AND repository.archived_at IS NULL)
         FROM projects project WHERE project.id = $1
         "#,
-    )
-    .bind(project_id)
-    .fetch_one(pool)
+        )
+        .bind(project_id)
+        .fetch_one(connection)
+        .await
+    })
     .await?;
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(pool).await?;
     let effective = settings::resolve(
         &mut connection,
         SettingsContext {
@@ -481,8 +492,8 @@ fn score(row: &Row, unblocks: usize, today: NaiveDate) -> (i64, Vec<String>) {
     (score, reasons)
 }
 
-fn href(row: &Row) -> String {
-    format!("/projects/{}/work-items/{}", row.project_id, row.id)
+fn href(addresses: Addresses, row: &Row) -> String {
+    addresses.in_workspace(row.workspace_id, &Target::task(row.project_id, row.id))
 }
 
 /// The project's open tasks, ranked, with each one's readiness.
@@ -540,7 +551,7 @@ pub async fn rank(
                 unblocks: count,
                 reasons,
                 readiness,
-                href: href(row),
+                href: href(reader.addresses, row),
             }
         })
         .filter(|task| match filter.scope {
@@ -586,18 +597,22 @@ pub async fn readiness_of(
     project_id: Uuid,
     task_id: Uuid,
 ) -> Result<Option<Readiness>, AppError> {
-    let Some(row) = sqlx::query_as::<_, Row>(&format!(
-        "{ROW_SELECT} WHERE item.project_id = $1 AND item.id = $2 AND item.archived_at IS NULL"
-    ))
-    .bind(project_id)
-    .bind(task_id)
-    .fetch_optional(pool)
+    let Some(row) = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, Row>(&format!(
+            "{ROW_SELECT} WHERE item.project_id = $1 AND item.id = $2 AND item.archived_at IS NULL"
+        ))
+        .bind(project_id)
+        .bind(task_id)
+        .fetch_optional(connection)
+        .await
+    })
     .await?
     else {
         return Ok(None);
     };
-    let blockers = sqlx::query_as::<_, Row>(&format!(
-        r#"{ROW_SELECT}
+    let blockers = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, Row>(&format!(
+            r#"{ROW_SELECT}
         JOIN work_item_dependencies dependency
           ON dependency.blocking_project_id = item.project_id
          AND dependency.blocking_work_item_id = item.id
@@ -610,12 +625,14 @@ pub async fn readiness_of(
                      AND sees_task.actor_id = $3 AND sees_task.enabled
                      AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
         "#
-    ))
-    .bind(project_id)
-    .bind(task_id)
-    .bind(reader.actor_id)
-    .bind(reader.connection_id)
-    .fetch_all(pool)
+        ))
+        .bind(project_id)
+        .bind(task_id)
+        .bind(reader.actor_id)
+        .bind(reader.connection_id)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     // Blockers in other projects the reader can't see (or an app's limit
     // hides) still block: counted, not named.
@@ -634,8 +651,9 @@ pub async fn readiness_of(
         .iter()
         .filter(|blocker| blocker.project_id != project_id)
         .count() as i64;
-    let elsewhere = sqlx::query_scalar::<_, i64>(
-        r#"
+    let elsewhere = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, i64>(
+            r#"
         SELECT count(*) FROM work_item_dependencies dependency
         JOIN task_rows item
           ON item.project_id = dependency.blocking_project_id
@@ -647,10 +665,12 @@ pub async fn readiness_of(
           AND status.semantic_category NOT IN ('completed', 'canceled')
           AND item.project_id <> $1
         "#,
-    )
-    .bind(project_id)
-    .bind(task_id)
-    .fetch_one(pool)
+        )
+        .bind(project_id)
+        .bind(task_id)
+        .fetch_one(connection)
+        .await
+    })
     .await?;
     let hidden = (elsewhere - shown_elsewhere).max(0);
     let place = run_place(pool, project_id).await?;
@@ -783,8 +803,9 @@ pub async fn graph(
         .iter()
         .map(|row| (row.id, row))
         .collect::<HashMap<_, _>>();
-    let suggested = sqlx::query_as::<_, SuggestedEdge>(
-        r#"
+    let suggested = crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_as::<_, SuggestedEdge>(
+            r#"
         SELECT suggestion.id, suggestion.work_item_id, suggestion.other_work_item_id,
                suggestion.confidence, suggestion.reason
         FROM ai_suggestions suggestion
@@ -794,11 +815,13 @@ pub async fn graph(
         ORDER BY suggestion.confidence DESC
         LIMIT 500
         "#,
-    )
-    .bind(project_id)
-    .bind(reader.actor_id)
-    .bind(reader.connection_id)
-    .fetch_all(pool)
+        )
+        .bind(project_id)
+        .bind(reader.actor_id)
+        .bind(reader.connection_id)
+        .fetch_all(connection)
+        .await
+    })
     .await?;
     // Which tasks to show: open ones in this project (in the milestone, when
     // filtered), the tasks linked to them, and finished ones on request.
@@ -881,7 +904,7 @@ pub async fn graph(
                 && open_blockers.get(&row.id).copied().unwrap_or(0) == 0
                 && loaded.hidden_blockers.get(&row.id).copied().unwrap_or(0) == 0,
             critical: critical_set.contains(&row.id),
-            href: href(row),
+            href: href(reader.addresses, row),
         })
         .collect::<Vec<_>>();
     nodes.sort_by_key(|node| natural_key(&node.key));
@@ -1012,6 +1035,7 @@ mod tests {
         Row {
             id,
             project_id: Uuid::nil(),
+            workspace_id: Uuid::nil(),
             key: format!("T-{}", id.as_u128()),
             title: String::new(),
             status_name: String::new(),

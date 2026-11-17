@@ -314,7 +314,11 @@ async fn notify_sponsoring_agents(
             &format!("Sponsored Worker run reached {state}"),
             "agent_run",
             run_id,
-            &format!("/projects/{project_id}/threads/{conversation_id}"),
+            &crate::addresses::Target::space(
+                project_id,
+                crate::addresses::Place::Thread(conversation_id),
+            )
+            .legacy_path(),
         )
         .await?;
     }

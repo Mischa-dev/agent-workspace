@@ -18,7 +18,6 @@ use super::{
 };
 use crate::{
     AppState,
-    access::compare::Mode as AccessMode,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
 };
 
@@ -144,6 +143,86 @@ async fn space_keys_to_ids(
             input[field] = Value::String(id.to_string());
         }
     }
+    task_keys_to_ids(state, request, input).await
+}
+
+/// A task's key (such as "AWD-12") in a field that names a task, replaced
+/// by the task's id (K2.13), the way MCP's own key resolution does for its
+/// tools: the task that has the key now, or the one a moved task went to,
+/// among spaces the caller is an enabled member of and can reach. A key two
+/// of the caller's workspaces share is never guessed; it stays for the
+/// input to refuse.
+async fn task_keys_to_ids(
+    state: &AppState,
+    request: &DispatchRequest,
+    mut input: Value,
+) -> Result<Value, OpError> {
+    for field in ["taskId", "workItemId", "parentId", "parentWorkItemId"] {
+        let Some((space_key, number)) = input
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(crate::mcp::split_task_key)
+            .map(|(key, number)| (key.to_owned(), number))
+        else {
+            continue;
+        };
+        let caller = &request.caller;
+        let workspace = request.workspace;
+        let found = crate::db::scoped_one(&state.pool, async |connection| {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+            SELECT found.id FROM (
+                SELECT item.id, 0 AS preference, item.project_id
+                FROM task_rows item
+                JOIN projects project ON project.id = item.project_id
+                WHERE upper(project.project_key) = upper($3) AND item.number = $4
+                  AND project.archived_at IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM work_item_key_aliases moved
+                      WHERE moved.source_work_item_id = item.id
+                  )
+                UNION ALL
+                SELECT alias.work_item_id, 1, item.project_id
+                FROM work_item_key_aliases alias
+                JOIN task_rows item ON item.id = alias.work_item_id
+                WHERE upper(alias.project_key) = upper($3) AND alias.number = $4
+            ) found
+            JOIN projects project ON project.id = found.project_id
+            JOIN project_memberships membership
+              ON membership.project_id = found.project_id
+             AND membership.actor_id = $1
+             AND membership.enabled
+            WHERE actor_can_access_project($1, $2, found.project_id)
+              AND ($5::uuid IS NULL OR found.project_id = $5)
+              AND ($6::uuid IS NULL OR project.organization_id = $6)
+            GROUP BY found.id
+            ORDER BY min(found.preference)
+            LIMIT 2
+            "#,
+            )
+            .bind(caller.account_id)
+            .bind(caller.connection_id)
+            .bind(&space_key)
+            .bind(number)
+            .bind(caller.confined_space)
+            .bind(workspace)
+            .fetch_all(connection)
+            .await
+        })
+        .await
+        .map_err(|error: sqlx::Error| OpError::logged("task key", &error.into()))?;
+        match found.as_slice() {
+            [id] => input[field] = Value::String(id.to_string()),
+            [] => return Err(OpError::not_found("That task")),
+            _ => {
+                return Err(OpError::invalid(
+                    "taskId",
+                    "That key names tasks in more than one of your workspaces. Use the task's \
+                     id or link.",
+                ));
+            }
+        }
+    }
     Ok(input)
 }
 
@@ -237,46 +316,23 @@ async fn admit<O: Operation>(
         }
     }
     let located = target::locate(&mut connection, target, caller.account_id, *workspace).await?;
-    let mode = state.config.access_mode("ops");
-    let old = if mode == AccessMode::New {
-        None
-    } else {
-        Some(old_check::<O>(&mut connection, caller, target, &located, writes).await)
-    };
-    if mode != AccessMode::Old {
-        let need = crate::access::Need::maybe(O::PERMISSION)
-            .writing(writes)
-            .in_module(O::MODULE);
-        let access_target = access_target(target, &located);
-        let new = crate::access::check(&mut connection, caller, need, access_target)
-            .await
-            .map_err(|error| OpError::logged(O::NAME, &error))?;
-        match &old {
-            Some(old) => {
-                crate::access::compare::compare(
-                    &mut connection,
-                    crate::access::compare::Compared {
-                        area: "ops",
-                        operation: O::NAME,
-                        caller,
-                        need: &need,
-                        target: &access_target,
-                        workspace_id: Some(located.workspace_id),
-                        space_id: located.space_id,
-                        old_allowed: old.is_ok(),
-                    },
-                    &new,
-                )
-                .await;
-            }
-            None => {
-                let _grant = new.map_err(|denied| denied_error::<O>(denied, caller, &located))?;
-            }
-        }
-    }
-    if let Some(old) = old {
-        old?;
-    }
+    let module = module_here::<O>(&mut connection, &located).await?;
+    let need = crate::access::Need::maybe(O::PERMISSION)
+        .writing(writes)
+        .in_module(module);
+    let _grant = crate::access::check(
+        &mut connection,
+        caller,
+        need,
+        access_target(target, &located),
+    )
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error))?
+    .map_err(|denied| denied_error::<O>(denied, caller, &located))?;
+    // H1.24: a suspended workspace, or one being deleted, refuses every
+    // call but the ones that still work then (keeping it).
+    crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)
+        .await?;
     drop(connection);
     Ok(located)
 }
@@ -330,6 +386,14 @@ async fn pipeline<O: Operation>(
     let writes = O::KIND.writes();
 
     let located = admit::<O>(state, &request.caller, &mut request.workspace, &target).await?;
+    // H1.1: an agent's or app's call spends its workspace's shared budget.
+    // After the connection goes back: the shared counter takes its own.
+    if matches!(request.edge, Edge::Mcp { .. } | Edge::PublicApi { .. }) {
+        state
+            .rate_limits
+            .check_workspace_call(located.workspace_id)
+            .await?;
+    }
 
     let key = request_id_for::<O>(&request)?;
     let ctx = OpContext {
@@ -352,6 +416,8 @@ async fn pipeline<O: Operation>(
         tx: None,
         audit: None,
         replayed: false,
+        keyed: false,
+        audited: false,
     };
     let mut reservation = None;
     if let Some(key) = key.as_ref()
@@ -387,7 +453,12 @@ async fn pipeline<O: Operation>(
         request_id: ctx.request_id.clone(),
         replayed: call.replayed,
         // A write without a request id ran once; a retry would run again.
-        replay_safe: writes.then_some(ctx.request_id.is_some()),
+        // A command that keeps its own idempotency is retry-safe only when
+        // it says it deduplicated this call.
+        replay_safe: writes.then_some(match O::IDEMPOTENCY {
+            Idempotency::Dispatcher => ctx.request_id.is_some(),
+            Idempotency::Command | Idempotency::None => call.keyed,
+        }),
         preview: request.preview,
     }
     .to_json();
@@ -409,6 +480,7 @@ async fn pipeline<O: Operation>(
     }
     if writes {
         let audit = call.audit.take();
+        let audited = call.audited;
         let tx = call.tx().await?;
         let (kind, id, metadata) = match audit {
             Some(facts) => (facts.kind, facts.id, facts.metadata),
@@ -417,7 +489,9 @@ async fn pipeline<O: Operation>(
                 (kind, id, serde_json::json!({}))
             }
         };
-        audit_row(tx, &ctx, kind, id, metadata).await?;
+        if !audited {
+            audit_row(tx, &ctx, kind, id, metadata).await?;
+        }
         if let Some(reservation) = reservation.as_ref() {
             idempotency::complete(tx, reservation, answer.status, &answer.body).await?;
         }
@@ -450,27 +524,25 @@ async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid])
     }
 }
 
-/// Today's checks, which decide while the `ops` area is in compare mode:
-/// the module gate, then the access shim.
-async fn old_check<O: Operation>(
+/// The module that must be on where an operation acts: its own, except
+/// that a conversation's follows the space it is in (registered as
+/// conversation filters: Messages in the direct space, Channels in a
+/// project), as the older tools decide.
+async fn module_here<O: Operation>(
     connection: &mut sqlx::PgConnection,
-    caller: &Caller,
-    target: &Target,
     located: &target::Located,
-    writes: bool,
-) -> Result<(), OpError> {
-    module_gate::<O>(connection, caller, target, located).await?;
-    access_shim::check(
-        connection,
-        caller,
-        target,
-        located,
-        O::PERMISSION,
-        writes,
-        O::TITLE,
-    )
-    .await
-    .map(|_| ())
+) -> Result<&'static str, OpError> {
+    let registry = crate::modules::registry::Registry::global();
+    let Some(space) = located.space_id else {
+        return Ok(O::MODULE);
+    };
+    if !registry.governs_conversations(O::MODULE) {
+        return Ok(O::MODULE);
+    }
+    let direct = crate::spaces::kind::holds_messages(connection, space)
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+    Ok(registry.conversation_module(direct).unwrap_or(O::MODULE))
 }
 
 /// What `access` is asked about for a located target.
@@ -537,39 +609,6 @@ fn denied_error<O: Operation>(
             None => OpError::not_found("That workspace"),
         },
     }
-}
-
-/// The operation's module must be on where it acts.
-async fn module_gate<O: Operation>(
-    connection: &mut sqlx::PgConnection,
-    caller: &Caller,
-    target: &Target,
-    located: &target::Located,
-) -> Result<(), OpError> {
-    let Some(manifest) = crate::modules::manifest::get(O::MODULE) else {
-        return Ok(());
-    };
-    if !manifest.switchable || matches!(target, Target::Account) {
-        return Ok(());
-    }
-    let modules = match located.space_id {
-        Some(space) => {
-            crate::modules::state::for_project(connection, space, caller.account_id).await?
-        }
-        None => Some(
-            crate::modules::state::for_member(connection, located.workspace_id, caller.account_id)
-                .await?,
-        ),
-    };
-    if modules.is_some_and(|modules| !modules.contains(O::MODULE)) {
-        return Err(OpError::Denied {
-            reason: DenyReason::ModuleOff {
-                module: manifest.id.clone(),
-            },
-            message: format!("{} is turned off here.", manifest.name).into(),
-        });
-    }
-    Ok(())
 }
 
 /// Begin a call's transaction narrowed to the call's workspace

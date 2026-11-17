@@ -258,15 +258,15 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
         json!({"projectId": "BETA", "title": "Beta crash", "priority": "urgent", "labels": ["Mobile"]}),
     ] {
         let task = call("task_create", arguments).await;
-        assert_eq!(task["outcome"], "applied", "{task}");
-        created.push(id(&task["workItemId"]));
+        assert_eq!(task["outcome"], "ok", "{task}");
+        created.push(id(&task["value"]["workItemId"]));
     }
     let by_mara = as_mara(
         "task_create",
         json!({"projectId": "ALPHA", "title": "Mara's", "priority": "medium"}),
     )
     .await;
-    assert_eq!(by_mara["key"], "ALPHA-4", "{by_mara}");
+    assert_eq!(by_mara["value"]["key"], "ALPHA-4", "{by_mara}");
     let archived_label = call(
         "label_write",
         json!({"projectId": "ALPHA", "label": "Old", "archived": true}),
@@ -535,7 +535,7 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
         json!({"taskId": "BETA-1", "expectedVersion": version(&setup, created[3]).await, "addLabels": ["ΟΔΟΣ"]}),
     )
     .await;
-    assert_eq!(tagged["outcome"], "applied", "{tagged}");
+    assert_eq!(tagged["outcome"], "ok", "{tagged}");
     let roads = list(json!({"labels": ["ΟΔΟΣ"]})).await;
     assert_eq!(keys(&roads["tasks"]), ["BETA-1"], "{roads}");
 }
@@ -567,7 +567,7 @@ async fn task_list_takes_several_values_and_reads_views_as_the_list_does() {
         let mut arguments = arguments;
         arguments["projectId"] = json!("VIEWS");
         let task = call("task_create", arguments).await;
-        assert_eq!(task["outcome"], "applied", "{task}");
+        assert_eq!(task["outcome"], "ok", "{task}");
     }
     let list = |arguments: Value| {
         let call = &call;
@@ -827,7 +827,7 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
         ("NEW", "Already here"),
     ] {
         let created = call("task_create", json!({"projectId": project, "title": title})).await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
     let mut tasks = Vec::new();
     for number in 1..=5 {
@@ -991,7 +991,7 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
         json!({"taskId": "ORD-4", "expectedVersion": 1, "status": "Ready", "clientRequestId": "ord-4-ready"}),
     )
     .await;
-    assert_eq!(ready["outcome"], "applied", "{ready}");
+    assert_eq!(ready["outcome"], "ok", "{ready}");
     let before = versions().await;
     assert_refused(
         &reorder(json!({"taskIds": ["ORD-1"], "beforeTaskId": "ORD-4"})).await,
@@ -1037,7 +1037,7 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
         json!({"taskId": "ORD-5", "expectedVersion": 2, "archived": true, "clientRequestId": "ord-5-archive"}),
     )
     .await;
-    assert_eq!(archived["outcome"], "applied", "{archived}");
+    assert_eq!(archived["outcome"], "ok", "{archived}");
     assert_refused(
         &reorder(json!({"taskIds": ["ORD-5"]})).await,
         "taskIds",
@@ -1119,7 +1119,7 @@ async fn task_link_repositories_pull_requests_and_threads() {
         json!({"projectId": "REPO", "title": "Offline mode"}),
     )
     .await;
-    let task = id(&created["workItemId"]);
+    let task = id(&created["value"]["workItemId"]);
     let link = |extra: Value| {
         let mut arguments = json!({"taskId": "REPO-1"});
         for (key, value) in extra.as_object().expect("object") {
@@ -1597,7 +1597,7 @@ async fn a_project_scoped_credential_never_learns_ids_beyond_its_project() {
             json!({"projectId": project, "title": "Start"}),
         )
         .await;
-        assert_eq!(created["outcome"], "applied", "{created}");
+        assert_eq!(created["outcome"], "ok", "{created}");
     }
     let secret_task = task_id(&setup, &secret, 1).await.to_string();
     let scoped = mcp::issue_credential(
@@ -1756,7 +1756,7 @@ async fn a_claim_waits_behind_a_write_to_its_column() {
         json!({"projectId": "WORK", "title": "Claim me"}),
     )
     .await;
-    assert_eq!(created["outcome"], "applied", "{created}");
+    assert_eq!(created["outcome"], "ok", "{created}");
     let project: Uuid = work.parse().expect("project ID");
     let claimed = task_id(&setup, &work, 1).await;
     let column = sqlx::query_scalar::<_, Uuid>("SELECT status_id FROM work_items WHERE id = $1")

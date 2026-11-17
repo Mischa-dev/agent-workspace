@@ -1,4 +1,4 @@
--- T1.32: dashboards. A dashboard is a page of tiles in a project: each tile
+-- T1.32: dashboards. A dashboard is a page of tiles in a space (a project): each tile
 -- shows one of a collection's views (a chart, a number, a short list) or a
 -- note. Shared dashboards are everyone's in the project; a personal one
 -- (owner set) is its owner's alone. A tile only names a view: its figures
@@ -8,7 +8,7 @@
 CREATE TABLE dashboards (
     id UUID PRIMARY KEY,
     workspace_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    space_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL CHECK (
         char_length(name) BETWEEN 1 AND 80
         AND name = btrim(name)
@@ -31,10 +31,10 @@ CREATE TABLE dashboards (
 
 CREATE UNIQUE INDEX dashboards_name_unique
     ON dashboards (
-        project_id,
+        space_id,
         COALESCE(owner_actor_id, '00000000-0000-0000-0000-000000000000'::uuid),
         lower(name)
     );
 
-CREATE INDEX dashboards_by_project ON dashboards (project_id, position);
+CREATE INDEX dashboards_by_project ON dashboards (space_id, position);
 CREATE INDEX dashboards_by_workspace ON dashboards (workspace_id);

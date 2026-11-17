@@ -296,6 +296,15 @@ pub static PAGE_CONTENT_SAVED: EventType = signal(
     "A page's content or details were saved",
 )
 .legacy(&["page.updated"]);
+/// A page's content was kept as a new version: quick saves merged into one
+/// version are one fact, which rules and webhooks hear (K3.5).
+pub static PAGE_UPDATED: EventType = fact(
+    "page.updated",
+    "pages",
+    Some("page"),
+    "A page was saved as a new version",
+)
+.automatable();
 pub static PAGE_DISCUSSION_CHANGED: EventType = signal(
     "page.discussion_changed",
     "pages",
@@ -341,7 +350,8 @@ pub static SHEET_UPDATED: EventType = fact(
     Some("sheet"),
     "A sheet's cells, tabs or name changed",
 )
-.legacy(&["sheet.updated"]);
+.legacy(&["sheet.updated"])
+.automatable();
 
 // --- dashboards ------------------------------------------------------------
 pub static DASHBOARD_UPDATED: EventType = fact(
@@ -361,6 +371,15 @@ pub static WHITEBOARD_SCENE_CHANGED: EventType = signal(
 )
 .legacy(&["whiteboard.updated"]);
 
+/// A whiteboard's scene was kept as a new version (its revision cadence),
+/// which rules and webhooks hear (K3.5).
+pub static WHITEBOARD_UPDATED: EventType = fact(
+    "whiteboard.updated",
+    "whiteboards",
+    Some("whiteboard"),
+    "A whiteboard was saved as a new version",
+)
+.automatable();
 pub static WHITEBOARD_VERSION_RESTORED: EventType = fact(
     "whiteboard.version_restored",
     "whiteboards",
@@ -438,6 +457,14 @@ pub static SPACE_MODULES_CHANGED: EventType = fact(
 )
 .legacy(&["project.modules.updated"]);
 
+pub static WORKSPACE_LIFECYCLE_CHANGED: EventType = fact(
+    "workspace.lifecycle_changed",
+    "workspace",
+    Some("workspace"),
+    "A workspace was suspended, resumed, scheduled for deletion or kept",
+)
+.legacy(&["workspace.lifecycle.changed"]);
+
 // --- workspace -------------------------------------------------------------
 pub static FILE_ATTACHED: EventType = fact(
     "file.attached",
@@ -514,6 +541,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &VIEW_CHANGED,
         &FIELD_CHANGED,
         &PAGE_CONTENT_SAVED,
+        &PAGE_UPDATED,
         &PAGE_DISCUSSION_CHANGED,
         &PAGE_COMMENTED,
         &PAGE_COMMENT_CHANGED,
@@ -523,6 +551,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SHEET_UPDATED,
         &DASHBOARD_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
+        &WHITEBOARD_UPDATED,
         &WHITEBOARD_VERSION_RESTORED,
         &COLLECTION_UPDATED,
         &RECORD_CREATED,
@@ -533,6 +562,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &PULL_REQUEST_CLOSED,
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
+        &WORKSPACE_LIFECYCLE_CHANGED,
         &FILE_ATTACHED,
         &FILE_REMOVED,
         &ACCOUNT_STATUS_CHANGED,

@@ -43,17 +43,32 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
 
     let mut transaction = crate::db::scoped_tx(pool).await?;
 
-    let organization_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO organizations (id, name, slug)
-        VALUES ($1, 'Demo Workspace', 'demo-workspace')
-        ON CONFLICT (slug) DO UPDATE SET updated_at = now()
-        RETURNING id
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .fetch_one(&mut *transaction)
-    .await?;
+    // The demo workspace, made the one way workspaces are (H1.24) the first
+    // time, with a new person as its founding owner.
+    let existing_organization =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM organizations WHERE slug = 'demo-workspace'")
+            .fetch_optional(&mut *transaction)
+            .await?;
+    let (organization_id, founding_owner) = match existing_organization {
+        Some(organization_id) => (organization_id, None),
+        None => {
+            let founder = Uuid::now_v7();
+            sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'human')")
+                .bind(founder)
+                .execute(&mut *transaction)
+                .await?;
+            let organization_id = crate::workspace::lifecycle::create(
+                &mut transaction,
+                founder,
+                crate::workspace::lifecycle::NewWorkspace {
+                    name: "Demo Workspace".to_owned(),
+                    slug: Some("demo-workspace".to_owned()),
+                },
+            )
+            .await?;
+            (organization_id, Some(founder))
+        }
+    };
 
     let project_id = sqlx::query_scalar::<_, Uuid>(
         r#"
@@ -80,7 +95,9 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .bind(project_id)
     .fetch_optional(&mut *transaction)
     .await?;
-    let human_actor_id = existing_human_actor.unwrap_or_else(Uuid::now_v7);
+    let human_actor_id = existing_human_actor
+        .or(founding_owner)
+        .unwrap_or_else(Uuid::now_v7);
     sqlx::query(
         r#"
         INSERT INTO actors (id, kind)
@@ -217,6 +234,8 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .fetch_one(&mut *transaction)
     .await?;
 
+    // The seed runs against older schemas in the upgrade tests, so it
+    // leaves conversations.workspace_id to its fill trigger (K4.4).
     let channel_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO conversations (id, project_id, kind, name)

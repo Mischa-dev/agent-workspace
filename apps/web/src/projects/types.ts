@@ -46,11 +46,14 @@ export type Project = {
   attentionCount: number
   /** AWD-75: the modules off for you in this project (its workspace, or your role there). */
   modulesOff?: string[]
-  /** AWD-96: the workspace's own space for pages, not a project. */
-  workspaceSpace?: boolean
+  /** The kind of space (K4.10); `workspace` is the workspace's own space, never listed as a project. */
+  kind?: SpaceKind
   capabilities: ProjectCapabilities
   navigation: ProjectNavigation
 }
+
+/** The kinds of space (K4). */
+export type SpaceKind = 'project' | 'workspace' | 'team' | 'personal'
 
 export type ProjectListResponse = {
   projects: Project[]

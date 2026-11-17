@@ -215,7 +215,7 @@ async fn start_write<T: Serialize>(
     require_authenticated_write(state, headers, principal).await?;
     let key = IdempotencyKey::from_headers(headers)?;
     let request_hash = RequestHash::for_value(request)?;
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let membership = lock_membership(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -329,7 +329,7 @@ async fn list_collections(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<IncludeArchivedQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let reader = reader(&mut connection, &headers, &principal, project_id).await?;
     if !reader.project_archived {
         super::tasks::ensure(&mut connection, project_id, principal.actor_id).await?;
@@ -340,6 +340,8 @@ async fn list_collections(
         query.include_archived.unwrap_or(false),
     )
     .await?;
+    // `ensure` may have made the Tasks collection just now: keep it.
+    connection.commit().await?;
     Ok(Json(json!({
         "collections": collections,
         "canBuild": reader.can_build && !reader.project_archived,
@@ -406,7 +408,7 @@ async fn get_collection(
     principal: AuthenticatedActor,
     ApiPath((project_id, collection_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<CollectionBody>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let reader = reader(&mut connection, &headers, &principal, project_id).await?;
     let collection = super::get(&mut *connection, project_id, collection_id)
         .await?
@@ -1183,7 +1185,7 @@ async fn list_records(
     ApiPath((project_id, collection_id)): ApiPath<(Uuid, Uuid)>,
     ApiQuery(query): ApiQuery<RecordsQuery>,
 ) -> Result<Response, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let reader = reader(&mut connection, &headers, &principal, project_id).await?;
     let collection = super::get(&mut *connection, project_id, collection_id)
         .await?
@@ -1384,7 +1386,7 @@ async fn get_record(
     principal: AuthenticatedActor,
     ApiPath((project_id, collection_id, record_id)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<RecordBody>, AppError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let reader = reader(&mut connection, &headers, &principal, project_id).await?;
     let tasks = super::get(&mut *connection, project_id, collection_id)
         .await?

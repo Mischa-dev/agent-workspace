@@ -17,6 +17,7 @@ import {
 } from '../conversations/liveMessages'
 import { createLiveStore, NO_STREAMS, type Streams } from './liveStore'
 import { modulesChanged } from './moduleSwitches'
+import { workspaceLifecycleChanged } from './workspaceLifecycle'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
 import {
   durableMessageId,
@@ -362,6 +363,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
             void queryClient.invalidateQueries({ queryKey: queryKeys.statuses })
             return
           }
+          if (workspaceLifecycleChanged(queryClient, envelope)) return
           if (
             envelope.type === 'whiteboard.updated' ||
             envelope.type === 'page.updated' ||

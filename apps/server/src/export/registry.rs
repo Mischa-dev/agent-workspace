@@ -89,6 +89,68 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "modules",
+                table: "modules",
+                references: &[
+                    ("space_id", "projects"),
+                    ("created_by_actor_id", "actors"),
+                    ("package_install_id", "package_installs"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "module_nav",
+                table: "module_nav",
+                references: &[("module_id", "modules")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "module_parts",
+                table: "module_parts",
+                references: &[("module_id", "modules"), ("space_id", "projects")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "packages",
+                table: "packages",
+                references: &[("created_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "package_installs",
+                table: "package_installs",
+                references: &[
+                    ("space_id", "projects"),
+                    ("package_id", "packages"),
+                    ("installed_by_actor_id", "actors"),
+                    ("via_app_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "package_objects",
+                table: "package_objects",
+                references: &[("install_id", "package_installs")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "agent_templates",
+                table: "agent_templates",
+                references: &[
+                    ("space_id", "projects"),
+                    ("install_id", "package_installs"),
+                    ("created_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "onboarding_progress",
                 table: "onboarding_progress",
                 references: &[("actor_id", "actors"), ("project_id", "projects")],
@@ -153,6 +215,14 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             },
         ],
         not_exported: &[
+            (
+                "account_claims",
+                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
+            ),
+            (
+                "invite_tokens",
+                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
+            ),
             (
                 "background_jobs",
                 "runtime state of this server (queues, leases, retries)",
@@ -1075,7 +1145,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             kind: "dashboards",
             table: "dashboards",
             references: &[
-                ("project_id", "projects"),
+                ("space_id", "projects"),
                 ("owner_actor_id", "actors"),
                 ("created_by_actor_id", "actors"),
             ],

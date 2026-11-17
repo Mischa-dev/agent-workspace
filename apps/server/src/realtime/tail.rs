@@ -9,7 +9,13 @@
 //! only. A gap in positions is a bug (the sequencer makes them dense), so it
 //! is counted and logged, never skipped silently.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use sqlx::PgPool;
 use tokio::{
@@ -39,6 +45,43 @@ pub enum Tailed {
     Resync,
 }
 
+/// When the tail last reached the head, for readiness (K5.7). It starts at
+/// the head, so it counts as caught up when it starts.
+#[derive(Clone)]
+pub struct Progress {
+    inner: Arc<ProgressInner>,
+}
+
+struct ProgressInner {
+    started: Instant,
+    /// Milliseconds from `started` to the last read that reached the head.
+    caught_up: AtomicU64,
+}
+
+impl Default for Progress {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(ProgressInner {
+                started: Instant::now(),
+                caught_up: AtomicU64::new(0),
+            }),
+        }
+    }
+}
+
+impl Progress {
+    fn caught_up(&self) {
+        let now = u64::try_from(self.inner.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.inner.caught_up.fetch_max(now, Ordering::Relaxed);
+    }
+
+    /// How long since the tail was last at the head.
+    pub fn behind(&self) -> Duration {
+        let caught_up = Duration::from_millis(self.inner.caught_up.load(Ordering::Relaxed));
+        self.inner.started.elapsed().saturating_sub(caught_up)
+    }
+}
+
 /// Where the tail's events go; subscribe for a receiver.
 pub type TailSender = broadcast::Sender<Tailed>;
 
@@ -53,6 +96,7 @@ pub async fn run(
     start: i64,
     wake: Arc<Notify>,
     sender: TailSender,
+    progress: Progress,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut after = start;
@@ -62,7 +106,9 @@ pub async fn run(
             return;
         }
         let pause =
-            match crate::tenancy::system("events.log", step(&pool, &mut after, &sender)).await {
+            match crate::tenancy::system("events.log", step(&pool, &mut after, &sender, &progress))
+                .await
+            {
                 Ok(read) if read >= READ as usize => Duration::ZERO,
                 Ok(_) => POLL,
                 Err(error) => {
@@ -116,7 +162,12 @@ pub async fn feed(
 }
 
 /// One read: returns how many events it handed on.
-async fn step(pool: &PgPool, after: &mut i64, sender: &TailSender) -> Result<usize, AppError> {
+async fn step(
+    pool: &PgPool,
+    after: &mut i64,
+    sender: &TailSender,
+    progress: &Progress,
+) -> Result<usize, AppError> {
     let mut connection = crate::db::scoped_tx(pool).await?;
     let head = events::head(&mut connection).await?;
     let position = *after;
@@ -127,6 +178,7 @@ async fn step(pool: &PgPool, after: &mut i64, sender: &TailSender) -> Result<usi
         );
         let _ = sender.send(Tailed::Resync);
         *after = head;
+        progress.caught_up();
         crate::metrics::tail_moved(head, 0, 0);
         return Ok(0);
     }
@@ -148,6 +200,9 @@ async fn step(pool: &PgPool, after: &mut i64, sender: &TailSender) -> Result<usi
     }
     let reached = batch.last().map_or(position, |event| event.position);
     *after = reached;
+    if reached >= head {
+        progress.caught_up();
+    }
     crate::metrics::tail_moved(reached, (head - reached).max(0), gaps);
     Ok(batch.len())
 }

@@ -69,8 +69,8 @@ async fn create_task(
     let mut arguments = arguments;
     arguments["projectId"] = json!(project);
     let created = tool(&setup.app, token, session, "task_create", arguments).await;
-    assert_eq!(created["outcome"], "applied", "{created}");
-    created["key"].as_str().expect("key").to_owned()
+    assert_eq!(created["outcome"], "ok", "{created}");
+    created["value"]["key"].as_str().expect("key").to_owned()
 }
 
 #[tokio::test]
@@ -630,7 +630,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
                "priority": "urgent", "dueDate": "2026-10-20", "clearEstimate": true}),
     )
     .await;
-    assert_eq!(updated["outcome"], "applied", "{updated}");
+    assert_eq!(updated["outcome"], "ok", "{updated}");
     // A due date before a task's start is found before anything is applied.
     let early = call(
         "task_update_many",
@@ -720,7 +720,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
         json!({"taskId": "PLAN-1", "expectedVersion": current["value"]["task"]["version"], "estimate": 8}),
     )
     .await;
-    assert_eq!(sized["outcome"], "applied", "{sized}");
+    assert_eq!(sized["outcome"], "ok", "{sized}");
     let moved = call(
         "task_move",
         json!({"taskId": "PLAN-1", "toProjectId": "NEXT"}),

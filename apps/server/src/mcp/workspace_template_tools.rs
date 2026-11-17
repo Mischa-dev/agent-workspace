@@ -17,14 +17,12 @@ use super::{
 use crate::{
     AppState,
     error::AppError,
-    policy::ActorKind,
     roles::{self, Auditor},
     workspace_templates::{
         self as templates, Applied, ApplyError, SaveOutcome, TemplateUse, TemplateView,
     },
 };
 
-const PEOPLE_USE_TEMPLATES: &str = "Agents can read templates and suggest one, but only a workspace owner or admin uses or saves them, in Settings > Workspace templates or through an app connected as themselves.";
 const MANAGERS_USE_TEMPLATES: &str = "Only people who manage the workspace's settings and roles use or save templates. Suggest one to a workspace owner or admin instead.";
 
 /// The workspace of the project a call names, once the caller is checked
@@ -122,9 +120,6 @@ pub(super) async fn workspace_template_apply(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_USE_TEMPLATES);
-    }
     let result = async {
         let Some(organization_id) = workspace_of(state, principal, &arguments.project_id).await?
         else {
@@ -204,9 +199,6 @@ pub(super) async fn workspace_template_save(
 ) -> ToolResult<WorkspaceTemplateSaveValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_USE_TEMPLATES);
     }
     let result = async {
         let Some(organization_id) = workspace_of(state, principal, &arguments.project_id).await?

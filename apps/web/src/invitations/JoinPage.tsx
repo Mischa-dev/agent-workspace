@@ -155,7 +155,7 @@ export function JoinPage() {
 
   /** A project invitation lands in that project when it can be told apart; otherwise Home. */
   const landing = async () => {
-    if (invitation?.kind !== 'project' || !invitation.projectName) return '/home'
+    if (!invitation || invitation.kind === 'workspace' || !invitation.projectName) return '/home'
     try {
       const { projects } = await queryClient.fetchQuery({ queryKey: queryKeys.projects, queryFn: () => listProjects() })
       const matches = projects.filter((project) => project.name === invitation.projectName && !project.archivedAt)
@@ -261,14 +261,19 @@ export function JoinPage() {
   const invalid = !resolving && !invitation
   // Known from the link itself, so the title doesn't change once the invitation loads.
   const kind = invitation?.kind ?? initial.kind
-  const workspace = kind === 'workspace'
+  // A link that names no space lets you into the workspace alone.
+  const workspace = kind === 'workspace' || (kind === 'link' && !invitation?.projectName)
   const needsCode = !signedIn && mode === 'existing' && challenge !== null
   const mismatch =
     mode === 'new' && passwordConfirmation.length > 0 && passwordConfirmation.length >= password.length && passwordConfirmation !== password
 
   return (
     <AuthLayout
-      footer="Invitation links work once. The secret is removed from the address bar before anything is sent."
+      footer={
+        kind === 'link'
+          ? 'The secret is removed from the address bar before anything is sent.'
+          : 'Invitation links work once. The secret is removed from the address bar before anything is sent.'
+      }
       intro={
         resolving ? (
           <span aria-live="polite">Checking your invitation…</span>
@@ -285,7 +290,7 @@ export function JoinPage() {
         ) : undefined
       }
       kicker="Private invitation"
-      title={kind === 'workspace' ? 'Join a workspace' : kind === 'project' ? 'Join a project' : 'Join'}
+      title={workspace ? 'Join a workspace' : kind === 'project' || kind === 'link' ? 'Join a project' : 'Join'}
       titleId="join-heading"
     >
       {error && (

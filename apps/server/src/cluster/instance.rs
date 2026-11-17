@@ -19,8 +19,10 @@ impl Default for InstanceId {
     }
 }
 
-/// What an instance does. Every instance does all three until K5.7 lets an
-/// operator choose.
+/// What an instance does (K5.7). `api` answers the app's requests; `live`
+/// holds browsers' sockets; `work` runs jobs, the log's consumers and loops,
+/// and may hold the built-in host. Every instance does all three unless the
+/// operator says otherwise.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Roles {
     pub api: bool,
@@ -42,6 +44,35 @@ impl Roles {
             .filter(|(_, on)| *on)
             .map(|(name, _)| name.to_owned())
             .collect()
+    }
+}
+
+impl std::str::FromStr for Roles {
+    type Err = String;
+
+    /// A comma-separated list of `api`, `live` and `work`, at least one.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let mut roles = Self {
+            api: false,
+            live: false,
+            work: false,
+        };
+        for name in value
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            match name.to_ascii_lowercase().as_str() {
+                "api" => roles.api = true,
+                "live" => roles.live = true,
+                "work" => roles.work = true,
+                _ => return Err(format!("unknown role {name:?}; expected api, live or work")),
+            }
+        }
+        if roles.names().is_empty() {
+            return Err("name at least one of api, live and work".into());
+        }
+        Ok(roles)
     }
 }
 

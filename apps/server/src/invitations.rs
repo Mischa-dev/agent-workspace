@@ -5,14 +5,10 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgConnection, Postgres, Transaction};
-use subtle::ConstantTimeEq;
 use uuid::Uuid;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::{
     AppState,
@@ -28,8 +24,8 @@ use crate::{
     },
 };
 
-const INVITATION_TOKEN_BYTES: usize = 32;
-const INVITATION_PREFIX_LENGTH: usize = 16;
+pub mod engine;
+
 const MAX_EXPIRY_HOURS: i32 = 7 * 24;
 
 /// Where people open the app, so invitation links work outside the server host.
@@ -650,10 +646,15 @@ async fn resolve_invitation(
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
     require_allowed_origin(&state.config, &headers)?;
     let (prefix, digest) = consume_invitation_token(&mut token, &state).await?;
-    let row = fetch_valid_invitation(&state, &prefix)
-        .await?
-        .filter(|row| digest_matches(&row.token_digest, &digest))
-        .ok_or(AppError::NotFound("project_invitation"))?;
+    let row = state
+        .rate_limits
+        .charge_link_miss(
+            fetch_valid_invitation(&state, &prefix)
+                .await?
+                .filter(|row| digest_matches(&row.token_digest, &digest))
+                .ok_or(AppError::NotFound("project_invitation")),
+        )
+        .await?;
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     require_issuer_still_grants(&mut connection, &row).await?;
     Ok(Json(ResolvedInvitation {
@@ -690,10 +691,14 @@ async fn accept_new_user(
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = lock_valid_invitation(&mut transaction, &prefix)
+    let found = lock_valid_invitation(&mut transaction, &prefix)
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
-        .ok_or(AppError::NotFound("project_invitation"))?;
+        .ok_or(AppError::NotFound("project_invitation"));
+    let (invitation, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     require_issuer_still_grants(&mut transaction, &invitation).await?;
     if sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM users WHERE lower(login_name) = $1)",
@@ -718,21 +723,19 @@ async fn accept_new_user(
         ));
     }
 
-    let actor_id = Uuid::now_v7();
-    let user_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
-        .bind(actor_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(map_join_database_error)?;
-    sqlx::query(
-        "INSERT INTO users (id, actor_id, login_name, display_name) VALUES ($1, $2, $3, $4)",
+    let crate::accounts::Person {
+        account_id: actor_id,
+        user_id,
+    } = crate::accounts::create_person(
+        &mut transaction,
+        crate::accounts::NewPerson {
+            login_name: &login_name,
+            display_name: &display_name,
+            default_workspace: None,
+            created_by: Some(invitation.issued_by_actor_id),
+            claimed: true,
+        },
     )
-    .bind(user_id)
-    .bind(actor_id)
-    .bind(&login_name)
-    .bind(&display_name)
-    .execute(&mut *transaction)
     .await
     .map_err(map_join_database_error)?;
     sqlx::query("INSERT INTO user_password_credentials (user_id, password_phc) VALUES ($1, $2)")
@@ -828,10 +831,14 @@ async fn accept_existing_user(
     let (prefix, digest) = consume_invitation_token(&mut token, &state).await?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = lock_valid_invitation(&mut transaction, &prefix)
+    let found = lock_valid_invitation(&mut transaction, &prefix)
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
-        .ok_or(AppError::NotFound("project_invitation"))?;
+        .ok_or(AppError::NotFound("project_invitation"));
+    let (invitation, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     require_issuer_still_grants(&mut transaction, &invitation).await?;
     #[derive(FromRow)]
     struct ExistingIdentity {
@@ -896,7 +903,10 @@ async fn accept_existing_user(
             UPDATE organization_memberships
             SET role = 'admin', version = version + 1, updated_at = now()
             WHERE organization_id = $1 AND actor_id = $2
-              AND role_id IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM workspace_roles held
+                  WHERE held.id = organization_memberships.role_id AND NOT held.built_in
+              )
             "#,
         )
         .bind(invitation.organization_id)
@@ -1046,28 +1056,11 @@ async fn consume_invitation_token(
     token: &mut String,
     state: &AppState,
 ) -> Result<(String, [u8; 32]), AppError> {
-    let valid = token.len() == 50
-        && token.starts_with("aw_inv_")
-        && token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
-    let result = valid.then(|| {
-        (
-            token[..INVITATION_PREFIX_LENGTH].to_owned(),
-            Sha256::digest(token.as_bytes()).into(),
-        )
-    });
-    token.zeroize();
-    let Some((prefix, digest)) = result else {
-        state.rate_limits.check_invitation("invalid").await?;
-        return Err(AppError::NotFound("project_invitation"));
-    };
-    state.rate_limits.check_invitation(&prefix).await?;
-    Ok((prefix, digest))
+    engine::consume(token, engine::Family::Project, state, "project_invitation").await
 }
 
 fn digest_matches(stored: &[u8], candidate: &[u8; 32]) -> bool {
-    stored.len() == candidate.len() && bool::from(stored.ct_eq(candidate))
+    engine::digest_matches(stored, candidate)
 }
 
 fn normalize_display_name(value: &str) -> Result<String, AppError> {
@@ -1273,12 +1266,8 @@ fn validate_invitation_role(role: &str) -> Result<(), AppError> {
 }
 
 fn generate_invitation_token() -> (String, String, [u8; 32]) {
-    let mut bytes = [0_u8; INVITATION_TOKEN_BYTES];
-    OsRng.fill_bytes(&mut bytes);
-    let token = format!("aw_inv_{}", URL_SAFE_NO_PAD.encode(bytes));
-    let prefix = token[..INVITATION_PREFIX_LENGTH].to_owned();
-    let digest = Sha256::digest(token.as_bytes()).into();
-    (token, prefix, digest)
+    let issued = engine::issue(engine::Family::Project);
+    (issued.token, issued.prefix, issued.digest)
 }
 
 pub(crate) async fn fetch_invitation(

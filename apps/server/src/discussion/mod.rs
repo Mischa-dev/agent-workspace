@@ -108,7 +108,7 @@ pub(crate) async fn open_for(
     }
     let project_id = match home.project_id {
         Some(project_id) => project_id,
-        None => crate::workspace_space::join(transaction, home.workspace_id, creator.actor_id)
+        None => crate::spaces::workspace::join(transaction, home.workspace_id, creator.actor_id)
             .await?
             .ok_or(AppError::NotFound(kind.as_str()))?,
     };

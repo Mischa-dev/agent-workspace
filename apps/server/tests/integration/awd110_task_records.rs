@@ -69,7 +69,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
         json!({"projectId": "WORK", "title": "Fix the bridge", "clientRequestId": "bridge"}),
     )
     .await;
-    assert_eq!(made["outcome"], "applied", "{made}");
+    assert_eq!(made["outcome"], "ok", "{made}");
     let task = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM task_rows WHERE project_id = $1::uuid AND title = 'Fix the bridge'",
     )

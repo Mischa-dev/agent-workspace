@@ -168,26 +168,38 @@ pub struct AppConfig {
     /// Cloudflare). Unset, nothing is read from the request for the
     /// caller's address and there are no per-address limits.
     pub client_address_header: Option<String>,
+    /// MCP and public API calls one workspace's agents and apps may make
+    /// together each minute (`AGENT_WORKSPACE_WORKSPACE_CALLS_PER_MINUTE`,
+    /// H1.1).
+    pub workspace_calls_per_minute: u32,
+    /// Apps that registered but never finished connecting the server keeps
+    /// before it refuses new registrations
+    /// (`AGENT_WORKSPACE_OAUTH_MAX_UNCLAIMED_CLIENTS`).
+    pub oauth_max_unclaimed_clients: i64,
+    /// The server's own mail transport (`AGENT_WORKSPACE_MAIL_URL`, H1.17):
+    /// account mail (password resets, address confirmations) goes through
+    /// it, and so does notification mail of a workspace without its own.
+    pub server_mail: Option<ServerMail>,
     /// The operator's name for this instance (K5.2), shown with the
     /// server's instances; never taken from the machine.
     pub instance_label: Option<String>,
     /// How long a lease lives unless renewed (K5.2): renewed every third,
     /// given up by its holder after two thirds.
     pub lease_ttl: Duration,
-    /// How each access area decides while it moves onto `access` (K1 §4.3):
-    /// `AGENT_WORKSPACE_ACCESS_<AREA>=old|compare|new`, each area's default
-    /// from `access::compare::AREAS`.
-    pub access_modes: BTreeMap<&'static str, crate::access::compare::Mode>,
-}
-
-impl AppConfig {
-    /// How `area` decides (its default when the area is unknown here).
-    pub fn access_mode(&self, area: &str) -> crate::access::compare::Mode {
-        self.access_modes
-            .get(area)
-            .copied()
-            .unwrap_or(crate::access::compare::Mode::Old)
-    }
+    /// What this instance does (K5.7): `AGENT_WORKSPACE_ROLES`, any of
+    /// `api`, `live` and `work` (default all three).
+    pub roles: crate::cluster::Roles,
+    /// Whether a `work` instance may hold the built-in host (runs, recovery,
+    /// repositories on this machine's disk): `AGENT_WORKSPACE_BUILTIN_HOST`,
+    /// default on.
+    pub builtin_host: bool,
+    /// How long a stopping instance answers "not ready" before it closes its
+    /// sockets and stops taking requests, so the balancer moves off it
+    /// first: `AGENT_WORKSPACE_DRAIN_SECONDS`, default 5.
+    pub drain: Duration,
+    /// Where an instance without `api` answers health checks:
+    /// `AGENT_WORKSPACE_HEALTH_ADDR`, default the application address.
+    pub health_addr: Option<SocketAddr>,
 }
 
 /// A set of defaults sized for one kind of server (H1.12). A profile only
@@ -389,7 +401,7 @@ impl AppConfig {
         let server_addr = parse(values, "SERVER_ADDR", "127.0.0.1:3100")?;
         let webhook_addr = parse(values, "WEBHOOK_ADDR", "127.0.0.1:3101")?;
         let database_url = required(values, "DATABASE_URL")?;
-        let database_max_connections = parse(values, "DATABASE_MAX_CONNECTIONS", "5")?;
+        let database_max_connections = parse(values, "DATABASE_MAX_CONNECTIONS", "10")?;
         let data_root = PathBuf::from(optional(values, "DATA_ROOT", ".agent-workspace"));
         let data_quota_bytes = parse(values, "DATA_QUOTA_BYTES", "21474836480")?;
         let minimum_free_bytes = parse(values, "MINIMUM_FREE_BYTES", "5368709120")?;
@@ -600,6 +612,26 @@ impl AppConfig {
             }
         }
         let client_address_header = client_address_header(values)?;
+        let workspace_calls_per_minute: u32 = parse(
+            values,
+            "WORKSPACE_CALLS_PER_MINUTE",
+            &crate::rate_limit::WORKSPACE_CALLS_PER_WINDOW.to_string(),
+        )?;
+        if workspace_calls_per_minute == 0 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}WORKSPACE_CALLS_PER_MINUTE"),
+                reason: "must be at least 1".into(),
+            });
+        }
+        let server_mail = server_mail(values)?;
+        let oauth_max_unclaimed_clients: i64 =
+            parse(values, "OAUTH_MAX_UNCLAIMED_CLIENTS", "1024")?;
+        if oauth_max_unclaimed_clients < 1 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}OAUTH_MAX_UNCLAIMED_CLIENTS"),
+                reason: "must be at least 1".into(),
+            });
+        }
         let instance_label = Some(optional(values, "INSTANCE_LABEL", "").trim().to_owned())
             .filter(|label| !label.is_empty());
         if instance_label
@@ -625,7 +657,40 @@ impl AppConfig {
                 reason: "must be between 2 and 300".into(),
             });
         }
-        let access_modes = access_modes(values)?;
+        let roles = optional(values, "ROLES", "api,live,work")
+            .parse::<crate::cluster::Roles>()
+            .map_err(|reason| ConfigError::Invalid {
+                key: format!("{PREFIX}ROLES"),
+                reason,
+            })?;
+        let builtin_host = match optional(values, "BUILTIN_HOST", "on")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "on" | "true" => true,
+            "off" | "false" => false,
+            _ => {
+                return Err(ConfigError::Invalid {
+                    key: format!("{PREFIX}BUILTIN_HOST"),
+                    reason: "expected on or off".into(),
+                });
+            }
+        };
+        let drain_seconds = parse::<u64>(values, "DRAIN_SECONDS", "5")?;
+        if drain_seconds > 120 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DRAIN_SECONDS"),
+                reason: "must be between 0 and 120".into(),
+            });
+        }
+        let health_addr = match optional(values, "HEALTH_ADDR", "").trim() {
+            "" => None,
+            address => Some(address.parse().map_err(|_| ConfigError::Invalid {
+                key: format!("{PREFIX}HEALTH_ADDR"),
+                reason: "expected an address and port, such as 127.0.0.1:3101".into(),
+            })?),
+        };
         Ok(Self {
             environment,
             server_addr,
@@ -674,9 +739,15 @@ impl AppConfig {
             link_previews,
             secrets_key_missing,
             client_address_header,
+            workspace_calls_per_minute,
+            oauth_max_unclaimed_clients,
+            server_mail,
             instance_label,
             lease_ttl: Duration::from_secs(lease_seconds),
-            access_modes,
+            roles,
+            builtin_host,
+            drain: Duration::from_secs(drain_seconds),
+            health_addr,
         })
     }
 }
@@ -712,26 +783,6 @@ fn secrets_key_path(
     }
     validate_secret_file(key, &path, data_root, web_root, 64 * 1024)?;
     Ok((Some(path), false))
-}
-
-fn access_modes(
-    values: &BTreeMap<String, String>,
-) -> Result<BTreeMap<&'static str, crate::access::compare::Mode>, ConfigError> {
-    let mut modes = BTreeMap::new();
-    for (area, default) in crate::access::compare::AREAS {
-        let key = format!("{PREFIX}ACCESS_{}", area.to_ascii_uppercase());
-        let mode = match values.get(&key) {
-            None => *default,
-            Some(value) => {
-                crate::access::compare::Mode::parse(value).ok_or_else(|| ConfigError::Invalid {
-                    key: key.clone(),
-                    reason: "must be old, compare or new".into(),
-                })?
-            }
-        };
-        modes.insert(*area, mode);
-    }
-    Ok(modes)
 }
 
 fn github_config(
@@ -1277,6 +1328,115 @@ pub enum ConfigError {
     Invalid { key: String, reason: String },
 }
 
+/// The server's own mail transport (H1.17).
+#[derive(Clone, Debug)]
+pub struct ServerMail {
+    pub smtp: crate::mail::smtp::Settings,
+    /// From the URL's password, if it has one.
+    pub password: Option<SecretString>,
+    pub from_address: String,
+    pub from_name: Option<String>,
+}
+
+/// `AGENT_WORKSPACE_MAIL_URL`: `smtps://user:password@host:465` (TLS from
+/// the first byte), `smtp://user:password@host:587` (STARTTLS, required),
+/// or `smtp+plain://localhost:25` (a relay on this machine only). Needs
+/// `AGENT_WORKSPACE_MAIL_FROM`; `AGENT_WORKSPACE_MAIL_FROM_NAME` is
+/// optional.
+fn server_mail(values: &BTreeMap<String, String>) -> Result<Option<ServerMail>, ConfigError> {
+    let invalid = |suffix: &str, reason: &str| ConfigError::Invalid {
+        key: format!("{PREFIX}{suffix}"),
+        reason: reason.to_owned(),
+    };
+    let Some(raw) = values
+        .get(&format!("{PREFIX}MAIL_URL"))
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let url = url::Url::parse(raw.trim()).map_err(|_| invalid("MAIL_URL", "not a URL"))?;
+    let (security, default_port) = match url.scheme() {
+        "smtps" => (crate::mail::smtp::Security::Tls, 465),
+        "smtp" => (crate::mail::smtp::Security::Starttls, 587),
+        "smtp+plain" => (crate::mail::smtp::Security::None, 25),
+        _ => {
+            return Err(invalid(
+                "MAIL_URL",
+                "expected smtps://, smtp:// or smtp+plain://",
+            ));
+        }
+    };
+    let host = url
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| invalid("MAIL_URL", "needs a host"))?
+        .to_owned();
+    let decode = |value: &str| {
+        percent_decode(value).ok_or_else(|| invalid("MAIL_URL", "bad percent-encoding"))
+    };
+    let username = match url.username() {
+        "" => None,
+        name => Some(decode(name)?),
+    };
+    let password = url
+        .password()
+        .map(decode)
+        .transpose()?
+        .map(SecretString::new);
+    let smtp = crate::mail::smtp::Settings {
+        host,
+        port: url.port().unwrap_or(default_port),
+        security,
+        username,
+    };
+    if let Err(field) = smtp.validate() {
+        return Err(invalid(
+            "MAIL_URL",
+            &format!("its {field} isn't usable (plain SMTP is for a relay on this machine)"),
+        ));
+    }
+    let from_address = values
+        .get(&format!("{PREFIX}MAIL_FROM"))
+        .and_then(|value| crate::mail::normalize_address(value))
+        .ok_or_else(|| invalid("MAIL_FROM", "an email address is needed with MAIL_URL"))?;
+    let from_name = values
+        .get(&format!("{PREFIX}MAIL_FROM_NAME"))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    if from_name
+        .as_deref()
+        .is_some_and(|name| name.len() > 120 || name.chars().any(char::is_control))
+    {
+        return Err(invalid(
+            "MAIL_FROM_NAME",
+            "at most 120 characters, on one line",
+        ));
+    }
+    Ok(Some(ServerMail {
+        smtp,
+        password,
+        from_address,
+        from_name,
+    }))
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
 pub const WORKOS_API_BASE: &str = "https://api.workos.com";
 
 fn workos_config(
@@ -1666,7 +1826,7 @@ mod tests {
         let mut values = base_values();
         let standard = AppConfig::from_values(&values).expect("standard");
         assert_eq!(standard.profile, Profile::Standard);
-        assert_eq!(standard.database_max_connections, 5);
+        assert_eq!(standard.database_max_connections, 10);
         assert_eq!(standard.job_concurrency, 4);
         assert!(standard.link_previews);
 
@@ -1685,6 +1845,44 @@ mod tests {
 
         values.insert("AGENT_WORKSPACE_PROFILE".to_owned(), "roomy".to_owned());
         assert!(AppConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn roles_host_and_drain_are_read_with_safe_defaults() {
+        let mut values = base_values();
+        let default = AppConfig::from_values(&values).expect("defaults");
+        assert_eq!(default.roles, crate::cluster::Roles::ALL);
+        assert!(default.builtin_host);
+        assert_eq!(default.drain, Duration::from_secs(5));
+        assert_eq!(default.health_addr, None);
+
+        values.insert("AGENT_WORKSPACE_ROLES".to_owned(), " work ".to_owned());
+        values.insert("AGENT_WORKSPACE_BUILTIN_HOST".to_owned(), "off".to_owned());
+        values.insert("AGENT_WORKSPACE_DRAIN_SECONDS".to_owned(), "0".to_owned());
+        values.insert(
+            "AGENT_WORKSPACE_HEALTH_ADDR".to_owned(),
+            "127.0.0.1:3101".to_owned(),
+        );
+        let work = AppConfig::from_values(&values).expect("work only");
+        assert!(work.roles.work && !work.roles.api && !work.roles.live);
+        assert!(!work.builtin_host);
+        assert_eq!(work.drain, Duration::ZERO);
+        assert_eq!(
+            work.health_addr,
+            Some("127.0.0.1:3101".parse().expect("address"))
+        );
+
+        for (key, value) in [
+            ("AGENT_WORKSPACE_ROLES", "api,cron"),
+            ("AGENT_WORKSPACE_ROLES", ","),
+            ("AGENT_WORKSPACE_BUILTIN_HOST", "maybe"),
+            ("AGENT_WORKSPACE_DRAIN_SECONDS", "600"),
+            ("AGENT_WORKSPACE_HEALTH_ADDR", "nowhere"),
+        ] {
+            let mut refused = values.clone();
+            refused.insert(key.to_owned(), value.to_owned());
+            assert!(AppConfig::from_values(&refused).is_err(), "{key}={value}");
+        }
     }
 
     #[test]
@@ -1993,6 +2191,68 @@ mod tests {
         );
         let error = AppConfig::from_values(&values).expect_err("oversized secret must fail");
         assert!(error.to_string().contains("between 1 and 4096 bytes"));
+    }
+
+    /// H1.17: the server's mail URL names a transport, its credentials stay
+    /// out of `Debug`, and plain SMTP is only for a relay on this machine.
+    #[test]
+    fn the_server_mail_url_is_parsed_and_its_password_redacted() {
+        let mut values = base_values();
+        assert!(
+            AppConfig::from_values(&values)
+                .expect("config")
+                .server_mail
+                .is_none()
+        );
+        values.insert(
+            "AGENT_WORKSPACE_MAIL_URL".to_owned(),
+            "smtps://mailer%40example.com:p%40ss-word@smtp.example.com".to_owned(),
+        );
+        assert!(
+            AppConfig::from_values(&values).is_err(),
+            "a from address is needed"
+        );
+        values.insert(
+            "AGENT_WORKSPACE_MAIL_FROM".to_owned(),
+            "no-reply@example.com".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("config");
+        let mail = config.server_mail.as_ref().expect("server mail");
+        assert_eq!(mail.smtp.host, "smtp.example.com");
+        assert_eq!(mail.smtp.port, 465);
+        assert_eq!(mail.smtp.security, crate::mail::smtp::Security::Tls);
+        assert_eq!(mail.smtp.username.as_deref(), Some("mailer@example.com"));
+        assert_eq!(
+            mail.password.as_ref().map(SecretString::expose),
+            Some("p@ss-word")
+        );
+        assert!(!format!("{config:?}").contains("p@ss-word"));
+
+        values.insert(
+            "AGENT_WORKSPACE_MAIL_URL".to_owned(),
+            "smtp://smtp.example.com".to_owned(),
+        );
+        let mail = AppConfig::from_values(&values)
+            .expect("config")
+            .server_mail
+            .expect("mail");
+        assert_eq!(
+            (mail.smtp.port, mail.smtp.security),
+            (587, crate::mail::smtp::Security::Starttls)
+        );
+        for invalid in [
+            "smtp+plain://mail.example.com",
+            "http://smtp.example.com",
+            "smtps://",
+        ] {
+            values.insert("AGENT_WORKSPACE_MAIL_URL".to_owned(), invalid.to_owned());
+            assert!(AppConfig::from_values(&values).is_err(), "{invalid}");
+        }
+        values.insert(
+            "AGENT_WORKSPACE_MAIL_URL".to_owned(),
+            "smtp+plain://127.0.0.1:2525".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_ok());
     }
 
     #[test]

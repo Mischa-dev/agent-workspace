@@ -129,6 +129,12 @@ pub(crate) const RULES: &[Rule] = &[
         count: notification_detail_text,
     },
     Rule {
+        id: "hand_built_links",
+        agents_rule: "rule 13, \"Addresses are built in one place\"",
+        ceiling: HAND_BUILT_LINKS_CEILING,
+        count: hand_built_links,
+    },
+    Rule {
         id: "vendor_names_core",
         agents_rule: "rule 8, \"Nobody's stack is hard-coded\"",
         ceiling: VENDOR_NAMES_CORE_CEILING,
@@ -189,6 +195,9 @@ const CONVERSATION_LISTINGS_CEILING: usize = 70;
 // suggested batch (usage/alerts.rs).
 const NOTIFICATION_DETAIL_TEXT_CEILING: usize = 4;
 const VENDOR_NAMES_CORE_CEILING: usize = 10;
+// K4.18: links into the web app built by hand instead of by the address
+// module. The rest move when links switch to workspace addresses (K4.19).
+const HAND_BUILT_LINKS_CEILING: usize = 83;
 // K5.17 (ruling R24 rule 3): what a transaction-mode pooler can't carry.
 const SESSION_ADVISORY_LOCKS_CEILING: usize = 0;
 const POOLER_SAFE_SQL_CEILING: usize = 0;
@@ -216,7 +225,11 @@ const AGENTS_HEADING: &str = "Rules while the foundations are rebuilt";
 
 /// Files the guards never read: the guards themselves and the scanner, whose
 /// samples would count against them.
-const SKIPPED: &[&str] = &["structure_guards.rs", "test_support/source.rs"];
+const SKIPPED: &[&str] = &[
+    "structure_guards.rs",
+    "test_support/source.rs",
+    "spaces/guards.rs",
+];
 
 /// The built-in roles a raw check names.
 const BUILT_IN_ROLES: [&str; 5] = ["owner", "admin", "member", "viewer", "worker"];
@@ -465,6 +478,38 @@ pub(crate) fn vendor_names_core(source: &str) -> usize {
         .count()
 }
 
+/// A link into the web app written out by hand: a string naming one of the
+/// app's pages (`/projects/…`, `/messages/…`, `/w/…`) that isn't an API
+/// path. Links come from `addresses` (rule 13), which [`exempt`] leaves out.
+pub(crate) fn hand_built_links(source: &str) -> usize {
+    string_literals(source)
+        .into_iter()
+        .filter(|literal| {
+            let text = &literal.text;
+            !text.contains("/api/")
+                && WEB_PAGES.iter().any(|page| {
+                    text.match_indices(page).any(|(at, _)| {
+                        // A path segment, not part of a longer word.
+                        text[..at]
+                            .chars()
+                            .next_back()
+                            .is_none_or(|before| !before.is_ascii_alphanumeric())
+                    })
+                })
+        })
+        .count()
+}
+
+/// The web app's pages a hand-built link would name.
+const WEB_PAGES: [&str; 6] = [
+    "/projects/",
+    "/messages/",
+    "/w/",
+    "/inbox",
+    "/whiteboards/",
+    "/pull-requests/",
+];
+
 /// The display names of today's adapters.
 const VENDOR_NAMES: [&str; 4] = ["Codex", "Claude", "OpenAI", "Anthropic"];
 
@@ -688,6 +733,8 @@ fn exempt(rule: &str, path: &str) -> bool {
         "agent_runs_sql" | "active_run_states_literal" => {
             path.starts_with("runs/") || path.starts_with("hosts/builtin/")
         }
+        // The address module is where links are built (rule 13).
+        "hand_built_links" => path == "addresses.rs" || path.starts_with("addresses/"),
         // The one listener (K5.4); its own connection, never the pool's.
         "listen_outside_wake" => path == "realtime/wake.rs",
         _ => false,

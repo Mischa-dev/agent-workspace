@@ -47,12 +47,19 @@ pub enum OpError {
 
 #[derive(Clone, Debug)]
 pub enum DenyReason {
-    Role { permission: Perm },
+    Role {
+        permission: Perm,
+    },
     ReadOnlyCredential,
-    ModuleOff { module: String },
+    ModuleOff {
+        module: String,
+    },
     Delegation,
     AccountPaused,
     HostRevoked,
+    /// A rule of the thing itself, whatever the role: only the author
+    /// edits a message, for one.
+    Rule,
 }
 
 #[derive(Clone, Debug)]
@@ -128,7 +135,9 @@ impl OpError {
             Self::Denied { reason, .. } => match reason {
                 DenyReason::ModuleOff { .. } => RetryCategory::Module,
                 DenyReason::ReadOnlyCredential => RetryCategory::Reauthenticate,
-                DenyReason::AccountPaused | DenyReason::HostRevoked => RetryCategory::DoNotRetry,
+                DenyReason::AccountPaused | DenyReason::HostRevoked | DenyReason::Rule => {
+                    RetryCategory::DoNotRetry
+                }
                 DenyReason::Role { .. } | DenyReason::Delegation => RetryCategory::AskForAccess,
             },
             Self::Conflict { reason, .. } => match reason {
@@ -208,6 +217,7 @@ impl OpError {
                     DenyReason::Delegation => "delegation",
                     DenyReason::AccountPaused => "account_paused",
                     DenyReason::HostRevoked => "host_revoked",
+                    DenyReason::Rule => "rule",
                 };
                 body["code"] = code.into();
             }
@@ -309,6 +319,7 @@ impl From<AppError> for OpError {
                     message: "You don't have permission to do that here.".into(),
                 }
             }
+            AppError::WorkspaceSuspended => Self::WorkspaceSuspended,
             AppError::ModuleOff { module } => Self::Denied {
                 reason: DenyReason::ModuleOff {
                     module: module.to_owned(),

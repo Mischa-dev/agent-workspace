@@ -244,36 +244,46 @@ async fn grant(
     } else {
         "registration"
     };
-    let row = sqlx::query_as::<_, Grant>(
-        r#"
+    let row = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, Grant>(
+            r#"
         SELECT c.id AS credential_id, c.actor_id, c.project_id,
                connection.id AS connection_id, c.client_name, c.scopes
         FROM workos_agent_bindings b
         JOIN workos_organizations o USING (client_id, organization_id)
         JOIN mcp_client_credentials c ON c.id = b.credential_id
         JOIN external_agent_connections connection ON connection.id = b.connection_id
-        JOIN projects p ON p.id = connection.project_id AND p.organization_id = b.organization_id
-        WHERE b.client_id = $1 AND b.subject_id = $2 AND b.kind = $3 AND b.revoked_at IS NULL
+                WHERE b.client_id = $1 AND b.subject_id = $2 AND b.kind = $3 AND b.revoked_at IS NULL
           AND o.workos_organization_id = $4
           AND c.external_agent_connection_id = connection.id
           AND c.actor_id = connection.actor_id AND c.project_id = connection.project_id
           AND c.status = 'active' AND c.revoked_at IS NULL AND c.expires_at > now()
           AND c.scopes = connection.scopes
-          AND agent_connection_can_access(connection.id, connection.project_id)
+          -- K1.6: the agent belongs to the workspace, not to the project it
+          -- was first added to; each call is checked against its target.
+          AND connection.status = 'active'
+          AND connection.workspace_id = b.organization_id
+          AND EXISTS (
+              SELECT 1 FROM actors account
+              JOIN organization_memberships om
+                ON om.actor_id = account.id AND om.organization_id = connection.workspace_id
+              WHERE account.id = connection.actor_id AND account.status = 'active' AND om.enabled
+          )
     "#,
-    )
-    .bind(&config.client_id)
-    .bind(subject)
-    .bind(kind)
-    .bind(&claims.org_id)
-    .fetch_optional(&state.pool)
+        )
+        .bind(&config.client_id)
+        .bind(subject)
+        .bind(kind)
+        .bind(&claims.org_id)
+        .fetch_optional(connection)
+        .await
+    })
     .await?;
     if let Some(row) = &row {
         // The agent's last check-in, throttled as for OAuth-connected agents.
-        sqlx::query("UPDATE external_agent_connections SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')")
+        crate::db::scoped_one(&state.pool, async |connection| { sqlx::query("UPDATE external_agent_connections SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')")
             .bind(row.connection_id)
-            .execute(&state.pool)
-            .await?;
+            .execute(connection).await }).await?;
     }
     Ok(row
         .map(|row| {
@@ -339,7 +349,7 @@ async fn list(
     principal: AuthenticatedActor,
     ApiPath((project, connection)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::scoped_tx(&state.pool).await?;
     crate::external_agents::authorize_identity_binding(&mut tx, &principal, project, connection)
         .await?;
     let bindings = sqlx::query_as::<_, BindingView>("SELECT id,kind,subject_id,revoked_at::text FROM workos_agent_bindings WHERE connection_id=$1 ORDER BY created_at")
@@ -366,7 +376,7 @@ async fn attach(
     require_authenticated_write(&state, &headers, &principal).await?;
     let config = config(&state)?;
     domain(config)?;
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::scoped_tx(&state.pool).await?;
     let org = crate::external_agents::authorize_identity_binding(
         &mut tx, &principal, project, connection,
     )
@@ -567,7 +577,7 @@ async fn revoke(
     ApiPath((project, connection, binding)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::scoped_tx(&state.pool).await?;
     crate::external_agents::authorize_identity_binding(&mut tx, &principal, project, connection)
         .await?;
     let subject: String = sqlx::query_scalar("UPDATE workos_agent_bindings SET revoked_at=COALESCE(revoked_at,now()) WHERE id=$1 AND connection_id=$2 RETURNING subject_id")
@@ -628,8 +638,8 @@ async fn mint(
         if refresh.is_empty() || refresh.len() > 4096 {
             return Err(AppError::InvalidCredentials);
         }
-        let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workos_agent_bindings WHERE client_id=$1 AND subject_id=$2 AND revoked_at IS NULL)")
-            .bind(&config.client_id).bind(&blueprint).fetch_one(&state.pool).await?;
+        let active:bool=crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workos_agent_bindings WHERE client_id=$1 AND subject_id=$2 AND revoked_at IS NULL)")
+            .bind(&config.client_id).bind(&blueprint).fetch_one(connection).await }).await?;
         if !active {
             return Err(AppError::InvalidCredentials);
         }
@@ -643,11 +653,11 @@ async fn mint(
         let principal = resolve_bearer_principal(&state, &headers)
             .await?
             .ok_or(AppError::InvalidCredentials)?;
-        let connection = principal
+        let agent_connection = principal
             .external_agent_connection_id
             .ok_or(AppError::Forbidden)?;
-        let (blueprint,org):(String,String)=sqlx::query_as("SELECT b.subject_id,o.workos_organization_id FROM workos_agent_bindings b JOIN workos_organizations o USING(client_id,organization_id) WHERE b.client_id=$1 AND b.connection_id=$2 AND b.credential_id=$3 AND b.kind='blueprint' AND b.revoked_at IS NULL")
-            .bind(&config.client_id).bind(connection).bind(principal.credential_id).fetch_optional(&state.pool).await?.ok_or(AppError::InvalidCredentials)?;
+        let (blueprint,org):(String,String)=crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_as("SELECT b.subject_id,o.workos_organization_id FROM workos_agent_bindings b JOIN workos_organizations o USING(client_id,organization_id) WHERE b.client_id=$1 AND b.connection_id=$2 AND b.credential_id=$3 AND b.kind='blueprint' AND b.revoked_at IS NULL")
+            .bind(&config.client_id).bind(agent_connection).bind(principal.credential_id).fetch_optional(connection).await }).await?.ok_or(AppError::InvalidCredentials)?;
         (
             blueprint,
             json!({"type":"autonomous","organization_id":org}),
@@ -955,7 +965,25 @@ mod tests {
             .execute(&pool)
             .await
             .expect("WorkOS agent test operation");
+        // K1.6: leaving the project it was first added to doesn't cut the
+        // agent off; leaving the workspace does.
         sqlx::query("UPDATE project_memberships SET enabled=false WHERE actor_id=$1")
+            .bind(agent.actor_id)
+            .execute(&pool)
+            .await
+            .expect("WorkOS agent test operation");
+        assert!(
+            grant(&state, &config, &token)
+                .await
+                .expect("WorkOS agent test operation")
+                .is_some()
+        );
+        sqlx::query("UPDATE project_memberships SET enabled=true WHERE actor_id=$1")
+            .bind(agent.actor_id)
+            .execute(&pool)
+            .await
+            .expect("WorkOS agent test operation");
+        sqlx::query("UPDATE organization_memberships SET enabled=false WHERE actor_id=$1")
             .bind(agent.actor_id)
             .execute(&pool)
             .await
@@ -966,7 +994,7 @@ mod tests {
                 .expect("WorkOS agent test operation")
                 .is_none()
         );
-        sqlx::query("UPDATE project_memberships SET enabled=true WHERE actor_id=$1")
+        sqlx::query("UPDATE organization_memberships SET enabled=true WHERE actor_id=$1")
             .bind(agent.actor_id)
             .execute(&pool)
             .await

@@ -378,6 +378,7 @@ pub(super) async fn get_timeline(
         crate::work_item_planning::Reader {
             actor_id: principal.actor_id,
             connection_id: None,
+            addresses: crate::addresses::Addresses::of(&state),
         },
         project_id,
         &ids,

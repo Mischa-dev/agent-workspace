@@ -193,6 +193,7 @@ const PHRASES: Record<string, string> = {
   'whiteboard.created': 'created a whiteboard',
   'whiteboard.updated': 'changed a whiteboard',
   'whiteboard.edited': 'drew on a whiteboard',
+  whiteboard_update_elements: 'drew on a whiteboard',
   'whiteboard.renamed': 'renamed a whiteboard',
   'whiteboard.moved': 'moved a whiteboard',
   'whiteboard.template_set': 'changed whether a whiteboard is a template',

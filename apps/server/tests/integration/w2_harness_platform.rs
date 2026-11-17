@@ -362,7 +362,7 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     );
     // A workspace admin who only views this project may still refresh; here
     // it stops at needing a signed-in account, not at permissions.
-    sqlx::query("UPDATE organization_memberships SET role = 'admin' WHERE actor_id = (SELECT actor_id FROM project_memberships WHERE handle = 'w2-member')")
+    sqlx::query("UPDATE organization_memberships SET role = 'admin' WHERE actor_id = (SELECT DISTINCT actor_id FROM project_memberships WHERE handle = 'w2-member')")
         .execute(&pool)
         .await
         .expect("make member a workspace admin");
@@ -388,7 +388,7 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         "{}",
         admin_refresh.1
     );
-    sqlx::query("UPDATE organization_memberships SET role = 'member' WHERE actor_id = (SELECT actor_id FROM project_memberships WHERE handle = 'w2-member')")
+    sqlx::query("UPDATE organization_memberships SET role = 'member' WHERE actor_id = (SELECT DISTINCT actor_id FROM project_memberships WHERE handle = 'w2-member')")
         .execute(&pool)
         .await
         .expect("restore member workspace role");

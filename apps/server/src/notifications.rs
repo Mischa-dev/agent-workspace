@@ -36,6 +36,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::{Addresses, Place, Target, WorkspaceAddress},
     auth::{AuthenticatedActor, require_authenticated_write},
     domain::RunState,
     error::{ApiJson, ApiQuery, AppError},
@@ -1768,6 +1769,7 @@ struct NotificationRow {
     subject_kind: String,
     subject_id: Uuid,
     project_id: Uuid,
+    workspace_id: Uuid,
     project_name: String,
     direct_space: bool,
     actor_id: Option<Uuid>,
@@ -1823,6 +1825,7 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
     format!(
         r#"
         SELECT n.id, n.kind, n.subject_kind, n.subject_id, n.project_id,
+               project.organization_id AS workspace_id,
                CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
                    AS project_name,
                project.kind = 'direct' AS direct_space,
@@ -1906,6 +1909,7 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
 /// One page of `viewer`'s notifications, newest first.
 pub async fn list(
     pool: &PgPool,
+    addresses: Addresses,
     viewer: Uuid,
     filter: &ListFilter,
 ) -> Result<NotificationPage, AppError> {
@@ -1948,7 +1952,7 @@ pub async fn list(
         notifications: rows
             .into_iter()
             .filter(|row| !hidden_by_limit(viewer, row))
-            .map(view)
+            .map(|row| view(addresses, row))
             .collect(),
         next_cursor,
         unread_count,
@@ -1967,6 +1971,7 @@ fn hidden_by_limit(viewer: Uuid, row: &NotificationRow) -> bool {
 /// The given notifications, if they are the viewer's and still visible.
 pub async fn get_many(
     pool: &PgPool,
+    addresses: Addresses,
     viewer: Uuid,
     ids: &[Uuid],
 ) -> Result<Vec<NotificationView>, AppError> {
@@ -1986,7 +1991,7 @@ pub async fn get_many(
     Ok(rows
         .into_iter()
         .filter(|row| !hidden_by_limit(viewer, row))
-        .map(view)
+        .map(|row| view(addresses, row))
         .collect())
 }
 
@@ -2069,25 +2074,23 @@ fn conversation_label(row: &NotificationRow) -> String {
     }
 }
 
+/// Where the notification's conversation opens, in today's shape.
 fn conversation_href(row: &NotificationRow) -> Option<String> {
     let conversation_id = row.conversation_id?;
     // A comment opens on its thing (C1.3).
     if let Some(href) = &row.subject_href {
         return Some(href.clone());
     }
-    if row.direct_space {
-        let id = row.parent_conversation_id.unwrap_or(conversation_id);
-        return Some(format!("/messages/{id}"));
-    }
-    let segment = if row.conversation_kind.as_deref() == Some("thread") {
-        "threads"
-    } else {
-        "channels"
-    };
-    Some(format!(
-        "/projects/{}/{segment}/{conversation_id}",
-        row.project_id
-    ))
+    Some(
+        crate::later::message_target(
+            row.project_id,
+            row.direct_space,
+            conversation_id,
+            Some(row.conversation_kind.as_deref().unwrap_or("channel")),
+            row.parent_conversation_id,
+        )
+        .legacy_path(),
+    )
 }
 
 /// "Muse's run", or "Your run" when the agent has no name here.
@@ -2097,7 +2100,7 @@ fn run_owner(row: &NotificationRow) -> String {
         .map_or_else(|| "Your run".to_owned(), |agent| format!("{agent}'s run"))
 }
 
-fn view(row: NotificationRow) -> NotificationView {
+fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
     let who = row
         .actor_name
         .clone()
@@ -2292,7 +2295,7 @@ fn view(row: NotificationRow) -> NotificationView {
     let href = match row.subject_kind.as_str() {
         "work_item" => row
             .work_item_id
-            .map(|id| format!("/projects/{}/work-items/{id}", row.project_id)),
+            .map(|id| Target::task(row.project_id, id).legacy_path()),
         "pull_request" => row.pull_request_url.clone(),
         _ => conversation_href(&row).map(|href| match row.message_id {
             Some(message_id)
@@ -2319,7 +2322,11 @@ fn view(row: NotificationRow) -> NotificationView {
             .filter(|href| href.starts_with('/'))
             .map(str::to_owned)
     })
-    .unwrap_or_else(|| format!("/projects/{}", row.project_id));
+    .unwrap_or_else(|| Target::space(row.project_id, Place::Home).legacy_path());
+    // Built (and stored) in today's shape; written as this server writes
+    // links, in the notification's workspace.
+    let workspace = WorkspaceAddress::id(row.workspace_id);
+    let href = addresses.from_legacy(&workspace, &href);
     let approval = match (row.approval_id, row.approval_kind, row.approval_status) {
         (Some(id), Some(kind), Some(status)) => Some(ApprovalView {
             id,
@@ -2360,7 +2367,7 @@ fn view(row: NotificationRow) -> NotificationView {
         .get("launchHref")
         .and_then(serde_json::Value::as_str)
         .filter(|href| href.starts_with('/'))
-        .map(str::to_owned);
+        .map(|href| addresses.from_legacy(&workspace, href));
     let batch = row.detail.get("batch").and_then(|batch| {
         Some(BatchAction {
             account_id: batch
@@ -2597,6 +2604,7 @@ async fn list_http(
 ) -> Result<Json<NotificationPage>, AppError> {
     let page = list(
         &state.pool,
+        Addresses::of(&state),
         principal.actor_id,
         &ListFilter {
             view: query.view.unwrap_or_default(),

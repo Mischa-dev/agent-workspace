@@ -1,0 +1,56 @@
+# K4.3 (G2): the SQL that reads conversations or messages without
+# conversation_visible_to, by file and function, and why it needs no filter.
+# The list only shrinks. Format: file::function | reason
+ai/summaries.rs::thread | summarises one thread the caller opened after a conversation_readable_by check
+api.rs::development_bootstrap | development-only seeding, not reachable in production
+api.rs::fetch_approval | reads an approval's run by id after the run access check; joins the thread for its project
+api.rs::fetch_run | reads a run by id after the run access check; joins the thread for its project
+api.rs::guard_conversation_mutation | locks a parent channel by id inside a write the caller is already authorised for
+api.rs::retry_run_in | reads whether a run's prompt message was removed, by id, after the run access check
+api.rs::select_run_setup_for | locks the thread a run starts in, by id, after the run access check
+automations.rs::message_contains | a rule's trigger test on one message by id, run as the rule's maker, who was checked when the event fired
+conversations.rs::append_message_command_with | the send pipeline: reads back the message it just wrote
+conversations.rs::enqueue_external_message_events | builds events for one written message; each recipient is checked when it reads
+conversations.rs::lock_conversation_for | locks the parent of a conversation the caller was just checked for
+conversations.rs::refresh_auto_thread_names | renames threads under a message the caller just wrote or edited
+conversations.rs::set_conversation_archived | locks a conversation and its threads by id after the archive permission check
+direct.rs::conversation_response | answers about the DM or group the caller just opened or joined (members only)
+direct.rs::direct_overview | the caller's own DM list, joined through their conversation_members rows; K4.4 moves it onto the rule
+direct.rs::open_dm_in | finds the DM for a pair key the caller is one half of
+external_events.rs::external_approval_recipients | a worker finding the agents to tell about an approval; recipients read it with their own access
+external_execution.rs::respond_to_sponsored_execution | reads a sponsored request by id after the sponsor's access check
+hosts/builtin/mod.rs::notify_sponsoring_agents | a worker telling a run's requesting agent its run finished; no text
+launch.rs::launch_from_tag | reads the message that tagged an agent, by id, inside the send pipeline
+launch.rs::queue_tag_launches | reads a just-written message's author by id, inside the send pipeline
+link_previews.rs::refresh_messages | a worker refreshing previews on messages by id; no text leaves it
+mcp/channels.rs::channel_create | the caller's own new channel's name clash in a space they create channels in
+mcp/channels.rs::conversation_update | locks a conversation by id after the moderation check
+mcp/channels.rs::conversation_value | the kind of a thread's parent the caller already read
+mcp/replies.rs::conflict_reason | the agent's own reply request, by id, scoped to the agent
+mcp/replies.rs::from_failure | the agent's own reply requests, scoped to the agent; K4.4 reviews the conversation name
+mcp/replies.rs::reply_claim | the agent's own reply request, by id, scoped to the agent
+mcp/replies.rs::unusable | the agent's own reply request, by id, scoped to the agent
+mcp/talk.rs::message_items | messages of a conversation the caller opened after a readable check; quotes from elsewhere are checked one by one
+mcp/tasks.rs::task_link_inner | whether an id is a thread in the task's own project, before linking
+memory.rs::decision_conversation | the conversation of a message a decision cites, by id; the citation is checked when read
+memory.rs::insert_revision | a decision's source conversation name; K4.4 checks it against the reader
+message_edits.rs::apply_edit | copies the message being edited into its history, by id, after the author check
+message_edits.rs::lock_message_for_change | locks a message by id; lock_message_conversation checks the conversation
+message_edits.rs::message_revisions_in | revisions of a message in a conversation the caller was just checked for
+message_edits.rs::neutralize_thread_names | renames threads named after a removed message, by id
+message_edits.rs::scrub_thread_audit_names | scrubs a removed message's words from audit rows, by id
+message_edits.rs::scrub_thread_replays | scrubs a removed message's words from stored replays, by id
+message_edits.rs::threads_from | threads under a message being removed, by id
+modules/things.rs::links_sql | a thing's links by id; each linked conversation is checked when shown
+notifications.rs::list_sql | the reader's own notifications; the conversation is joined for its name; K4.4 reviews it
+projects.rs::fetch_project_row | whether a saved navigation location's conversation is archived, nothing of its contents
+projects.rs::fetch_project_row_in_transaction | whether a saved navigation location's conversation is archived, nothing of its contents
+projects.rs::list_projects | whether a saved navigation location's conversation is archived, nothing of its contents
+projects.rs::validate_navigation_location | locks a conversation by id in a space the caller sets their navigation in
+reactions.rs::set_reaction | locks a message by id; lock_message_conversation checks the conversation
+replies.rs::continue_conversation_in | the latest messages of a conversation an agent was asked to continue, after its check
+replies.rs::retry_request_in | the agent's own reply request, by id
+runs/views.rs::router | runs the reader can see, filtered by run access; the thread is joined for its name; K4.4 reviews it
+scheduler.rs::claim_one | a scheduled message's conversation, locked by id by the scheduler
+webhooks.rs::build_body | a webhook's body for a message the subscription already covers; ids and names only
+workspace_templates.rs::starter_contents | whether a starter channel's name is taken in a space the template sets up

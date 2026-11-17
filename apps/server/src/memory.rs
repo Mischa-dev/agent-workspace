@@ -958,6 +958,25 @@ async fn insert_revision(
     .bind(note)
     .execute(&mut **transaction)
     .await?;
+    // The page's own fact, once per kept version (K3.5): saves merged into
+    // the writer's recent version (`record_revision`) don't fire again.
+    let project_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM project_pages WHERE id = $1")
+            .bind(page_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::PAGE_UPDATED,
+            project_id,
+            "page",
+            page_id,
+        )
+        .version(version)
+        .actor(writer.actor_id),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1346,7 +1365,7 @@ async fn workspace_pages_space_http(
 ) -> Result<Json<PagesSpaceResponse>, AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project_id =
-        crate::workspace_space::join(&mut transaction, organization_id, principal.actor_id)
+        crate::spaces::workspace::join(&mut transaction, organization_id, principal.actor_id)
             .await?
             .ok_or(AppError::NotFound("workspace"))?;
     transaction.commit().await?;

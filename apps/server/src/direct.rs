@@ -814,8 +814,8 @@ pub(crate) async fn open_dm_in(
     let dm_key = format!("{first}:{second}");
     let inserted = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO conversations (id, project_id, kind, name, visibility, dm_key)
-        VALUES ($1, $2, 'dm', $3, 'members', $4)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility, dm_key)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'dm', $3, 'members', $4)
         ON CONFLICT DO NOTHING
         RETURNING id
         "#,
@@ -870,8 +870,8 @@ pub(crate) async fn create_group_in(
     let conversation_id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, kind, name, visibility)
-        VALUES ($1, $2, 'group', $3, 'members')
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'group', $3, 'members')
         "#,
     )
     .bind(conversation_id)
@@ -1173,7 +1173,7 @@ struct ReachableAgent {
 /// Agents a person can message that aren't in the Messages space yet: active
 /// agents of the space's workspace that share a project with the person and
 /// can actually work there (`agent_connection_can_access`, so not one whose
-/// home project is archived),
+/// connection is off),
 /// named as they are in the earliest such project. `only` narrows the list
 /// to those Actors. Members of the space, enabled or not, are left out, so
 /// an agent switched off there stays off.

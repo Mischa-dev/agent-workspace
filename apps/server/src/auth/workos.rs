@@ -55,12 +55,15 @@ async fn status(
 ) -> Result<Json<WorkOsStatus>, AppError> {
     let principal = load_authenticated_actor(&state, &headers).await?;
     let email = if let (Some(config), Some(principal)) = (&state.config.workos, principal) {
-        sqlx::query_scalar::<_, String>(
-            "SELECT email FROM workos_identities WHERE user_id = $1 AND client_id = $2",
-        )
-        .bind(principal.user_id)
-        .bind(&config.client_id)
-        .fetch_optional(&state.pool)
+        crate::db::scoped_one(&state.pool, async |connection| {
+            sqlx::query_scalar::<_, String>(
+                "SELECT email FROM workos_identities WHERE user_id = $1 AND client_id = $2",
+            )
+            .bind(principal.user_id)
+            .bind(&config.client_id)
+            .fetch_optional(connection)
+            .await
+        })
         .await?
     } else {
         None
@@ -207,11 +210,14 @@ async fn start(
     if link_session_id.is_some() {
         url.query_pairs_mut().append_pair("prompt", "login");
     }
-    sqlx::query("DELETE FROM workos_login_attempts WHERE expires_at < now()")
-        .execute(&state.pool)
-        .await?;
-    sqlx::query("INSERT INTO workos_login_attempts (state_hash,browser_hash,link_session_id,signup_username,expires_at) VALUES ($1,$2,$3,$4,now()+interval '10 minutes')")
-        .bind(hash_secret(&nonce).to_vec()).bind(hash_secret(&browser).to_vec()).bind(link_session_id).bind(username).execute(&state.pool).await?;
+    crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query("DELETE FROM workos_login_attempts WHERE expires_at < now()")
+            .execute(connection)
+            .await
+    })
+    .await?;
+    crate::db::scoped_one(&state.pool, async |connection| { sqlx::query("INSERT INTO workos_login_attempts (state_hash,browser_hash,link_session_id,signup_username,expires_at) VALUES ($1,$2,$3,$4,now()+interval '10 minutes')")
+        .bind(hash_secret(&nonce).to_vec()).bind(hash_secret(&browser).to_vec()).bind(link_session_id).bind(username).execute(connection).await }).await?;
     let mut response_headers = HeaderMap::new();
     append_cookie(
         &mut response_headers,
@@ -330,8 +336,8 @@ async fn finish_callback(
         .filter(|v| v.len() <= 256)
         .ok_or(AppError::InvalidCredentials)?;
     *step = "login attempt";
-    let attempt=sqlx::query_as::<_,LoginAttempt>("DELETE FROM workos_login_attempts WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING link_session_id,signup_username")
-        .bind(hash_secret(&nonce).to_vec()).bind(hash_secret(&browser).to_vec()).fetch_optional(&state.pool).await?.ok_or(AppError::InvalidCredentials)?;
+    let attempt=crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_as::<_,LoginAttempt>("DELETE FROM workos_login_attempts WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING link_session_id,signup_username")
+        .bind(hash_secret(&nonce).to_vec()).bind(hash_secret(&browser).to_vec()).fetch_optional(connection).await }).await?.ok_or(AppError::InvalidCredentials)?;
     *linking = attempt.link_session_id.is_some();
     // Only now: a callback that brings an error instead of a code (someone
     // cancelled at WorkOS) still has to find its way back to a link.
@@ -386,7 +392,7 @@ async fn finish_callback(
         return Err(AppError::InvalidCredentials);
     }
     *step = "account";
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::scoped_tx(&state.pool).await?;
     let user_id = resolve_identity(&mut tx, config, &auth.user, &attempt).await?;
     *step = "local user";
     let row=sqlx::query_as::<_,(Uuid,String,String,i64)>("SELECT u.actor_id,u.login_name,u.display_name,u.authentication_epoch FROM users u JOIN actors a ON a.id=u.actor_id WHERE u.id=$1 AND u.status='active' AND a.status='active' AND a.kind='human' FOR SHARE OF u,a")
@@ -486,9 +492,6 @@ async fn resolve_identity(
             .signup_username
             .as_deref()
             .ok_or(AppError::Validation("choose a username before signing up"))?;
-        let id = Uuid::now_v7();
-        let actor = Uuid::now_v7();
-        let org = Uuid::now_v7();
         let name = format!(
             "{} {}",
             user.first_name.as_deref().unwrap_or(""),
@@ -499,25 +502,29 @@ async fn resolve_identity(
         if name.chars().count() > 120 || name.chars().any(char::is_control) {
             return Err(AppError::Validation("display name"));
         }
-        sqlx::query("INSERT INTO actors(id,kind) VALUES ($1,'human')")
-            .bind(actor)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("INSERT INTO users(id,actor_id,login_name,display_name) VALUES ($1,$2,$3,$4)")
-            .bind(id)
-            .bind(actor)
-            .bind(username)
-            .bind(name)
-            .execute(&mut **tx)
-            .await?;
+        // One way to create a person (K1.29).
+        let person = crate::accounts::create_person(
+            tx,
+            crate::accounts::NewPerson {
+                login_name: username,
+                display_name: name,
+                default_workspace: None,
+                created_by: None,
+                claimed: true,
+            },
+        )
+        .await?;
+        let (id, actor) = (person.user_id, person.account_id);
         // A readable slug from the name, with a numeric suffix (K4.5).
-        let slug = crate::workspace::slug::readable_for_new(tx, "My workspace").await?;
-        sqlx::query("INSERT INTO organizations(id,name,slug) VALUES ($1,'My workspace',$2)")
-            .bind(org)
-            .bind(slug)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("INSERT INTO organization_memberships(organization_id,actor_id,role) VALUES ($1,$2,'owner')").bind(org).bind(actor).execute(&mut **tx).await?;
+        crate::workspace::lifecycle::create(
+            tx,
+            actor,
+            crate::workspace::lifecycle::NewWorkspace {
+                name: "My workspace".to_owned(),
+                slug: None,
+            },
+        )
+        .await?;
         id
     };
     sqlx::query(
@@ -547,12 +554,14 @@ async fn profile(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
 ) -> Result<Json<Profile>, AppError> {
-    let github_login =
+    let github_login = crate::db::scoped_one(&state.pool, async |connection| {
         sqlx::query_scalar::<_, Option<String>>("SELECT github_login FROM users WHERE id = $1")
             .bind(principal.user_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .flatten();
+            .fetch_optional(connection)
+            .await
+    })
+    .await?
+    .flatten();
     Ok(Json(Profile {
         username: principal.login_name,
         display_name: principal.display_name,
@@ -605,7 +614,7 @@ async fn update_profile(
         Some(login) if valid_github_login(login) => Some(Some(login)),
         Some(_) => return Err(AppError::Validation("GitHub username")),
     };
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::scoped_tx(&state.pool).await?;
     if let Some(name) = name {
         sqlx::query("UPDATE users SET display_name=$2,updated_at=now() WHERE id=$1")
             .bind(principal.user_id)
@@ -640,9 +649,9 @@ async fn update_profile(
 }
 
 pub(super) async fn session_valid(state: &AppState, session_id: Uuid) -> Result<bool, AppError> {
-    let remote = sqlx::query_as::<_, (String, Option<String>, bool)>(
+    let remote = crate::db::scoped_one(&state.pool, async |connection| { sqlx::query_as::<_, (String, Option<String>, bool)>(
         "SELECT s.workos_session_id,i.subject_id,(s.workos_checked_at IS NULL OR s.workos_checked_at<now()-interval '5 minutes') FROM sessions s LEFT JOIN workos_identities i ON i.user_id=s.user_id AND i.client_id=$2 WHERE s.id=$1 AND s.workos_session_id IS NOT NULL"
-    ).bind(session_id).bind(state.config.workos.as_ref().map(|c| c.client_id.as_str()).unwrap_or("")).fetch_optional(&state.pool).await?;
+    ).bind(session_id).bind(state.config.workos.as_ref().map(|c| c.client_id.as_str()).unwrap_or("")).fetch_optional(connection).await }).await?;
     let Some((sid, subject, needs_check)) = remote else {
         return Ok(true);
     };
@@ -655,10 +664,9 @@ pub(super) async fn session_valid(state: &AppState, session_id: Uuid) -> Result<
     }
     // Claim this interval's check so concurrent requests on the same session
     // make one provider call; the others keep the session until it resolves.
-    let claimed = sqlx::query("UPDATE sessions SET workos_checked_at=now() WHERE id=$1 AND (workos_checked_at IS NULL OR workos_checked_at<now()-interval '5 minutes')")
+    let claimed = crate::db::scoped_one(&state.pool, async |connection| { sqlx::query("UPDATE sessions SET workos_checked_at=now() WHERE id=$1 AND (workos_checked_at IS NULL OR workos_checked_at<now()-interval '5 minutes')")
         .bind(session_id)
-        .execute(&state.pool)
-        .await?
+        .execute(connection).await }).await?
         .rows_affected()
         == 1;
     if !claimed {
@@ -668,18 +676,24 @@ pub(super) async fn session_valid(state: &AppState, session_id: Uuid) -> Result<
         Ok(valid) => valid,
         Err(error) => {
             // Release the claim so the next request checks again.
-            sqlx::query("UPDATE sessions SET workos_checked_at=NULL WHERE id=$1")
-                .bind(session_id)
-                .execute(&state.pool)
-                .await?;
+            crate::db::scoped_one(&state.pool, async |connection| {
+                sqlx::query("UPDATE sessions SET workos_checked_at=NULL WHERE id=$1")
+                    .bind(session_id)
+                    .execute(connection)
+                    .await
+            })
+            .await?;
             return Err(error);
         }
     };
     if !valid {
-        sqlx::query("UPDATE sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE id=$1")
-            .bind(session_id)
-            .execute(&state.pool)
-            .await?;
+        crate::db::scoped_one(&state.pool, async |connection| {
+            sqlx::query("UPDATE sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE id=$1")
+                .bind(session_id)
+                .execute(connection)
+                .await
+        })
+        .await?;
         crate::realtime::ephemeral::revoke_session(state, session_id).await;
     }
     Ok(valid)
@@ -729,11 +743,14 @@ pub(crate) async fn revoke_provider_session(state: &AppState, session_id: Uuid) 
     let Some(config) = &state.config.workos else {
         return;
     };
-    let Ok(Some(Some(sid))) = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT workos_session_id FROM sessions WHERE id=$1",
-    )
-    .bind(session_id)
-    .fetch_optional(&state.pool)
+    let Ok(Some(Some(sid))) = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT workos_session_id FROM sessions WHERE id=$1",
+        )
+        .bind(session_id)
+        .fetch_optional(connection)
+        .await
+    })
     .await
     else {
         return;

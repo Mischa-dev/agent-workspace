@@ -1,4 +1,10 @@
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use axum::{
     extract::{
@@ -29,6 +35,9 @@ use crate::{
 
 const SESSION_REVALIDATION_INTERVAL: Duration = Duration::from_secs(15);
 const REALTIME_RESYNC_CLOSE_REASON: &str = "realtime lag; reconnect and refetch";
+/// Why a draining instance closes its sockets: reconnect (to another
+/// instance) and refetch.
+pub const SERVER_DRAINING_CLOSE_REASON: &str = "server_draining";
 const MAX_REALTIME_FRAME_BYTES: usize = 70_000;
 const MAX_REALTIME_CLIENT_FRAME_BYTES: usize = 4_096;
 const MAX_EPHEMERAL_PAYLOAD_BYTES: usize = 65_536;
@@ -53,8 +62,10 @@ enum RealtimeDelivery {
         envelope: OutboxEnvelope,
     },
     Ephemeral(RealtimeEvent),
-    /// The tail skipped ahead: every socket closes to refetch (K5.5).
-    Resync,
+    /// Every socket closes with 1012 and this reason, to reconnect and
+    /// refetch: the tail skipped ahead (K5.5), or this instance is
+    /// draining (K5.7).
+    Restart(&'static str),
 }
 
 impl RealtimeDelivery {
@@ -62,7 +73,7 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope, .. } => envelope.event_id,
             Self::Ephemeral(event) => event.event_id,
-            Self::Resync => Uuid::nil(),
+            Self::Restart(_) => Uuid::nil(),
         }
     }
 
@@ -70,7 +81,7 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope, .. } => envelope.project_id,
             Self::Ephemeral(event) => event.project_id,
-            Self::Resync => Uuid::nil(),
+            Self::Restart(_) => Uuid::nil(),
         }
     }
 
@@ -78,14 +89,14 @@ impl RealtimeDelivery {
         match self {
             Self::Durable { envelope } => envelope.conversation_id,
             Self::Ephemeral(event) => event.conversation_id,
-            Self::Resync => None,
+            Self::Restart(_) => None,
         }
     }
 
     fn recipient_actor_id(&self) -> Option<Uuid> {
         match self {
             Self::Durable { envelope } => envelope.recipient_actor_id,
-            Self::Ephemeral(_) | Self::Resync => None,
+            Self::Ephemeral(_) | Self::Restart(_) => None,
         }
     }
 
@@ -103,6 +114,15 @@ impl RealtimeDelivery {
         }
     }
 
+    /// A workspace-wide event (its lifecycle, H1.24): delivered to the
+    /// workspace's enabled members, whichever spaces they are in.
+    fn is_workspace_wide(&self) -> bool {
+        matches!(
+            self,
+            Self::Durable { envelope } if envelope.event_type == "workspace.lifecycle.changed"
+        )
+    }
+
     fn is_visible_to_actor(&self, actor_id: Uuid) -> bool {
         self.recipient_actor_id()
             .is_none_or(|recipient_actor_id| recipient_actor_id == actor_id)
@@ -112,7 +132,7 @@ impl RealtimeDelivery {
         let json = match self {
             Self::Durable { envelope, .. } => serde_json::to_string(envelope),
             Self::Ephemeral(event) => serde_json::to_string(event),
-            Self::Resync => return Err(RealtimePublishError::Serialization),
+            Self::Restart(_) => return Err(RealtimePublishError::Serialization),
         }
         .map_err(|_| RealtimePublishError::Serialization)?;
         if json.len() > MAX_REALTIME_FRAME_BYTES {
@@ -141,6 +161,8 @@ pub struct RealtimeHub {
     session_revocations: broadcast::Sender<Uuid>,
     /// Who this hub is on the ephemeral bus, so it skips its own frames.
     origin: Uuid,
+    /// Set when this instance drains: no new sockets.
+    draining: Arc<AtomicBool>,
 }
 
 impl RealtimeHub {
@@ -151,6 +173,7 @@ impl RealtimeHub {
             sender,
             session_revocations,
             origin: Uuid::now_v7(),
+            draining: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -176,7 +199,18 @@ impl RealtimeHub {
 
     /// The tail skipped ahead: every socket here closes to refetch.
     pub fn resync(&self) {
-        let _ = self.sender.send(RealtimeDelivery::Resync);
+        let _ = self
+            .sender
+            .send(RealtimeDelivery::Restart(REALTIME_RESYNC_CLOSE_REASON));
+    }
+
+    /// This instance is stopping (K5.7): every socket here closes with 1012
+    /// so its browser reconnects to another instance, and no new one opens.
+    pub fn drain(&self) {
+        self.draining.store(true, Ordering::SeqCst);
+        let _ = self
+            .sender
+            .send(RealtimeDelivery::Restart(SERVER_DRAINING_CLOSE_REASON));
     }
 
     /// A `message.delta` to this instance's sockets only; use
@@ -278,6 +312,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "custom_emoji.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
+                | "workspace.lifecycle.changed"
         );
         let project_scoped_event = matches!(
             envelope.event_type.as_str(),
@@ -296,6 +331,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "custom_emoji.changed"
                 | "message_draft.changed"
                 | "notification_keywords.changed"
+                | "workspace.lifecycle.changed"
         );
         let invalid_conversation_scope = if project_scoped_event {
             envelope.conversation_id.is_some() || envelope.payload.get("conversationId").is_some()
@@ -401,6 +437,11 @@ pub async fn websocket(
     };
     let receiver = state.realtime.subscribe();
     let session_revocations = state.realtime.subscribe_session_revocations();
+    // Checked after subscribing: a drain that starts from here on reaches
+    // this socket's receiver, so no socket opens past it (K5.7).
+    if state.realtime.draining.load(Ordering::SeqCst) {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     upgrade
         .max_frame_size(MAX_REALTIME_CLIENT_FRAME_BYTES)
         .max_message_size(MAX_REALTIME_CLIENT_FRAME_BYTES)
@@ -452,13 +493,13 @@ async fn serve_socket(
                             skipped_events = skipped,
                             "realtime client lagged; forcing durable-state resynchronization"
                         );
-                        close_socket_for_resync(&mut socket).await;
+                        close_socket_to_restart(&mut socket, REALTIME_RESYNC_CLOSE_REASON).await;
                         break;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
-                if matches!(event, RealtimeDelivery::Resync) {
-                    close_socket_for_resync(&mut socket).await;
+                if let RealtimeDelivery::Restart(reason) = event {
+                    close_socket_to_restart(&mut socket, reason).await;
                     break;
                 }
                 let current_principal =
@@ -584,6 +625,27 @@ async fn event_is_authorized(
         return crate::whiteboards::visible_to(&state.pool, whiteboard_id, principal.actor_id)
             .await;
     }
+    if event.is_workspace_wide() {
+        // The envelope's space names the workspace; its members hear of it.
+        return sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM projects p
+                JOIN organization_memberships om
+                  ON om.organization_id = p.organization_id
+                 AND om.actor_id = $1
+                 AND om.enabled
+                WHERE p.id = $2
+            )
+            "#,
+        )
+        .bind(principal.actor_id)
+        .bind(event.project_id())
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await
+        .map_err(AppError::from);
+    }
     let membership = sqlx::query_as::<_, RealtimeMembership>(
         r#"
         SELECT pm.role, pm.enabled
@@ -676,11 +738,11 @@ async fn close_socket(socket: &mut WebSocket) {
     let _ = socket.send(Message::Close(None)).await;
 }
 
-async fn close_socket_for_resync(socket: &mut WebSocket) {
+async fn close_socket_to_restart(socket: &mut WebSocket, reason: &'static str) {
     let _ = socket
         .send(Message::Close(Some(CloseFrame {
             code: close_code::RESTART,
-            reason: REALTIME_RESYNC_CLOSE_REASON.into(),
+            reason: reason.into(),
         })))
         .await;
 }

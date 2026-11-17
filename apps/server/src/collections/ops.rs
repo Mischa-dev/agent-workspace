@@ -84,7 +84,7 @@ pub struct FormulaPreviewOutput {
 
 impl Operation for FormulaPreview {
     const NAME: &'static str = "formula_preview";
-    const KIND: OpKind = OpKind::Describe;
+    const KIND: OpKind = OpKind::Query;
     const MODULE: &'static str = "collections";
     const PERMISSION: Option<crate::ops::Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::None;

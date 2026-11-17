@@ -489,7 +489,7 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
                 json!({"taskId": keys[0], "status": status, "expectedVersion": version}),
             )
             .await;
-        version = moved["version"]
+        version = moved["value"]["version"]
             .as_i64()
             .unwrap_or_else(|| panic!("no version: {moved}"));
     }
@@ -664,7 +664,7 @@ async fn an_agent_stops_its_run_and_only_people_start_it_again() {
             json!({"projectId": project, "title": "Launch later"}),
         )
         .await;
-    let key = string(&task, "/key");
+    let key = string(&task, "/value/key");
     let far = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
     let launched = tool(
         &f.app,
@@ -1240,7 +1240,7 @@ async fn an_agent_forwards_messages_and_removes_files() {
             json!({"projectId": project, "title": "Ship the notes"}),
         )
         .await;
-    let key = string(&task, "/key");
+    let key = string(&task, "/value/key");
     let on_task = f
         .call(
             "file_upload",

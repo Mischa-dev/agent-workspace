@@ -21,16 +21,14 @@ use axum::{
     response::Response,
     routing::{get, patch, post, put},
 };
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, Transaction};
-use subtle::ConstantTimeEq;
 use uuid::Uuid;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
+pub mod lifecycle;
+pub mod ops;
 pub mod slug;
 
 use crate::{
@@ -41,12 +39,10 @@ use crate::{
         require_authenticated_write, respond_with_established_session,
     },
     error::{ApiJson, ApiPath, AppError},
+    invitations::engine::{self, Family},
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
 };
 
-const TOKEN_BYTES: usize = 32;
-const TOKEN_PREFIX: &str = "aw_wsi_";
-const TOKEN_PREFIX_LENGTH: usize = 16;
 const MAX_EXPIRY_HOURS: i32 = 30 * 24;
 
 pub fn router() -> Router<AppState> {
@@ -275,6 +271,8 @@ struct WorkspaceRow {
     agent_count: i64,
     project_count: i64,
     owner_count: i64,
+    lifecycle: String,
+    delete_after: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -291,6 +289,10 @@ struct WorkspaceView {
     people_count: i64,
     agent_count: i64,
     project_count: i64,
+    /// `active`, `importing`, `suspended` or `deleting` (H1.24).
+    lifecycle: String,
+    /// When a deleting workspace goes for good.
+    delete_after: Option<DateTime<Utc>>,
     capabilities: WorkspaceCapabilities,
 }
 
@@ -302,6 +304,9 @@ struct WorkspaceCapabilities {
     transfer_ownership: bool,
     leave: bool,
     view_audit_log: bool,
+    /// Holds "Delete the workspace" (H1.24): may schedule its deletion, or
+    /// keep it.
+    delete: bool,
 }
 
 fn role_name(role: WorkspaceRole) -> &'static str {
@@ -312,9 +317,12 @@ fn role_name(role: WorkspaceRole) -> &'static str {
     }
 }
 
+/// The workspace as `actor` sees it, holding `role`. Every handler that
+/// returns a workspace view goes through here, so its capabilities agree.
 async fn load_workspace(
     connection: &mut sqlx::PgConnection,
     organization_id: Uuid,
+    actor_id: Uuid,
     role: WorkspaceRole,
 ) -> Result<WorkspaceView, AppError> {
     let row = sqlx::query_as::<_, WorkspaceRow>(
@@ -338,7 +346,8 @@ async fn load_workspace(
                    AND project.archived_at IS NULL AND project.kind NOT IN ('direct', 'workspace')) AS project_count,
                (SELECT count(*) FROM organization_memberships membership
                  WHERE membership.organization_id = organization.id AND membership.enabled
-                   AND membership.role = 'owner') AS owner_count
+                   AND membership.role = 'owner') AS owner_count,
+               organization.lifecycle, organization.delete_after
         FROM organizations organization
         WHERE organization.id = $1
         "#,
@@ -347,6 +356,10 @@ async fn load_workspace(
     .fetch_optional(&mut *connection)
     .await?
     .ok_or(AppError::NotFound("workspace"))?;
+    let delete = crate::roles::standing(&mut *connection, organization_id, actor_id)
+        .await?
+        .permissions
+        .contains(crate::policy::Permission::WorkspaceDelete);
     Ok(WorkspaceView {
         id: row.id,
         name: row.name,
@@ -358,12 +371,15 @@ async fn load_workspace(
         people_count: row.people_count,
         agent_count: row.agent_count,
         project_count: row.project_count,
+        lifecycle: row.lifecycle,
+        delete_after: row.delete_after,
         capabilities: WorkspaceCapabilities {
             rename: role.manages(),
             manage_members: role.manages(),
             transfer_ownership: role == WorkspaceRole::Owner,
             leave: role != WorkspaceRole::Owner || row.owner_count > 1,
             view_audit_log: role.manages(),
+            delete,
         },
     })
 }
@@ -375,9 +391,8 @@ async fn read_workspace(
 ) -> Result<Json<WorkspaceView>, AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
     let role = caller_role(&mut connection, &principal, organization_id, false).await?;
-    Ok(Json(
-        load_workspace(&mut connection, organization_id, role).await?,
-    ))
+    let view = load_workspace(&mut connection, organization_id, principal.actor_id, role).await?;
+    Ok(Json(view))
 }
 
 #[derive(Debug, Deserialize)]
@@ -432,7 +447,7 @@ async fn rename_workspace(
         )
         .await?;
     }
-    let view = load_workspace(&mut transaction, organization_id, role).await?;
+    let view = load_workspace(&mut transaction, organization_id, principal.actor_id, role).await?;
     transaction.commit().await?;
     Ok(Json(view))
 }
@@ -558,7 +573,7 @@ const MEMBER_COLUMNS: &str = r#"
     membership.actor_id, actor.kind,
     COALESCE(profile.display_name, user_account.display_name, 'Unknown') AS display_name,
     COALESCE(profile.handle, user_account.login_name, 'unknown') AS handle,
-    user_account.login_name, membership.role, membership.role_id, held.name AS role_name,
+    user_account.login_name, membership.role, custom_role_id(membership.role_id) AS role_id, held.name AS role_name,
     membership.agent_limit, membership.enabled, membership.version,
     membership.created_at AS joined_at,
     (SELECT count(*) FROM project_memberships project_membership
@@ -1012,7 +1027,13 @@ async fn transfer_ownership(
         serde_json::json!({ "previousRole": target.role }),
     )
     .await?;
-    let view = load_workspace(&mut transaction, organization_id, WorkspaceRole::Admin).await?;
+    let view = load_workspace(
+        &mut transaction,
+        organization_id,
+        principal.actor_id,
+        WorkspaceRole::Admin,
+    )
+    .await?;
     transaction.commit().await?;
     Ok(Json(view))
 }
@@ -1199,12 +1220,8 @@ pub(crate) fn may_invite(issuer: WorkspaceRole, role: &str) -> bool {
 }
 
 fn generate_token() -> (String, String, [u8; 32]) {
-    let mut bytes = [0_u8; TOKEN_BYTES];
-    OsRng.fill_bytes(&mut bytes);
-    let token = format!("{TOKEN_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes));
-    let prefix = token[..TOKEN_PREFIX_LENGTH].to_owned();
-    let digest = Sha256::digest(token.as_bytes()).into();
-    (token, prefix, digest)
+    let issued = engine::issue(Family::Workspace);
+    (issued.token, issued.prefix, issued.digest)
 }
 
 async fn issue_invitation(
@@ -1516,28 +1533,11 @@ async fn consume_token(
     token: &mut String,
     state: &AppState,
 ) -> Result<(String, [u8; 32]), AppError> {
-    let valid = token.len() == 50
-        && token.starts_with(TOKEN_PREFIX)
-        && token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
-    let result = valid.then(|| {
-        (
-            token[..TOKEN_PREFIX_LENGTH].to_owned(),
-            Sha256::digest(token.as_bytes()).into(),
-        )
-    });
-    token.zeroize();
-    let Some((prefix, digest)) = result else {
-        state.rate_limits.check_invitation("invalid").await?;
-        return Err(AppError::NotFound("workspace_invitation"));
-    };
-    state.rate_limits.check_invitation(&prefix).await?;
-    Ok((prefix, digest))
+    engine::consume(token, Family::Workspace, state, "workspace_invitation").await
 }
 
 fn digest_matches(stored: &[u8], candidate: &[u8; 32]) -> bool {
-    stored.len() == candidate.len() && bool::from(stored.ct_eq(candidate))
+    engine::digest_matches(stored, candidate)
 }
 
 async fn find_invitation(
@@ -1576,7 +1576,11 @@ async fn resolve_invitation(
     require_allowed_origin(&state.config, &headers)?;
     let (prefix, digest) = consume_token(&mut token, &state).await?;
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    let row = find_invitation(&mut connection, &prefix, &digest, false).await?;
+    let found = find_invitation(&mut connection, &prefix, &digest, false).await;
+    let (row, _connection) = state
+        .rate_limits
+        .release_on_link_miss(connection, found)
+        .await?;
     Ok(Json(ResolvedInvitation {
         organization_name: row.organization_name,
         role: row.role,
@@ -1601,7 +1605,7 @@ struct AcceptExistingRequest {
     handle: String,
 }
 
-fn normalize_display_name(value: &str) -> Result<String, AppError> {
+pub(crate) fn normalize_display_name(value: &str) -> Result<String, AppError> {
     let normalized = value.trim();
     if normalized.is_empty()
         || normalized.chars().count() > 120
@@ -1629,7 +1633,7 @@ pub(crate) fn normalize_handle(value: &str) -> Result<String, AppError> {
     Ok(normalized)
 }
 
-fn map_join_error(error: sqlx::Error) -> AppError {
+pub(crate) fn map_join_error(error: sqlx::Error) -> AppError {
     let constraint = match &error {
         sqlx::Error::Database(database) => database.constraint(),
         _ => None,
@@ -1652,75 +1656,29 @@ async fn join_workspace(
     display_name: &str,
     handle: &str,
 ) -> Result<(), AppError> {
-    let existing = sqlx::query_as::<_, (String, bool)>(
-        "SELECT role, enabled FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2 FOR UPDATE",
+    // One invitation engine (K1.29): the same admission as every other way in.
+    let admitted = engine::admit(
+        transaction,
+        engine::Admission {
+            workspace_id: invitation.organization_id,
+            account_id: actor_id,
+            role: &invitation.role,
+            role_id: invitation.role_id,
+            display_name,
+            handle,
+        },
     )
-    .bind(invitation.organization_id)
-    .bind(actor_id)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    match existing {
-        Some((_, true)) => {
-            return Err(AppError::Conflict(
-                "workspace_invitation",
-                "already a member of this workspace",
-            ));
-        }
-        Some((role, false)) => {
-            // Someone removed earlier comes back with the invited role (an
-            // owner who left comes back as an admin at most).
-            let next = if invitation.role == "admin" || role == "owner" {
-                "admin"
-            } else {
-                "member"
-            };
-            sqlx::query(
-                r#"
-                UPDATE organization_memberships
-                SET enabled = true, role = $3, role_explicit = $4, role_id = $5,
-                    version = version + 1, updated_at = now()
-                WHERE organization_id = $1 AND actor_id = $2
-                "#,
-            )
-            .bind(invitation.organization_id)
-            .bind(actor_id)
-            .bind(next)
-            .bind(invitation.role == "admin" || invitation.role_id.is_some())
-            .bind(invitation.role_id)
-            .execute(&mut **transaction)
-            .await?;
-        }
-        None => {
-            sqlx::query(
-                r#"
-                INSERT INTO organization_memberships (organization_id, actor_id, role, role_explicit, role_id)
-                VALUES ($1, $2, $3, $4, $5)
-                "#,
-            )
-            .bind(invitation.organization_id)
-            .bind(actor_id)
-            .bind(&invitation.role)
-            .bind(invitation.role == "admin" || invitation.role_id.is_some())
-            .bind(invitation.role_id)
-            .execute(&mut **transaction)
-            .await
-            .map_err(map_join_error)?;
-        }
-    }
-    sqlx::query(
-        r#"
-        INSERT INTO organization_actor_profiles (organization_id, actor_id, display_name, handle)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (organization_id, actor_id) DO NOTHING
-        "#,
-    )
-    .bind(invitation.organization_id)
-    .bind(actor_id)
-    .bind(display_name)
-    .bind(handle)
-    .execute(&mut **transaction)
     .await
-    .map_err(map_join_error)?;
+    .map_err(|error| match error {
+        AppError::Database(database) => map_join_error(database),
+        other => other,
+    })?;
+    if admitted == engine::Admitted::AlreadyMember {
+        return Err(AppError::Conflict(
+            "workspace_invitation",
+            "already a member of this workspace",
+        ));
+    }
     let updated = sqlx::query(
         r#"
         UPDATE workspace_invitations
@@ -1765,25 +1723,24 @@ async fn accept_new_user(
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = find_invitation(&mut transaction, &prefix, &digest, true).await?;
-    let actor_id = Uuid::now_v7();
-    let user_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
-        .bind(actor_id)
-        .execute(&mut *transaction)
+    let found = find_invitation(&mut transaction, &prefix, &digest, true).await;
+    let (invitation, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
         .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO users (id, actor_id, login_name, display_name, default_organization_id)
-        VALUES ($1, $2, $3, $4, $5)
-        "#,
+    let crate::accounts::Person {
+        account_id: actor_id,
+        user_id,
+    } = crate::accounts::create_person(
+        &mut transaction,
+        crate::accounts::NewPerson {
+            login_name: &login_name,
+            display_name: &display_name,
+            default_workspace: Some(invitation.organization_id),
+            created_by: Some(invitation.issued_by_actor_id),
+            claimed: true,
+        },
     )
-    .bind(user_id)
-    .bind(actor_id)
-    .bind(&login_name)
-    .bind(&display_name)
-    .bind(invitation.organization_id)
-    .execute(&mut *transaction)
     .await
     .map_err(map_join_error)?;
     sqlx::query("INSERT INTO user_password_credentials (user_id, password_phc) VALUES ($1, $2)")
@@ -1842,7 +1799,11 @@ async fn accept_existing_user(
     let (prefix, digest) = consume_token(&mut token, &state).await?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = find_invitation(&mut transaction, &prefix, &digest, true).await?;
+    let found = find_invitation(&mut transaction, &prefix, &digest, true).await;
+    let (invitation, mut transaction) = state
+        .rate_limits
+        .release_on_link_miss(transaction, found)
+        .await?;
     let epoch = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT user_account.authentication_epoch
@@ -2040,6 +2001,7 @@ pub(crate) async fn audit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn only_owners_change_roles_and_nobody_touches_owners_or_themselves() {
@@ -2091,7 +2053,7 @@ mod tests {
         let (token, prefix, digest) = generate_token();
         assert_eq!(token.len(), 50);
         assert!(token.starts_with("aw_wsi_"));
-        assert_eq!(prefix.len(), TOKEN_PREFIX_LENGTH);
+        assert_eq!(prefix.len(), engine::PREFIX_LENGTH);
         assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(token.as_bytes())));
         assert_ne!(generate_token().0, token);
     }

@@ -35,28 +35,65 @@ pub async fn notify(
     transaction: &mut Transaction<'_, Postgres>,
     whiteboard_id: Uuid,
 ) -> Result<(), AppError> {
-    let (organization_id, project_id, scene_seq, version) =
-        sqlx::query_as::<_, (Uuid, Option<Uuid>, i64, i64)>(
-            "SELECT organization_id, project_id, scene_seq, version FROM whiteboards WHERE id = $1",
-        )
-        .bind(whiteboard_id)
-        .fetch_one(&mut **transaction)
-        .await?;
-    // A workspace board's events ride on the workspace's Messages space,
-    // the one project row every workspace has; realtime delivers them by
-    // whiteboard_visible_to, not by that project's members.
-    let carrier = match project_id {
-        Some(project_id) => project_id,
-        None => crate::direct::space_project(transaction, organization_id).await?,
-    };
+    let (project_id, scene_seq, version) = sqlx::query_as::<_, (Uuid, i64, i64)>(
+        "SELECT project_id, scene_seq, version FROM whiteboards WHERE id = $1",
+    )
+    .bind(whiteboard_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    // Every board lives in a space (K4.10); realtime delivers its events by
+    // whiteboard_visible_to.
     enqueue_typed(
         transaction,
-        carrier,
+        project_id,
         OutboxEventPayload::WhiteboardUpdated(WhiteboardUpdatedPayload {
             whiteboard_id,
             scene_seq,
             version,
         }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// The board's own fact when an edit kept a new revision (K3.5): once per
+/// edit session, which rules and webhooks hear. A workspace board's fact
+/// belongs to the workspace and is heard by whoever may see the board.
+pub async fn updated(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    whiteboard_id: Uuid,
+    revision: i32,
+) -> Result<(), AppError> {
+    use crate::events::{Audience, NewEvent, catalog};
+    let (organization_id, project_id) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "SELECT organization_id, project_id FROM whiteboards WHERE id = $1",
+    )
+    .bind(whiteboard_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let event = match project_id {
+        Some(project_id) => NewEvent::thing(
+            &catalog::WHITEBOARD_UPDATED,
+            project_id,
+            "whiteboard",
+            whiteboard_id,
+        ),
+        None => NewEvent {
+            space_id: None,
+            ..NewEvent::thing(
+                &catalog::WHITEBOARD_UPDATED,
+                Uuid::nil(),
+                "whiteboard",
+                whiteboard_id,
+            )
+            .workspace(organization_id)
+            .audience(Audience::Thing)
+        },
+    };
+    crate::events::emit(
+        transaction,
+        event.version(i64::from(revision)).actor(caller.actor_id),
     )
     .await?;
     Ok(())
