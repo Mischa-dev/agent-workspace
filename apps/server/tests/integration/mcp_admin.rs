@@ -1050,6 +1050,45 @@ async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
         .await
         .expect("roles");
     assert_eq!(roles, 0);
+
+    // Nor reaches into the other space through a workspace-wide module: the
+    // owner is in TARGET, but this connection isn't.
+    let elsewhere = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO collections (id, project_id, name, description, title_name, position, \
+         created_by_actor_id) VALUES ($1, $2::uuid, 'Target list', '', 'Name', 0, $3)",
+    )
+    .bind(elsewhere)
+    .bind(&target)
+    .bind(actor)
+    .execute(&setup.pool)
+    .await
+    .expect("collection in TARGET");
+    let module = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "module_create",
+        json!({"key": "reach", "name": "Reach", "clientRequestId": "reach-1"}),
+    )
+    .await;
+    assert_eq!(module["outcome"], "ok", "{module}");
+    let linked = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "module_part_link",
+        json!({"moduleId": module["value"]["id"],
+                   "part": {"kind": "collection", "id": elsewhere.to_string()}}),
+    )
+    .await;
+    assert_eq!(linked["outcome"], "not_found", "{linked}");
+    let parts: i64 = sqlx::query_scalar("SELECT count(*) FROM module_parts WHERE object_id = $1")
+        .bind(elsewhere)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("parts");
+    assert_eq!(parts, 0);
 }
 
 #[tokio::test]

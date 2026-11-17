@@ -928,8 +928,15 @@ impl Operation for PackageInstall {
                                 ),
                             ));
                         };
-                        crate::modules::built::link_part(tx, &module, part_kind, object.id, actor)
-                            .await?;
+                        crate::modules::built::link_part(
+                            tx,
+                            &module,
+                            part_kind,
+                            object.id,
+                            actor,
+                            ctx.caller.confined_space,
+                        )
+                        .await?;
                     }
                     for entry in body["nav"].as_array().cloned().unwrap_or_default() {
                         let label = entry["label"].as_str().unwrap_or("").trim();

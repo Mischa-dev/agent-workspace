@@ -320,6 +320,7 @@ impl Operation for ModuleCreate {
             .await?;
         }
         let actor = call.account_id();
+        let confined = call.ctx.caller.confined_space;
         let workspace = call.ctx.workspace_id;
         let maker = crate::events::Caller::from(call.ctx);
         let state = call.state;
@@ -576,14 +577,14 @@ impl Operation for ModuleCreate {
             .await?
             .ok_or(OpError::Unavailable)?;
         for (kind, id) in &made {
-            super::link_part(tx, &module, kind, *id, actor).await?;
+            super::link_part(tx, &module, kind, *id, actor, confined).await?;
         }
         for (index, part) in input.parts.iter().enumerate() {
             let kind = part_kind(&part.kind).map_err(|_| OpError::Invalid {
                 field: format!("parts[{index}].kind").into(),
                 message: "A part is a collection, form, automation or page.".into(),
             })?;
-            super::link_part(tx, &module, kind, part.id.id(), actor)
+            super::link_part(tx, &module, kind, part.id.id(), actor, confined)
                 .await
                 .map_err(|error| match error {
                     crate::error::AppError::NotFound(_) => OpError::Invalid {
@@ -797,8 +798,9 @@ impl Operation for ModulePartLink {
         let module = locked(call, input.module_id.id()).await?;
         live(&module)?;
         let actor = call.account_id();
+        let confined = call.ctx.caller.confined_space;
         let tx = call.tx().await?;
-        if super::link_part(tx, &module, kind, input.part.id.id(), actor).await? {
+        if super::link_part(tx, &module, kind, input.part.id.id(), actor, confined).await? {
             super::touch(tx, module.id).await?;
             // Joining a switched-off module hides it: its readers refetch.
             announce_part(tx, kind, input.part.id.id()).await?;

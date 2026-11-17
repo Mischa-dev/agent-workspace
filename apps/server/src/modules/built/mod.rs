@@ -244,14 +244,15 @@ pub async fn object_place(
 
 /// Makes an object a part of a module. The object must be in the module's
 /// workspace (and space, for a space's module), in a space `actor` is a
-/// member of, and in no other module. Returns false when it was already this
-/// module's.
+/// member of (and, for a connection held to one space, in that space), and
+/// in no other module. Returns false when it was already this module's.
 pub async fn link_part(
     connection: &mut PgConnection,
     module: &ModuleRow,
     part_kind: &'static str,
     object_id: Uuid,
     actor: Uuid,
+    confined: Option<Uuid>,
 ) -> Result<bool, AppError> {
     let Some((workspace_id, space_id)) = object_place(connection, part_kind, object_id).await?
     else {
@@ -273,7 +274,7 @@ pub async fn link_part(
     .bind(actor)
     .fetch_one(&mut *connection)
     .await?;
-    if !member {
+    if !member || confined.is_some_and(|confined| confined != space_id) {
         return Err(AppError::NotFound("part"));
     }
     let owner = sqlx::query_scalar::<_, Uuid>(
