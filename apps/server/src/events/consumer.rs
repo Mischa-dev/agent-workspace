@@ -366,7 +366,12 @@ pub async fn run_consumer<C: Consumer + 'static>(
         let cluster = work_cluster.clone();
         async move {
             let mut runner = runner.lock().await;
-            run_rounds(&mut runner, &pool, &cluster, &lease).await
+            // Rounds and sweeps read every workspace's events.
+            crate::tenancy::system(
+                "events.log",
+                run_rounds(&mut runner, &pool, &cluster, &lease),
+            )
+            .await
         }
     })
     .await;
@@ -384,12 +389,7 @@ async fn run_rounds<C: Consumer>(
         if lease.lost.is_cancelled() {
             return Ok(());
         }
-        let pause = match crate::tenancy::system(
-            "events.log",
-            runner.round_under(pool, Some((cluster, lease))),
-        )
-        .await
-        {
+        let pause = match runner.round_under(pool, Some((cluster, lease))).await {
             Ok(round) if round.handled > 0 || round.parked > 0 => Duration::ZERO,
             Ok(round) if round.busy => Duration::from_secs(2),
             Ok(_) if runner.batch_failures > 0 => backoff(runner.batch_failures),
