@@ -444,8 +444,8 @@ pub(super) async fn page_get(
                    AND EXISTS (SELECT 1 FROM messages reply
                                WHERE reply.conversation_id = thread.id
                                  AND reply.removed_at IS NULL)),
-                (SELECT count(*) FROM project_page_suggestions
-                 WHERE page_id = $1 AND status = 'pending')
+                (SELECT count(*) FROM proposals
+                 WHERE thing_kind = 'page' AND thing_id = $1 AND status = 'pending')
             "#,
         )
         .bind(page_id)

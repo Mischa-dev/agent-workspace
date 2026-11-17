@@ -533,14 +533,27 @@ pub(crate) fn document() -> Value {
             }),
         );
         for (status, _) in ERROR_STATUSES {
-            let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
-                json!({ "$ref": format!("#/components/responses/{refused}") })
-            } else {
+            // The refusing 4xx statuses (403, 404, 409, 422) share one
+            // "4XX" entry; 401, 413 and 429 are more specific, so they win
+            // over it. One entry instead of four keeps the document small
+            // as operations are added.
+            let (key, response) = match *status {
+                "403" | "404" | "409" | "422" => (
+                    "4XX".to_owned(),
+                    json!({ "$ref": format!("#/components/responses/{refused}") }),
+                ),
+                "503" => (
+                    (*status).to_owned(),
+                    json!({ "$ref": format!("#/components/responses/{refused}") }),
+                ),
                 // The same for every operation, so referenced rather than
-                // repeated, which keeps the document small as tools are added.
-                json!({ "$ref": format!("#/components/responses/Error{status}") })
+                // repeated.
+                _ => (
+                    (*status).to_owned(),
+                    json!({ "$ref": format!("#/components/responses/Error{status}") }),
+                ),
             };
-            responses.insert((*status).to_owned(), response);
+            responses.insert(key, response);
         }
         paths.insert(
             format!("/{name}"),

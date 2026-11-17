@@ -454,6 +454,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "ai_summarize",
     "automation_write",
     "bug_report_link_write",
+    "change_undo",
     "channel_create",
     "connection_create",
     "connection_remove",
@@ -484,6 +485,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "layout_preset_write",
     "field_write",
     "collection_write",
+    "proposal_decide",
     "record_write",
     "button_press",
     "sheet_write",
@@ -7076,6 +7078,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"pageId": b.page, "suggestionId": b.page_suggestions[1], "decision": "reject"}),
                 json!({"pageId": a.page, "suggestionId": b.page_suggestions[1], "decision": "reject"}),
             ],
+        ),
+        mcp_case(
+            "change_undo",
+            json!({"changeSetId": a.page_change}),
+            vec![json!({"changeSetId": b.page_change})],
+        ),
+        mcp_case(
+            "proposal_decide",
+            json!({"proposalId": a.page_suggestions[2], "decision": "reject"}),
+            vec![json!({"proposalId": b.page_suggestions[2], "decision": "reject"})],
         ),
         mcp_case(
             "page_write",

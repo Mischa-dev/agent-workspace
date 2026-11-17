@@ -1365,7 +1365,11 @@ async fn post_update_inner(
         content,
         &attachments,
         reply_to,
-        key,
+        key.clone(),
+        (
+            &mcp_actor(principal, key.as_str().to_owned()),
+            "work_item.mcp_update_posted",
+        ),
     )
     .await
     {

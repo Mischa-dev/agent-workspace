@@ -36,6 +36,8 @@ export type ButtonStepView = { arguments: Record<string, unknown>; operation: st
 
 export type ButtonView = { label: string; steps: ButtonStepView[] }
 
+export type ChangeSetView = { actor?: string | null; actorId: string; createdAt: string; id: string; proposalId?: string | null; thingId: string; thingKind: string; touched: unknown; undoable: boolean; undoes?: string | null; undoneBy?: string | null; updatedAt: string; versionFrom: number; versionTo: number }
+
 export type ChartStyle = ("bar" | "line" | "donut") | "number"
 
 export type ChartWrite = { field?: string | null; measure?: MeasureOp | null; style?: ChartStyle | null }
@@ -63,6 +65,8 @@ export type CustomEmojiView = { createdAt: string; createdByAccountId: string; i
 export type DashboardEntry = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 
 export type DateBucket = "day" | "week" | "month"
+
+export type DecisionArg = "accept" | "reject" | "withdraw"
 
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
 
@@ -156,6 +160,8 @@ export type PressedStep = { operation: string; value: unknown }
 
 export type PreviewRecord = { number: number; title: string }
 
+export type ProposalView = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
+
 export type Publisher = { name: string; url?: string | null }
 
 export type PullRequest = { baseRef: string; checksState: string; draft: boolean; headRef: string; id: string; mergedAt?: string | null; number: number; repository: string; repositoryId: string; reviewState: string; spaceId: string; state: string; title: string; updatedAt: string; url: string }
@@ -247,6 +253,14 @@ export type ButtonGetOutput = { button: ButtonView; canPress: boolean; reason?: 
 export type ButtonPressInput = { collection: string; field: string; record: string }
 
 export type ButtonPressOutput = { record: PreviewRecord; steps: PressedStep[] }
+
+export type ChangeListInput = { limit?: number | null; sinceHours?: number | null; thingId: string; thingKind: string }
+
+export type ChangeListOutput = { changes: ChangeSetView[] }
+
+export type ChangeUndoInput = { changeSetId: string }
+
+export type ChangeUndoOutput = { change: ChangeSetView; skipped: string[]; version: number }
 
 export type CommentCreateInput = { anchor?: unknown; attachmentIds?: string[]; content?: unknown; newThread?: boolean; replyToMessageId?: string | null; text?: string | null; thing: ThingInput; threadId?: string | null }
 
@@ -492,6 +506,14 @@ export type PersonCreateInput = { displayName: string; handle: string; roleId?: 
 
 export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken?: string | null }
 
+export type ProposalDecideInput = { decision: DecisionArg; proposalId: string }
+
+export type ProposalDecideOutput = { appliedVersion?: number | null; author?: string | null; authorId: string; baseVersion: number; change: unknown; createdAt: string; decidedAt?: string | null; decidedBy?: string | null; decisionNote?: string | null; id: string; note?: string | null; operation: string; spaceId: string; status: string; thingId: string; thingKind: string; thingTitle?: string | null }
+
+export type ProposalListInput = { includeDecided?: boolean; limit?: number | null; thingId?: string | null; thingKind?: string | null }
+
+export type ProposalListOutput = { proposals: ProposalView[] }
+
 export type RequestCancelInput = { requestId: string }
 
 export type RequestCancelOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
@@ -675,6 +697,8 @@ export type Operations = {
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   button_get: { input: ButtonGetInput; output: ButtonGetOutput }
   button_press: { input: ButtonPressInput; output: ButtonPressOutput }
+  change_list: { input: ChangeListInput; output: ChangeListOutput }
+  change_undo: { input: ChangeUndoInput; output: ChangeUndoOutput }
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
   comment_list: { input: CommentListInput; output: CommentListOutput }
   comment_thread_update: { input: CommentThreadUpdateInput; output: CommentThreadUpdateOutput }
@@ -736,6 +760,8 @@ export type Operations = {
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }
+  proposal_decide: { input: ProposalDecideInput; output: ProposalDecideOutput }
+  proposal_list: { input: ProposalListInput; output: ProposalListOutput }
   request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
   request_create: { input: RequestCreateInput; output: RequestCreateOutput }
   request_get: { input: RequestGetInput; output: RequestGetOutput }

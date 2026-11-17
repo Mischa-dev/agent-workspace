@@ -183,6 +183,18 @@ const KINDS: &[(&str, &str)] = &[
          WHERE page.id = $1 AND subject_visible_to('page', page.id, $2)",
     ),
     (
+        "change_set",
+        "SELECT change.workspace_id, change.space_id FROM document_change_sets change \
+         WHERE change.id = $1 \
+           AND subject_visible_to(change.thing_kind, change.thing_id, $2)",
+    ),
+    (
+        "proposal",
+        "SELECT proposal.workspace_id, proposal.space_id FROM proposals proposal \
+         WHERE proposal.id = $1 \
+           AND subject_visible_to(proposal.thing_kind, proposal.thing_id, $2)",
+    ),
+    (
         "sheet",
         "SELECT project.organization_id, project.id FROM sheets sheet \
          JOIN projects project ON project.id = sheet.project_id \
@@ -319,6 +331,8 @@ fn what_of(kind: &str) -> &'static str {
         "task" => "That task",
         "run" => "That run",
         "page" => "That page",
+        "proposal" => "That proposal",
+        "change_set" => "That change",
         "sheet" => "That sheet",
         "record" => "That record",
         "module" => "That module",

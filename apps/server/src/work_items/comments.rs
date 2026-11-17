@@ -88,7 +88,12 @@ pub(crate) async fn post(
     attachments: &[Uuid],
     reply_to: Option<Uuid>,
     key: IdempotencyKey,
+    audit: (&crate::work_item_commands::CommandActor, &'static str),
 ) -> Result<PostedTaskComment, AppError> {
+    // The send pipeline audits a message sent with an MCP credential itself;
+    // every other poster (a browser session, a connected app's grant) gets
+    // the task's audit row here.
+    let audited_by_pipeline = actor.mcp_credential.is_some();
     let posted = crate::discussion::post(
         state,
         actor,
@@ -120,6 +125,18 @@ pub(crate) async fn post(
     if !posted.replayed {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         task_changed(&mut transaction, work_item_id).await?;
+        // The audit row names the comment by id only, with the request id
+        // it came with.
+        if !audited_by_pipeline {
+            crate::work_item_commands::record_audit(
+                &mut transaction,
+                audit.0,
+                audit.1,
+                work_item_id,
+                serde_json::json!({ "commentId": posted.message_id }),
+            )
+            .await?;
+        }
         transaction.commit().await?;
     }
     Ok(PostedTaskComment {

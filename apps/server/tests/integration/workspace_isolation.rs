@@ -2029,7 +2029,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "automation_runs",
     "briefing",
     "bug_report_link_list",
+    "change_list",
     "connection_list",
+    "proposal_list",
     "schedule_list",
     "conversation_list",
     "conversation_open",
@@ -2726,6 +2728,21 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "page_suggestions",
             vec![json!({"pageId": a.page, "includeDecided": true})],
             vec![json!({"pageId": b.page, "includeDecided": true})],
+            vec![],
+        ),
+        case(
+            "change_list",
+            vec![json!({"thingKind": "page", "thingId": a.page})],
+            vec![json!({"thingKind": "page", "thingId": b.page})],
+            vec![],
+        ),
+        case(
+            "proposal_list",
+            vec![
+                json!({"thingKind": "page", "thingId": a.page, "includeDecided": true}),
+                json!({}),
+            ],
+            vec![json!({"thingKind": "page", "thingId": b.page, "includeDecided": true})],
             vec![],
         ),
         case(

@@ -3005,6 +3005,10 @@ async fn create_work_item_comment(
         &request.attachments,
         request.reply_to_comment_id,
         key,
+        (
+            &browser_actor(&headers, &principal, project_id)?,
+            "work_item.comment_created",
+        ),
     )
     .await?;
     let body = CommentAppendResponse {

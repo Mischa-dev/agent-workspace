@@ -749,14 +749,16 @@ pub async fn update_page(
     }
     // A page with a stored document changes through it, and its Markdown is
     // derived from the result.
+    let mut blocks_changed = None;
     if new_body != body
-        && let Some(derived) =
+        && let Some(change) =
             page_docs::store::set_markdown(transaction, page_id, &new_body).await?
     {
-        if derived.chars().count() > MAX_PAGE_BODY {
+        if change.derived.markdown.chars().count() > MAX_PAGE_BODY {
             return Err(page_docs::store::too_long());
         }
-        new_body = derived;
+        new_body = change.derived.markdown.clone();
+        blocks_changed = Some(change);
     }
     let new_guide = input.is_guide.unwrap_or(is_guide);
     let new_skill = normalize_skill_description(input.skill_description.as_deref())?
@@ -821,6 +823,19 @@ pub async fn update_page(
     .execute(&mut **transaction)
     .await
     .map_err(map_page_title_conflict)?;
+    if let Some(change) = &blocks_changed {
+        crate::change_sets::record_page(
+            transaction,
+            writer,
+            project_id,
+            page_id,
+            (version, next_version),
+            &change.before,
+            &change.blocks,
+            false,
+        )
+        .await?;
+    }
     insert_revision(
         transaction,
         writer,

@@ -90,6 +90,36 @@
     "title": "Press a button"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "change_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List recent changes"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "change_undo",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Undo a change"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1023,6 +1053,36 @@
     "preview": false,
     "proposable": false,
     "title": "Add a person who hasn't signed in yet"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.discussion.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "proposal_decide",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Decide a proposal"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "proposal_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List proposals"
   },
   {
     "automation": true,

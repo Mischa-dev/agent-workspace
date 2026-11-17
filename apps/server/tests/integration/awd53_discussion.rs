@@ -126,6 +126,28 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     .await;
     assert_eq!(self_accept["outcome"], "permission_denied", "{self_accept}");
 
+    // Both are proposals (C1.7): Mara lists her own, and deciding through
+    // proposal_decide follows the same rule.
+    let mine = call("proposal_list", json!({})).await;
+    assert_eq!(mine["outcome"], "ok", "{mine}");
+    let proposals = mine["value"]["proposals"].as_array().expect("proposals");
+    assert_eq!(proposals.len(), 2, "{mine}");
+    assert!(
+        proposals
+            .iter()
+            .all(|proposal| proposal["thingKind"] == "page"
+                && proposal["thingId"] == page.as_str()
+                && proposal["operation"] == "page_edit"
+                && proposal["status"] == "pending"),
+        "{mine}"
+    );
+    let self_accept = call(
+        "proposal_decide",
+        json!({"proposalId": first, "decision": "accept", "clientRequestId": "self-accept"}),
+    )
+    .await;
+    assert_eq!(self_accept["outcome"], "permission_denied", "{self_accept}");
+
     // The owner accepts the first: the page changes as Mara's edit, with
     // the owner named in the note.
     let (status, accepted) = send(
@@ -156,6 +178,17 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         note.starts_with("Fix the risk (Suggestion accepted by"),
         "{note}"
     );
+    let applied = sqlx::query_scalar::<_, bool>(
+        "SELECT proposal.applied_change_set_id = change.id \
+         FROM proposals proposal JOIN document_change_sets change \
+           ON change.proposal_id = proposal.id \
+         WHERE proposal.id = $1::uuid",
+    )
+    .bind(&first)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("accepting made a change set");
+    assert!(applied);
 
     // The owner edits the last paragraph by hand; the second suggestion,
     // made against the old text, no longer applies and stays pending.
@@ -185,11 +218,12 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     assert!(body.contains("Ship it soon."), "{body}");
     assert!(!body.contains("Friday"), "{body}");
     let withdrawn = call(
-        "page_suggestion_decide",
-        json!({"pageId": page, "suggestionId": second, "decision": "withdraw"}),
+        "proposal_decide",
+        json!({"proposalId": second, "decision": "withdraw", "clientRequestId": "withdraw-second"}),
     )
     .await;
     assert_eq!(withdrawn["value"]["status"], "withdrawn", "{withdrawn}");
+    assert_eq!(withdrawn["value"]["thingId"], page.as_str(), "{withdrawn}");
     let pending = discussion().await;
     assert!(
         pending["suggestions"]
@@ -214,6 +248,56 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     .await;
     assert!(appended["value"]["suggestion"].is_null(), "{appended}");
     assert_eq!(appended["value"]["version"], 2, "{appended}");
+
+    // Change sets (C1.9): the append is one change Mara can undo, and the
+    // undo is a change she can undo in turn.
+    let own_body = || async {
+        sqlx::query_scalar::<_, String>("SELECT body FROM project_pages WHERE id = $1::uuid")
+            .bind(&own_page)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("own page")
+    };
+    let changes = call(
+        "change_list",
+        json!({"thingKind": "page", "thingId": own_page}),
+    )
+    .await;
+    assert_eq!(changes["outcome"], "ok", "{changes}");
+    let latest = changes["value"]["changes"][0].clone();
+    assert_eq!(latest["versionTo"], 2, "{changes}");
+    assert_eq!(latest["undoable"], true, "{changes}");
+    let undone = call(
+        "change_undo",
+        json!({"changeSetId": latest["id"], "clientRequestId": "undo-append"}),
+    )
+    .await;
+    assert_eq!(undone["outcome"], "ok", "{undone}");
+    assert_eq!(undone["value"]["version"], 3, "{undone}");
+    assert!(!own_body().await.contains("Two"));
+    let again = call(
+        "change_undo",
+        json!({"changeSetId": latest["id"], "clientRequestId": "undo-append-again"}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+    let redone = call(
+        "change_undo",
+        json!({"changeSetId": undone["value"]["change"]["id"], "clientRequestId": "undo-the-undo"}),
+    )
+    .await;
+    assert_eq!(redone["outcome"], "ok", "{redone}");
+    assert!(own_body().await.contains("Two"));
+    // On the owner's page Mara only suggests, so she can't undo there.
+    let theirs = call("change_list", json!({"thingKind": "page", "thingId": page})).await;
+    let theirs = theirs["value"]["changes"][0]["id"].clone();
+    assert!(theirs.is_string(), "the owner's edits are change sets");
+    let denied = call(
+        "change_undo",
+        json!({"changeSetId": theirs, "clientRequestId": "undo-theirs"}),
+    )
+    .await;
+    assert_eq!(denied["outcome"], "permission_denied", "{denied}");
 
     // Comments: Mara quotes words in a block; quoting words that aren't
     // there is refused.

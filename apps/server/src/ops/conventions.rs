@@ -39,6 +39,7 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "update_elements",
             "archive",
             "restore",
+            "undo",
             "delete",
             "move",
             "reorder",
