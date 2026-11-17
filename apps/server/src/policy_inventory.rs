@@ -25,6 +25,10 @@ pub enum MutationAction {
     OAuthProtocol,
     McpProtocol,
     GithubWebhook,
+    /// A delivery to an incoming hook (K3.26), signed with the hook's
+    /// secret over its timestamp, delivery id and body. It starts the
+    /// rules on that hook, which act as their makers.
+    IncomingHookSignature,
     /// Browser error reports: counted and logged, never stored.
     ClientTelemetry,
     /// A button on a person's own push notification, carrying a short-lived
@@ -1228,6 +1232,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/integrations/github/webhook",
         GithubWebhook
+    ),
+    boundary_route!(
+        "incoming_hooks",
+        Post,
+        "/api/v1/incoming-hooks/{hook_id}",
+        IncomingHookSignature
     ),
     policy_route!(
         "invitations",

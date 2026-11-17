@@ -186,9 +186,10 @@ impl Server {
         // This instance's sockets hear the log through the tail (K5.5).
         let feed =
             crate::realtime::tail::feed(state.realtime.clone(), tail.subscribe(), receiver.clone());
-        if roles.work {
-            crate::harnesses::spawn_reloader(state.clone());
-        }
+        // Every instance serves harness manifests (launches, catalogues,
+        // accounts), so each reloads them: one registered or switched off
+        // through another instance shows here too.
+        crate::harnesses::spawn_reloader(state.clone());
         // Every instance knows its cluster, host or not, so a run started
         // through this one's API wakes the lease holder instead of being
         // admitted here without the lease.
