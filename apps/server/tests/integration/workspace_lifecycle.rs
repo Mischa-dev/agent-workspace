@@ -285,6 +285,17 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["value"]["lifecycle"], "deleting", "{body}");
     assert!(body["value"]["deleteAfter"].is_string(), "{body}");
+    // Asking again (a retry whose answer was lost) gets the same schedule.
+    let (status, again) = op(
+        &t,
+        &a.browser,
+        a.organization,
+        "workspace_delete",
+        json!({"confirm": a_slug}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["value"]["deleteAfter"], body["value"]["deleteAfter"]);
     // Deleting: everything is refused but keeping it.
     let body = agent_task_list(&t, &a.agent_token).await;
     assert!(refused_as_suspended(&body), "{body}");

@@ -41,7 +41,9 @@ pub const DELETION_GRACE_DAYS: i64 = 14;
 pub const DELETE_JOB_KIND: &str = "workspace.delete";
 
 /// The calls a workspace that is deleting still answers.
-const ALLOWED_WHILE_DELETING: &[&str] = &["workspace_delete_cancel"];
+// Asking again answers with the schedule it has, so a retried request
+// (its response lost) still succeeds.
+const ALLOWED_WHILE_DELETING: &[&str] = &["workspace_delete_cancel", "workspace_delete"];
 
 /// Where a workspace is in its life.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
