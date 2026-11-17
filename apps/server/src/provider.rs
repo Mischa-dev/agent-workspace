@@ -17,6 +17,7 @@ use crate::{
 
 pub mod adapter;
 pub mod catalog;
+pub mod ceremonies;
 pub(crate) mod claude_cloud;
 pub(crate) mod claude_code;
 mod codex_app_server;
@@ -38,11 +39,10 @@ pub use adapter::{
     ProfileHealth, RateLimitSummary, RateLimitWindow,
 };
 use adapter::{HarnessAnswer, HarnessEvent, HarnessRequest, ItemKind, RecoveredTurn, RequestKind};
+pub use ceremonies::{LoginCeremonyError, LoginCeremonySnapshot, LoginReservation};
 pub use codex_app_server::{CODEX_KIND, codex_manifest};
 pub use codex_cloud::{CODEX_CLOUD_KIND, codex_cloud_manifest};
-pub use registry::{
-    LoginCeremonyError, LoginCeremonySnapshot, LoginReservation, SupervisorRegistry,
-};
+pub use registry::SupervisorRegistry;
 use run_config::RunConfig;
 
 const ANY_AUTHORIZED_APPROVER: &str = "any_authorized";

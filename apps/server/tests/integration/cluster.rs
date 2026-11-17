@@ -1974,3 +1974,108 @@ async fn follow_catches_up_then_goes_live_without_gaps() {
     assert!(stale.next().await.is_none(), "the stream ends after it");
     cluster.finish().await;
 }
+
+/// K5.14: a provider sign-in started through one instance is answered by
+/// the other: its poll sees the code, a retried start replays it, a second
+/// start is refused, and a cancel there ends it for both.
+#[tokio::test]
+async fn provider_sign_in_started_on_one_instance_completes_on_the_other() {
+    use agent_workspace_server::provider::{
+        LoginCeremonyError, LoginReservation,
+        adapter::{LoginKind, LoginStart},
+        ceremonies,
+    };
+
+    let Some(cluster) = cluster("k5_14_sign_in", 2).await else {
+        return;
+    };
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 LIMIT 1",
+    )
+    .bind(cluster.organization_id)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("owner");
+    let account = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO provider_accounts (id, organization_id, owner_actor_id, adapter_kind, name, home_path)
+        VALUES ($1, $2, $3, 'demo', 'Demo', '/tmp/k5-14-' || $1::text)
+        "#,
+    )
+    .bind(account)
+    .bind(cluster.organization_id)
+    .bind(owner)
+    .execute(&cluster.pool)
+    .await
+    .expect("provider account");
+    let (a, b) = (
+        cluster.instance(0).state().pool.clone(),
+        cluster.instance(1).state().pool.clone(),
+    );
+    let session = Uuid::now_v7();
+    let reserve = |pool: sqlx::PgPool, session: Uuid, key: &'static str| async move {
+        ceremonies::reserve_login(&pool, account, owner, session, key, LoginKind::DeviceCode).await
+    };
+    let Ok(LoginReservation::Reserved(ceremony)) = reserve(a.clone(), session, "start").await
+    else {
+        panic!("the first start reserves");
+    };
+    // Not answered yet: a second start, anywhere, is refused.
+    assert!(matches!(
+        reserve(b.clone(), session, "start").await,
+        Err(LoginCeremonyError::Active)
+    ));
+    ceremonies::complete_login(
+        &a,
+        account,
+        ceremony,
+        LoginStart::DeviceCode {
+            login_id: "login-1".to_owned(),
+            verification_url: "https://example.com/device".to_owned(),
+            user_code: "ABCD-EFGH".to_owned(),
+        },
+    )
+    .await
+    .unwrap_or_else(|_| panic!("complete"));
+    // The page's poll lands on B and sees the code.
+    let seen = ceremonies::login_ceremony(&b, account, owner, session)
+        .await
+        .expect("read")
+        .expect("open on B");
+    assert_eq!(seen.ceremony_id, ceremony);
+    assert!(matches!(
+        seen.response,
+        Some(LoginStart::DeviceCode { ref user_code, .. }) if user_code == "ABCD-EFGH"
+    ));
+    // Another session doesn't see it; a retried start on B replays it.
+    assert!(
+        ceremonies::login_ceremony(&b, account, owner, Uuid::now_v7())
+            .await
+            .expect("read")
+            .is_none()
+    );
+    assert!(matches!(
+        reserve(b.clone(), session, "start").await,
+        Ok(LoginReservation::Replay(replayed)) if replayed.ceremony_id == ceremony
+    ));
+    assert!(matches!(
+        reserve(b.clone(), Uuid::now_v7(), "other").await,
+        Err(LoginCeremonyError::Active)
+    ));
+    // Cancelled on B, it is gone on A, and a new start may begin.
+    ceremonies::clear_login(&b, account, Some(ceremony))
+        .await
+        .expect("cancel");
+    assert!(
+        ceremonies::login_ceremony(&a, account, owner, session)
+            .await
+            .expect("read")
+            .is_none()
+    );
+    assert!(matches!(
+        reserve(a.clone(), session, "again").await,
+        Ok(LoginReservation::Reserved(_))
+    ));
+    cluster.finish().await;
+}

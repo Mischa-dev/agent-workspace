@@ -185,6 +185,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
+                "provider_login_ceremonies",
+                "runtime state of this server (a sign-in in progress, ten minutes at most)",
+            ),
+            (
                 "file_objects_pending",
                 "runtime state of this server (bytes being written to a store)",
             ),
