@@ -250,6 +250,7 @@ async fn direct_overview(
                     thread_status: None,
                     thread_outcome: None,
                     parent_kind: None,
+                    private: false,
                 },
                 members: serde_json::from_value(row.members)
                     .map_err(|_| AppError::Internal("direct conversation members"))?,
@@ -534,8 +535,12 @@ pub(crate) struct GroupMembersChange {
     pub removed: Vec<ActorView>,
 }
 
-/// Add and remove people and agents in a group. Shared by the browser API and
-/// MCP; callers record their own audit rows.
+/// Add and remove people and agents in a group or a private channel (C2.6).
+/// Shared by the browser API and MCP; callers record their own audit rows.
+///
+/// A private channel's managers (whoever made it, to begin with) and the
+/// space's moderators change its members; any member can leave. Whoever is
+/// added must be in the channel's space already, and there's no cap.
 ///
 /// - Visibility goes through `lock_conversation_for` (`conversation_visible_to`),
 ///   which also locks the group row, so concurrent changes are serialized and
@@ -567,12 +572,20 @@ pub(crate) async fn change_group_members(
         return Err(AppError::Validation("group members"));
     }
     let leaving_only = add.is_empty() && remove.iter().all(|id| *id == editor.actor_id);
+    // -- visibility: only a kind and a flag, before the checked lock below.
+    let private_channel = sqlx::query_scalar::<_, bool>(
+        "SELECT kind = 'channel' AND visibility = 'members' FROM conversations WHERE id = $1",
+    )
+    .bind(conversation_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or(false);
     let conversation = lock_conversation_for(
         transaction,
         editor.actor_id,
         editor.actor_kind,
         conversation_id,
-        if leaving_only {
+        if leaving_only || private_channel {
             Action::ProjectView
         } else {
             Action::ChannelCreate
@@ -580,13 +593,16 @@ pub(crate) async fn change_group_members(
         false,
     )
     .await?;
-    if conversation.kind != "group" {
+    if private_channel {
+        if !leaving_only && !manages_channel(transaction, &conversation, &editor).await? {
+            return Err(AppError::Forbidden);
+        }
+    } else if conversation.kind != "group" {
         return Err(AppError::Conflict(
             "conversation",
-            "only groups can change members",
+            "only groups and private channels change members",
         ));
-    }
-    if editor.actor_kind != ActorKind::Human && !leaving_only {
+    } else if editor.actor_kind != ActorKind::Human && !leaving_only {
         return Err(AppError::Forbidden);
     }
     if let Some(expected_version) = expected_version
@@ -622,9 +638,11 @@ pub(crate) async fn change_group_members(
     let added = if to_add.is_empty() {
         Vec::new()
     } else {
-        join_reachable_agents(transaction, project_id, editor.actor_id, &to_add).await?;
+        if !private_channel {
+            join_reachable_agents(transaction, project_id, editor.actor_id, &to_add).await?;
+        }
         let people = lock_people(transaction, project_id, &to_add).await?;
-        if current.len() + to_add.len() - to_remove.len() > MAX_GROUP_MEMBERS {
+        if !private_channel && current.len() + to_add.len() - to_remove.len() > MAX_GROUP_MEMBERS {
             return Err(AppError::Conflict(
                 "group members",
                 "a group can have at most 20 members",
@@ -738,6 +756,30 @@ pub(crate) async fn change_group_members(
         added,
         removed,
     })
+}
+
+/// Whether `editor` changes a private channel's members: one of its
+/// managers, or someone who moderates its space.
+async fn manages_channel(
+    transaction: &mut Transaction<'_, Postgres>,
+    channel: &crate::conversations::ConversationAccessRow,
+    editor: &GroupEditor,
+) -> Result<bool, AppError> {
+    if channel.allows(editor.actor_id, editor.actor_kind, Action::MessageModerate)? {
+        return Ok(true);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM conversation_members
+            WHERE conversation_id = $1 AND actor_id = $2 AND manager
+        )
+        "#,
+    )
+    .bind(channel.id)
+    .bind(editor.actor_id)
+    .fetch_one(&mut **transaction)
+    .await?)
 }
 
 /// Everyone in a group, by name.
@@ -1420,6 +1462,7 @@ async fn conversation_response(
             thread_status: None,
             thread_outcome: None,
             parent_kind: None,
+            private: false,
         },
         read_state: ReadStateView {
             highest_seen_sequence: seen,

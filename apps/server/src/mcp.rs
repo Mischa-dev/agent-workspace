@@ -899,9 +899,9 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Add or remove people and agents in a group (pass the group, or a thread in it). Whoever you add can read everything said in the group so far. Remove your own @handle to leave. People can add and remove anyone; agents can only leave. DMs never change; channels are open to everyone in the project.",
+        description = "Add or remove people and agents in a group or a private channel (pass it, or a thread in it). Whoever you add can read everything said there so far. Remove your own @handle to leave. In a group, people can add and remove anyone and agents can only leave; in a private channel, its managers and the space's moderators change who's in it. DMs never change; other channels are open to everyone in the project.",
         annotations(
-            title = "Change group members",
+            title = "Change members",
             read_only_hint = false,
             destructive_hint = true,
             idempotent_hint = true,
@@ -1096,7 +1096,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a channel in a project. If an active channel with that name already exists, it's returned instead (created: false).",
+        description = "Create a channel in a project, or a private one (private: true) that only its members see, starting with you; add people with conversation_members. If an active channel with that name that you can see already exists, it's returned instead (created: false).",
         annotations(
             title = "Create channel",
             read_only_hint = false,

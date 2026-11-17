@@ -121,6 +121,10 @@ pub(crate) struct ConversationAccessRow {
     pub(crate) project_archived: bool,
     parent_archived: bool,
     pub(crate) parent_kind: Option<String>,
+    /// A private channel, or a thread in one (C2.6). Read where the lock
+    /// reads it; false elsewhere.
+    #[sqlx(default)]
+    pub(crate) private: bool,
     pub(crate) thread_status: String,
     pub(crate) thread_outcome: Option<String>,
     pub(crate) next_entry_sequence: i64,
@@ -197,6 +201,11 @@ impl ConversationAccessRow {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateChannelRequest {
     name: String,
+    /// A private channel: its members only, starting with whoever makes it
+    /// (C2.6). Left out of the request's hash when false, so retries of
+    /// older requests still replay.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    private: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -284,6 +293,9 @@ pub struct ConversationView {
     /// Threads only: the kind of conversation the thread lives under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_kind: Option<String>,
+    /// A private channel (or a thread in one): its members only (C2.6).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 impl From<&ConversationAccessRow> for ConversationView {
@@ -309,6 +321,7 @@ impl From<&ConversationAccessRow> for ConversationView {
             } else {
                 None
             },
+            private: row.private,
         }
     }
 }
@@ -693,6 +706,7 @@ struct ChannelRow {
     highest_sequence: i64,
     highest_seen_sequence: i64,
     read_version: i64,
+    private: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -851,7 +865,8 @@ async fn list_channels(
             conversation.version,
             conversation.next_entry_sequence - 1 AS highest_sequence,
             COALESCE(read_state.highest_seen_sequence, 0) AS highest_seen_sequence,
-            COALESCE(read_state.version, 0) AS read_version
+            COALESCE(read_state.version, 0) AS read_version,
+            conversation.visibility = 'members' AS private
         FROM conversations conversation
         LEFT JOIN conversation_read_states read_state
           ON read_state.project_id = conversation.project_id
@@ -901,6 +916,7 @@ async fn list_channels(
                     thread_status: None,
                     thread_outcome: None,
                     parent_kind: None,
+                    private: row.private,
                 },
                 highest_sequence,
                 unread,
@@ -934,7 +950,10 @@ async fn create_channel(
     require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let name = normalize_conversation_name(&request.name)?;
-    let command = CreateChannelRequest { name };
+    let command = CreateChannelRequest {
+        name,
+        private: request.private,
+    };
     let request_hash = RequestHash::for_value(&command)?;
     let scope = idempotency::resource_bound_scope("project", project_id, "channel_create")?;
 
@@ -971,6 +990,7 @@ async fn create_channel(
         project_id,
         principal.actor_id,
         &command.name,
+        command.private,
     )
     .await?;
     insert_audit_event(
@@ -996,6 +1016,7 @@ async fn create_channel(
             thread_status: None,
             thread_outcome: None,
             parent_kind: None,
+            private: command.private,
         },
         read_state: ReadStateView {
             highest_seen_sequence: 0,
@@ -1008,26 +1029,45 @@ async fn create_channel(
 }
 
 /// Create a channel in a Project, read up to date for its creator. The caller
-/// has already checked `Action::ChannelCreate`. Shared with MCP.
+/// has already checked `Action::ChannelCreate`. Shared with MCP. A private
+/// one (C2.6) is for its members only, and its creator is its first member
+/// and manager.
 pub(crate) async fn insert_channel(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     creator_actor_id: Uuid,
     name: &str,
+    private: bool,
 ) -> Result<Uuid, AppError> {
     let conversation_id = Uuid::now_v7();
     let inserted = sqlx::query(
         r#"
-        INSERT INTO conversations (id, project_id, workspace_id, kind, name)
-        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'channel', $3)
+        INSERT INTO conversations (id, project_id, workspace_id, kind, name, visibility)
+        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'channel', $3,
+                CASE WHEN $4 THEN 'members' ELSE 'project' END)
         "#,
     )
     .bind(conversation_id)
     .bind(project_id)
     .bind(name)
+    .bind(private)
     .execute(&mut **transaction)
     .await;
     map_conversation_insert(inserted)?;
+    if private {
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_members
+                (project_id, conversation_id, actor_id, added_by_actor_id, manager)
+            VALUES ($1, $2, $3, $3, true)
+            "#,
+        )
+        .bind(project_id)
+        .bind(conversation_id)
+        .bind(creator_actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
     sqlx::query(
         r#"
         INSERT INTO conversation_read_states (
@@ -1139,6 +1179,7 @@ async fn create_thread(
             thread_status: Some("Open".to_owned()),
             thread_outcome: None,
             parent_kind: Some(channel.kind.clone()),
+            private: channel.private,
         },
         read_state: ReadStateView {
             highest_seen_sequence: 0,
@@ -2320,6 +2361,8 @@ pub(crate) async fn lock_message_conversation(
                project.archived_at IS NOT NULL AS project_archived,
                COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
                parent.kind AS parent_kind,
+               COALESCE(parent.kind, conversation.kind) = 'channel'
+                   AND COALESCE(parent.visibility, conversation.visibility) = 'members' AS private,
                conversation.thread_status,
                conversation.thread_outcome,
                conversation.next_entry_sequence,
@@ -3832,6 +3875,8 @@ pub(crate) async fn fetch_conversation_access(
             project.archived_at IS NOT NULL AS project_archived,
             COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
             parent.kind AS parent_kind,
+            COALESCE(parent.kind, conversation.kind) = 'channel'
+                AND COALESCE(parent.visibility, conversation.visibility) = 'members' AS private,
             conversation.thread_status,
             conversation.thread_outcome,
             conversation.next_entry_sequence,
@@ -3952,6 +3997,8 @@ pub(crate) async fn lock_conversation_for(
             project.archived_at IS NOT NULL AS project_archived,
             COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
             parent.kind AS parent_kind,
+            COALESCE(parent.kind, conversation.kind) = 'channel'
+                AND COALESCE(parent.visibility, conversation.visibility) = 'members' AS private,
             conversation.thread_status,
             conversation.thread_outcome,
             conversation.next_entry_sequence,

@@ -134,3 +134,127 @@ async fn non_members_see_no_private_conversation_in_any_list() {
 
     world.finish().await;
 }
+
+/// C2.6: a private channel is made private, its maker managing it. Only its
+/// members find it, its messages or its timeline; a member who doesn't
+/// manage it can't bring others in; whoever is removed loses it at once,
+/// and anyone can leave.
+#[tokio::test]
+async fn private_channels_belong_to_their_members() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("nina", "member")
+        .build("c2_6_private_channels")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let work = world.project("WORK");
+    let lena = &world.people["lena"];
+    let mara = &world.people["mara"];
+    let nina = &world.people["nina"];
+
+    let (status, made) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/channels"),
+            Some("private-launch"),
+            json!({"name": "launch", "private": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(made["conversation"]["private"], true, "{made}");
+    let channel = made["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .to_owned();
+    let word = format!("zqlaunch{}", &Uuid::now_v7().simple().to_string()[20..]);
+    let (status, sent) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/messages"),
+            Some("private-launch-message"),
+            json!({"content": text(&format!("launch date {word}"))}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+
+    let sees = |person: &'static str| {
+        let who = &world.people[person];
+        let channel = channel.clone();
+        let word = word.clone();
+        async move {
+            let listed = get(app, who, &format!("/api/v1/projects/{work}/channels")).await;
+            let listed = listed.to_string().contains(channel.as_str());
+            let (status, _) = send(
+                app,
+                who.browser.request(
+                    "GET",
+                    &format!("/api/v1/conversations/{channel}/timeline"),
+                    None,
+                    Value::Null,
+                ),
+            )
+            .await;
+            let found = get(app, who, &format!("/api/v1/search?q={word}")).await;
+            let found = found.to_string().contains(word.as_str());
+            assert_eq!(
+                listed,
+                status == StatusCode::OK,
+                "{person}: list and timeline agree"
+            );
+            assert_eq!(listed, found, "{person}: list and search agree");
+            listed
+        }
+    };
+    assert!(sees("lena").await);
+    assert!(!sees("mara").await);
+    assert!(!sees("nina").await);
+
+    let add = |by: &Person, who: Uuid, key: &str| {
+        by.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/members"),
+            Some(key),
+            json!({"actorId": who}),
+        )
+    };
+    let remove = |by: &Person, who: Uuid| {
+        by.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/members/{who}/remove"),
+            None,
+            Value::Null,
+        )
+    };
+    // Someone outside it can't add themselves.
+    let (status, refused) = send(app, add(nina, nina.actor, "nina-self")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    let (status, added) = send(app, add(lena, mara.actor, "add-mara")).await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert!(sees("mara").await);
+    // Mara is in it but doesn't manage it.
+    let (status, refused) = send(app, add(mara, nina.actor, "mara-adds-nina")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert!(!sees("nina").await);
+    let (status, added) = send(app, add(lena, nina.actor, "add-nina")).await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert!(sees("nina").await);
+    let (status, removed) = send(app, remove(lena, nina.actor)).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert!(!sees("nina").await);
+    // Mara leaves on her own.
+    let (status, left) = send(app, remove(mara, mara.actor)).await;
+    assert_eq!(status, StatusCode::OK, "{left}");
+    assert!(!sees("mara").await);
+    assert!(sees("lena").await);
+
+    world.finish().await;
+}
