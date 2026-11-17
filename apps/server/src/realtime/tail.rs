@@ -61,17 +61,18 @@ pub async fn run(
         if *shutdown.borrow() {
             return;
         }
-        let pause = match step(&pool, &mut after, &sender).await {
-            Ok(read) if read >= READ as usize => Duration::ZERO,
-            Ok(_) => POLL,
-            Err(error) => {
-                tracing::warn!(
-                    error_category = error.log_category(),
-                    "event tail read failed"
-                );
-                Duration::from_secs(1)
-            }
-        };
+        let pause =
+            match crate::tenancy::system("events.log", step(&pool, &mut after, &sender)).await {
+                Ok(read) if read >= READ as usize => Duration::ZERO,
+                Ok(_) => POLL,
+                Err(error) => {
+                    tracing::warn!(
+                        error_category = error.log_category(),
+                        "event tail read failed"
+                    );
+                    Duration::from_secs(1)
+                }
+            };
         // At most one read per MIN_GAP, however often it is woken.
         let wait_until = last_read + MIN_GAP;
         last_read = Instant::now();

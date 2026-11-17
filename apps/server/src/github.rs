@@ -1718,6 +1718,14 @@ pub(crate) async fn queue_publish_in(
     project_id: Uuid,
     run_id: Uuid,
 ) -> Result<Queued<PublishJobView>, AppError> {
+    // The worktree is inspected here, and it is on the built-in host's
+    // disk: another instance can't see it (K5.3).
+    if state.supervisors.host_lease_lost().is_cancelled() {
+        return Err(AppError::Conflict(
+            "repository_workspace",
+            "this server doesn't hold the run's worktree; try again",
+        ));
+    }
     let candidate = sqlx::query_as::<_, PublishCandidate>(
         r#"
         SELECT run.id AS agent_run_id, run.conversation_id,
@@ -2407,7 +2415,14 @@ async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
         // Each job keeps renewing its lease while it works: a publish alone
         // can take minutes (a token, two ref reads and a push), far past one
         // lease, and an expired lease lets another worker run it again.
-        if let Some(job) = claim_publish_job(state).await? {
+        // A publication reads the run's worktree, which is on the built-in
+        // host's disk: only the instance holding it takes one (K5.3).
+        let host_here = !state.supervisors.host_lease_lost().is_cancelled();
+        if let Some(job) = if host_here {
+            claim_publish_job(state).await?
+        } else {
+            None
+        } {
             let job_id = job.job_id;
             match while_leased(
                 state,

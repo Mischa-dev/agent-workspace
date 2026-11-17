@@ -111,7 +111,7 @@ pub async fn run(pool: PgPool, wake: Arc<Notify>, mut shutdown: watch::Receiver<
             return;
         }
         // A full batch means more may be waiting: go again at once.
-        let full = match step(&pool).await {
+        let full = match crate::tenancy::system("events.log", step(&pool)).await {
             Ok(moved) => moved >= BATCH as u64,
             Err(error) => {
                 tracing::warn!(
