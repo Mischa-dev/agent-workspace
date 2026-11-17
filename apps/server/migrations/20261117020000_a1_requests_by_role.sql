@@ -57,3 +57,19 @@ UPDATE requests SET legacy_source = NULL WHERE legacy_source = 'person_question'
 DROP FUNCTION requests_sync_question(UUID);
 DROP TABLE person_questions;
 DROP FUNCTION events_from_person_questions();
+
+-- Answering requests is a permission every built-in role holds (an
+-- addressed role still narrows who may), and custom roles gain it so the
+-- people who answered questions before still can.
+INSERT INTO permission_catalogue (key, module, scope, required, default_for)
+VALUES ('requests.answer', 'runs', 'space', false,
+        ARRAY['owner', 'admin', 'member', 'viewer']::text[])
+ON CONFLICT (key) DO UPDATE
+SET module = EXCLUDED.module, scope = EXCLUDED.scope, required = EXCLUDED.required,
+    default_for = EXCLUDED.default_for;
+UPDATE workspace_roles role
+   SET permissions = role.permissions || ARRAY['requests.answer'],
+       version = role.version + 1,
+       updated_at = now()
+ WHERE NOT role.built_in
+   AND NOT 'requests.answer' = ANY(role.permissions);
