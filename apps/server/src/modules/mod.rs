@@ -385,6 +385,7 @@ mod tests {
             kind::AGENT_UNRESPONSIVE,
             kind::BUDGET_WARNING,
             kind::THING_UPDATE,
+            kind::FORM_PAUSED,
             crate::automations::NOTIFICATION_KIND,
             "automation_disabled",
             "ai_suggestions",

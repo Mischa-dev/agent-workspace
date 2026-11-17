@@ -21,7 +21,7 @@
   },
   "routes": ["/api/v1/projects/{project_id}/collections*", "/api/v1/forms/*"],
   "events": { "emits": ["record.created", "record.updated"], "listens": [] },
-  "notifications": [],
+  "notifications": ["form_paused"],
   "search": ["records"],
   "automations": { "triggers": ["record_created", "record_changed"], "actions": [] },
   "things": [

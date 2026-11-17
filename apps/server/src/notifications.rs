@@ -98,6 +98,8 @@ pub mod kind {
     pub const BUDGET_WARNING: &str = "budget_warning";
     /// A2's follows: a thing you follow changed.
     pub const THING_UPDATE: &str = "thing_update";
+    /// T1.29: a public form you made reached its daily limit and paused.
+    pub const FORM_PAUSED: &str = "form_paused";
 }
 
 /// Groups of kinds people filter the inbox by.

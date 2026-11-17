@@ -31,6 +31,20 @@ pub const MAX_INTRO_CHARACTERS: usize = 2_000;
 pub const MAX_THANKS_CHARACTERS: usize = 500;
 /// The longest answer to a text field, as a record keeps it.
 const MAX_ANSWER_CHARACTERS: usize = 10_000;
+/// Answers a form takes in one UTC day before it pauses itself, unless its
+/// settings say otherwise (T1.29).
+pub const DEFAULT_DAILY_LIMIT: u32 = 500;
+pub const MAX_DAILY_LIMIT: u32 = 10_000;
+/// Answers one sender address may give one form in an hour.
+pub const ANSWERS_PER_ADDRESS_PER_HOUR: u32 = 20;
+/// An answer must come at least this long after its page was rendered, and
+/// within a day of it.
+pub const MIN_RENDER_AGE_MS: i64 = 3_000;
+const MAX_RENDER_AGE_MS: i64 = 24 * 3_600 * 1_000;
+/// The answer key that carries the page's render token.
+pub const RENDER_TOKEN_KEY: &str = "_aw_rendered";
+/// A field the page hides from people; anything in it means a script.
+pub const HONEYPOT_KEY: &str = "_aw_homepage";
 
 /// A form's settings, as `bug_report_links.form` stores them.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -45,6 +59,16 @@ pub struct FormConfig {
     /// Shown once an answer is in.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub thanks: String,
+    /// Answers it takes in a UTC day before pausing itself and telling its
+    /// maker; [`DEFAULT_DAILY_LIMIT`] when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_limit: Option<u32>,
+}
+
+impl FormConfig {
+    pub fn daily_limit(&self) -> u32 {
+        self.daily_limit.unwrap_or(DEFAULT_DAILY_LIMIT)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -101,11 +125,81 @@ pub fn check(form: &FormConfig, definitions: &[FieldDefinition]) -> Result<FormC
             return Err(format!("\"{}\" is on the form twice.", field.name));
         }
     }
+    if let Some(limit) = form.daily_limit
+        && !(1..=MAX_DAILY_LIMIT).contains(&limit)
+    {
+        return Err(format!(
+            "A form takes from 1 to {MAX_DAILY_LIMIT} answers a day."
+        ));
+    }
     Ok(FormConfig {
         intro: clean(&form.intro, MAX_INTRO_CHARACTERS, "introduction")?,
         fields: form.fields.clone(),
         thanks: clean(&form.thanks, MAX_THANKS_CHARACTERS, "thank-you note")?,
+        daily_limit: form.daily_limit,
     })
+}
+
+// ---------------------------------------------------------------------------
+// The render token: proof the page was loaded a moment before
+
+/// `<milliseconds since 1970>.<signature>`, signed with the form's own key,
+/// which only the server holds.
+pub fn render_token(key: &[u8], link_id: Uuid, now_ms: i64) -> String {
+    let signature = render_mac(key, link_id, now_ms)
+        .map(|mac| hex::encode(hmac::Mac::finalize(mac).into_bytes()))
+        .unwrap_or_default();
+    format!("{now_ms}.{signature}")
+}
+
+fn render_mac(key: &[u8], link_id: Uuid, issued_ms: i64) -> Option<hmac::Hmac<Sha256>> {
+    use hmac::Mac;
+    let mut mac = <hmac::Hmac<Sha256> as Mac>::new_from_slice(key).ok()?;
+    mac.update(link_id.as_bytes());
+    mac.update(&issued_ms.to_be_bytes());
+    Some(mac)
+}
+
+/// Why an answer's render token doesn't let it in, in words for the page.
+#[derive(Debug, Eq, PartialEq)]
+pub enum RenderRefusal {
+    /// Missing, forged, or more than a day old: load the form again.
+    Reload,
+    /// Sent sooner after the page loaded than a person could.
+    TooSoon,
+}
+
+pub fn check_render_token(
+    key: &[u8],
+    link_id: Uuid,
+    token: Option<&str>,
+    now_ms: i64,
+) -> Result<(), RenderRefusal> {
+    use hmac::Mac;
+    let (issued, signature) = token
+        .and_then(|token| token.split_once('.'))
+        .ok_or(RenderRefusal::Reload)?;
+    let issued = issued.parse::<i64>().map_err(|_| RenderRefusal::Reload)?;
+    let signature = hex::decode(signature).map_err(|_| RenderRefusal::Reload)?;
+    render_mac(key, link_id, issued)
+        .ok_or(RenderRefusal::Reload)?
+        .verify_slice(&signature)
+        .map_err(|_| RenderRefusal::Reload)?;
+    let age = now_ms - issued;
+    if !(0..=MAX_RENDER_AGE_MS).contains(&age) {
+        return Err(RenderRefusal::Reload);
+    }
+    if age < MIN_RENDER_AGE_MS {
+        return Err(RenderRefusal::TooSoon);
+    }
+    Ok(())
+}
+
+/// Whether the hidden field a person never sees was filled in.
+pub fn caught_by_honeypot(answer: &Map<String, Value>) -> bool {
+    answer
+        .get(HONEYPOT_KEY)
+        .is_some_and(|value| !is_blank(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +238,10 @@ pub struct PublicForm {
     pub intro: String,
     pub thanks: String,
     pub fields: Vec<PublicField>,
+    /// Sent back with the answer under [`RENDER_TOKEN_KEY`].
+    pub render_token: String,
+    /// The key of a field the page keeps out of sight; left empty.
+    pub honeypot: &'static str,
 }
 
 /// The form a page shows: the fields still active and askable, in the
@@ -153,8 +251,11 @@ pub fn public(
     collection: &collections::Collection,
     form: &FormConfig,
     definitions: &[FieldDefinition],
+    render_token: String,
 ) -> PublicForm {
     PublicForm {
+        render_token,
+        honeypot: HONEYPOT_KEY,
         name: name.to_owned(),
         collection: collection.name.clone(),
         title_name: collection.title_name.clone(),
@@ -391,7 +492,10 @@ mod tests {
     use serde_json::{Map, json};
     use uuid::Uuid;
 
-    use super::{FormConfig, FormField, check, parse_answer, record_from_answer};
+    use super::{
+        FormConfig, FormField, MIN_RENDER_AGE_MS, RenderRefusal, caught_by_honeypot, check,
+        check_render_token, parse_answer, record_from_answer, render_token,
+    };
     use crate::{
         collections::Collection,
         fields::{ChoiceOption, FieldConfig, FieldDefinition, FieldType},
@@ -556,5 +660,65 @@ mod tests {
         let (_, values) =
             record_from_answer(&collection(), &form, &fields, &by_id).expect("record");
         assert_eq!(values[&named_title.id.to_string()], json!(3));
+    }
+
+    #[test]
+    fn a_render_token_lets_in_an_answer_after_a_moment_and_only_for_its_form() {
+        let key = [7_u8; 32];
+        let link = Uuid::now_v7();
+        let issued = 1_800_000_000_000;
+        let token = render_token(&key, link, issued);
+        let at = |ms| check_render_token(&key, link, Some(&token), issued + ms);
+        assert_eq!(at(MIN_RENDER_AGE_MS - 1), Err(RenderRefusal::TooSoon));
+        assert_eq!(at(MIN_RENDER_AGE_MS), Ok(()));
+        assert_eq!(at(25 * 3_600 * 1_000), Err(RenderRefusal::Reload));
+        assert_eq!(at(-1), Err(RenderRefusal::Reload));
+        // Another form's key, another form, a changed time, or none at all.
+        let later = issued + MIN_RENDER_AGE_MS;
+        assert_eq!(
+            check_render_token(&[8; 32], link, Some(&token), later),
+            Err(RenderRefusal::Reload)
+        );
+        assert_eq!(
+            check_render_token(&key, Uuid::now_v7(), Some(&token), later),
+            Err(RenderRefusal::Reload)
+        );
+        let forged = token.replacen(&issued.to_string(), &(issued - 60_000).to_string(), 1);
+        assert_eq!(
+            check_render_token(&key, link, Some(&forged), later),
+            Err(RenderRefusal::Reload)
+        );
+        assert_eq!(
+            check_render_token(&key, link, None, later),
+            Err(RenderRefusal::Reload)
+        );
+    }
+
+    #[test]
+    fn the_honeypot_catches_only_a_filled_in_hidden_field() {
+        let mut answer = Map::new();
+        assert!(!caught_by_honeypot(&answer));
+        answer.insert("_aw_homepage".to_owned(), json!(""));
+        assert!(!caught_by_honeypot(&answer));
+        answer.insert("_aw_homepage".to_owned(), json!("https://spam.example"));
+        assert!(caught_by_honeypot(&answer));
+    }
+
+    #[test]
+    fn a_daily_limit_is_from_one_to_ten_thousand() {
+        for (limit, ok) in [
+            (Some(0), false),
+            (Some(1), true),
+            (Some(10_000), true),
+            (Some(10_001), false),
+            (None, true),
+        ] {
+            let form = FormConfig {
+                daily_limit: limit,
+                ..FormConfig::default()
+            };
+            assert_eq!(check(&form, &[]).is_ok(), ok, "{limit:?}");
+        }
+        assert_eq!(FormConfig::default().daily_limit(), 500);
     }
 }

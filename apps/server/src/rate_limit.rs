@@ -75,6 +75,11 @@ const WEBHOOK_ATTEMPTS_PER_WINDOW: u32 = 300;
 /// burst of real reports, not for a loop to flood a project.
 const BUG_REPORTS_PER_WINDOW: u32 = 30;
 const GLOBAL_BUG_REPORTS_PER_WINDOW: u32 = 300;
+/// Answers to one public form from one sender address (T1.29).
+/// In-process until K5's shared limits.
+const FORM_ANSWERS_PER_ADDRESS_PER_HOUR: u32 =
+    crate::collection_forms::ANSWERS_PER_ADDRESS_PER_HOUR;
+const MAX_FORM_SENDER_KEYS: usize = 16_384;
 /// Password reset requests: a few per account an hour and a few dozen per
 /// sender address, checked before a ceiling for the whole server so one
 /// script can't use up everyone's. The mail itself has its own ceiling,
@@ -118,6 +123,7 @@ pub struct RateLimiters {
     webhook_attempts: FixedWindowLimiter<()>,
     bug_reports: FixedWindowLimiter<[u8; 32]>,
     global_bug_reports: FixedWindowLimiter<()>,
+    form_answer_senders: FixedWindowLimiter<[u8; 32]>,
     password_resets: FixedWindowLimiter<[u8; 32]>,
     password_reset_senders: FixedWindowLimiter<[u8; 32]>,
     global_password_resets: FixedWindowLimiter<()>,
@@ -369,6 +375,24 @@ impl RateLimiters {
         let key: [u8; 32] = Sha256::digest(token_digest).into();
         self.bug_reports.check(key).map_err(AppError::rate_limited)
     }
+
+    /// An answer to one public form from one sender address. A caller
+    /// whose address isn't known is bounded by the form's own limits.
+    pub fn check_form_answer_sender(
+        &self,
+        link_id: Uuid,
+        address: Option<&str>,
+    ) -> Result<(), AppError> {
+        let Some(address) = address else {
+            return Ok(());
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(link_id.as_bytes());
+        hasher.update(address.as_bytes());
+        self.form_answer_senders
+            .check(hasher.finalize().into())
+            .map_err(AppError::rate_limited)
+    }
 }
 
 impl Default for RateLimiters {
@@ -482,6 +506,11 @@ impl Default for RateLimiters {
             webhook_attempts: FixedWindowLimiter::new(WEBHOOK_ATTEMPTS_PER_WINDOW, WINDOW, 1),
             bug_reports: FixedWindowLimiter::new(BUG_REPORTS_PER_WINDOW, WINDOW, MAX_SESSION_KEYS),
             global_bug_reports: FixedWindowLimiter::new(GLOBAL_BUG_REPORTS_PER_WINDOW, WINDOW, 1),
+            form_answer_senders: FixedWindowLimiter::new(
+                FORM_ANSWERS_PER_ADDRESS_PER_HOUR,
+                HOUR,
+                MAX_FORM_SENDER_KEYS,
+            ),
             password_resets: FixedWindowLimiter::new(
                 PASSWORD_RESETS_PER_HOUR,
                 HOUR,

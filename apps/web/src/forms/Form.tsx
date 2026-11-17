@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 
 import { BrandMark } from '../auth/AuthLayout'
 import { Banner, Button, Checkbox, SelectField, TextArea, TextField } from '../ui'
-import { fetchForm, FormProblem, missing, sendAnswers, type Answers, type PublicField, type PublicForm } from './formModel'
+import { fetchForm, FormProblem, MIN_RENDER_AGE_MS, missing, sendAnswers, type Answers, type PublicField, type PublicForm } from './formModel'
 import './forms.css'
 
 type Loaded = { state: 'loading' } | { state: 'ready'; form: PublicForm } | { state: 'gone'; message: string }
@@ -20,12 +20,14 @@ export function FormPage() {
   const [sending, setSending] = useState(false)
   const [thanks, setThanks] = useState<string | null>(null)
   const errorRef = useRef<HTMLDivElement>(null)
+  const loadedAt = useRef(0)
 
   useEffect(() => {
     let live = true
     fetchForm(token).then(
       (form) => {
         if (!live) return
+        loadedAt.current = Date.now()
         setLoaded({ state: 'ready', form })
         document.title = form.name || form.collection
       },
@@ -100,6 +102,10 @@ export function FormPage() {
     setError(null)
     setSending(true)
     try {
+      // The form refuses answers sent sooner after it loaded than a person
+      // could type them; a quick person (or autofill) just waits it out.
+      const wait = loadedAt.current + MIN_RENDER_AGE_MS + 200 - Date.now()
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
       setThanks(await sendAnswers(token, form, answers))
     } catch (reason) {
       setError(reason instanceof FormProblem ? reason.message : 'Your answers weren’t sent. Check your connection and try again.')
@@ -126,6 +132,21 @@ export function FormPage() {
         {form.fields.map((field) => (
           <FieldInput field={field} key={field.id} onChange={(value) => set(field.id, value)} value={answers[field.id]} />
         ))}
+        {form.honeypot ? (
+          <div aria-hidden="true" className="aw-pform__trap">
+            <label>
+              Leave this empty
+              <input
+                autoComplete="off"
+                name={form.honeypot}
+                onChange={(event) => set(form.honeypot, event.target.value)}
+                tabIndex={-1}
+                type="text"
+                value={typeof answers[form.honeypot] === 'string' ? (answers[form.honeypot] as string) : ''}
+              />
+            </label>
+          </div>
+        ) : null}
         {error ? (
           <div ref={errorRef} tabIndex={-1}>
             <Banner tone="danger">{error}</Banner>
