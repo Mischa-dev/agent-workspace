@@ -59,7 +59,7 @@ pub struct FormField {
 /// links (the person filling it in can't see who or what there is), and
 /// not the record's own columns, which nobody fills in.
 pub fn askable(field_type: FieldType) -> bool {
-    !matches!(field_type, FieldType::Person | FieldType::Link) && !field_type.is_system()
+    !matches!(field_type, FieldType::Person | FieldType::Link) && !field_type.is_read_only()
 }
 
 fn clean(value: &str, limit: usize, what: &str) -> Result<String, String> {
@@ -308,7 +308,9 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
         | FieldType::EditedTime
         | FieldType::CreatedBy
         | FieldType::EditedBy
-        | FieldType::AutoId => return Err(wrong("nothing on a form")),
+        | FieldType::AutoId
+        | FieldType::Formula
+        | FieldType::Button => return Err(wrong("nothing on a form")),
     })
 }
 

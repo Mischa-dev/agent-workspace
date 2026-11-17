@@ -767,6 +767,10 @@ struct CreateFieldRequest {
     options: Option<Vec<OptionInput>>,
     target: Option<String>,
     position: Option<i32>,
+    /// A formula field's formula, fields by name: {Price} * {Quantity}.
+    formula: Option<String>,
+    /// A button field's label and steps.
+    button: Option<crate::fields::button::ButtonInput>,
 }
 
 fn field_name_message() -> String {
@@ -796,7 +800,7 @@ async fn create_field(
     let Some(field_type) = FieldType::parse(&request.field_type) else {
         return Ok(invalid(
             "type",
-            "Pick a type: text, number, date, single_choice, multiple_choice, person, url, checkbox or link.",
+            "Pick a type: text, number, date, single_choice, multiple_choice, person, url, checkbox, link, formula or button.",
         ));
     };
     let Some(description) = fields::normalize_description(&request.description) else {
@@ -855,6 +859,8 @@ async fn create_field(
             field_type,
             config,
             position: request.position,
+            formula: request.formula.clone(),
+            button: request.button.clone(),
         },
     )
     .await?
@@ -880,6 +886,7 @@ async fn create_field(
                 Value::Null,
             ));
         }
+        CreateFieldOutcome::InvalidSetting(at, message) => return Ok(invalid(at, message)),
     };
     record_audit_for(
         &mut write.transaction,
@@ -912,6 +919,10 @@ struct UpdateFieldRequest {
     options: Option<Vec<OptionInput>>,
     position: Option<i32>,
     archived: Option<bool>,
+    /// A formula field's new formula, fields by name.
+    formula: Option<String>,
+    /// A button field's new label and steps.
+    button: Option<crate::fields::button::ButtonInput>,
 }
 
 async fn update_field(
@@ -1002,6 +1013,8 @@ async fn update_field(
             config,
             position: request.position,
             archived: request.archived,
+            formula: request.formula.clone(),
+            button: request.button.clone(),
             expected_version: Some(request.expected_version),
         },
     )
@@ -1068,6 +1081,7 @@ async fn update_field(
                 Value::Null,
             ));
         }
+        ChangeFieldOutcome::InvalidSetting(at, message) => return Ok(invalid(at, message)),
     };
     write.finish(StatusCode::OK, &FieldView::from(&field)).await
 }

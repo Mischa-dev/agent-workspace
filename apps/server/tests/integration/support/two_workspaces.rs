@@ -89,6 +89,8 @@ pub(crate) struct World {
     /// values name `rook`, task WORK-1 and `page`.
     pub(crate) collection: Uuid,
     pub(crate) collection_field: Uuid,
+    /// A button field on it (T1.21) that records a decision.
+    pub(crate) collection_button: Uuid,
     pub(crate) collection_view: Uuid,
     pub(crate) record: Uuid,
     /// A sheet (AWD-54) with a header, a value and a formula.
@@ -691,6 +693,10 @@ async fn build_workspace(
                 {"name": format!("Build{m}"), "type": "link", "target": "task"},
                 {"name": format!("Spec{m}"), "type": "link", "target": "page"},
                 {"name": format!("Notes{m}"), "type": "text"},
+                {"name": format!("Ship{m}"), "type": "button", "button": {"steps": [{
+                    "operation": "decision_record",
+                    "arguments": {"spaceId": "{{space.id}}", "title": "Shipped {{record.title}}"},
+                }]}},
             ],
             "views": [{
                 "name": format!("Severe ones{m}"),
@@ -741,6 +747,13 @@ async fn build_workspace(
     .fetch_one(pool)
     .await
     .expect("collection field");
+    let collection_button = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM field_definitions WHERE collection_id = $1 AND field_type = 'button'",
+    )
+    .bind(collection)
+    .fetch_one(pool)
+    .await
+    .expect("collection button");
     let collection_view = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM collection_views WHERE collection_id = $1 ORDER BY position, id LIMIT 1",
     )
@@ -1662,6 +1675,7 @@ async fn build_workspace(
         project_whiteboard,
         collection,
         collection_field,
+        collection_button,
         collection_view,
         record,
         sheet,

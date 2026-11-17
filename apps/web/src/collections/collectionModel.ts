@@ -1,4 +1,5 @@
-import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isSystemType, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isReadOnlyType, likeOf, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { typeInfo } from '../fields/fieldTypes'
 import { formatDateLabel } from '../ui/dateModel'
 import type { CollectionRecord, GroupCount, SortRule, ViewConfig } from './api'
 
@@ -8,28 +9,8 @@ export const recordName = (record: Pick<CollectionRecord, 'title' | 'number'>) =
 /** The title column's width when a view doesn't set one, in pixels. */
 export const TITLE_WIDTH = 280
 
-const WIDTHS: Record<FieldType, number> = {
-  text: 240,
-  long_text: 320,
-  number: 120,
-  date: 140,
-  single_choice: 160,
-  multiple_choice: 220,
-  status: 160,
-  person: 180,
-  people: 220,
-  labels: 220,
-  url: 200,
-  email: 220,
-  phone: 160,
-  checkbox: 104,
-  link: 220,
-  created_time: 170,
-  edited_time: 170,
-  created_by: 180,
-  edited_by: 180,
-  auto_id: 90,
-}
+/** A field's column width when the view doesn't set one: its type's (the field registry's). */
+const widthOf = (field: FieldDefinition) => typeInfo(field.type).width
 
 export type ShownColumn = { field: FieldDefinition; width: number }
 
@@ -47,12 +28,12 @@ export function columnOrder(fields: readonly FieldDefinition[], config: ViewConf
   const active = fields.filter((field) => !field.archived)
   const listed = config.columns.flatMap((column) => {
     const field = active.find((entry) => entry.id === column.field)
-    return field ? [{ field, hidden: column.hidden === true, width: column.width ?? WIDTHS[field.type] }] : []
+    return field ? [{ field, hidden: column.hidden === true, width: column.width ?? widthOf(field) }] : []
   })
   const rest = active
     .filter((field) => !config.columns.some((column) => column.field === field.id))
     .sort((left, right) => left.position - right.position)
-    .map((field) => ({ field, hidden: false, width: WIDTHS[field.type] }))
+    .map((field) => ({ field, hidden: false, width: widthOf(field) }))
   return [...listed, ...rest]
 }
 
@@ -63,7 +44,7 @@ export function withColumnHidden(fields: readonly FieldDefinition[], config: Vie
     columns: columnOrder(fields, config).map(({ field, hidden: wasHidden, width }) => ({
       field: field.id,
       ...((field.id === fieldId ? hidden : wasHidden) ? { hidden: true } : {}),
-      ...(width !== WIDTHS[field.type] ? { width } : {}),
+      ...(width !== widthOf(field) ? { width } : {}),
     })),
   }
 }
@@ -113,33 +94,15 @@ export function sortName(rule: SortRule, fields: readonly FieldDefinition[], tit
 /** "Severity, Z to A": a sort key's direction as people read it for its type. */
 export function sortText(rule: SortRule, fields: readonly FieldDefinition[], titleName: string) {
   const field = fields.find((entry) => entry.id === rule.field)
-  const type = rule.field === 'number' ? 'number' : rule.field === 'updated' ? 'date' : (field?.type ?? 'text')
-  const words =
-    type === 'number'
-      ? rule.direction === 'asc'
-        ? '1 to 9'
-        : '9 to 1'
-      : type === 'date'
-        ? rule.direction === 'asc'
-          ? 'oldest first'
-          : 'newest first'
-        : type === 'checkbox'
-          ? rule.direction === 'asc'
-            ? 'checked first'
-            : 'unchecked first'
-          : type === 'single_choice' || type === 'multiple_choice'
-            ? rule.direction === 'asc'
-              ? 'in option order'
-              : 'in reverse option order'
-            : rule.direction === 'asc'
-              ? 'A to Z'
-              : 'Z to A'
+  const type: FieldType = rule.field === 'number' ? 'number' : rule.field === 'updated' ? 'date' : field ? likeOf(field) : 'text'
+  const directions = typeInfo(type).sort ?? { asc: 'A to Z', desc: 'Z to A' }
+  const words = rule.direction === 'asc' ? directions.asc : directions.desc
   return `${sortName(rule, fields, titleName)}, ${words}`
 }
 
 /** Fields a table or cards can group by: choices, a status, a person, a checkbox or a date. */
 export function groupableFields(fields: readonly FieldDefinition[]) {
-  return fields.filter((field) => !field.archived && canGroupRecords(field.type))
+  return fields.filter((field) => !field.archived && canGroupRecords(field))
 }
 
 /**
@@ -147,7 +110,7 @@ export function groupableFields(fields: readonly FieldDefinition[]) {
  * choice, a status, a person or a checkbox someone sets.
  */
 export function boardFields(fields: readonly FieldDefinition[]) {
-  return fields.filter((field) => !field.archived && canGroup(field.type) && !isSystemType(field.type))
+  return fields.filter((field) => !field.archived && canGroup(field) && !isReadOnlyType(field.type))
 }
 
 /** A status field's options by category, in workflow order, then in the field's order (as the server groups them). */

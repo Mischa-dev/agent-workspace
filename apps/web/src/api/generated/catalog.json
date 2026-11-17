@@ -16,6 +16,36 @@
     "title": "Set agent managers"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "button_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "See a button"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "record.button_pressed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "button_press",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Press a button"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -152,6 +182,20 @@
     "preview": false,
     "proposable": false,
     "title": "Record decision"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "formula_preview",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Preview a formula"
   },
   {
     "automation": true,

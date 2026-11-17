@@ -24,11 +24,14 @@ export async function listFields(scope: FieldScope, includeArchived = false): Pr
   return { fields: (payload.fields ?? []).map(normalizeField), canManage: payload.canManage === true }
 }
 
+/** A button as written: its label and 1 to 3 steps, fields named in `{{...}}`. */
+export type ButtonInput = { label?: string; steps: Array<{ operation: string; arguments: Record<string, unknown> }> }
+
 export type OptionInput = { id?: string; name: string; color?: string; category?: StatusCategory }
 
 export async function createField(
   scope: FieldScope,
-  input: { name: string; type: string; description?: string; options?: OptionInput[]; target?: string; idempotencyKey: string },
+  input: { name: string; type: string; description?: string; options?: OptionInput[]; target?: string; formula?: string; button?: ButtonInput; idempotencyKey: string },
 ) {
   const { idempotencyKey, ...json } = input
   return normalizeField(await requestJson<unknown>(scopePath(scope), { method: 'POST', idempotencyKey, json }))
@@ -44,6 +47,10 @@ export async function updateField(
     options?: OptionInput[]
     position?: number
     archived?: boolean
+    /** A formula field's new formula, fields by name. */
+    formula?: string
+    /** A button field's new label and steps. */
+    button?: ButtonInput
     idempotencyKey: string
   },
 ) {

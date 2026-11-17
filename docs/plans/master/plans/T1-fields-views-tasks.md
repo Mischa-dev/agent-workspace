@@ -265,7 +265,7 @@ keeps 10,000-task lists on index paths.
 | `created_time`, `edited_time` | system column | date ops | yes | Accessor columns `record.created_at`, `record.updated_at` |
 | `created_by`, `edited_by` | system column | person ops | yes | `record.created_by_actor_id`, `record.updated_by_actor_id` |
 | `auto_id` | system column | number ops on the number | yes | Shows `<prefix>-<number>`; prefix in config; for task-like records it is the project key |
-| `button` | none | none | none | Config names one operation (K2) and its arguments as a template over the record. Pressing it calls the operation as the presser |
+| `button` | none | none | none | Config names one to three operations (K2), each with its arguments as a template over the record. Pressing it calls them in order as the presser |
 
 A migration widens the `field_type` CHECK once for all new stored names
 (`field_type IN (... 'long_text','email','phone','status','relation','rollup','formula','file','created_time','edited_time','created_by','edited_by','auto_id','button')`).
@@ -1128,8 +1128,9 @@ Depends on C1/K5's "files on any thing" (`files.rs:277-290` `Destination` gains 
 target). Acceptance: upload into a cell; a public form with files off refuses a file; an
 archived record's files stay readable by members.
 
-**T1.21 Button field (S).** Config names a K2 operation and an argument template; the web
-draws a button; pressing calls the operation as the presser. Depends on K2's operation
+**T1.21 Button field (S).** Config names one to three K2 operations, each with an argument
+template over the record, run in order; the web draws a button; pressing calls them as the
+presser, each checked against the presser's access first, stopping at the first refused. Depends on K2's operation
 registry. Acceptance: a "Mark shipped" button sets a status and posts a message; a viewer
 without the operation's permission sees it disabled with the reason.
 

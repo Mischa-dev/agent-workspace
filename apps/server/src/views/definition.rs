@@ -255,7 +255,7 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
         }
         // "me" stands for the reader; any member's ID checks the same way.
         let mut checked = clause.clone();
-        if field.field_type.behaves_as() == FieldType::Person {
+        if field.behaves_as() == FieldType::Person {
             for value in &mut checked.values {
                 if value == ME {
                     *value = Uuid::nil().to_string();
@@ -369,7 +369,7 @@ pub async fn check_references(
         if ids.is_empty() {
             continue;
         }
-        let found = match (field.field_type.behaves_as(), field.config.target) {
+        let found = match (field.behaves_as(), field.config.target) {
             (FieldType::Person, _) => {
                 sqlx::query_scalar::<_, i64>(
                     "SELECT count(*) FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)",
@@ -415,7 +415,7 @@ pub async fn check_references(
             return Ok(Err(format!(
                 "A filter on \"{}\" names {} that isn't in this project.",
                 field.name,
-                if field.field_type.behaves_as() == FieldType::Person {
+                if field.behaves_as() == FieldType::Person {
                     "someone"
                 } else {
                     "something"

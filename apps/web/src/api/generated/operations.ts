@@ -18,6 +18,10 @@ export type Envelope<T> =
   | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }
   | OpError
 
+export type ButtonStepView = { arguments: Record<string, unknown>; operation: string; title: string }
+
+export type ButtonView = { label: string; steps: ButtonStepView[] }
+
 export type CommentThreadView = { anchor?: unknown; createdAt: string; id: string; messageCount: number; name: string; outcome?: string | null; status: string; unread: boolean }
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
@@ -46,11 +50,17 @@ export type PackageTarget = "space" | "workspace"
 
 export type PageTemplateView = { builtIn: boolean; excerpt: string; id: string; projectName?: string | null; title: string }
 
+export type PressedStep = { operation: string; value: unknown }
+
+export type PreviewRecord = { number: number; title: string }
+
 export type Publisher = { name: string; url?: string | null }
 
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
 export type Requires = { contract?: string | null; modules?: string[] }
+
+export type ResultType = "number" | "text" | "boolean" | "date" | "list"
 
 export type RunActivityInput = { at?: string | null; id: string; kind: string; parentRef?: string | null; payload?: unknown; stepRef?: string | null; summary?: string | null }
 
@@ -71,6 +81,14 @@ export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type ButtonGetInput = { collection: string; field: string }
+
+export type ButtonGetOutput = { button: ButtonView; canPress: boolean; reason?: string | null }
+
+export type ButtonPressInput = { collection: string; field: string; record: string }
+
+export type ButtonPressOutput = { record: PreviewRecord; steps: PressedStep[] }
 
 export type CommentCreateInput = { anchor?: unknown; attachmentIds?: string[]; content?: unknown; newThread?: boolean; replyToMessageId?: string | null; text?: string | null; thing: ThingInput; threadId?: string | null }
 
@@ -107,6 +125,10 @@ export type DecisionListOutput = { decisions: DecisionView[] }
 export type DecisionRecordInput = { detail?: string | null; pin?: boolean; sourceConversationId?: string | null; sourceMessageId?: string | null; spaceId?: string | null; supersedes?: string | null; title: string }
 
 export type DecisionRecordOutput = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
+
+export type FormulaPreviewInput = { collection: string; field?: string | null; formula: string; record?: number | null }
+
+export type FormulaPreviewOutput = { problem?: string | null; record?: PreviewRecord | null; result?: ResultType | null; value?: unknown }
 
 export type HostAgentBindInput = { accountId: string; hostAgentRef: string; hostId: string }
 
@@ -202,6 +224,8 @@ export type WhiteboardTemplateListOutput = { templates: WhiteboardTemplateView[]
 
 export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  button_get: { input: ButtonGetInput; output: ButtonGetOutput }
+  button_press: { input: ButtonPressInput; output: ButtonPressOutput }
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
   comment_list: { input: CommentListInput; output: CommentListOutput }
   comment_thread_update: { input: CommentThreadUpdateInput; output: CommentThreadUpdateOutput }
@@ -211,6 +235,7 @@ export type Operations = {
   custom_emoji_update: { input: CustomEmojiUpdateInput; output: CustomEmojiUpdateOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
+  formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
   host_agent_unbind: { input: HostAgentUnbindInput; output: HostAgentUnbindOutput }
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }

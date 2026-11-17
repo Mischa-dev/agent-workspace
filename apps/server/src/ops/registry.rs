@@ -43,11 +43,21 @@ pub struct OpMeta {
 
 type Call = for<'a> fn(&'a AppState, DispatchRequest, Value) -> BoxFuture<'a, Answer>;
 
+/// Whether a caller may run it on a target, without running it
+/// (`dispatch::may_run`).
+type Check = for<'a> fn(
+    &'a AppState,
+    &'a super::Caller,
+    Option<uuid::Uuid>,
+    &'a super::Target,
+) -> BoxFuture<'a, Result<(), super::OpError>>;
+
 /// One operation in the registry.
 #[derive(Clone)]
 pub struct OpEntry {
     pub meta: OpMeta,
     pub call: Call,
+    pub check: Check,
 }
 
 impl std::fmt::Debug for OpEntry {
@@ -86,6 +96,11 @@ pub fn entry<O: Operation>() -> OpEntry {
             output_schema: schema_of::<O::Output>,
         },
         call: |state, request, input| Box::pin(super::dispatch::run::<O>(state, request, input)),
+        check: |state, caller, workspace, target| {
+            Box::pin(super::dispatch::check::<O>(
+                state, caller, workspace, target,
+            ))
+        },
     }
 }
 
