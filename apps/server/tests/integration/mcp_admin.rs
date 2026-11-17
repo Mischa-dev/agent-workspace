@@ -1136,6 +1136,69 @@ async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
             .await
             .expect("module");
     assert_eq!(untouched, ("Shared".to_owned(), true));
+
+    // Nor reads what lives in the other space, though the account is a
+    // member there: its templates, its installs, or a module's part there.
+    sqlx::query(
+        "INSERT INTO agent_templates (id, workspace_id, space_id, template_key, name, definition) \
+         SELECT $1, organization_id, id, 'target_helper', 'Target helper', \
+                '{\"instructions\": \"TARGET-ONLY\"}'::jsonb \
+         FROM projects WHERE id = $2::uuid",
+    )
+    .bind(Uuid::now_v7())
+    .bind(&target)
+    .execute(&setup.pool)
+    .await
+    .expect("template in TARGET");
+    let package_row = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO packages (id, workspace_id, package_key, version, name, document, digest, source) \
+         SELECT $1, organization_id, 'target_kit', '1.0.0', 'Target kit', '{}'::jsonb, 'd', 'upload' \
+         FROM projects WHERE id = $2::uuid",
+    )
+    .bind(package_row)
+    .bind(&target)
+    .execute(&setup.pool)
+    .await
+    .expect("package");
+    sqlx::query(
+        "INSERT INTO package_installs (id, workspace_id, space_id, package_id, state, plan, \
+             plan_hash, summary, installed_by_actor_id) \
+         SELECT $1, organization_id, id, $3, 'installed', '{}'::jsonb, 'h', \
+                ARRAY['Made TARGET-ONLY'], $4 \
+         FROM projects WHERE id = $2::uuid",
+    )
+    .bind(Uuid::now_v7())
+    .bind(&target)
+    .bind(package_row)
+    .bind(actor)
+    .execute(&setup.pool)
+    .await
+    .expect("install in TARGET");
+    let linked = tool(
+        &setup.app,
+        &full,
+        &owner_session,
+        "module_part_link",
+        json!({"moduleId": shared_id, "part": {"kind": "collection", "id": elsewhere.to_string()}}),
+    )
+    .await;
+    assert_eq!(linked["outcome"], "ok", "{linked}");
+    for (name, arguments) in [
+        ("agent_template_list", json!({})),
+        ("package_list", json!({})),
+        ("module_open", json!({"moduleId": shared_id})),
+    ] {
+        let result = tool(&setup.app, &issued.token, &session, name, arguments).await;
+        assert_eq!(result["outcome"], "ok", "{name}: {result}");
+        let text = result.to_string();
+        assert!(
+            !text.contains("TARGET-ONLY")
+                && !text.contains("Target list")
+                && !text.contains(&elsewhere.to_string()),
+            "{name} reached past its space: {result}"
+        );
+    }
 }
 
 #[tokio::test]

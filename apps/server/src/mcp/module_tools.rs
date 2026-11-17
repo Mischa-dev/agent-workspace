@@ -150,7 +150,7 @@ pub(super) async fn module_list(
         let counts = modules::built::part_counts(
             &mut connection,
             &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-            principal.actor_id,
+            modules::built::Reader::of(&crate::access::Caller::of_principal(principal, None)),
         )
         .await?;
         let built = rows

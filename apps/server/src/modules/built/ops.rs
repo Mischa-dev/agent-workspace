@@ -66,7 +66,7 @@ pub struct ModuleView {
 /// channels they can't see, are left out.
 async fn view(call: &mut OpCall<'_>, module_id: Uuid) -> Result<ModuleView, OpError> {
     let workspace_id = call.ctx.workspace_id;
-    let reader = call.account_id();
+    let reader = super::Reader::of(&call.ctx.caller);
     let connection = call.tx().await?;
     let row = super::get(connection, workspace_id, module_id)
         .await?

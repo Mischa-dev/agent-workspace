@@ -22,6 +22,38 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// Who reads a thing that may live in a space: the account, the connection
+/// it came through (an agent's connection may reach fewer spaces), and the
+/// one space an older credential is held to. Membership alone never widens
+/// what a narrower connection reaches.
+#[derive(Clone, Copy, Debug)]
+pub struct Reader {
+    pub account: Uuid,
+    pub connection: Option<Uuid>,
+    pub held: Option<Uuid>,
+}
+
+impl Reader {
+    pub fn of(caller: &crate::access::Caller) -> Self {
+        Self {
+            account: caller.account_id,
+            connection: caller.connection_id,
+            held: caller.confined_space,
+        }
+    }
+
+    /// The SQL that says this reader reaches `space` (an expression), with
+    /// the account, connection and held space bound at `$first`, `$first+1`
+    /// and `$first+2`.
+    pub fn reaches_sql(space: &str, first: usize) -> String {
+        let (account, connection, held) = (first, first + 1, first + 2);
+        format!(
+            "(actor_can_access_project(${account}, ${connection}::uuid, {space}) \
+             AND (${held}::uuid IS NULL OR {space} = ${held}::uuid))"
+        )
+    }
+}
+
 /// Built modules' keys are `local.<name>`: a connected install's own kinds
 /// are `<install>.<name>` (ruling R54), and `local` is never an install.
 pub const KEY_PREFIX: &str = "local";
@@ -444,25 +476,24 @@ struct PartRow {
 }
 
 /// Whether `reader` may know of a part (`part` aliases `module_parts`): one
-/// in a space only to that space's members, a channel only to those who can
-/// see it. A workspace-wide module may gather parts from several spaces, and
-/// anyone in the workspace can open it.
-const PART_VISIBLE: &str = r#"
-    (part.space_id IS NULL OR EXISTS (
-        SELECT 1 FROM project_memberships membership
-        WHERE membership.project_id = part.space_id
-          AND membership.actor_id = $2
-          AND membership.enabled
-    ))
-    AND (part.part_kind <> 'channel' OR conversation_visible_to(part.object_id, $2))
-"#;
+/// in a space only to a reader who reaches that space, a channel only to
+/// those who can see it. A workspace-wide module may gather parts from
+/// several spaces, and anyone in the workspace can open it.
+fn part_visible() -> String {
+    format!(
+        "(part.space_id IS NULL OR {}) \
+         AND (part.part_kind <> 'channel' OR conversation_visible_to(part.object_id, $2))",
+        Reader::reaches_sql("part.space_id", 2)
+    )
+}
 
 /// A module's parts that `reader` may know of, in order, each with its name.
 pub async fn parts(
     connection: &mut PgConnection,
     module_id: Uuid,
-    reader: Uuid,
+    reader: Reader,
 ) -> Result<Vec<PartView>, AppError> {
+    let visible = part_visible();
     let rows = sqlx::query_as::<_, PartRow>(&format!(
         r#"
         SELECT part.part_kind, part.object_id,
@@ -474,12 +505,14 @@ pub async fn parts(
                    WHEN 'nav' THEN (SELECT label FROM module_nav WHERE id = part.object_id)
                END AS name
         FROM module_parts part
-        WHERE part.module_id = $1 AND {PART_VISIBLE}
+        WHERE part.module_id = $1 AND {visible}
         ORDER BY part.part_kind, part.position, part.object_id
         "#
     ))
     .bind(module_id)
-    .bind(reader)
+    .bind(reader.account)
+    .bind(reader.connection)
+    .bind(reader.held)
     .fetch_all(&mut *connection)
     .await?;
     Ok(rows
@@ -512,13 +545,13 @@ pub struct NavView {
 }
 
 /// A module's nav entries `reader` may follow: an entry whose collection,
-/// page or form is in a space they aren't in is left out.
+/// page or form is in a space they don't reach is left out.
 pub async fn nav(
     connection: &mut PgConnection,
     module_id: Uuid,
-    reader: Uuid,
+    reader: Reader,
 ) -> Result<Vec<NavView>, AppError> {
-    Ok(sqlx::query_as::<_, NavRow>(
+    Ok(sqlx::query_as::<_, NavRow>(&format!(
         r#"
         SELECT nav.id, nav.label, nav.icon, nav.target FROM module_nav nav
         WHERE nav.module_id = $1
@@ -531,15 +564,15 @@ pub async fn nav(
                   UNION ALL
                   SELECT project_id FROM bug_report_links WHERE id::text = nav.target->>'form'
               ) goes
-              WHERE NOT EXISTS (
-                  SELECT 1 FROM project_memberships membership
-                  WHERE membership.project_id = goes.project_id
-                    AND membership.actor_id = $2 AND membership.enabled))
+              WHERE NOT {reaches})
         ORDER BY nav.position, nav.id
         "#,
-    )
+        reaches = Reader::reaches_sql("goes.project_id", 2)
+    ))
     .bind(module_id)
-    .bind(reader)
+    .bind(reader.account)
+    .bind(reader.connection)
+    .bind(reader.held)
     .fetch_all(&mut *connection)
     .await?
     .into_iter()
@@ -556,14 +589,17 @@ pub async fn nav(
 pub async fn part_counts(
     connection: &mut PgConnection,
     module_ids: &[Uuid],
-    reader: Uuid,
+    reader: Reader,
 ) -> Result<BTreeMap<Uuid, i64>, AppError> {
     Ok(sqlx::query_as::<_, (Uuid, i64)>(&format!(
         "SELECT part.module_id, count(*) FROM module_parts part \
-         WHERE part.module_id = ANY($1) AND {PART_VISIBLE} GROUP BY part.module_id"
+         WHERE part.module_id = ANY($1) AND {} GROUP BY part.module_id",
+        part_visible()
     ))
     .bind(module_ids)
-    .bind(reader)
+    .bind(reader.account)
+    .bind(reader.connection)
+    .bind(reader.held)
     .fetch_all(&mut *connection)
     .await?
     .into_iter()

@@ -583,8 +583,8 @@ impl Operation for TaskCommentUpdate {
             input.expected_revision,
         )
         .await?;
-        // The same text again changes nothing; an edit wrote its own row.
-        call.key_honoured();
+        // The command keeps no request ids, so a retry after a later edit
+        // would write again: replaySafe stays false.
         call.audited_by_command();
         Ok(edited)
     }
