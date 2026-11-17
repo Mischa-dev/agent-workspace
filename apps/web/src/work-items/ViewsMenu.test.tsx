@@ -4,7 +4,8 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { FieldDefinition } from '../fields/fieldModel'
-import { createView, type SavedView } from '../views/api'
+import { createTaskView, type TaskView } from '../views/api'
+import { listWorkItems } from './api'
 import { readListState, type ListState } from './listModel'
 import ViewsMenu from './ViewsMenu'
 
@@ -14,8 +15,13 @@ vi.mock('../fields/api', () => ({ useFields: () => fields.current }))
 vi.mock('../experience/layout', () => ({ useProjectExperience: () => ({ shows: () => true }) }))
 vi.mock('../views/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../views/api')>()),
-  listViews: vi.fn(async () => ({ views: [], canShare: true })),
-  createView: vi.fn(),
+  listProjectTaskViews: vi.fn(async () => ({ views: [], defaultViewId: null, collectionId: 'tasks-a' })),
+  createTaskView: vi.fn(),
+  pinTaskView: vi.fn(),
+}))
+vi.mock('./api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./api')>()),
+  listWorkItems: vi.fn(async () => ({ items: [], nextCursor: null, total: 0, collectionId: 'tasks-a', config: { filters: ['read'] } })),
 }))
 
 const me = '01a1b5c0-0000-7000-8000-000000000001'
@@ -52,7 +58,7 @@ afterEach(() => {
 describe('ViewsMenu', () => {
   it('waits for the project fields before saving field filters, then saves "me" for a person field', async () => {
     fields.current = { isSuccess: false, isError: false, data: undefined, refetch: vi.fn() }
-    vi.mocked(createView).mockResolvedValue({ id: 'view-a', name: 'Mine', href: '/x', pinned: true } as SavedView)
+    vi.mocked(createTaskView).mockResolvedValue({ id: 'view-a', name: 'Mine', type: 'table', listParams: null, pinned: true } as unknown as TaskView)
     const client = new QueryClient()
     const wrap = (state: ListState) => (
       <QueryClientProvider client={client}>
@@ -74,10 +80,13 @@ describe('ViewsMenu', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Save as new view…' }))
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Mine' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save view' }))
-    await waitFor(() => expect(createView).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(createView).mock.calls[0][1].query.fieldFilters).toBe(
+    await waitFor(() => expect(createTaskView).toHaveBeenCalledTimes(1))
+    // The server reads the list's address as the view, "me" kept.
+    expect((vi.mocked(listWorkItems).mock.calls[0][1] as Record<string, unknown>).fieldFilters).toBe(
       JSON.stringify([{ field: owner.id, op: 'is', values: ['me'] }]),
     )
+    expect(vi.mocked(createTaskView).mock.calls[0][0]).toBe('tasks-a')
+    expect(vi.mocked(createTaskView).mock.calls[0][1].config).toEqual({ filters: ['read'] })
   })
 
   it('offers to load the fields again when they failed, instead of saving', async () => {
@@ -89,7 +98,7 @@ describe('ViewsMenu', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Fields didn’t load, so the view can’t be saved. Try again' }))
     expect(refetch).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('menuitem', { name: 'Save as new view…' })).toBeNull()
-    expect(createView).not.toHaveBeenCalled()
+    expect(createTaskView).not.toHaveBeenCalled()
   })
 
   it('saves a view without field filters while the fields are still loading', async () => {

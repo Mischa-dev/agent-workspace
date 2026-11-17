@@ -103,6 +103,13 @@
       "default": true
     },
     {
+      "id": "area.dashboards",
+      "group": "areas",
+      "label": "Dashboards",
+      "description": "Charts, counts and notes from the project’s collections on one page, read live.",
+      "default": true
+    },
+    {
       "id": "area.sheets",
       "group": "areas",
       "label": "Sheets",

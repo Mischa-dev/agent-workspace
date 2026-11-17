@@ -92,13 +92,24 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     let views = sqlx::query_scalar::<_, String>(
         "SELECT view.name FROM collection_views view \
          JOIN collections collection ON collection.id = view.collection_id \
-         WHERE collection.project_id = $1::uuid AND collection.builtin = 'tasks'",
+         WHERE collection.project_id = $1::uuid AND collection.builtin = 'tasks' \
+         ORDER BY view.name",
     )
     .bind(&work)
     .fetch_all(pool)
     .await
     .expect("views");
-    assert_eq!(views, vec!["All tasks".to_owned()]);
+    // Its first view, and the views every Tasks collection starts with.
+    assert_eq!(
+        views,
+        [
+            "All tasks",
+            "Blocked",
+            "My tasks",
+            "Ready for agents",
+            "Recently changed"
+        ]
+    );
 
     // A task's changes reach its record: the title through the task tool.
     // Since T1.3 the record owns the title, field values and archive state,

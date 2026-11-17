@@ -178,6 +178,144 @@
         },
         "type": "object"
       },
+      "ButtonInput": {
+        "additionalProperties": false,
+        "description": "A button as people and agents write it.",
+        "properties": {
+          "label": {
+            "description": "What the button says (up to 40 characters); the field's name when\nleft out.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "steps": {
+            "description": "1 to 3 operations run in order as whoever presses it.",
+            "items": {
+              "$ref": "#/components/schemas/ButtonStepInput"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "type": "object"
+      },
+      "ButtonStepInput": {
+        "additionalProperties": false,
+        "description": "One operation of a button, as written.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "Its input. Text may name the record's fields in double braces,\n`{{Stage}}`, or `{{record.id}}`, `{{record.number}}`,\n`{{record.title}}`, `{{collection.id}}`, `{{space.id}}`, `{{me}}`,\n`{{today}}`.",
+            "type": "object"
+          },
+          "operation": {
+            "description": "An operation's name, such as `decision_record`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "ButtonStepView": {
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "title": {
+            "description": "The operation's title, such as \"Record a decision\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation",
+          "title",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "ButtonView": {
+        "description": "A button as a field's view shows it (placeholders as stored).",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ButtonStepView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "ChartStyle": {
+        "description": "How a chart draws its groups.",
+        "oneOf": [
+          {
+            "enum": [
+              "bar",
+              "line",
+              "donut"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "number",
+            "description": "One number: the measure over every record.",
+            "type": "string"
+          }
+        ]
+      },
+      "ChartWrite": {
+        "additionalProperties": false,
+        "description": "A chart view's style and what it adds up.",
+        "properties": {
+          "field": {
+            "description": "The number field a sum, average, min or max reads, by name or ID.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "measure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasureOp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "\"count\" (the default), \"sum\", \"average\", \"min\" or \"max\" for each\ngroup (the view's groupBy)."
+          },
+          "style": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartStyle"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "\"bar\" (the default), \"line\", \"donut\", or \"number\" (one figure over\nevery record)."
+          }
+        },
+        "type": "object"
+      },
       "ColumnWrite": {
         "additionalProperties": false,
         "properties": {
@@ -579,6 +717,53 @@
         ],
         "type": "object"
       },
+      "DashboardEntry": {
+        "description": "A dashboard as a reader sees it.",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "description": "1 is first, among the shared dashboards or among your own.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "shared": {
+            "description": "True for one everyone in the project sees; false for your own.",
+            "type": "boolean"
+          },
+          "tiles": {
+            "items": {
+              "$ref": "#/components/schemas/TileEntry"
+            },
+            "type": "array"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "shared",
+          "tiles",
+          "position",
+          "version",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "DateBucket": {
         "description": "How a list grouped by a date puts records together: by day, by week\n(from Monday) or by month.",
         "enum": [
@@ -807,6 +992,17 @@
               "null"
             ]
           },
+          "button": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ButtonInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A button field's button: its label and 1 to 3 steps, each an\noperation and its arguments, filled from the record when pressed."
+          },
           "description": {
             "description": "What it's for, on one line. \"\" clears it.",
             "type": [
@@ -816,6 +1012,13 @@
           },
           "field": {
             "description": "The field to change, by its current name or ID. Left out, `name`\nfinds it, and a name the collection doesn't have adds a field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "formula": {
+            "description": "A formula field's formula, fields in braces (the title by its\nname): `IF({Due} < TODAY(), \"Late\", {Price} * {Qty})`. & joins text.",
             "type": [
               "string",
               "null"
@@ -854,13 +1057,113 @@
             ]
           },
           "type": {
-            "description": "For a new field: text, long_text, number, date, single_choice,\nmultiple_choice, status, person, url, email, phone, checkbox or link;\nor created_time, edited_time, created_by, edited_by or auto_id,\nwhich show the record's own and take no values. It never changes.",
+            "description": "For a new field: text, long_text, number, date, single_choice,\nmultiple_choice, status, person, url, email, phone, checkbox or link;\ncreated_time, edited_time, created_by, edited_by or auto_id, which\nshow the record's own and take no values; formula, worked out from\nthe record's other fields (give `formula`); or button, which runs\noperations when pressed (give `button`). It never changes.",
             "type": [
               "string",
               "null"
             ]
           }
         },
+        "type": "object"
+      },
+      "FigureGroup": {
+        "properties": {
+          "color": {
+            "description": "An option's colour, when the group is one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "key": {
+            "description": "The group's value, stable across reads (an option's id, a date).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "count"
+        ],
+        "type": "object"
+      },
+      "Figures": {
+        "description": "A view tile's figures, read as `reader`.",
+        "properties": {
+          "collectionName": {
+            "type": "string"
+          },
+          "groups": {
+            "description": "A chart's groups, in order, with their counts (and values).",
+            "items": {
+              "$ref": "#/components/schemas/FigureGroup"
+            },
+            "type": "array"
+          },
+          "measure": {
+            "description": "What the chart shows: \"count\", or \"sum\", \"average\", \"min\" or \"max\"\nof a field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "records": {
+            "description": "Any other view: its first few records' titles.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "style": {
+            "description": "A chart's look: bar, line, donut or number.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Records the view finds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "value": {
+            "description": "A chart's measure over every record, when it isn't a count.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "viewName": {
+            "type": "string"
+          },
+          "viewType": {
+            "description": "The view's kind: table, board, list, gallery, calendar, timeline or\nchart.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "viewType",
+          "viewName",
+          "collectionName",
+          "total",
+          "groups",
+          "records"
+        ],
         "type": "object"
       },
       "FilterWrite": {
@@ -1560,6 +1863,17 @@
           "url"
         ],
         "type": "object"
+      },
+      "MeasureOp": {
+        "description": "What a chart counts for each group (T1.31): how many records, or the\nsum, average, least or most of a number field.",
+        "enum": [
+          "count",
+          "sum",
+          "average",
+          "min",
+          "max"
+        ],
+        "type": "string"
       },
       "MessageContent": {
         "additionalProperties": false,
@@ -2309,6 +2623,39 @@
         ],
         "type": "object"
       },
+      "PressedStep": {
+        "description": "One operation a press ran.",
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "value": {
+            "description": "What the operation answered."
+          }
+        },
+        "required": [
+          "operation",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PreviewRecord": {
+        "description": "The record a preview was worked out on.",
+        "properties": {
+          "number": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "title"
+        ],
+        "type": "object"
+      },
       "Publisher": {
         "additionalProperties": false,
         "properties": {
@@ -2743,6 +3090,17 @@
           }
         },
         "type": "object"
+      },
+      "ResultType": {
+        "description": "What a formula field's value is, which decides how it filters, sorts\nand groups.",
+        "enum": [
+          "number",
+          "text",
+          "boolean",
+          "date",
+          "list"
+        ],
+        "type": "string"
       },
       "RevisionItem": {
         "properties": {
@@ -3371,6 +3729,156 @@
         ],
         "type": "object"
       },
+      "TileEntry": {
+        "properties": {
+          "collection": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "figures": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Figures"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With figures: what the view finds, read as you."
+          },
+          "height": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TileKind"
+          },
+          "text": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "unseen": {
+            "description": "With figures, when there are none for you: why.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "width": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "text",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "TileInput": {
+        "additionalProperties": false,
+        "description": "A tile as written.",
+        "properties": {
+          "height": {
+            "description": "Rows it spans: 1 to 4 (2 when left out).",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The tile's id, to keep a tile that's already there; left out for a\nnew one.",
+            "maxLength": 2048,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TileKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "\"view\" (the default when view is given) or \"text\"."
+          },
+          "text": {
+            "description": "A text tile's note, up to 2,000 characters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "Shown above the tile; left out, the view's name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "description": "A view tile's view, by id (view_list gives them). A chart view shows\nas its chart; any other as how many records it finds and the first\nfew. A shared dashboard shows shared views only.",
+            "maxLength": 2048,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "width": {
+            "description": "Columns of twelve it spans: 3 to 12 (6 when left out).",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TileKind": {
+        "description": "What a tile shows.",
+        "oneOf": [
+          {
+            "const": "view",
+            "description": "A collection's view: a chart view as its chart, any other as a\ncount and its first few records.",
+            "type": "string"
+          },
+          {
+            "const": "text",
+            "description": "A note.",
+            "type": "string"
+          }
+        ]
+      },
       "UnattributedUsageLine": {
         "properties": {
           "accountId": {
@@ -3417,10 +3925,96 @@
         ],
         "type": "object"
       },
+      "ViewEntry": {
+        "description": "One view as a reader sees it.",
+        "properties": {
+          "builtin": {
+            "description": "One of the views every Tasks collection starts with: my_tasks,\nready_for_agents, blocked or recently_changed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "collectionId": {
+            "type": "string"
+          },
+          "config": {
+            "description": "Its filters, sort, grouping and columns, by field id (\"me\" in a\nperson filter is whoever reads it)."
+          },
+          "id": {
+            "type": "string"
+          },
+          "listParams": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "For a view of tasks: the same view as the task list's address\nparameters (`statusId`, `sort` and so on), when they can say it.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "pinPosition": {
+            "description": "Its place among your pinned views (0 is first).",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pinned": {
+            "description": "In your sidebar.",
+            "type": "boolean"
+          },
+          "position": {
+            "description": "1 is first, among the shared views or among your own.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "shared": {
+            "description": "True for a view everyone who can see the collection sees; false for\none of your own.",
+            "type": "boolean"
+          },
+          "type": {
+            "description": "table, board, list, gallery, calendar, timeline or chart.",
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "collectionId",
+          "name",
+          "type",
+          "config",
+          "shared",
+          "pinned",
+          "position",
+          "version"
+        ],
+        "type": "object"
+      },
       "ViewWrite": {
         "additionalProperties": false,
         "description": "A view as a definition holds it, or a change to one. Each part given\nreplaces that part; the rest stays.",
         "properties": {
+          "chart": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartWrite"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A chart's style and measure; its groups are the view's groupBy."
+          },
           "columns": {
             "description": "Columns in order; fields left out show after them.",
             "items": {
@@ -3432,7 +4026,14 @@
             ]
           },
           "dateField": {
-            "description": "A calendar's date field, by name or ID.",
+            "description": "A calendar's date field, by name or ID; where a timeline's bars\nstart.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endField": {
+            "description": "Where a timeline's bars end, a date field by name or ID; \"\" for\none-day bars.",
             "type": [
               "string",
               "null"
@@ -3509,7 +4110,7 @@
             ]
           },
           "type": {
-            "description": "\"table\" (the default), \"board\", \"gallery\" or \"calendar\". A board's\ncolumns are its groupBy field's values; a calendar puts records on\nits dateField. A new one without them takes the first field that\nfits. The type doesn't change once made.",
+            "description": "\"table\" (the default), \"board\", \"list\", \"gallery\", \"calendar\",\n\"timeline\" or \"chart\". A board's columns and a chart's bars are its\ngroupBy field's values; a calendar puts records on its dateField. A new one without them takes the first field that\nfits. The type doesn't change once made.",
             "type": [
               "string",
               "null"
@@ -4754,6 +5355,529 @@
           "runs"
         ],
         "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/button_get": {
+      "post": {
+        "description": "A button field's label and the operations pressing it runs, and whether you can press it, with the reason when you can't. button_press presses it on a record.",
+        "operationId": "button_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "Which button.",
+                "properties": {
+                  "collection": {
+                    "description": "The collection: its id, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The button field's id.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "collection",
+                  "field"
+                ],
+                "title": "ButtonGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "button": {
+                              "$ref": "#/components/schemas/ButtonView"
+                            },
+                            "canPress": {
+                              "description": "Whether you can press it here.",
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "description": "Why not, when you can't.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "button",
+                            "canPress"
+                          ],
+                          "title": "ButtonGetOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "button": {
+                              "$ref": "#/components/schemas/ButtonView"
+                            },
+                            "canPress": {
+                              "description": "Whether you can press it here.",
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "description": "Why not, when you can't.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "button",
+                            "canPress"
+                          ],
+                          "title": "ButtonGetOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "See a button",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/button_press": {
+      "post": {
+        "description": "Press a button field on a record: runs the operations the button names, in order, as you, with their arguments filled in from the record. Stops at the first one refused and says which; the ones before it stay done. button_get says whether you can press it.",
+        "operationId": "button_press",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "A press: which button, on which record.",
+                "properties": {
+                  "collection": {
+                    "description": "The collection: its id, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The button field's id.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "record": {
+                    "description": "The record: its number (`12` or `#12`) or id.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "collection",
+                  "field",
+                  "record"
+                ],
+                "title": "ButtonPressInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "record": {
+                              "$ref": "#/components/schemas/PreviewRecord",
+                              "description": "The record it was pressed on."
+                            },
+                            "steps": {
+                              "description": "Each operation it ran, in order.",
+                              "items": {
+                                "$ref": "#/components/schemas/PressedStep"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "record",
+                            "steps"
+                          ],
+                          "title": "ButtonPressOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "record": {
+                              "$ref": "#/components/schemas/PreviewRecord",
+                              "description": "The record it was pressed on."
+                            },
+                            "steps": {
+                              "description": "Each operation it ran, in order.",
+                              "items": {
+                                "$ref": "#/components/schemas/PressedStep"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "record",
+                            "steps"
+                          ],
+                          "title": "ButtonPressOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Press a button",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "change"
       }
     },
     "/api/v2/w/{workspace}/ops/comment_create": {
@@ -8472,6 +9596,1477 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/dashboard_create": {
+      "post": {
+        "description": "Make a dashboard in a project: tiles that each show one of a collection's views (a chart view as its chart) or a note. Make chart views first with view_create (type chart). Shared dashboards need a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
+        "operationId": "dashboard_create",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "shared": {
+                    "description": "Shared with everyone in the project (the default; needs a role that\ncan edit dashboards), or false for your own.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "spaceId": {
+                    "description": "The project: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "tiles": {
+                    "default": [],
+                    "description": "Its tiles, in order, at most 24.",
+                    "items": {
+                      "$ref": "#/components/schemas/TileInput"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "spaceId",
+                  "name"
+                ],
+                "title": "DashboardCreateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A dashboard as a reader sees it.",
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared dashboards or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for one everyone in the project sees; false for your own.",
+                              "type": "boolean"
+                            },
+                            "tiles": {
+                              "items": {
+                                "$ref": "#/components/schemas/TileEntry"
+                              },
+                              "type": "array"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "description",
+                            "shared",
+                            "tiles",
+                            "position",
+                            "version",
+                            "updatedAt"
+                          ],
+                          "title": "DashboardEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A dashboard as a reader sees it.",
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared dashboards or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for one everyone in the project sees; false for your own.",
+                              "type": "boolean"
+                            },
+                            "tiles": {
+                              "items": {
+                                "$ref": "#/components/schemas/TileEntry"
+                              },
+                              "type": "array"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "description",
+                            "shared",
+                            "tiles",
+                            "position",
+                            "version",
+                            "updatedAt"
+                          ],
+                          "title": "DashboardEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Make a dashboard",
+        "tags": [
+          "dashboards"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/dashboard_delete": {
+      "post": {
+        "description": "Remove a dashboard. The views its tiles showed stay. Removing a shared one needs a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
+        "operationId": "dashboard_delete",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "dashboard": {
+                    "description": "The dashboard: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "dashboard"
+                ],
+                "title": "DashboardDeleteInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "removed": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "removed"
+                          ],
+                          "title": "DashboardDeleteOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "removed": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "removed"
+                          ],
+                          "title": "DashboardDeleteOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Remove a dashboard",
+        "tags": [
+          "dashboards"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/dashboard_get": {
+      "post": {
+        "description": "Read a dashboard and what each tile shows, as you see it: a chart's groups with their counts (and sums or averages), or how many records a view finds and the first few. A tile over records you can't see says so. Needs \"See dashboards\" where it acts.",
+        "operationId": "dashboard_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "dashboard": {
+                    "description": "The dashboard: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "figures": {
+                    "description": "Read each view tile's figures (the default); false for the layout\nalone.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "dashboard"
+                ],
+                "title": "DashboardGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A dashboard as a reader sees it.",
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared dashboards or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for one everyone in the project sees; false for your own.",
+                              "type": "boolean"
+                            },
+                            "tiles": {
+                              "items": {
+                                "$ref": "#/components/schemas/TileEntry"
+                              },
+                              "type": "array"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "description",
+                            "shared",
+                            "tiles",
+                            "position",
+                            "version",
+                            "updatedAt"
+                          ],
+                          "title": "DashboardEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A dashboard as a reader sees it.",
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared dashboards or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for one everyone in the project sees; false for your own.",
+                              "type": "boolean"
+                            },
+                            "tiles": {
+                              "items": {
+                                "$ref": "#/components/schemas/TileEntry"
+                              },
+                              "type": "array"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "description",
+                            "shared",
+                            "tiles",
+                            "position",
+                            "version",
+                            "updatedAt"
+                          ],
+                          "title": "DashboardEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Read a dashboard",
+        "tags": [
+          "dashboards"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/dashboard_list": {
+      "post": {
+        "description": "List a project's dashboards you can see: the shared ones, then your own, each with its tiles. Read one's figures with dashboard_get. Needs \"See dashboards\" where it acts.",
+        "operationId": "dashboard_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "spaceId": {
+                    "description": "The project: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spaceId"
+                ],
+                "title": "DashboardListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "canShare": {
+                              "description": "Whether you can make, change and remove shared dashboards here.",
+                              "type": "boolean"
+                            },
+                            "dashboards": {
+                              "description": "The shared dashboards in order, then your own; dashboard_get reads\none with its figures.",
+                              "items": {
+                                "$ref": "#/components/schemas/DashboardEntry"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "dashboards",
+                            "canShare"
+                          ],
+                          "title": "DashboardListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "canShare": {
+                              "description": "Whether you can make, change and remove shared dashboards here.",
+                              "type": "boolean"
+                            },
+                            "dashboards": {
+                              "description": "The shared dashboards in order, then your own; dashboard_get reads\none with its figures.",
+                              "items": {
+                                "$ref": "#/components/schemas/DashboardEntry"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "dashboards",
+                            "canShare"
+                          ],
+                          "title": "DashboardListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List dashboards",
+        "tags": [
+          "dashboards"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/dashboard_update": {
+      "post": {
+        "description": "Rename a dashboard, change its tiles, share one of your own, or make a shared one yours alone. Changing a shared dashboard needs a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
+        "operationId": "dashboard_update",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "dashboard": {
+                    "description": "The dashboard: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "description": "The version you last read; a change made since is refused.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "share": {
+                    "description": "true shares one of your own with everyone in the project; false\nmakes a shared one yours alone.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "tiles": {
+                    "description": "Every tile, in order: replaces the ones there (pass a tile's id to\nkeep it).",
+                    "items": {
+                      "$ref": "#/components/schemas/TileInput"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "dashboard"
+                ],
+                "title": "DashboardUpdateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A dashboard as a reader sees it.",
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared dashboards or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for one everyone in the project sees; false for your own.",
+                              "type": "boolean"
+                            },
+                            "tiles": {
+                              "items": {
+                                "$ref": "#/components/schemas/TileEntry"
+                              },
+                              "type": "array"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "description",
+                            "shared",
+                            "tiles",
+                            "position",
+                            "version",
+                            "updatedAt"
+                          ],
+                          "title": "DashboardEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A dashboard as a reader sees it.",
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared dashboards or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for one everyone in the project sees; false for your own.",
+                              "type": "boolean"
+                            },
+                            "tiles": {
+                              "items": {
+                                "$ref": "#/components/schemas/TileEntry"
+                              },
+                              "type": "array"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "description",
+                            "shared",
+                            "tiles",
+                            "position",
+                            "version",
+                            "updatedAt"
+                          ],
+                          "title": "DashboardEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Change a dashboard",
+        "tags": [
+          "dashboards"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
     "/api/v2/w/{workspace}/ops/decision_list": {
       "post": {
         "description": "List a space's decisions, newest first: what was chosen, why, and where. Superseded ones are left out unless includeSuperseded.",
@@ -9649,6 +12244,307 @@
         "summary": "List events",
         "tags": [
           "agents"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/formula_preview": {
+      "post": {
+        "description": "Check a formula field's formula without saving it, and see its value on one record of the collection (the first, or the record numbered). Answers what to fix when it can't be saved; collection_write saves it.",
+        "operationId": "formula_preview",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "collection": {
+                    "description": "The collection: its id, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "field": {
+                    "description": "The formula field being edited, if it exists already: its own name\ncan't be used, and the formulas it reads are checked for loops.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "formula": {
+                    "description": "The formula as written, fields by name in braces: `{Price} * {Qty}`.",
+                    "type": "string"
+                  },
+                  "record": {
+                    "description": "The record to work it out on, by number; the first one when left out.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "collection",
+                  "formula"
+                ],
+                "title": "FormulaPreviewInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "problem": {
+                              "description": "What's wrong with the formula, so it can't be saved yet.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "record": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/PreviewRecord"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The record it was worked out on; none when the collection has none."
+                            },
+                            "result": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ResultType"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "What it gives: number, text, boolean, date or list."
+                            },
+                            "value": {
+                              "default": null,
+                              "description": "Its value there: null for none, `{\"error\": ...}` for an error."
+                            }
+                          },
+                          "title": "FormulaPreviewOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "problem": {
+                              "description": "What's wrong with the formula, so it can't be saved yet.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "record": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/PreviewRecord"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The record it was worked out on; none when the collection has none."
+                            },
+                            "result": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ResultType"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "What it gives: number, text, boolean, date or list."
+                            },
+                            "value": {
+                              "default": null,
+                              "description": "Its value there: null for none, `{\"error\": ...}` for an error."
+                            }
+                          },
+                          "title": "FormulaPreviewOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Preview a formula",
+        "tags": [
+          "collections"
         ],
         "x-operation-kind": "query"
       }
@@ -32009,6 +34905,1904 @@
           "messages"
         ],
         "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/view_create": {
+      "post": {
+        "description": "Save a way to look at a collection's records (Tasks included): a name, a type and its filters, sort, grouping and columns. It is yours alone unless shared is true.",
+        "operationId": "view_create",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "collection": {
+                    "description": "The collection: its id, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "config": {
+                    "description": "Filters, sort, groupBy, groupBucket, columns, titleWidth and\ndateField, fields by id. A board without groupBy, or a calendar\nwithout dateField, takes the collection's first field that fits."
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "position": {
+                    "description": "1 is first; the end when left out.",
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "shared": {
+                    "default": false,
+                    "description": "True to share it with everyone who can see the collection (needs a\nrole that can build collections); a view of your own by default.",
+                    "type": "boolean"
+                  },
+                  "type": {
+                    "description": "table, board, list, gallery, calendar, timeline or chart (what the\ncollection's records can show).",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "collection",
+                  "name",
+                  "type"
+                ],
+                "title": "ViewCreateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One view as a reader sees it.",
+                          "properties": {
+                            "builtin": {
+                              "description": "One of the views every Tasks collection starts with: my_tasks,\nready_for_agents, blocked or recently_changed.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "config": {
+                              "description": "Its filters, sort, grouping and columns, by field id (\"me\" in a\nperson filter is whoever reads it)."
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "listParams": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "description": "For a view of tasks: the same view as the task list's address\nparameters (`statusId`, `sort` and so on), when they can say it.",
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "pinPosition": {
+                              "description": "Its place among your pinned views (0 is first).",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "pinned": {
+                              "description": "In your sidebar.",
+                              "type": "boolean"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared views or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for a view everyone who can see the collection sees; false for\none of your own.",
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "description": "table, board, list, gallery, calendar, timeline or chart.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "name",
+                            "type",
+                            "config",
+                            "shared",
+                            "pinned",
+                            "position",
+                            "version"
+                          ],
+                          "title": "ViewEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One view as a reader sees it.",
+                          "properties": {
+                            "builtin": {
+                              "description": "One of the views every Tasks collection starts with: my_tasks,\nready_for_agents, blocked or recently_changed.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "config": {
+                              "description": "Its filters, sort, grouping and columns, by field id (\"me\" in a\nperson filter is whoever reads it)."
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "listParams": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "description": "For a view of tasks: the same view as the task list's address\nparameters (`statusId`, `sort` and so on), when they can say it.",
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "pinPosition": {
+                              "description": "Its place among your pinned views (0 is first).",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "pinned": {
+                              "description": "In your sidebar.",
+                              "type": "boolean"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared views or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for a view everyone who can see the collection sees; false for\none of your own.",
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "description": "table, board, list, gallery, calendar, timeline or chart.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "name",
+                            "type",
+                            "config",
+                            "shared",
+                            "pinned",
+                            "position",
+                            "version"
+                          ],
+                          "title": "ViewEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Make a view",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/view_default_set": {
+      "post": {
+        "description": "Choose the view a collection opens on: for you, or for everyone holding a role. Your own choice wins over your role's; with neither it opens on the first shared view.",
+        "operationId": "view_default_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "collection": {
+                    "description": "The collection: its id, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "role": {
+                    "description": "A role (by id): the default for everyone holding it in this space,\nwhich needs a role that can build collections. Left out, your own.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "view": {
+                    "description": "The view it opens on; left out, the default is cleared.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "collection"
+                ],
+                "title": "ViewDefaultSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "defaultViewId": {
+                              "description": "The view the collection now opens on for you.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "title": "ViewDefaultSetOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "defaultViewId": {
+                              "description": "The view the collection now opens on for you.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "title": "ViewDefaultSetOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Choose a default view",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/view_delete": {
+      "post": {
+        "description": "Remove a view. The records it showed stay. Removing a shared view needs a role that can build collections, and a collection keeps at least one shared view.",
+        "operationId": "view_delete",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "view": {
+                    "description": "The view: its id.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "view"
+                ],
+                "title": "ViewDeleteInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "removed": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "removed"
+                          ],
+                          "title": "ViewDeleted",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "removed": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "removed"
+                          ],
+                          "title": "ViewDeleted",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Remove a view",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/view_list": {
+      "post": {
+        "description": "List the views of a collection you can use: the shared ones, then your own, with which are in your sidebar and the one it opens on for you. Pass a view's id to collection_query or task_list to read the records it shows.",
+        "operationId": "view_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "collection": {
+                    "description": "The collection (the project's Tasks collection for task views): its\nid, or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "collection"
+                ],
+                "title": "ViewListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "defaultViewId": {
+                              "description": "The view the collection opens on for you: your own default, else\nyour role's, else the first shared view.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "views": {
+                              "description": "The shared views in order, then your own.",
+                              "items": {
+                                "$ref": "#/components/schemas/ViewEntry"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "views"
+                          ],
+                          "title": "ViewListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "defaultViewId": {
+                              "description": "The view the collection opens on for you: your own default, else\nyour role's, else the first shared view.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "views": {
+                              "description": "The shared views in order, then your own.",
+                              "items": {
+                                "$ref": "#/components/schemas/ViewEntry"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "views"
+                          ],
+                          "title": "ViewListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List views",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/view_pin": {
+      "post": {
+        "description": "Keep a view in your sidebar, or take it out. Only your own sidebar changes.",
+        "operationId": "view_pin",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "pinned": {
+                    "description": "True keeps it in your sidebar; false takes it out.",
+                    "type": "boolean"
+                  },
+                  "position": {
+                    "description": "Its place among your pinned views, 0 first; the end when left out.",
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "view": {
+                    "description": "The view: its id.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "view",
+                  "pinned"
+                ],
+                "title": "ViewPinInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One view as a reader sees it.",
+                          "properties": {
+                            "builtin": {
+                              "description": "One of the views every Tasks collection starts with: my_tasks,\nready_for_agents, blocked or recently_changed.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "config": {
+                              "description": "Its filters, sort, grouping and columns, by field id (\"me\" in a\nperson filter is whoever reads it)."
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "listParams": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "description": "For a view of tasks: the same view as the task list's address\nparameters (`statusId`, `sort` and so on), when they can say it.",
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "pinPosition": {
+                              "description": "Its place among your pinned views (0 is first).",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "pinned": {
+                              "description": "In your sidebar.",
+                              "type": "boolean"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared views or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for a view everyone who can see the collection sees; false for\none of your own.",
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "description": "table, board, list, gallery, calendar, timeline or chart.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "name",
+                            "type",
+                            "config",
+                            "shared",
+                            "pinned",
+                            "position",
+                            "version"
+                          ],
+                          "title": "ViewEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One view as a reader sees it.",
+                          "properties": {
+                            "builtin": {
+                              "description": "One of the views every Tasks collection starts with: my_tasks,\nready_for_agents, blocked or recently_changed.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "config": {
+                              "description": "Its filters, sort, grouping and columns, by field id (\"me\" in a\nperson filter is whoever reads it)."
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "listParams": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "description": "For a view of tasks: the same view as the task list's address\nparameters (`statusId`, `sort` and so on), when they can say it.",
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "pinPosition": {
+                              "description": "Its place among your pinned views (0 is first).",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "pinned": {
+                              "description": "In your sidebar.",
+                              "type": "boolean"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared views or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for a view everyone who can see the collection sees; false for\none of your own.",
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "description": "table, board, list, gallery, calendar, timeline or chart.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "name",
+                            "type",
+                            "config",
+                            "shared",
+                            "pinned",
+                            "position",
+                            "version"
+                          ],
+                          "title": "ViewEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Pin a view",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/view_update": {
+      "post": {
+        "description": "Rename a view, change what it shows, move it, or share one of your own. Changing a shared view needs a role that can build collections.",
+        "operationId": "view_update",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "config": {
+                    "description": "Its whole config: filters, sort, groupBy, groupBucket, columns,\ntitleWidth and dateField."
+                  },
+                  "expectedVersion": {
+                    "description": "The version you last read; a change since is refused.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "position": {
+                    "description": "1 is first, among the shared views or among your own.",
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "share": {
+                    "default": false,
+                    "description": "True shares a view of your own with everyone who can see the\ncollection (needs a role that can build collections).",
+                    "type": "boolean"
+                  },
+                  "view": {
+                    "description": "The view: its id.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "view"
+                ],
+                "title": "ViewUpdateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One view as a reader sees it.",
+                          "properties": {
+                            "builtin": {
+                              "description": "One of the views every Tasks collection starts with: my_tasks,\nready_for_agents, blocked or recently_changed.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "config": {
+                              "description": "Its filters, sort, grouping and columns, by field id (\"me\" in a\nperson filter is whoever reads it)."
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "listParams": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "description": "For a view of tasks: the same view as the task list's address\nparameters (`statusId`, `sort` and so on), when they can say it.",
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "pinPosition": {
+                              "description": "Its place among your pinned views (0 is first).",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "pinned": {
+                              "description": "In your sidebar.",
+                              "type": "boolean"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared views or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for a view everyone who can see the collection sees; false for\none of your own.",
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "description": "table, board, list, gallery, calendar, timeline or chart.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "name",
+                            "type",
+                            "config",
+                            "shared",
+                            "pinned",
+                            "position",
+                            "version"
+                          ],
+                          "title": "ViewEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One view as a reader sees it.",
+                          "properties": {
+                            "builtin": {
+                              "description": "One of the views every Tasks collection starts with: my_tasks,\nready_for_agents, blocked or recently_changed.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "collectionId": {
+                              "type": "string"
+                            },
+                            "config": {
+                              "description": "Its filters, sort, grouping and columns, by field id (\"me\" in a\nperson filter is whoever reads it)."
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "listParams": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "description": "For a view of tasks: the same view as the task list's address\nparameters (`statusId`, `sort` and so on), when they can say it.",
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "pinPosition": {
+                              "description": "Its place among your pinned views (0 is first).",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "pinned": {
+                              "description": "In your sidebar.",
+                              "type": "boolean"
+                            },
+                            "position": {
+                              "description": "1 is first, among the shared views or among your own.",
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "shared": {
+                              "description": "True for a view everyone who can see the collection sees; false for\none of your own.",
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "description": "table, board, list, gallery, calendar, timeline or chart.",
+                              "type": "string"
+                            },
+                            "version": {
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "collectionId",
+                            "name",
+                            "type",
+                            "config",
+                            "shared",
+                            "pinned",
+                            "position",
+                            "version"
+                          ],
+                          "title": "ViewEntry",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Change a view",
+        "tags": [
+          "collections"
+        ],
+        "x-operation-kind": "change"
       }
     },
     "/api/v2/w/{workspace}/ops/whiteboard_create": {

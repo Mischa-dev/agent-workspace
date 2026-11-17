@@ -87,7 +87,25 @@ describe('live documents from the realtime socket', () => {
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
       ['project', PROJECT, 'collections', COLLECTION],
       ['project', PROJECT, 'collections', 'list'],
+      // Open dashboards, by a predicate over their op keys.
+      undefined,
     ])
+    const dashboards = invalidate.mock.calls[2][0]?.predicate
+    expect(dashboards?.({ queryKey: ['op', null, 'dashboard_get', { dashboard: PAGE }] } as never)).toBe(true)
+    expect(dashboards?.({ queryKey: ['op', null, 'dashboard_list', { spaceId: PROJECT }] } as never)).toBe(false)
+  })
+
+  it('refetches open dashboards and their lists once when one changes', () => {
+    vi.useFakeTimers()
+    const queryClient = new QueryClient()
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue()
+    documentChanged(queryClient, envelope('dashboard.updated', { dashboardId: PAGE, version: 2 }))
+    documentChanged(queryClient, envelope('dashboard.updated', { dashboardId: PAGE, version: 3 }))
+    vi.advanceTimersByTime(300)
+    expect(invalidate).toHaveBeenCalledTimes(1)
+    const matches = invalidate.mock.calls[0][0]?.predicate
+    expect(matches?.({ queryKey: ['op', null, 'dashboard_list', { spaceId: PROJECT }] } as never)).toBe(true)
+    expect(matches?.({ queryKey: ['project', PROJECT, 'collections', 'list'] } as never)).toBe(false)
   })
 
   it('refetches an open sheet and the list of sheets once for a burst of changes', () => {

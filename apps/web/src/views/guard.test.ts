@@ -24,7 +24,6 @@ const FROZEN_LINES: Record<string, number> = {
   'work-items/WorkItemList.tsx': 548,
   'work-items/filterModel.ts': 281,
   'work-items/boardModel.ts': 317,
-  'work-items/viewDraft.ts': 33,
 }
 
 /** Files shaped like a second view engine that exist today. */
@@ -33,7 +32,6 @@ const ALLOWED_FILES = new Set([
   'work-items/FilterBar.tsx',
   'work-items/WorkItemBoard.tsx',
   'work-items/filterModel.ts',
-  'work-items/viewDraft.ts',
 ])
 
 /** Files that call the board drag hook today, besides its own. */

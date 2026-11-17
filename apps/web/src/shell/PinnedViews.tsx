@@ -5,7 +5,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { toastError } from '../app/toastError'
 import { useProjectExperience } from '../experience/layout'
 import { Icon } from '../ui'
-import { listViews, pinView, viewKeys, type SavedView } from '../views/api'
+import { listProjectTaskViews, pinTaskView, taskViewHref, viewKeys, type TaskView } from '../views/api'
 import { viewName, viewShown } from '../views/layoutViews'
 import { orderAfterDrop } from './dragOrder'
 import { isMobileWidth } from './mobileNavigation'
@@ -23,7 +23,7 @@ export default function PinnedViews({ onNavigate, projectId }: { onNavigate: () 
   const location = useLocation()
   const queryClient = useQueryClient()
   const experience = useProjectExperience(projectId)
-  const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listViews(projectId), staleTime: 60_000 })
+  const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listProjectTaskViews(projectId), staleTime: 60_000 })
   const [drag, setDrag] = useState<{ id: string; over: { id: string; after: boolean } | null } | null>(null)
   const pinned = (views.data?.views ?? [])
     .filter((view) => view.pinned && viewShown(view, experience))
@@ -32,21 +32,21 @@ export default function PinnedViews({ onNavigate, projectId }: { onNavigate: () 
   const current = new URLSearchParams(location.search).get('savedView')
 
   // Your own order: each pin keeps its place on the server, for you alone.
-  const reorder = async (order: SavedView[]) => {
+  const reorder = async (order: TaskView[]) => {
     const key = viewKeys.views(projectId)
     const place = new Map(order.map((view, index) => [view.id, index]))
-    queryClient.setQueryData<Awaited<ReturnType<typeof listViews>>>(key, (data) =>
+    queryClient.setQueryData<Awaited<ReturnType<typeof listProjectTaskViews>>>(key, (data) =>
       data ? { ...data, views: data.views.map((view) => (place.has(view.id) ? { ...view, position: place.get(view.id) ?? view.position } : view)) } : data,
     )
     try {
-      await Promise.all(order.map((view, index) => (view.position === index ? null : pinView(projectId, view.id, true, crypto.randomUUID(), index))))
+      await Promise.all(order.map((view, index) => (view.position === index ? null : pinTaskView(view.id, true, crypto.randomUUID(), index))))
     } catch (reason) {
       toastError('The views’ order wasn’t saved', reason)
     } finally {
       void queryClient.invalidateQueries({ queryKey: key })
     }
   }
-  const dragOver = (event: DragEvent<HTMLElement>, view: SavedView) => {
+  const dragOver = (event: DragEvent<HTMLElement>, view: TaskView) => {
     if (!drag || !event.dataTransfer.types.includes(VIEW_DRAG_TYPE)) return
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
@@ -85,10 +85,10 @@ export default function PinnedViews({ onNavigate, projectId }: { onNavigate: () 
               event.dataTransfer.setData(VIEW_DRAG_TYPE, view.id)
               setDrag({ id: view.id, over: null })
             }}
-            to={view.href}
+            to={taskViewHref(projectId, view)}
           >
             <span className="aw-item__lead">
-              <Icon name={view.builtin === 'ready_for_agents' ? 'bot' : view.layout === 'board' ? 'board' : 'list'} />
+              <Icon name={view.builtin === 'ready_for_agents' ? 'bot' : view.type === 'board' ? 'board' : 'list'} />
             </span>
             <span className="aw-item__label">{viewName(view, experience)}</span>
           </NavLink>

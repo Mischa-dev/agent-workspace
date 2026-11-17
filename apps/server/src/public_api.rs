@@ -274,6 +274,33 @@ fn hoist(tool: &str, schema: &Map<String, Value>, components: &mut Map<String, V
     value
 }
 
+/// The arguments every operation takes (the workspace, a write's
+/// `clientRequestId`, `preview`) are written once and referenced, so each
+/// new operation adds only what is its own.
+fn share_arguments(input: &mut Value, components: &mut Map<String, Value>) {
+    let Some(properties) = input.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (argument, key) in [
+        ("workspace", "WorkspaceArgument"),
+        ("clientRequestId", "ClientRequestId"),
+        ("preview", "PreviewArgument"),
+    ] {
+        let Some(schema) = properties.get(argument) else {
+            continue;
+        };
+        let shared = components
+            .entry(key.to_owned())
+            .or_insert_with(|| schema.clone());
+        if shared == schema {
+            properties.insert(
+                argument.to_owned(),
+                json!({ "$ref": format!("#/components/schemas/{key}") }),
+            );
+        }
+    }
+}
+
 /// Each tool hoists its own copy of the types it shares with others (a
 /// field type, an inbox item, a run record): keep one of each identical
 /// schema, under the first of its names, and point every reference there.
@@ -460,7 +487,8 @@ pub(crate) fn document() -> Value {
             .and_then(|annotations| annotations.title.clone())
             .or(tool.title.clone())
             .unwrap_or_else(|| name.replace('_', " "));
-        let input = hoist(&name, &tool.input_schema, &mut components);
+        let mut input = hoist(&name, &tool.input_schema, &mut components);
+        share_arguments(&mut input, &mut components);
         let output = tool
             .output_schema
             .as_ref()

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { answerBody, missing, normalizeForm } from './formModel'
-import { formFromDraft } from '../collections/formSettings'
+import { dailyLimitProblem, formFromDraft } from '../collections/formSettings'
 import type { FieldDefinition } from '../fields/fieldModel'
 
 const form = normalizeForm({
@@ -27,6 +27,12 @@ describe('public form', () => {
     expect(missing(form, { title: 'Broken', sev: 'hi' })).toBeNull()
   })
 
+  it('sends the page’s render token, and the hidden field only when something filled it in', () => {
+    const signed = normalizeForm({ titleName: 'Summary', fields: [], renderToken: '17.ab', honeypot: '_aw_homepage' })
+    expect(answerBody(signed, { title: 'Hi', _aw_homepage: '' })).toEqual({ title: 'Hi', _aw_rendered: '17.ab' })
+    expect(answerBody(signed, { title: 'Hi', _aw_homepage: 'x' })).toEqual({ title: 'Hi', _aw_rendered: '17.ab', _aw_homepage: 'x' })
+  })
+
   it('sends numbers as numbers and leaves blanks out', () => {
     expect(answerBody(form, { title: ' Broken ', sev: 'hi', n: '3', ok: true })).toEqual({ title: 'Broken', sev: 'hi', n: 3, ok: true })
     expect(answerBody(form, { title: 'Broken', n: '  ' })).toEqual({ title: 'Broken' })
@@ -48,7 +54,14 @@ describe('form settings', () => {
 
   it('keeps the collection’s order and never requires a checkbox', () => {
     const fields = [field('a', 'text'), field('b', 'checkbox'), field('c', 'date')]
-    const settings = formFromDraft({ name: 'F', intro: ' Hi ', thanks: '', asked: { c: 'required', b: 'required', a: undefined } }, fields)
+    const settings = formFromDraft({ name: 'F', intro: ' Hi ', thanks: '', asked: { c: 'required', b: 'required', a: undefined }, dailyLimit: '500' }, fields)
     expect(settings).toEqual({ intro: 'Hi', thanks: '', fields: [{ field: 'b' }, { field: 'c', required: true }] })
+  })
+
+  it('sends a daily limit only when it differs from the usual 500, and says when it is out of range', () => {
+    const draft = { name: 'F', intro: '', thanks: '', asked: {}, dailyLimit: '50' }
+    expect(formFromDraft(draft, [])).toEqual({ intro: '', thanks: '', fields: [], dailyLimit: 50 })
+    expect(dailyLimitProblem(draft)).toBeNull()
+    for (const typed of ['0', '10001', '2.5', '']) expect(dailyLimitProblem({ ...draft, dailyLimit: typed })).not.toBeNull()
   })
 })

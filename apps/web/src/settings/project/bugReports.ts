@@ -30,7 +30,7 @@ export type BugReportLink = {
 }
 
 /** What a form asks: its fields by ID, in order, after the title. */
-export type FormSettings = { intro?: string; fields: { field: string; required?: boolean }[]; thanks?: string }
+export type FormSettings = { intro?: string; fields: { field: string; required?: boolean }[]; thanks?: string; dailyLimit?: number }
 
 export type BugReportLinkList = { links: BugReportLink[]; canCreate: boolean }
 export type BugReportLinkWithUrl = { link: BugReportLink; url: string; formUrl?: string }
