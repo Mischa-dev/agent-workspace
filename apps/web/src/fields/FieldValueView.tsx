@@ -1,3 +1,4 @@
+import { ThingChip } from '../pieces/ThingChip'
 import { Icon } from '../ui'
 import { chosenOptions, displayText, isEmpty, type FieldDefinition, type FieldReference, type FieldValue } from './fieldModel'
 import '../styles/work.css'
@@ -73,6 +74,11 @@ export function FieldValueView({
         {displayText(field, value, references)}
       </span>
     )
+  }
+  if (field.type === 'link') {
+    // A linked task, page or record is a chip with a card on hover (W1.21).
+    const reference = references.find((entry) => entry.id === value)
+    if (reference) return <ThingChip details={reference.kind === 'task' ? reference.key : null} kind={reference.kind} label={reference.label} />
   }
   return <span className="aw-prop__text">{displayText(field, value, references)}</span>
 }

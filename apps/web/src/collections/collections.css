@@ -392,39 +392,7 @@ button.aw-collection__chiptext:hover,
   justify-self: center;
 }
 
-/* A record in the side panel */
-.aw-recordpanel {
-  display: grid;
-  align-content: start;
-  gap: var(--space-4);
-  min-height: 100%;
-  padding: 0 var(--space-4) var(--space-10);
-}
-
-.aw-recordpanel__bar {
-  position: sticky;
-  top: 0;
-  z-index: var(--layer-sticky);
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: 48px;
-  margin: 0 calc(-1 * var(--space-4));
-  padding: 0 var(--space-2) 0 var(--space-4);
-  border-bottom: 1px solid var(--content-border);
-  background: var(--content-bg);
-}
-
-.aw-recordpanel__number {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font: var(--t-small);
-  color: var(--content-fg-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* A record in the side panel (the detail view draws its frame) */
 .aw-recordpanel__title {
   margin: 0;
   font: var(--t-headline);
@@ -576,17 +544,6 @@ button.aw-collection__chiptext:hover,
 
 .aw-recordpanel__changename {
   color: var(--content-fg);
-}
-
-/* On a phone the record takes the whole screen, with its own close button. */
-@media (max-width: 860px) {
-  .aw-panel:has(.aw-recordpanel) {
-    width: 100vw;
-  }
-
-  .aw-panel:has(.aw-recordpanel) .aw-panel__close {
-    display: none;
-  }
 }
 
 @media (max-width: 640px) {
