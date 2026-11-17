@@ -388,6 +388,41 @@ async fn every_kind_keeps_its_row_in_step_and_the_backfill_resumes() {
     let rest = backfill::run(pool, 2, usize::MAX).await.expect("the rest");
     assert!(rest.done);
     assert!(backfill::is_done(pool).await.expect("done?"));
+    // Stopped after the last copy but before the steps after it: the
+    // copy's markers are all set, yet the next run still sets parents and
+    // queues the links copy.
+    sqlx::query("DELETE FROM things_backfill WHERE source = 'thing_source_finished'")
+        .execute(pool)
+        .await
+        .expect("forget the finish");
+    sqlx::query("DELETE FROM background_jobs WHERE kind = 'links.backfill'")
+        .execute(pool)
+        .await
+        .expect("forget the links job");
+    sqlx::query("UPDATE things SET access_parent_id = NULL WHERE kind = 'message'")
+        .execute(pool)
+        .await
+        .expect("forget parents");
+    assert!(!backfill::is_done(pool).await.expect("done?"));
+    assert!(
+        backfill::run(pool, 2, usize::MAX)
+            .await
+            .expect("finish")
+            .done
+    );
+    assert!(backfill::is_done(pool).await.expect("done?"));
+    let (orphans, queued) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT (SELECT count(*) FROM things WHERE kind = 'message' AND access_parent_id IS NULL), \
+                (SELECT count(*) FROM background_jobs WHERE kind = 'links.backfill')",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("finished");
+    assert_eq!(
+        (orphans, queued),
+        (0, 1),
+        "parents set and the links copy queued"
+    );
     let after = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM things")
         .fetch_one(pool)
         .await

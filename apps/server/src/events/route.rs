@@ -254,8 +254,8 @@ async fn listening(
 ///
 /// An event queued before the log existed (left unpublished across the
 /// upgrade) has no log entry, so it is put in the log here, with its own
-/// id, before the pass is queued; otherwise it would be marked published
-/// and never routed.
+/// id and time, before the pass is queued; otherwise it would be marked
+/// published and never routed.
 ///
 /// The pass is queued for no workspace: the router's cursor is shared by
 /// every workspace, so it must read the whole log, not one workspace's
@@ -290,6 +290,16 @@ pub async fn queue_route(
             &payload,
             claim.payload_json(),
         )
+        .await?;
+        // Keep when it happened: task activity and record history are
+        // matched to their event by this time.
+        sqlx::query(
+            "UPDATE event_staging SET created_at = outbox.created_at \
+             FROM outbox_events outbox \
+             WHERE event_staging.id = $1 AND outbox.event_id = $1",
+        )
+        .bind(claim.event_id())
+        .execute(&mut **transaction)
         .await?;
     }
     jobs::enqueue(

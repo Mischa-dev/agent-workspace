@@ -64,10 +64,28 @@ pub async fn run(pool: &PgPool, batch: i64, max_batches: usize) -> Result<Progre
             progress.copied += copied;
         }
     }
+    // The steps after the copy are redone until they have all succeeded:
+    // the copy's own markers say nothing about them.
     set_parents(pool).await?;
+    // Every end has its row now: links whose ends were missing can be
+    // copied (K3.12).
+    crate::jobs::enqueue(pool, crate::links::backfill_job()).await?;
+    crate::db::scoped_one(pool, async |connection| {
+        sqlx::query(
+            "INSERT INTO things_backfill (source, done_at) VALUES ($1, now()) \
+             ON CONFLICT (source) DO UPDATE SET done_at = now(), updated_at = now()",
+        )
+        .bind(FINISHED)
+        .execute(&mut *connection)
+        .await
+    })
+    .await?;
     progress.done = true;
     Ok(progress)
 }
+
+/// The marker row saying the steps after the copy succeeded.
+const FINISHED: &str = "thing_source_finished";
 
 /// One batch of `table`. `None` when the source was already done.
 async fn copy_batch(pool: &PgPool, table: &str, batch: i64) -> Result<Option<u64>, AppError> {
@@ -144,17 +162,17 @@ async fn set_parents(pool: &PgPool) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Whether every source has been copied.
+/// Whether every source has been copied and the steps after it are done.
 pub async fn is_done(pool: &PgPool) -> Result<bool, AppError> {
-    let done = crate::db::scoped_one(pool, async |connection| {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM things_backfill WHERE done_at IS NOT NULL",
+    Ok(crate::db::scoped_one(pool, async |connection| {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM things_backfill WHERE source = $1 AND done_at IS NOT NULL)",
         )
+        .bind(FINISHED)
         .fetch_one(&mut *connection)
         .await
     })
-    .await?;
-    Ok(usize::try_from(done).unwrap_or(0) == SOURCES.len())
+    .await?)
 }
 
 pub fn register_jobs(registry: &mut JobRegistry) {
@@ -166,9 +184,6 @@ pub fn register_jobs(registry: &mut JobRegistry) {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(240) {
             if run(&context.state.pool, BATCH, 10).await?.done {
-                // Every end has its row now: links whose ends were missing
-                // can be copied (K3.12).
-                crate::jobs::enqueue(&context.state.pool, crate::links::backfill_job()).await?;
                 break;
             }
         }

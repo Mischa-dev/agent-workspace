@@ -802,6 +802,13 @@ async fn an_outbox_event_from_before_the_log_still_routes() {
         .execute(&pool)
         .await
         .expect("forget the log entry");
+    sqlx::query(
+        "UPDATE outbox_events SET created_at = created_at - interval '1 hour' WHERE event_id = $1",
+    )
+    .bind(event_id)
+    .execute(&pool)
+    .await
+    .expect("written an hour ago");
 
     while publish_ready_outbox_batch(&pool, &hub, "old-outbox-test")
         .await
@@ -815,6 +822,15 @@ async fn an_outbox_event_from_before_the_log_still_routes() {
         .await
         .expect("log");
     assert_eq!(logged.as_deref(), Some("message.created"), "put in the log");
+    let same_time = sqlx::query_scalar::<_, bool>(
+        "SELECT event.created_at = outbox.created_at FROM events event \
+         JOIN outbox_events outbox ON outbox.event_id = event.id WHERE event.id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(&pool)
+    .await
+    .expect("times");
+    assert!(same_time, "the log keeps when it happened");
     let passes = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>)>(
         "SELECT organization_id, project_id FROM background_jobs WHERE kind = 'events.router'",
     )
