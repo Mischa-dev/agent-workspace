@@ -99,6 +99,40 @@ async fn any_emoji_and_the_workspaces_own() {
         assert_eq!(refused["outcome"], "invalid_request", "{name}: {refused}");
     }
 
+    // A workspace keeps at most so many live emoji: filled to the limit, the
+    // next add is refused.
+    let workspace = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT workspace_id FROM custom_emojis WHERE id = $1::uuid",
+    )
+    .bind(&parrot)
+    .fetch_one(world.pool())
+    .await
+    .expect("workspace");
+    sqlx::query(
+        "INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id) \
+         SELECT gen_random_uuid(), $1, 'filler_' || n, content_type, image, created_by_account_id \
+         FROM custom_emojis, generate_series(1, $2::int - 1) n WHERE id = $3::uuid",
+    )
+    .bind(workspace)
+    .bind(i32::try_from(agent_workspace_server::custom_emoji::MAX_EMOJI).expect("limit"))
+    .bind(&parrot)
+    .execute(world.pool())
+    .await
+    .expect("fill");
+    let full = tool(
+        app,
+        &desk.token,
+        &desk.session,
+        "custom_emoji_create",
+        json!({"name": "one_too_many", "imageBase64": PNG_BASE64, "clientRequestId": "full"}),
+    )
+    .await;
+    assert_eq!(full["outcome"], "invalid_request", "{full}");
+    sqlx::query("DELETE FROM custom_emojis WHERE name LIKE 'filler_%'")
+        .execute(world.pool())
+        .await
+        .expect("unfill");
+
     // Rook reacts with any emoji and with :partyparrot:; not with anything else.
     let react = |message: &str, emoji: &str| {
         let arguments = json!({"messageId": message, "emoji": emoji});

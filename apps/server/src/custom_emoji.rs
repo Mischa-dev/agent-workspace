@@ -61,6 +61,31 @@ pub(crate) async fn announce(
     Ok(())
 }
 
+/// Charges the events a change in `workspace_id` will send (one to each
+/// live space, as [`announce`] sends them) before it's made, so adding and
+/// retiring emoji can't flood a large workspace's members.
+pub(crate) async fn charge_announcement(
+    state: &crate::AppState,
+    workspace_id: Uuid,
+) -> Result<(), AppError> {
+    let spaces = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM projects WHERE organization_id = $1 AND archived_at IS NULL",
+    )
+    .bind(workspace_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let events = u32::try_from(spaces.clamp(1, 500)).unwrap_or(500);
+    state
+        .rate_limits
+        .check_custom_emoji_events(workspace_id, events)
+        .await
+}
+
+/// The most live custom emoji one workspace keeps (so the list shows all).
+pub const MAX_EMOJI: i64 = MAX_LISTED;
+/// The most bytes one workspace's custom emoji images take, retired ones
+/// included.
+pub const MAX_TOTAL_BYTES: i64 = 16 * 1024 * 1024;
 /// The largest image kept.
 pub const MAX_IMAGE_BYTES: usize = 65_536;
 /// The most custom emoji one workspace lists.
