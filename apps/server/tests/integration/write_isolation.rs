@@ -498,7 +498,13 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "request_respond",
     "request_cancel",
     "launch_cancel",
+    "conversations_mark_read",
+    "custom_emoji_create",
+    "custom_emoji_update",
+    "comment_create",
+    "comment_thread_update",
     "message_delete",
+    "message_draft_set",
     "message_forward",
     "message_preview_hide",
     "message_react",
@@ -514,6 +520,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "module_set",
     "module_update",
     "model_catalog_write",
+    "notification_keyword_set",
     "notification_update",
     "package_install",
     "package_remove",
@@ -559,6 +566,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "scheduled_message_update",
     "session_bind",
     "settings_set",
+    "status_delete",
+    "status_set",
     "task_claim",
     "task_archive",
     "task_comment_create",
@@ -1311,7 +1320,14 @@ struct Targets {
     connection: Uuid,
     /// A follow-up the owner set (A2.11).
     schedule: Uuid,
+    /// The workspace's own emoji (C2.19).
+    custom_emoji: Uuid,
+    /// A thread in the sheet's comments (C1.3).
+    comment_thread: Uuid,
 }
+
+/// The smallest PNG header a custom emoji passes with (C2.19).
+const NET_PNG: &[u8] = b"\x89PNG\r\n\x1a\nnet";
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
     let a_side = world.marker.is_empty();
@@ -1783,11 +1799,54 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .execute(pool)
     .await
     .expect("follow-up");
+    // C2.19: a custom emoji, to retire.
+    let custom_emoji = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id)
+        VALUES ($1, $2, 'net_emoji', 'image/png', $3, $4)
+        "#,
+    )
+    .bind(custom_emoji)
+    .bind(organization)
+    .bind(NET_PNG)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("custom emoji");
+    // C1.3: the sheet's comments and a thread in them, to resolve.
+    let (comments, comment_thread) = (Uuid::now_v7(), Uuid::now_v7());
+    for (id, kind, parent, visibility, subject) in [
+        (comments, "comments", None, "subject", Some(world.sheet)),
+        (comment_thread, "thread", Some(comments), "project", None),
+    ] {
+        sqlx::query(
+            r#"
+            INSERT INTO conversations (
+                id, project_id, kind, parent_channel_id, name, visibility, subject_kind, subject_id
+            )
+            SELECT $1, sheet.project_id, $2, $3, 'Net comments', $4,
+                   CASE WHEN $5::uuid IS NULL THEN NULL ELSE 'sheet' END, $5
+            FROM sheets sheet WHERE sheet.id = $6
+            "#,
+        )
+        .bind(id)
+        .bind(kind)
+        .bind(parent)
+        .bind(visibility)
+        .bind(subject)
+        .bind(world.sheet)
+        .execute(pool)
+        .await
+        .expect("comments");
+    }
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
         connection,
         schedule,
+        custom_emoji,
+        comment_thread,
         hosts,
         questions,
         reported_runs,
@@ -6175,6 +6234,37 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"scheduleId": ax.schedule, "note": "Net moved"}),
             vec![json!({"scheduleId": bx.schedule, "cancel": true})],
         ),
+        // C2.15: an agent's status is set by those who manage it; B's agent
+        // isn't A's to set.
+        mcp_case(
+            "status_set",
+            json!({"text": "Net status", "account": a.agent}),
+            vec![json!({"text": "Net status", "account": b.agent})],
+        ),
+        mcp_case(
+            "status_delete",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
+        // C2.19: an emoji goes in the workspace called; B's can't be retired
+        // from A.
+        mcp_case(
+            "custom_emoji_create",
+            json!({"name": "net_new", "imageBase64": "iVBORw0KGgpuZXQ=", "clientRequestId": "net-emoji"}),
+            vec![json!({"workspace": b.organization, "name": "net_new", "imageBase64": "iVBORw0KGgpuZXQ=", "clientRequestId": "net-emoji-b"})],
+        ),
+        mcp_case(
+            "custom_emoji_update",
+            json!({"id": ax.custom_emoji, "retired": true}),
+            vec![json!({"id": bx.custom_emoji, "retired": true})],
+        ),
+        // C2.13: keywords are the caller's own, in the workspace called; a
+        // workspace the caller isn't in takes none.
+        mcp_case(
+            "notification_keyword_set",
+            json!({"keywords": ["net launch"]}),
+            vec![json!({"workspace": b.organization, "keywords": ["net launch"]})],
+        ),
         // H1.24: deleting a workspace, or keeping it, only ever acts on the
         // caller's own. A's own call would stop every later case here;
         // workspace_lifecycle.rs runs it.
@@ -6387,6 +6477,31 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "conversation_mark_read",
             json!({"conversationId": a.channel}),
             vec![json!({"conversationId": b.channel})],
+        ),
+        mcp_case(
+            "message_draft_set",
+            json!({"conversationId": a.channel, "draft": {"text": "Net draft"}}),
+            vec![json!({"conversationId": b.channel, "draft": {"text": "Net draft"}})],
+        ),
+        mcp_case(
+            "conversations_mark_read",
+            json!({"spaceId": a.project}),
+            vec![json!({"spaceId": b.project})],
+        ),
+        mcp_case(
+            "comment_create",
+            json!({"thing": {"kind": "sheet", "id": a.sheet}, "text": "Net comment"}),
+            vec![
+                json!({"thing": {"kind": "sheet", "id": b.sheet}, "text": "Net comment"}),
+                json!({"thing": {"kind": "whiteboard", "id": b.whiteboard}, "text": "Net"}),
+                json!({"thing": {"kind": "sheet", "id": a.sheet}, "text": "Net",
+                       "threadId": bx.comment_thread}),
+            ],
+        ),
+        mcp_case(
+            "comment_thread_update",
+            json!({"threadId": ax.comment_thread, "status": "Resolved"}),
+            vec![json!({"threadId": bx.comment_thread, "status": "Resolved"})],
         ),
         mcp_case(
             "notification_update",

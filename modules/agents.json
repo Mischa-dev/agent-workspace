@@ -45,7 +45,7 @@
     "/api/v1/events*"
   ],
   "events": { "emits": ["account.managers_changed", "reply.requested", "reply.followup", "reply.cancelled", "schedule.due", "connection.push_disabled", "connection.changed", "schedule.changed"], "listens": ["message.created", "task.updated", "run.finished"] },
-  "notifications": [],
+  "notifications": ["connection_problem", "agent_unresponsive", "budget_warning"],
   "search": [],
   "automations": { "triggers": [], "actions": [] },
   "things": [],

@@ -347,6 +347,7 @@ impl Operation for PackageInstall {
             actor_id: actor,
             actor_kind: ctx.caller.kind,
             via_grant_id: ctx.caller.via_grant_id,
+            confined_project: ctx.caller.confined_space,
         };
         let tx = call.tx().await?;
 

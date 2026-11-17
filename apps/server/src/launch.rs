@@ -30,9 +30,6 @@ use crate::{
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     jobs::{self, JobRegistry, NewJob},
     memory,
-    outbox::{
-        ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload, enqueue_typed,
-    },
     policy::{Action, ActorKind},
     provider::{manifest::AdapterManifest, run_config::RunConfig},
     settings,
@@ -566,6 +563,17 @@ impl LaunchCaller {
                 .map(str::to_owned),
             mcp_credential: None,
         })
+    }
+
+    /// Who starts a launch's thread, for `threads::create`.
+    fn thread_creator(&self) -> crate::conversations::threads::ThreadCreator {
+        crate::conversations::threads::ThreadCreator::plain(
+            self.actor_id,
+            self.actor_kind,
+            self.session_id,
+            self.authentication_class(),
+            self.request_id.clone(),
+        )
     }
 
     fn authentication_class(&self) -> &'static str {
@@ -1800,58 +1808,19 @@ async fn task_thread(
     .ok_or(AppError::Invalid(
         "the project needs a channel you can see before a task can launch",
     ))?;
-    let thread_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO conversations (id, project_id, workspace_id, kind, parent_channel_id, name)
-        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4)
-        "#,
-    )
-    .bind(thread_id)
-    .bind(project_id)
-    .bind(channel_id)
-    .bind(crate::work_items::worker_thread_name(
-        &task.key,
-        &task.title,
-        thread_id,
-    ))
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_read_states (
-            project_id, conversation_id, actor_id, highest_seen_sequence
-        ) VALUES ($1, $2, $3, 0)
-        "#,
-    )
-    .bind(project_id)
-    .bind(thread_id)
-    .bind(caller.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO work_item_conversation_links (
-            project_id, work_item_id, conversation_id, created_by_actor_id
-        ) VALUES ($1, $2, $3, $4)
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(thread_id)
-    .bind(caller.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    enqueue_typed(
+    let thread = crate::conversations::threads::create(
         &mut transaction,
-        project_id,
-        OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
-            conversation_id: thread_id,
-            kind: OutboxConversationKind::Thread,
-            version: 1,
-        }),
+        &caller.thread_creator(),
+        channel_id,
+        crate::conversations::threads::ThreadSpec::new(
+            crate::conversations::threads::ThreadName::Composed(
+                crate::work_items::worker_thread_name(&task.key, &task.title, Uuid::now_v7()),
+            ),
+        )
+        .linked_to_task(work_item_id),
     )
     .await?;
+    let thread_id = thread.id;
     transaction.commit().await?;
     Ok(thread_id)
 }
@@ -2983,113 +2952,22 @@ async fn thread_under(
     message_id: Uuid,
 ) -> Result<Uuid, AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    sqlx::query("SELECT id FROM conversations WHERE id = $1 FOR UPDATE")
-        .bind(message.conversation_id)
-        .execute(&mut *transaction)
-        .await?;
-    if let Some(thread_id) = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id FROM conversations
-        WHERE origin_message_id = $1 AND parent_channel_id = $2 AND kind = 'thread'
-          AND archived_at IS NULL
-        ORDER BY created_at
-        LIMIT 1
-        "#,
-    )
-    .bind(message_id)
-    .bind(message.conversation_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    {
-        transaction.commit().await?;
-        return Ok(thread_id);
-    }
-    memory::project_access(
-        &state.pool,
-        caller.actor_id,
-        caller.actor_kind,
-        message.project_id,
-        Action::ThreadCreate,
-    )
-    .await?;
-    let base = crate::conversations::normalize_conversation_name(
-        &crate::conversations::suggested_thread_name(&message.plain_text),
-    )
-    .unwrap_or_else(|_| "Agent run".to_owned());
-    let name = unique_thread_name(&mut transaction, message.conversation_id, &base).await?;
-    let thread_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO conversations (
-            id, project_id, workspace_id, kind, parent_channel_id, origin_message_id, name
-        )
-        VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4, $5)
-        "#,
-    )
-    .bind(thread_id)
-    .bind(message.project_id)
-    .bind(message.conversation_id)
-    .bind(message_id)
-    .bind(&name)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_read_states (project_id, conversation_id, actor_id, highest_seen_sequence)
-        VALUES ($1, $2, $3, 0)
-        "#,
-    )
-    .bind(message.project_id)
-    .bind(thread_id)
-    .bind(caller.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    enqueue_typed(
+    // `threads::create` locks the channel, checks the caller may still see
+    // it and start a thread there, and returns the one already started from
+    // the message when there is one.
+    let thread = crate::conversations::threads::create(
         &mut transaction,
-        message.project_id,
-        OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
-            conversation_id: thread_id,
-            kind: OutboxConversationKind::Thread,
-            version: 1,
-        }),
+        &caller.thread_creator(),
+        message.conversation_id,
+        crate::conversations::threads::ThreadSpec::new(
+            crate::conversations::threads::ThreadName::Derived,
+        )
+        .opened_from(Some(message_id))
+        .reusing(),
     )
     .await?;
     transaction.commit().await?;
-    Ok(thread_id)
-}
-
-async fn unique_thread_name(
-    transaction: &mut Transaction<'_, Postgres>,
-    parent_id: Uuid,
-    base: &str,
-) -> Result<String, AppError> {
-    let taken = sqlx::query_scalar::<_, String>(
-        r#"
-        SELECT lower(name) FROM conversations
-        WHERE parent_channel_id = $1 AND kind = 'thread' AND archived_at IS NULL
-        "#,
-    )
-    .bind(parent_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    if !taken.contains(&base.to_lowercase()) {
-        return Ok(base.to_owned());
-    }
-    for number in 2..1000 {
-        let suffix = format!(" ({number})");
-        let stem = base
-            .chars()
-            .take(120 - suffix.chars().count())
-            .collect::<String>();
-        let candidate = format!("{stem}{suffix}");
-        if !taken.contains(&candidate.to_lowercase()) {
-            return Ok(candidate);
-        }
-    }
-    Err(AppError::Conflict(
-        "conversation_name",
-        "an active Conversation already uses that name",
-    ))
+    Ok(thread.id)
 }
 
 /// The message without the leading @mentions, as the run's prompt.

@@ -153,13 +153,10 @@
     "server.rs": 5
   },
   "conversation_inserts": {
-    "conversations.rs": 2,
+    "conversations.rs": 1,
+    "conversations/threads.rs": 1,
     "direct.rs": 2,
-    "launch.rs": 2,
-    "mcp/replies.rs": 1,
-    "mcp/talk.rs": 1,
-    "seed.rs": 2,
-    "work_items.rs": 1
+    "seed.rs": 2
   },
   "conversation_listings": {
     "ai/summaries.rs": 1,

@@ -140,7 +140,7 @@ SELECT tenancy_protect('deliveries', 'workspace_id');
 -- Whether `recipient` may hear `ev` now: every transport asks this once per
 -- event, so all three agree. The audience decides who could ever hear it;
 -- the thing access is decided on (a conversation, a request, a run, a
--- board) is checked as it is now. An inactive account hears nothing.
+-- board, a task, a page) is checked as it is now. An inactive account hears nothing.
 CREATE FUNCTION delivery_thing_visible(thing UUID, recipient UUID)
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -155,6 +155,10 @@ AS $$
             THEN run_visible_to(thing, recipient)
         WHEN EXISTS (SELECT 1 FROM whiteboards w WHERE w.id = thing)
             THEN whiteboard_visible_to(thing, recipient)
+        WHEN EXISTS (SELECT 1 FROM work_items w WHERE w.id = thing)
+            THEN subject_visible_to('task', thing, recipient)
+        WHEN EXISTS (SELECT 1 FROM project_pages p WHERE p.id = thing)
+            THEN subject_visible_to('page', thing, recipient)
         ELSE true
     END
 $$;
@@ -218,6 +222,41 @@ SELECT gen_random_uuid(), connection.workspace_id, connection.actor_id, false,
        connection.created_by_actor_id, connection.created_at, now()
 FROM external_agent_connections connection, event_position_counter counter
 WHERE connection.status <> 'removed';
+
+-- Every account in a workspace has its default connection from the moment
+-- it joins, reading from then on, so reading events never has to make one.
+CREATE FUNCTION agent_connections_default_on_join() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.enabled THEN
+        INSERT INTO agent_connections (
+            id, home_workspace_id, account_id, reaches_all, is_default, name,
+            push_cursor, read_cursor, created_by_account_id
+        )
+        SELECT gen_random_uuid(), NEW.organization_id, NEW.actor_id, true, true, 'Default',
+               counter.next_position - 1, counter.next_position - 1, NEW.actor_id
+        FROM event_position_counter counter
+        ON CONFLICT (account_id)
+            WHERE is_default AND source_connection_id IS NULL AND state <> 'removed'
+            DO NOTHING;
+    END IF;
+    RETURN NEW;
+END
+$$;
+CREATE TRIGGER agent_connections_default_on_join
+AFTER INSERT OR UPDATE OF enabled ON organization_memberships
+FOR EACH ROW EXECUTE FUNCTION agent_connections_default_on_join();
+
+INSERT INTO agent_connections (
+    id, home_workspace_id, account_id, reaches_all, is_default, name,
+    push_cursor, read_cursor, created_by_account_id
+)
+SELECT DISTINCT ON (membership.actor_id)
+       gen_random_uuid(), membership.organization_id, membership.actor_id, true, true,
+       'Default', counter.next_position - 1, counter.next_position - 1, membership.actor_id
+FROM organization_memberships membership, event_position_counter counter
+WHERE membership.enabled
+ORDER BY membership.actor_id, membership.created_at, membership.organization_id;
 
 INSERT INTO connection_signing_secrets (id, connection_id, secret_id, state)
 SELECT gen_random_uuid(), delivery.id, connection.webhook_secret_id, 'active'

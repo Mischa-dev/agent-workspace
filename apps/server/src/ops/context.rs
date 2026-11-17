@@ -177,6 +177,7 @@ impl From<&OpContext> for crate::memory::Writer {
             actor_id: ctx.caller.account_id,
             actor_kind: ctx.caller.kind,
             via_grant_id: ctx.caller.via_grant_id,
+            confined_project: ctx.caller.confined_space,
         }
     }
 }

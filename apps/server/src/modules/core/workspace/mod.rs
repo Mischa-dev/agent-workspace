@@ -14,6 +14,9 @@ impl CoreModule for Module {
 
     fn register(&self, module: &mut Registrar<'_>) {
         module.operations(crate::packages::ops::register_ops);
+        module.operations(crate::statuses::ops::register_ops);
+        module.operations(crate::custom_emoji::ops::register_ops);
+        module.routes(crate::custom_emoji::router);
         module.operations(crate::modules::built::ops::register_ops);
         module.operations(crate::history::ops::register_ops);
         module.operations(crate::accounts::claims::register_ops);

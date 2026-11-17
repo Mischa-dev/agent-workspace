@@ -1091,3 +1091,35 @@
   font: var(--t-small);
   color: var(--content-fg-muted);
 }
+
+/* C1.23: "Print…" on a page prints the page alone, as the PDF export lays
+   it out: no rail, sidebar, panels or page actions. */
+@media print {
+  .aw-rail,
+  .aw-sidebar,
+  .aw-panel,
+  .aw-mobilebar,
+  .aw-resize,
+  .aw-skip-link,
+  .aw-pagehead [role='toolbar'],
+  .aw-pagehead button {
+    display: none !important;
+  }
+
+  .aw-shell,
+  .aw-main,
+  .aw-page {
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-width: none !important;
+    background: #fff !important; /* design-exception: paper, whatever the theme */
+    color: #111 !important; /* design-exception: ink on paper, whatever the theme */
+  }
+
+  .aw-page pre,
+  .aw-page table,
+  .aw-page img {
+    break-inside: avoid;
+  }
+}
