@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { HostOffersSection } from './HostOffersSection'
 import { JoinAgentSection } from './JoinAgentSection'
 import { WorkOsAgentSettings } from './WorkOsAgentSettings'
 import { toastError } from '../app/mutations'
@@ -311,6 +312,7 @@ export function ExternalAgentSettings({
         />
       </Section>
       <JoinAgentSection projectId={projectId} />
+      <HostOffersSection />
       <ConfirmDialog
         busy={confirmMutation.isPending}
         confirmLabel={confirming?.kind === 'rotate' ? 'Make a new token' : 'Remove'}

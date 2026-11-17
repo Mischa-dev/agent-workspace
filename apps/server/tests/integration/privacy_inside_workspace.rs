@@ -1267,6 +1267,10 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
             json!({"account": rook, "actionId": "pause"}),
         ),
         (
+            "agent_offer_start",
+            json!({"host": Uuid::now_v7(), "offerId": "new"}),
+        ),
+        (
             "agent_register_decide",
             json!({"proposal": Uuid::now_v7(), "decision": "approve"}),
         ),

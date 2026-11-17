@@ -148,6 +148,8 @@ export type RaisedRequestOutput = { activityId: string; clientRequestId?: string
 
 export type ReactionSummary = { byYou: boolean; count: number; emoji: string; name: string; people: string[] }
 
+export type RecipeView = { id: string; title: string }
+
 export type RemoveParts = "archive" | "keep"
 
 export type RequestAnswerView = { label?: string | null; optionId?: string | null; text?: string | null }
@@ -226,9 +228,17 @@ export type AgentOfferListInput = Record<string, never>
 
 export type AgentOfferListOutput = { offers: Offer[] }
 
+export type AgentOfferStartInput = { host: string; offerId: string }
+
+export type AgentOfferStartOutput = { commandId: string; page?: string | null }
+
 export type AgentPauseInput = { account: string; everywhere?: boolean; reason?: string | null }
 
 export type AgentPauseOutput = { account: string; changed: boolean; status: string }
+
+export type AgentRecipeListInput = Record<string, never>
+
+export type AgentRecipeListOutput = { recipes: RecipeView[] }
 
 export type AgentRegisterDecideInput = { decision: string; proposal: string; roleId?: string | null }
 
@@ -642,7 +652,9 @@ export type Operations = {
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_offer_list: { input: AgentOfferListInput; output: AgentOfferListOutput }
+  agent_offer_start: { input: AgentOfferStartInput; output: AgentOfferStartOutput }
   agent_pause: { input: AgentPauseInput; output: AgentPauseOutput }
+  agent_recipe_list: { input: AgentRecipeListInput; output: AgentRecipeListOutput }
   agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
   agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }

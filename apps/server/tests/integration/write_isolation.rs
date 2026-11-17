@@ -457,6 +457,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "agent_create",
     "agent_managers_set",
     "agent_action_run",
+    "agent_offer_start",
     "agent_register_decide",
     "agent_pause",
     "agent_resume",
@@ -1763,10 +1764,11 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         *host = sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version,
-                               described_agents, actions, enrolled_by_account_id)
+                               described_agents, actions, offers, enrolled_by_account_id)
             VALUES (gen_random_uuid(), $1, $2, $3, '2026-11',
                     '[{"hostAgentRef": "net-agent", "name": "Net", "backends": [], "actions": []}]',
-                    '[{"id": "net-action", "label": "Net"}]', $4)
+                    '[{"id": "net-action", "label": "Net"}]',
+                    '[{"id": "net-offer", "title": "Net"}]', $4)
             RETURNING id
             "#,
         )
@@ -7290,6 +7292,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "agent_register_decide",
             json!({"proposal": ax.proposal, "decision": "refuse"}),
             vec![json!({"proposal": bx.proposal, "decision": "refuse"})],
+        ),
+        mcp_case(
+            "agent_offer_start",
+            json!({"host": ax.hosts[2], "offerId": "net-offer"}),
+            vec![json!({"host": bx.hosts[2], "offerId": "net-offer"})],
         ),
         mcp_case(
             "agent_action_run",

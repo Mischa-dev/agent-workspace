@@ -1,3 +1,4 @@
+import { callOp } from '../api/ops'
 import { requestJson } from '../api/client'
 
 export type ExternalAgentRole = 'member' | 'viewer'
@@ -48,8 +49,8 @@ export type SetupRecipe = { id: string; title: string }
 
 /** The apps the server has setup steps for, in its order. */
 export async function listSetupRecipes(): Promise<SetupRecipe[]> {
-  const recipes = await requestJson<unknown>('/api/v1/agent-recipes')
-  return Array.isArray(recipes) ? (recipes as SetupRecipe[]) : []
+  const value = await callOp('agent_recipe_list', {})
+  return value.recipes
 }
 
 /** A one-time link that hands an agent its token, with the steps for its app. */

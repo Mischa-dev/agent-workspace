@@ -93,9 +93,9 @@ describe('ExternalAgentSettings', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input)
-        if (path.endsWith('/api/v1/agent-recipes')) return jsonResponse(recipes)
-        if (path.includes('/api/v2/ops/status_list') || path.includes('/api/v2/ops/account_joinable_list')) {
-          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [] } })
+        if (path.includes('/api/v2/ops/agent_recipe_list')) return jsonResponse({ outcome: 'ok', value: { recipes } })
+        if (/\/api\/v2\/ops\/(status_list|account_joinable_list|agent_offer_list)/.test(path)) {
+          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [], offers: [] } })
         }
         requests.push({ path, init })
         if (!init?.method || init.method === 'GET') {
@@ -155,9 +155,9 @@ describe('ExternalAgentSettings', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input)
-        if (path.endsWith('/api/v1/agent-recipes')) return jsonResponse(recipes)
-        if (path.includes('/api/v2/ops/status_list') || path.includes('/api/v2/ops/account_joinable_list')) {
-          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [] } })
+        if (path.includes('/api/v2/ops/agent_recipe_list')) return jsonResponse({ outcome: 'ok', value: { recipes } })
+        if (/\/api\/v2\/ops\/(status_list|account_joinable_list|agent_offer_list)/.test(path)) {
+          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [], offers: [] } })
         }
         paths.push(path)
         if (init?.method === 'POST') {
@@ -210,9 +210,9 @@ describe('ExternalAgentSettings', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input)
-        if (path.endsWith('/api/v1/agent-recipes')) return jsonResponse(recipes)
-        if (path.includes('/api/v2/ops/status_list') || path.includes('/api/v2/ops/account_joinable_list')) {
-          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [] } })
+        if (path.includes('/api/v2/ops/agent_recipe_list')) return jsonResponse({ outcome: 'ok', value: { recipes } })
+        if (/\/api\/v2\/ops\/(status_list|account_joinable_list|agent_offer_list)/.test(path)) {
+          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [], offers: [] } })
         }
         if (init?.method === 'POST') {
           created = true
@@ -268,9 +268,9 @@ describe('ExternalAgentSettings', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input)
-        if (path.endsWith('/api/v1/agent-recipes')) return jsonResponse(recipes)
-        if (path.includes('/api/v2/ops/status_list') || path.includes('/api/v2/ops/account_joinable_list')) {
-          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [] } })
+        if (path.includes('/api/v2/ops/agent_recipe_list')) return jsonResponse({ outcome: 'ok', value: { recipes } })
+        if (/\/api\/v2\/ops\/(status_list|account_joinable_list|agent_offer_list)/.test(path)) {
+          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [], offers: [] } })
         }
         if (init?.method === 'POST') {
           posts.push({ path, body: JSON.parse(String(init.body)) })

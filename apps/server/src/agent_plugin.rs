@@ -6,15 +6,19 @@
 //! file there, not code.
 
 use axum::{
-    Json, Router,
+    Router,
     extract::State,
     http::header,
     response::{IntoResponse, Response},
     routing::get,
 };
-use serde::Serialize;
+use rmcp::schemars::{self, JsonSchema};
+use serde::{Deserialize, Serialize};
 
-use crate::AppState;
+use crate::{
+    AppState,
+    ops::{Idempotency, OpCall, OpError, OpKind, Operation, Perm, Target, Targeted},
+};
 
 mod embedded {
     include!(concat!(env!("OUT_DIR"), "/agent_plugin.rs"));
@@ -140,9 +144,7 @@ fn parts(origin: &str) -> Vec<(String, Vec<u8>)> {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/agent-plugin.zip", get(download))
-        .route("/api/v1/agent-recipes", get(list))
+    Router::new().route("/agent-plugin.zip", get(download))
 }
 
 /// Nothing in it is secret, so anyone may fetch it.
@@ -162,9 +164,64 @@ async fn download(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
-/// The clients a setup link can be made for.
-async fn list() -> Json<Vec<Recipe>> {
-    Json(recipes())
+pub fn register_ops(registry: &mut crate::ops::Registry) {
+    registry.add::<AgentRecipeList>();
+}
+
+/// The clients a setup link can be made for, as an operation so the web
+/// and agents read them the same way.
+pub struct AgentRecipeList;
+
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentRecipeListInput {}
+
+impl Targeted for AgentRecipeListInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeView {
+    /// What a setup link names it by.
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipesView {
+    pub recipes: Vec<RecipeView>,
+}
+
+impl Operation for AgentRecipeList {
+    const NAME: &'static str = "agent_recipe_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "agents";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "Apps an agent can be set up in";
+    const DESCRIPTION: &'static str = "The apps an agent setup link has steps for.";
+
+    type Input = AgentRecipeListInput;
+    type Output = RecipesView;
+
+    async fn run(
+        _call: &mut OpCall<'_>,
+        _input: AgentRecipeListInput,
+    ) -> Result<RecipesView, OpError> {
+        Ok(RecipesView {
+            recipes: recipes()
+                .into_iter()
+                .map(|recipe| RecipeView {
+                    id: recipe.id,
+                    title: recipe.title,
+                })
+                .collect(),
+        })
+    }
 }
 
 #[cfg(test)]

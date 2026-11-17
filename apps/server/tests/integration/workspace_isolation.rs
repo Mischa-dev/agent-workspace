@@ -262,11 +262,6 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
          people; covered in awd110_collection_forms",
     ),
     (
-        "/api/v1/agent-recipes",
-        "the agent plugin's setup recipes (A2.17), built into the server: the same list for \
-         everyone, reading no row of any workspace; covered in awd63_setup_links",
-    ),
-    (
         "/api/v1/file-links/{token}",
         "a short-lived file link (A2.12) is read by its signed token, not a session; the \
          token names the account it was made for, which must still be able to read the file \
@@ -2056,6 +2051,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "account_joinable_list",
     "agent_offer_list",
     "agent_action_get",
+    "agent_recipe_list",
     "inbox_list",
     "invitation_list",
     "label_list",
@@ -2386,6 +2382,14 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         case(
             "agent_offer_list",
             vec![json!({}), json!({"workspace": a.organization})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // A2.17: the same built-in list everywhere, but only asked where
+        // the caller is.
+        case(
+            "agent_recipe_list",
+            vec![json!({})],
             vec![json!({"workspace": b.organization})],
             vec![],
         ),

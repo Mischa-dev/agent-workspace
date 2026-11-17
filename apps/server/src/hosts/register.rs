@@ -38,6 +38,7 @@ pub(crate) const REGISTER_SUBJECT: &str = "agent_register";
 
 pub fn register_ops(registry: &mut Registry) {
     registry.add::<AgentOfferList>();
+    registry.add::<AgentOfferStart>();
     registry.add::<AgentRegisterDecide>();
     registry.add::<AgentActionRun>();
     registry.add::<AgentActionGet>();
@@ -700,6 +701,141 @@ impl Operation for AgentOfferList {
     }
 }
 
+/// A host the caller may get agents from here: the workspace's or their
+/// own, linked, not the built-in one.
+async fn offering_host(
+    connection: &mut PgConnection,
+    host_id: Uuid,
+    workspace_id: Uuid,
+    caller: Uuid,
+) -> Result<Option<HostRow>, AppError> {
+    Ok(super::get(connection, host_id).await?.filter(|host| {
+        host.status == "active"
+            && !host.builtin
+            && match host.owner() {
+                HostOwner::Workspace(owner) => owner == workspace_id,
+                HostOwner::Account(owner) => owner == caller,
+            }
+    }))
+}
+
+/// The page an offer starts on, when it names one on the host's own
+/// origin (its issuer, approved at enrolment). Anything else is not opened.
+fn offer_page(host: &HostRow, offer: &Value, command_id: Uuid) -> Option<String> {
+    let page = offer["start"]["page"].as_str()?;
+    let page = url::Url::parse(page).ok()?;
+    let issuer = url::Url::parse(host.issuer.as_deref()?).ok()?;
+    if page.scheme() != "https" || page.origin() != issuer.origin() {
+        return None;
+    }
+    let mut page = page;
+    page.query_pairs_mut()
+        .append_pair("command", &command_id.to_string());
+    Some(page.into())
+}
+
+pub struct AgentOfferStart;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentOfferStartInput {
+    /// The host whose offer it is (from agent_offer_list).
+    pub host: IdRef,
+    /// The offer's id, as the host published it.
+    pub offer_id: String,
+}
+
+impl Targeted for AgentOfferStartInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferStarted {
+    /// The command the host was sent; read it with agent_action_get.
+    #[schemars(with = "String")]
+    pub command_id: Uuid,
+    /// The host's page to carry on at, when the offer names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+}
+
+impl Operation for AgentOfferStart {
+    const NAME: &'static str = "agent_offer_start";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "agents";
+    const PERMISSION: Option<Perm> = Some(Perm::AgentsCreate);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["host.action_run"];
+    const TITLE: &'static str = "Start a host's offer";
+    const DESCRIPTION: &'static str = "Tell a host you chose one of its offers. It sets the \
+        agent up, then proposes it here for you to approve.";
+
+    type Input = AgentOfferStartInput;
+    type Output = OfferStarted;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: AgentOfferStartInput,
+    ) -> Result<OfferStarted, OpError> {
+        let workspace_id = call.ctx.workspace_id;
+        let caller = call.account_id();
+        let tx = call.tx().await?;
+        let host = offering_host(tx, input.host.id(), workspace_id, caller)
+            .await?
+            .ok_or_else(|| OpError::not_found("That host"))?;
+        let offer = host
+            .offers
+            .as_array()
+            .and_then(|offers| {
+                offers
+                    .iter()
+                    .find(|offer| offer["id"] == input.offer_id.as_str())
+            })
+            .cloned()
+            .ok_or_else(|| OpError::invalid("offerId", "That host publishes no such offer."))?;
+        let command = super::commands::issue(
+            tx,
+            super::commands::NewCommand {
+                workspace_id,
+                host_id: host.id,
+                run_id: None,
+                request_id: None,
+                kind: agent_workspace_host_protocol::CommandKind::Action,
+                start_key: None,
+                body: json!({
+                    "offer": input.offer_id,
+                    "workspaceId": workspace_id,
+                    "requestedBy": caller,
+                }),
+            },
+        )
+        .await?;
+        mark_invoker(tx, command.id, caller).await?;
+        call.audit_target("host", host.id, json!({"offer": offer["id"]}));
+        Ok(OfferStarted {
+            command_id: command.id,
+            page: offer_page(&host, &offer, command.id),
+        })
+    }
+}
+
+/// Who ran an action: only they read its reply.
+async fn mark_invoker(
+    transaction: &mut Transaction<'_, Postgres>,
+    command_id: Uuid,
+    account_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE host_commands SET invoked_by_account_id = $2 WHERE id = $1")
+        .bind(command_id)
+        .bind(account_id)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
 // -------------------------------------------------------------- actions
 
 pub struct AgentActionRun;
@@ -840,12 +976,7 @@ impl Operation for AgentActionRun {
             },
         )
         .await?;
-        sqlx::query("UPDATE host_commands SET invoked_by_account_id = $2 WHERE id = $1")
-            .bind(command.id)
-            .bind(caller.account_id)
-            .execute(&mut **tx)
-            .await
-            .map_err(AppError::from)?;
+        mark_invoker(tx, command.id, caller.account_id).await?;
         call.audit_target("host", host_id, json!({"action": command.body["action"]}));
         Ok(ActionView {
             command_id: command.id,

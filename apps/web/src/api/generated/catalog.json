@@ -110,6 +110,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "host.action_run"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "agents",
+    "name": "agent_offer_start",
+    "permission": "agents.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Start a host's offer"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "agent.paused",
       "account.status.changed"
     ],
@@ -122,6 +138,20 @@
     "preview": false,
     "proposable": false,
     "title": "Pause agent"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "agent_recipe_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Apps an agent can be set up in"
   },
   {
     "automation": true,

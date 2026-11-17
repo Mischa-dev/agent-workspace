@@ -1,5 +1,7 @@
 import { callOp } from '../../api/ops'
 
+import type { HostAction } from './HostActions'
+
 /** A1.11: hosts, the machines and services that run agents. */
 export type HostOwner = { kind: 'person' | 'workspace'; id: string; name: string }
 
@@ -8,6 +10,7 @@ export type HostAgent = {
   name: string | null
   hostAgentRef: string
   status: 'active' | 'paused' | 'gone'
+  actions?: HostAction[]
 }
 
 export type DescribedAgent = { hostAgentRef: string; name: string | null }
@@ -23,7 +26,7 @@ export type Host = {
   protocol: string
   capabilities: Record<string, unknown>
   offers: { id: string; title: string; summary?: string }[]
-  actions: { id: string; label: string }[]
+  actions: HostAction[]
   describedAgents: DescribedAgent[]
   agents: HostAgent[]
   lastSeenAt: string | null

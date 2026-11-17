@@ -24,6 +24,7 @@ import {
   type ChipTone,
 } from '../../ui'
 import { OneTimeValue } from '../OneTimeValue'
+import { HostActions } from './HostActions'
 import { actorKind } from '../../ui/identityModel'
 import { listWorkspaceMembers, workspaceKeys } from '../workspace/api'
 import {
@@ -235,6 +236,14 @@ function HostRow({
                 <li key={agent.accountId}>
                   {agent.name ?? 'An agent'} as <code className="aw-inline-code">{agent.hostAgentRef}</code>
                   {agent.status !== 'active' && <> ({agent.status})</>}
+                  {host.canManage && agent.status === 'active' && (
+                    <HostActions
+                      account={agent.accountId}
+                      actions={agent.actions ?? []}
+                      hostId={host.id}
+                      workspaceId={workspaceId}
+                    />
+                  )}
                   {host.canManage && (
                     <Button
                       disabled={unbind.isPending}
@@ -248,6 +257,9 @@ function HostRow({
                 </li>
               ))}
             </ul>
+          )}
+          {host.canManage && !host.builtin && host.status !== 'revoked' && (
+            <HostActions actions={host.actions} hostId={host.id} workspaceId={workspaceId} />
           )}
           {host.offers.length > 0 && (
             <span className="aw-quiet">Offers: {host.offers.map((offer) => offer.title).join(', ')}</span>

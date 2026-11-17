@@ -68,7 +68,11 @@ async fn a_host_proposes_an_agent_and_someone_who_may_add_agents_approves_it() {
                 "software": {"name": "test-host", "version": "1.0"},
                 "capabilities": {"start": true},
                 "reportIntervalSeconds": 60,
-                "offers": [{"id": "new", "title": "New agent", "start": {"panel": "new-agent"}}],
+                "issuer": "https://host.example",
+                "offers": [
+                    {"id": "new", "title": "New agent", "start": {"page": "https://host.example/new"}},
+                    {"id": "away", "title": "Elsewhere", "start": {"page": "https://other.example/new"}},
+                ],
                 "actions": [{"id": "sign-ins", "label": "Model sign-ins", "needs": "panel"}],
                 "agents": [{"hostAgentRef": "helper", "name": "Helper",
                             "actions": [{"id": "pause", "label": "Pause", "needs": "confirm"}]}],
@@ -87,6 +91,81 @@ async fn a_host_proposes_an_agent_and_someone_who_may_add_agents_approves_it() {
     assert_eq!(offers["value"]["offers"][0]["hostId"], host.id.to_string());
     let refused = op(&world, lena, "agent_offer_list", json!({})).await;
     assert_ne!(refused["outcome"], "ok", "{refused}");
+
+    // Starting an offer tells the host who chose it, over its own channel,
+    // and opens its page only on its own origin.
+    let started = op(
+        &world,
+        owner,
+        "agent_offer_start",
+        json!({"host": host.id, "offerId": "new"}),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{started}");
+    let page = started["value"]["page"].as_str().expect("page");
+    assert!(
+        page.starts_with("https://host.example/new?command="),
+        "{page}"
+    );
+    let elsewhere_page = op(
+        &world,
+        owner,
+        "agent_offer_start",
+        json!({"host": host.id, "offerId": "away"}),
+    )
+    .await;
+    assert_eq!(
+        elsewhere_page["value"]["page"],
+        Value::Null,
+        "{elsewhere_page}"
+    );
+    let commands = host.poll().await;
+    let chosen = commands
+        .iter()
+        .find(|command| command["commandId"] == started["value"]["commandId"])
+        .expect("offer command");
+    let (_, chosen) = host.fetch(&chosen["commandId"]).await;
+    assert_eq!(chosen["offer"], "new", "{chosen}");
+    assert_eq!(chosen["requestedBy"], owner.actor.to_string(), "{chosen}");
+    let refused = op(
+        &world,
+        lena,
+        "agent_offer_start",
+        json!({"host": host.id, "offerId": "new"}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+
+    // Who is asked: the person who chose the offer, if they may add agents.
+    for (key, chooser, asked) in [
+        ("c-asks-owner", owner.actor, true),
+        ("c-asks-lena", lena.actor, false),
+    ] {
+        let mut body = register(&world, key, key, key);
+        body["requestedBy"] = json!(chooser);
+        let (_, proposed) = host
+            .call("POST", "/api/v1/host/agents/register", Some(body))
+            .await;
+        let addressed = sqlx::query_scalar::<_, Vec<Uuid>>(
+            "SELECT addressed_account_ids FROM requests WHERE id = $1",
+        )
+        .bind(
+            proposed["requestId"]
+                .as_str()
+                .expect("id")
+                .parse::<Uuid>()
+                .expect("uuid"),
+        )
+        .fetch_one(world.pool())
+        .await
+        .expect("request");
+        assert_eq!(
+            addressed.contains(&owner.actor),
+            asked,
+            "{key}: {addressed:?}"
+        );
+        assert!(!addressed.contains(&lena.actor), "{key}: {addressed:?}");
+    }
 
     // Not for a workspace that isn't the host's (nor its owner's).
     let elsewhere = Uuid::now_v7();
@@ -123,9 +202,10 @@ async fn a_host_proposes_an_agent_and_someone_who_may_add_agents_approves_it() {
     assert_eq!(status, StatusCode::ACCEPTED, "{again}");
     assert_eq!(again["proposalId"], proposed["proposalId"]);
     let requests = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM requests WHERE subject_kind = 'agent_register' AND workspace_id = $1",
+        "SELECT count(*) FROM requests WHERE subject_kind = 'agent_register' \
+         AND subject_id IN (SELECT id FROM agent_proposals WHERE host_id = $1 AND client_request_id = 'c-1')",
     )
-    .bind(world.organization)
+    .bind(host.id)
     .fetch_one(world.pool())
     .await
     .expect("requests");
