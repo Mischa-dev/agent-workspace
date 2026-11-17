@@ -67,7 +67,7 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root.join("codex").to_string_lossy().into_owned(),
         ),
         (
@@ -1685,7 +1685,8 @@ async fn removing_a_sponsored_prompt_scrubs_the_execution_request_too() {
         "agent_runs",
         "external_execution_requests",
         "idempotency_keys",
-        "outbox_events",
+        "events",
+        "event_staging",
     ] {
         assert_eq!(
             super::message_edits::copies(&setup.pool, table, secret).await,

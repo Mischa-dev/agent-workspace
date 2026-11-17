@@ -82,7 +82,7 @@ done
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             codex_home_root.to_string_lossy().into_owned(),
         ),
         (
@@ -258,17 +258,18 @@ done
     assert_eq!(event_count, 1);
     assert_eq!(failure_sequence, Some(2), "prompt then run_failed");
     assert!(
-        sqlx::query_scalar::<_, bool>(
+        sqlx::query_scalar::<_, bool>(&format!(
             r#"
             SELECT EXISTS (
                 SELECT 1
-                FROM outbox_events
+                FROM {n} outbox
                 WHERE event_type = 'conversation.agent_run.updated'
                   AND conversation_id = $1
                   AND resource_id = $2
             )
             "#,
-        )
+            n = crate::support::NOTICES
+        ),)
         .bind(seed.thread_id)
         .bind(run_id)
         .fetch_one(&pool)

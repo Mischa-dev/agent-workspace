@@ -2763,13 +2763,11 @@ async fn run_action(
                 // A pull request with no task: start a run in the thread of
                 // the run that opened it.
                 if let (Some(run_id), Some(prompt)) = (context.agent_run_id, prompt) {
-                    let (conversation_id, repository_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
-                        "SELECT conversation_id, repository_id FROM agent_runs WHERE id = $1",
-                    )
-                    .bind(run_id)
-                    .fetch_one(crate::db::scoped(&state.pool))
-                    .await
-                    .map_err(|error| database(error.into()))?;
+                    let (conversation_id, repository_id) =
+                        crate::runs::reads::thread_and_repository(&state.pool, run_id)
+                            .await
+                            .map_err(database)?
+                            .ok_or_else(|| database(AppError::NotFound("agent_run")))?;
                     let (_, started) = crate::api::start_run_in(
                         state,
                         &caller,

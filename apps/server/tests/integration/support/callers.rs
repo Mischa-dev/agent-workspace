@@ -2,10 +2,7 @@
 //! an app a person connected) behind one `Caller` trait, so a test can run
 //! the same operation as each and compare: "no difference by account kind".
 
-use agent_workspace_server::{
-    AppState,
-    realtime::{outbox_worker_id, publish_ready_outbox_batch},
-};
+use agent_workspace_server::AppState;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
@@ -147,19 +144,12 @@ async fn bearer_call(
     }
 }
 
-/// Publishes the outbox until it's empty, so the events a write queued
-/// (realtime, notifications, webhooks) have gone out.
+/// Runs the log's consumers until they have caught up, so the events a
+/// write staged (notifications, webhooks) have had their effects.
 pub(crate) async fn drain_outbox(state: &AppState) {
-    let worker = outbox_worker_id();
-    for _ in 0..100 {
-        let published = publish_ready_outbox_batch(&state.pool, &state.realtime, &worker)
-            .await
-            .expect("publish the outbox");
-        if published == 0 {
-            return;
-        }
-    }
-    panic!("the outbox didn't drain in 100 batches");
+    agent_workspace_server::events::catch_up(&state.pool)
+        .await
+        .expect("catch up with the log");
 }
 
 /// Fails when `body` carries any of `markers` (text or IDs that mustn't

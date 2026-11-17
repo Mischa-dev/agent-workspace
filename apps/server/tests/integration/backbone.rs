@@ -1560,7 +1560,7 @@ async fn metrics_need_their_token_outside_development() {
     let text = String::from_utf8(body.to_vec()).expect("text");
     for metric in [
         "aw_job_queue{state=\"due\"}",
-        "aw_outbox_lag_seconds",
+        "aw_events_lag_seconds",
         "aw_agent_webhooks_failing",
         "aw_http_requests_total",
     ] {

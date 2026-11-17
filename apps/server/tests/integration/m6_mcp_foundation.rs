@@ -59,7 +59,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             temporary.path().join("data").to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             temporary
                 .path()
                 .join("data/codex/profiles")
@@ -694,7 +694,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let parity_cookie = login(&application).await;
     let parity_csrf = csrf_from_cookie(&parity_cookie);
     let parity_effects_before = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -731,7 +734,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     )
     .expect("browser parity Work Item UUID");
     let after_browser = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -767,7 +773,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     )
     .expect("MCP parity Work Item UUID");
     let after_mcp = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -829,7 +838,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         json!(2)
     );
     let after_browser_update = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -857,7 +869,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     assert_eq!(mcp_updated["outcome"], "ok");
     assert_eq!(mcp_updated["value"]["version"], 2);
     let after_mcp_update = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&pool)
     .await
@@ -899,9 +914,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         mcp_audits, 10,
         "exact replay and conflicts create no success audit"
     );
-    let viewer_denial_effects_before = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM outbox_events)",
-    )
+    let viewer_denial_effects_before = sqlx::query_as::<_, (i64, i64)>(&format!(
+        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM {n} outbox)",
+        n = crate::support::NOTICES
+    ))
     .fetch_one(&pool)
     .await
     .expect("count effects before Viewer denial");
@@ -965,9 +981,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         "denied Viewer writes produce no success audit"
     );
     assert_eq!(
-        sqlx::query_as::<_, (i64, i64)>(
-            "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM outbox_events)",
-        )
+        sqlx::query_as::<_, (i64, i64)>(&format!(
+            "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM {n} outbox)",
+            n = crate::support::NOTICES
+        ),)
         .fetch_one(&pool)
         .await
         .expect("count effects after Viewer denial"),
@@ -1743,7 +1760,7 @@ fn csrf_from_cookie(cookie: &str) -> String {
 
 async fn json_response(response: axum::response::Response) -> Value {
     let status = response.status();
-    let body = to_bytes(response.into_body(), 1_000_000)
+    let body = to_bytes(response.into_body(), 4_000_000)
         .await
         .expect("JSON body");
     serde_json::from_slice(&body).unwrap_or_else(|error| {
@@ -1817,7 +1834,7 @@ async fn call_tool(
 }
 
 async fn protocol_json(response: axum::response::Response) -> Value {
-    let body = to_bytes(response.into_body(), 1_000_000)
+    let body = to_bytes(response.into_body(), 4_000_000)
         .await
         .expect("read MCP response");
     let text = String::from_utf8(body.to_vec()).expect("MCP response UTF-8");

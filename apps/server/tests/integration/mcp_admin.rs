@@ -1199,6 +1199,23 @@ async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
             "{name} reached past its space: {result}"
         );
     }
+
+    // A board made with no space named lands in the held space, as before.
+    let board = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "whiteboard_create",
+        json!({"title": "Held board", "clientRequestId": "held-board"}),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let space: Option<Uuid> =
+        sqlx::query_scalar("SELECT project_id FROM whiteboards WHERE title = 'Held board'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("board");
+    assert_eq!(space, Some(source.parse::<Uuid>().expect("source")));
 }
 
 #[tokio::test]
@@ -1423,7 +1440,7 @@ async fn a_fresh_project_gets_its_worker_when_someone_connects_codex() {
                 data_root.to_string_lossy().into_owned(),
             ),
             (
-                "AGENT_WORKSPACE_CODEX_HOME_ROOT",
+                "AGENT_WORKSPACE_PROVIDER_HOME_ROOT",
                 data_root
                     .join("codex/profiles")
                     .to_string_lossy()

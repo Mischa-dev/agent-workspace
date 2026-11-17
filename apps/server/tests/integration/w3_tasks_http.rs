@@ -197,7 +197,7 @@ async fn fixture(name: &str) -> Option<Fixture> {
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root
                 .join("codex/profiles")
                 .to_string_lossy()
@@ -1316,7 +1316,6 @@ async fn every_status_change_says_what_changed() {
         mcp_admin::{create_project, setup},
         message_edits::owner_id,
     };
-    use agent_workspace_server::realtime::publish_ready_outbox_batch;
     let Some(setup) = setup("p12_changes").await else {
         return;
     };
@@ -1401,7 +1400,7 @@ async fn every_status_change_says_what_changed() {
             worker_id: "p12-test".to_owned(),
         };
         for _ in 0..10 {
-            let published = publish_ready_outbox_batch(pool, &state.realtime, "p12-test")
+            let published = agent_workspace_server::events::catch_up(pool)
                 .await
                 .expect("publish outbox");
             let ran = agent_workspace_server::jobs::run_due(&state, &registry, &options)

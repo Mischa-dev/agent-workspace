@@ -239,8 +239,9 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     .expect("collection part");
     let announced = || async {
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM outbox_events WHERE event_type = 'collection.updated' \
-             AND payload->>'collectionId' = $1",
+            "SELECT count(*) FROM (SELECT thing_id, type FROM event_staging \
+                 UNION ALL SELECT thing_id, type FROM events) event \
+             WHERE event.type = 'collection.updated' AND event.thing_id = $1::text::uuid",
         )
         .bind(collection_id.to_string())
         .fetch_one(&pool)

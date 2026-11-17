@@ -55,7 +55,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
             data_root.to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             data_root
                 .join("codex/profiles")
                 .to_string_lossy()

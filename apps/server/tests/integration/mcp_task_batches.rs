@@ -73,18 +73,19 @@ fn assert_invalid(result: &Value, field: &str, says: &str) {
 /// Every row a batch could leave behind: tasks, activity, audit, outbox,
 /// labels, criteria, stored replays and task numbers.
 async fn footprint(setup: &Setup) -> Vec<i64> {
-    let row = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64, i64, i64)>(
+    let row = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64, i64, i64)>(&format!(
         r#"
         SELECT (SELECT count(*) FROM work_items),
                (SELECT count(*) FROM work_item_activity),
                (SELECT count(*) FROM audit_events),
-               (SELECT count(*) FROM outbox_events),
+               (SELECT count(*) FROM {n} outbox),
                (SELECT count(*) FROM project_labels),
                (SELECT count(*) FROM work_item_acceptance_criteria),
                (SELECT count(*) FROM idempotency_keys),
                (SELECT COALESCE(sum(next_work_item_number), 0)::bigint FROM project_counters)
         "#,
-    )
+        n = crate::support::NOTICES
+    ))
     .fetch_one(&setup.pool)
     .await
     .expect("footprint");

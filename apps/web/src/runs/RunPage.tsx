@@ -33,7 +33,8 @@ import {
   showToast,
 } from '../ui'
 import { workItemHref } from '../work-items/links'
-import { getRun, runKeys, type RunDetail } from './api'
+import { getRun, runKeys, viewRun, type RunDetail, type RunView } from './api'
+import { ReportedRun } from './ReportedRun'
 import { RunDiff } from './RunDiff'
 import { RunSteps } from './RunSteps'
 import { formatCost, formatTokens, isLiveRun, logText, runDuration, runStatus, runTitle } from './runModel'
@@ -41,17 +42,24 @@ import './runs.css'
 
 const LIVE_REFRESH_MS = 5_000
 
-/** One run: what it was asked, every step it took, what it changed and what it used. */
+/**
+ * One run, whoever runs it. A run on this server's own host keeps its full
+ * page (steps, files, tests); any other run shows what its host or agent
+ * reported.
+ */
 export function RunPage() {
   const { runId = '' } = useParams()
-  const run = useQuery({
-    queryKey: runKeys.detail(runId),
-    queryFn: () => getRun(runId),
+  const view = useQuery({
+    queryKey: runKeys.view(runId),
+    queryFn: ({ signal }) => viewRun(runId, signal),
     enabled: Boolean(runId),
-    refetchInterval: (query) => (query.state.data && isLiveRun(query.state.data.state) ? LIVE_REFRESH_MS : false),
+    refetchInterval: (query) => {
+      const data = query.state.data
+      return data && !data.builtin && isLiveRun(data.state) ? LIVE_REFRESH_MS : false
+    },
   })
-  const notFound = run.isError && isApiError(run.error) && run.error.status === 404
-  usePageTitle(run.data ? runTitle(run.data) : null)
+  const notFound = view.isError && isApiError(view.error) && (view.error.status === 404 || view.error.code === 'not_found')
+  usePageTitle(view.data ? runTitle(view.data) : null)
   useShellPage({ home: true, mainClassName: 'aw-main--page' })
 
   return (
@@ -60,17 +68,42 @@ export function RunPage() {
         <ButtonLink className="aw-runs__back" icon="arrow-left" size="sm" to="/runs" variant="ghost">
           All runs
         </ButtonLink>
-        {run.isPending ? <PageSkeleton /> : null}
-        {notFound ? (
-          <EmptyState action={<ButtonLink to="/runs">See all runs</ButtonLink>} icon="activity" title="This run isn’t here">
-            It may be in a thread you can’t see.
-          </EmptyState>
-        ) : null}
-        {run.isError && !notFound ? <ErrorState error={run.error} onRetry={() => void run.refetch()} title="The run didn’t load" /> : null}
-        {run.data ? <RunBody run={run.data} /> : null}
+        {view.isPending ? <PageSkeleton /> : null}
+        {notFound ? <RunNotFound /> : null}
+        {view.isError && !notFound ? <ErrorState error={view.error} onRetry={() => void view.refetch()} title="The run didn’t load" /> : null}
+        {view.data?.builtin ? <BuiltinRun runId={view.data.id} /> : null}
+        {view.data && !view.data.builtin ? <ReportedRunPage onRefresh={() => void view.refetch()} run={view.data} /> : null}
       </div>
     </>
   )
+}
+
+function RunNotFound() {
+  return (
+    <EmptyState action={<ButtonLink to="/runs">See all runs</ButtonLink>} icon="activity" title="This run isn’t here">
+      It may be in a thread you can’t see.
+    </EmptyState>
+  )
+}
+
+function ReportedRunPage({ onRefresh, run }: { onRefresh: () => void; run: RunView }) {
+  const now = useNow(isLiveRun(run.state))
+  const experience = useProjectExperience(run.projectId ?? undefined)
+  return <ReportedRun now={now} onRefresh={onRefresh} run={run} usage={experience.shows('tech.run_usage')} />
+}
+
+/** A run on this server's own host: its full page. */
+function BuiltinRun({ runId }: { runId: string }) {
+  const run = useQuery({
+    queryKey: runKeys.detail(runId),
+    queryFn: () => getRun(runId),
+    refetchInterval: (query) => (query.state.data && isLiveRun(query.state.data.state) ? LIVE_REFRESH_MS : false),
+  })
+  const notFound = run.isError && isApiError(run.error) && run.error.status === 404
+  if (run.isPending) return <PageSkeleton />
+  if (notFound) return <RunNotFound />
+  if (run.isError) return <ErrorState error={run.error} onRetry={() => void run.refetch()} title="The run didn’t load" />
+  return <RunBody run={run.data} />
 }
 
 /** Ticks while the run is live, so its running time keeps counting. */

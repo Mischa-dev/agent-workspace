@@ -52,7 +52,7 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
             temporary.path().join("data").to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             temporary
                 .path()
                 .join("data/codex/profiles")
@@ -413,7 +413,7 @@ async fn invitation_acceptance_creates_or_extends_one_human_identity_atomically(
             temporary.path().join("data").to_string_lossy().into_owned(),
         ),
         (
-            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "AGENT_WORKSPACE_PROVIDER_HOME_ROOT".to_owned(),
             temporary
                 .path()
                 .join("data/codex/profiles")

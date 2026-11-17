@@ -1561,28 +1561,7 @@ async fn build_body(
             let Some(run_id) = subject.agent_run_id else {
                 return Ok(None);
             };
-            let Some(run) = sqlx::query_as::<
-                _,
-                (
-                    Uuid,
-                    Uuid,
-                    String,
-                    Option<String>,
-                    Option<String>,
-                    DateTime<Utc>,
-                    Option<DateTime<Utc>>,
-                ),
-            >(
-                r#"
-                SELECT run.id, run.conversation_id, run.state, run.config->>'harness',
-                       run.failure_reason, run.created_at, run.finished_at
-                FROM agent_runs run WHERE run.id = $1
-                "#,
-            )
-            .bind(run_id)
-            .fetch_optional(crate::db::scoped(pool))
-            .await?
-            else {
+            let Some(run) = crate::runs::reads::for_webhook(pool, run_id).await? else {
                 return Ok(None);
             };
             let task = match (due.project_id, subject.work_item_id) {
@@ -1594,15 +1573,15 @@ async fn build_body(
             let project_id = due.project_id.unwrap_or_default();
             json!({
                 "run": {
-                    "id": run.0,
-                    "conversationId": run.1,
-                    "state": subject.state.clone().unwrap_or_else(|| run.2.clone()),
-                    "currentState": run.2,
-                    "harness": run.3,
-                    "failure": run.4,
-                    "createdAt": run.5,
-                    "finishedAt": run.6,
-                    "url": format!("{origin}/projects/{project_id}/threads/{}", run.1),
+                    "id": run.id,
+                    "conversationId": run.conversation_id,
+                    "state": subject.state.clone().unwrap_or_else(|| run.state.clone()),
+                    "currentState": run.state,
+                    "harness": run.harness,
+                    "failure": run.failure_reason,
+                    "createdAt": run.created_at,
+                    "finishedAt": run.finished_at,
+                    "url": format!("{origin}/projects/{project_id}/threads/{}", run.conversation_id),
                 },
                 "task": task,
             })

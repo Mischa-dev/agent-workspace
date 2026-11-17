@@ -1975,11 +1975,12 @@ async fn a_space_narrows_its_own_modules_only() {
     .await;
     assert!(status.is_success(), "{status}: {body}");
     // Other tabs and processes hear of it: ids and module ids only.
-    let events = sqlx::query_scalar::<_, Value>(
-        "SELECT payload FROM outbox_events \
-         WHERE event_type = 'project.modules.updated' AND resource_kind = 'project' \
+    let events = sqlx::query_scalar::<_, Value>(&format!(
+        "SELECT payload FROM {n} outbox \
+         WHERE event_type = 'project.modules.updated' \
            AND resource_id = $1 AND project_id = $1",
-    )
+        n = crate::support::NOTICES
+    ))
     .bind(Uuid::parse_str(&work).expect("work"))
     .fetch_all(&setup.pool)
     .await

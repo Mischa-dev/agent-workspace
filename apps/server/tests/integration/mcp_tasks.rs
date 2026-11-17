@@ -87,7 +87,10 @@ async fn parent(setup: &Setup, task: Uuid) -> Option<Uuid> {
 /// Activity, audit and outbox rows: one of each per change.
 async fn side_effects(setup: &Setup) -> (i64, i64, i64) {
     sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+        &format!(
+"SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",
+ n = crate::support::NOTICES
+),
     )
     .fetch_one(&setup.pool)
     .await

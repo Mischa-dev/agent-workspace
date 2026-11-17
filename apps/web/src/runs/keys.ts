@@ -9,5 +9,6 @@ export const runKeys = {
   list: (filter: RunListFilter) => ['runs', 'list', filter] as const,
   usage: (filter: UsageFilter) => ['runs', 'usage', filter] as const,
   detail: (runId: string) => ['runs', 'detail', runId] as const,
+  view: (runId: string) => ['runs', 'detail', runId, 'view'] as const,
   diff: (runId: string) => ['runs', 'detail', runId, 'diff'] as const,
 }
