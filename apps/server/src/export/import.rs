@@ -533,6 +533,53 @@ pub async fn account_by_login(pool: &sqlx::PgPool, login: &str) -> Result<Uuid, 
     .await
 }
 
+/// How an import is going, for the account that started it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    #[serde(flatten)]
+    pub transfer: TransferView,
+    pub workspace_id: Uuid,
+    /// The workspace's address, to open it once the import is done.
+    pub slug: String,
+}
+
+/// `requester`'s import `transfer`, wherever it is.
+pub async fn progress(
+    pool: &sqlx::PgPool,
+    transfer: Uuid,
+    requester: Uuid,
+) -> Result<Option<Progress>, AppError> {
+    crate::tenancy::system("workspace.import", async {
+        let found = crate::db::scoped_one(pool, async |connection| {
+            sqlx::query_as::<_, (Uuid, String)>(
+                "SELECT transfer.workspace_id, workspace.slug \
+                 FROM workspace_transfers transfer \
+                 JOIN organizations workspace ON workspace.id = transfer.workspace_id \
+                 WHERE transfer.id = $1 AND transfer.requested_by_actor_id = $2 \
+                   AND transfer.direction = 'import'",
+            )
+            .bind(transfer)
+            .bind(requester)
+            .fetch_optional(&mut *connection)
+            .await
+        })
+        .await?;
+        let Some((workspace_id, slug)) = found else {
+            return Ok(None);
+        };
+        let mut connection = crate::db::scoped_tx(pool).await?;
+        let view =
+            transfer::transfer_of(&mut connection, workspace_id, requester, transfer).await?;
+        Ok(view.map(|transfer| Progress {
+            transfer,
+            workspace_id,
+            slug,
+        }))
+    })
+    .await
+}
+
 /// Queues the job that fills an imported workspace.
 pub async fn enqueue(state: &AppState, workspace: Uuid, transfer: Uuid) -> Result<(), AppError> {
     crate::db::scoped_one(&state.pool, async |connection| {

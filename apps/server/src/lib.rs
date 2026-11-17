@@ -113,6 +113,7 @@ pub mod seed;
 pub mod server;
 pub mod server_status;
 pub mod settings;
+pub mod setup;
 pub mod sheets;
 pub mod spaces;
 pub mod statuses;

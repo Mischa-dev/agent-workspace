@@ -55,6 +55,7 @@ mod event_archive;
 mod event_log;
 mod export_declarations;
 mod files_links;
+mod first_run;
 mod followed_threads;
 mod github_task_keys;
 mod harness_support;

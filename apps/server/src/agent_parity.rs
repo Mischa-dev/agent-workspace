@@ -312,6 +312,21 @@ mod tests {
             "/api/v1/account/default-workspace",
             Person("a person's own account"),
         ),
+        (
+            Post,
+            "/api/v1/setup",
+            Plumbing("first run, before any account"),
+        ),
+        (
+            Post,
+            "/api/v1/setup/workspace",
+            Plumbing("first run, before any account"),
+        ),
+        (
+            Post,
+            "/api/v1/setup/import",
+            Plumbing("first run, before any account"),
+        ),
         (Post, "/api/v1/auth/login", Plumbing("sign-in")),
         (Post, "/api/v1/auth/logout", Plumbing("sign-in")),
         (Post, "/api/v1/auth/login/two-factor", Plumbing("sign-in")),

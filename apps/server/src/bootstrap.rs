@@ -425,6 +425,8 @@ pub async fn bootstrap_admin(
     }))
     .execute(&mut *transaction)
     .await?;
+    // Someone has an account now: first run in the browser is over (H1.14).
+    crate::setup::forget(&mut transaction).await?;
     transaction.commit().await?;
 
     Ok(BootstrapResult {

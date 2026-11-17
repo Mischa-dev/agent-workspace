@@ -1628,7 +1628,7 @@ struct ApplyRequest {
 }
 
 /// A refusal the person can act on, as the browser shows it.
-fn refused(problem: Problem) -> (StatusCode, Json<Value>) {
+pub(crate) fn refused(problem: Problem) -> (StatusCode, Json<Value>) {
     (
         StatusCode::UNPROCESSABLE_ENTITY,
         Json(json!({

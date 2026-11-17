@@ -21,6 +21,7 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(crate::auth::router())
+        .merge(crate::setup::router())
         .merge(crate::projects::router())
         .merge(crate::execution::router())
         .merge(crate::external_execution::router())

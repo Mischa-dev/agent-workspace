@@ -515,6 +515,19 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&issued)?);
             return Ok(());
         }
+        Some("setup-code") => {
+            // H1.14: a fresh first-run code in this process's data root,
+            // for when the first one is on a process that's gone.
+            reject_unknown_options(&parse_options(arguments)?, &[])?;
+            let path = agent_workspace_server::setup::issue_here(&pool, &config)
+                .await
+                .context("issue a setup code")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "setupCodeFile": path }))?
+            );
+            return Ok(());
+        }
         Some("migrate") => return Ok(()),
         Some(_) => bail!("unknown command"),
         None => {}
@@ -529,6 +542,28 @@ async fn main() -> anyhow::Result<()> {
             path = %created.display(),
             "created a new secrets keyring; back this file up apart from database dumps"
         );
+    }
+
+    // First run in the browser (H1.14): while nobody has an account, a
+    // setup code waits in the data root. Only its file's path is logged.
+    if config.roles.work {
+        match agent_workspace_server::setup::prepare(&pool, &config)
+            .await
+            .context("prepare first-run setup")?
+        {
+            agent_workspace_server::setup::Prepared::Waiting(path) => tracing::warn!(
+                path = %path.display(),
+                "nobody has an account yet: open the app in a browser and enter the setup code \
+                 from this file (in the container: docker compose exec app cat {})",
+                path.display()
+            ),
+            agent_workspace_server::setup::Prepared::Elsewhere => tracing::warn!(
+                "nobody has an account yet, and another server process holds the setup code; \
+                 run `agent-workspace-server setup-code` here for a new one"
+            ),
+            agent_workspace_server::setup::Prepared::Done
+            | agent_workspace_server::setup::Prepared::Claimed => {}
+        }
     }
 
     let server = while_starting(&mut starting, Server::build(Arc::clone(&config), pool)).await?;

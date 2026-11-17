@@ -428,6 +428,16 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/account/default-workspace",
         SessionAuthentication
     ),
+    // First run (H1.14): the setup code makes the first account; the rest
+    // is that account's own, signed in.
+    boundary_route!("setup", Post, "/api/v1/setup", SessionAuthentication),
+    boundary_route!(
+        "setup",
+        Post,
+        "/api/v1/setup/workspace",
+        SessionAuthentication
+    ),
+    boundary_route!("setup", Post, "/api/v1/setup/import", SessionAuthentication),
     boundary_route!("auth", Post, "/api/v1/auth/login", SessionAuthentication),
     boundary_route!("auth", Post, "/api/v1/auth/logout", SessionAuthentication),
     boundary_route!(

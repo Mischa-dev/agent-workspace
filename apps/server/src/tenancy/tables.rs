@@ -337,6 +337,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the server processes sharing this database and their heartbeats (K5.2)",
     ),
     (
+        "server_setup",
+        "the server's first-run setup code, before any account or workspace exists (H1.14)",
+    ),
+    (
         "sessions",
         "browser sign-in sessions, before any workspace is chosen",
     ),
