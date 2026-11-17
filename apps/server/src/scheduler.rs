@@ -402,6 +402,10 @@ async fn claim_one(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Resul
           ON repository.id = run.repository_id
          AND repository.project_id = run.project_id
         JOIN projects project ON project.id = run.project_id
+        -- H1.24: a suspended or deleting workspace's runs wait.
+        JOIN organizations workspace
+          ON workspace.id = project.organization_id
+         AND workspace.lifecycle NOT IN ('suspended', 'deleting')
         JOIN execution_profiles profile ON profile.id = run.execution_profile_id
         JOIN provider_accounts account ON account.id = profile.provider_account_id
         WHERE run.state = 'queued'

@@ -5,7 +5,7 @@
 //! notifier decodes the payload by.
 
 use serde_json::json;
-use sqlx::{Postgres, Transaction};
+
 use uuid::Uuid;
 
 use super::{Audience, NewEvent, catalog};
@@ -13,7 +13,7 @@ use crate::{error::AppError, outbox::OutboxEventPayload};
 
 /// Stage one notice as an event in the change's transaction.
 pub async fn stage(
-    transaction: &mut Transaction<'_, Postgres>,
+    connection: &mut sqlx::PgConnection,
     event_id: Uuid,
     project_id: Uuid,
     payload: &OutboxEventPayload,
@@ -24,7 +24,7 @@ pub async fn stage(
     // with what changed, from the activity this transaction wrote for it.
     // A move or a comment alone stays the board's placement signal.
     let task = match payload {
-        P::WorkItemUpdated(p) => Some(task_change(transaction, project_id, p.work_item_id).await?),
+        P::WorkItemUpdated(p) => Some(task_change(connection, project_id, p.work_item_id).await?),
         _ => None,
     };
     let conversation = |id: Uuid| Audience::ConversationOf(id);
@@ -178,6 +178,15 @@ pub async fn stage(
             None,
             None,
         ),
+        P::WorkspaceLifecycleChanged(p) => (
+            &catalog::WORKSPACE_LIFECYCLE_CHANGED,
+            "workspace",
+            p.workspace_id,
+            None,
+            Audience::Workspace,
+            None,
+            None,
+        ),
         P::NotificationsUpdated(p) => (
             &catalog::NOTIFICATION_CHANGED,
             "account",
@@ -256,7 +265,7 @@ pub async fn stage(
         .map(|(_, changes, _)| changes.iter().map(String::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
     super::emit(
-        transaction,
+        connection,
         NewEvent {
             id: event_id,
             ty,
@@ -280,7 +289,7 @@ pub async fn stage(
 /// placement signal when it wrote no activity (a move, a comment). The
 /// activity's actor is who acted when the edge didn't say.
 async fn task_change(
-    transaction: &mut Transaction<'_, Postgres>,
+    connection: &mut sqlx::PgConnection,
     project_id: Uuid,
     work_item_id: Uuid,
 ) -> Result<(&'static super::EventType, Vec<String>, Option<Uuid>), AppError> {
@@ -290,7 +299,7 @@ async fn task_change(
     )
     .bind(project_id)
     .bind(work_item_id)
-    .fetch_all(&mut **transaction)
+    .fetch_all(&mut *connection)
     .await?;
     let actor = activities.first().map(|(_, _, actor)| *actor);
     if activities
