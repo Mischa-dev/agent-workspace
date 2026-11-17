@@ -1393,7 +1393,6 @@ async fn pause_for_the_day(
         work_item_id: None,
         comment_id: None,
         agent_run_id: None,
-        approval_id: None,
         pull_request_id: None,
         detail: json!({
             "title": "A form you made paused itself",
