@@ -1,23 +1,22 @@
 # Repository guidance
 
-The plan's source of truth is the "Master plan: ..." pages in the app's AWD
-project; `docs/plans/master/` is their mirror in the repository, and a plan
-change goes into both in the same step (the page wins if they differ). A
-build's assignment and brief are its AWD task. Before you start a slice, read, in this
-order: `docs/plans/master/END-STATE.md` (what the product is becoming; its
-words are used the same way everywhere), `docs/plans/master/LEAD-RULINGS.md`
-(binding where a plan disagrees), your workstream's plan in
-`docs/plans/master/plans/` (at least its goal, target design, guard rails and
-touch points), and your slice's section in it, which is the specification.
-`docs/plans/master/BUILD-ORDER.md` says which build the slice is in, what must
-have merged first and how a build runs (its section 3); if a slice it depends
-on hasn't merged, stop and say so in the task. Work is tracked as tasks in the
-app's AWD project; a task's title and the pull request's title start with the
-slice id (`K1.3: …`). The definition of done is section 7 of
-`docs/plans/master/plans/P0-steady-ground.md`. If your slice changes something
-another plan relies on, record it in `docs/plans/master/interfaces.md`. Older
-plans in `docs/plans/` are references for how existing pieces were built;
-where they disagree with `docs/plans/master/`, the master plan wins.
+The plan is one page, "Build plan", in the app's AWD project; that page and
+your lane's task there are the required reading, together with the code. The
+plan says what must exist and in what order; the session doing the work decides
+how. Five lanes each own an area (accounts, access and spaces; backbone and
+hosting; operations, modules and the web app; chat, documents and records;
+agents), and a lane's task holds its feature list and what is in flight. Build a
+whole chunk in one branch and one pull request, never split work to keep busy,
+never wait on another lane (build against a small stub instead), and merge your
+own pull request when CI is green and the review has no open P1. Comment on the
+lane task when a pull request opens and when it merges.
+
+`docs/plans/master/` (the end state, the rulings, the fourteen detailed plans,
+the slice list) is a reference library: look things up there for background,
+and overrule it where the code says otherwise. Nobody has to read it first,
+keep it current or mirror it. The end state itself,
+`docs/plans/master/END-STATE.md`, is still what the product is becoming. Older
+plans in `docs/plans/` are references for how existing pieces were built.
 First-build documents are in `docs/history/`; don't follow them.
 
 ## Skills for working here
