@@ -1999,6 +1999,7 @@ async fn one_stream_walks_several_workspaces_and_the_direct_scope() {
             let workspace = NewWorkspace {
                 name: name.into(),
                 slug: None,
+                id: None,
             };
             made.push(
                 lifecycle::create(&mut transaction, owner, workspace)

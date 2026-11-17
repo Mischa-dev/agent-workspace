@@ -70,6 +70,9 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     ("jobs.server", &["jobs.rs"]),
     // Pruning finished jobs and counting the queue for the Server page.
     ("jobs.queue", &["jobs.rs"]),
+    // An import (H1.10) checks the archive's ids against every workspace,
+    // and fills a workspace that has no members' scope yet.
+    ("workspace.import", &["export/import.rs"]),
     // Taking, renewing and releasing a server-wide maintenance lease.
     ("maintenance.lease", &["maintenance_lease.rs"]),
     // The event log's own loops: the sequencer, the tail that feeds

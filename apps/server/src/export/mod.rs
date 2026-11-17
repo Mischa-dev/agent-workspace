@@ -12,6 +12,7 @@
 //! parts (live page documents, sheets' cells, whiteboard elements, files)
 //! are H1.9's.
 
+pub mod import;
 pub mod ops;
 pub mod registry;
 pub mod transfer;

@@ -348,6 +348,7 @@ pub async fn bootstrap_admin(
                 crate::workspace::lifecycle::NewWorkspace {
                     name: organization_name.clone(),
                     slug: Some(organization_slug),
+                    id: None,
                 },
             )
             .await

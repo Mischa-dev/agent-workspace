@@ -163,6 +163,7 @@ mod w3_tasks_http;
 mod w7_launch;
 mod w9_capacity_and_push;
 mod workspace_export;
+mod workspace_import;
 mod workspace_isolation;
 mod workspace_lifecycle;
 mod write_isolation;

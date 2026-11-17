@@ -119,6 +119,9 @@ pub struct NewWorkspace {
     /// Its address. Left out, a readable one from the name (K4.5). A slug
     /// a person chose is checked with `slug::check_new` by the caller.
     pub slug: Option<String>,
+    /// Its id, when it keeps the one it had elsewhere (an import, H1.10);
+    /// left out, a new one.
+    pub id: Option<Uuid>,
 }
 
 /// Make a workspace with `owner` as its owner. The one way a workspace row
@@ -136,7 +139,7 @@ pub async fn create(
         Some(slug) => slug,
         None => super::slug::readable_for_new(connection, name).await?,
     };
-    let id = Uuid::now_v7();
+    let id = input.id.unwrap_or_else(Uuid::now_v7);
     let inserted = sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
         .bind(id)
         .bind(name)
@@ -164,6 +167,31 @@ pub async fn create(
     .execute(&mut *connection)
     .await?;
     Ok(id)
+}
+
+/// Marks a workspace just made as being imported (H1.10): it refuses
+/// writes until [`finish_import`].
+pub async fn begin_import(connection: &mut PgConnection, workspace: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE organizations SET lifecycle = 'importing', lifecycle_changed_at = now() \
+         WHERE id = $1 AND lifecycle = 'active'",
+    )
+    .bind(workspace)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+/// Opens a workspace whose import finished.
+pub async fn finish_import(connection: &mut PgConnection, workspace: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE organizations SET lifecycle = 'active', lifecycle_changed_at = now() \
+         WHERE id = $1 AND lifecycle = 'importing'",
+    )
+    .bind(workspace)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
 }
 
 /// A workspace's state, as the edges and the web read it.
@@ -226,7 +254,8 @@ async fn check_open(
     .fetch_optional(&mut *connection)
     .await?;
     match lifecycle.as_deref() {
-        Some("suspended") => Err(AppError::WorkspaceSuspended),
+        // Nobody writes into a workspace while it is being imported.
+        Some("suspended" | "importing") => Err(AppError::WorkspaceSuspended),
         Some("deleting") if !ALLOWED_WHILE_DELETING.contains(&call) => {
             Err(AppError::WorkspaceSuspended)
         }

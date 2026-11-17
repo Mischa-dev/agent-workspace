@@ -233,6 +233,59 @@ async fn main() -> anyhow::Result<()> {
             );
             return Ok(());
         }
+        Some("workspace-import") => {
+            // H1.10: a workspace from an export archive on this server's
+            // disk, owned by an account here. `--resume <transfer>` goes on
+            // with one that stopped.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["file", "owner-login", "slug", "resume"])?;
+            let state = agent_workspace_server::AppState {
+                config: Arc::clone(&config),
+                pool: pool.clone(),
+                rate_limits: agent_workspace_server::rate_limit::RateLimiters::for_config(&config),
+                realtime: agent_workspace_server::realtime::RealtimeHub::new(256),
+                supervisors: agent_workspace_server::provider::SupervisorRegistry::new(&config)
+                    .context("configure provider supervisors")?,
+            };
+            use agent_workspace_server::export::import;
+            let transfer = match options.get("resume") {
+                Some(resume) => Uuid::parse_str(resume).context("--resume is a transfer's id")?,
+                None => {
+                    let owner =
+                        import::account_by_login(&pool, required_option(&options, "owner-login")?)
+                            .await
+                            .context("find the owner")?;
+                    let path = std::path::PathBuf::from(required_option(&options, "file")?);
+                    let started = import::start_import(
+                        &state,
+                        import::StartImport {
+                            path: &path,
+                            owner,
+                            slug: options.get("slug").cloned(),
+                        },
+                    )
+                    .await
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                    println!("{}", serde_json::to_string_pretty(&started)?);
+                    started.transfer.id
+                }
+            };
+            let finished = import::run_import(&state, transfer, import::RunLimits::default())
+                .await
+                .context("import the workspace")?;
+            if !finished {
+                bail!(
+                    "another process is importing this archive; run again with --resume {transfer} later"
+                );
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "transfer": transfer, "done": true })
+                )?
+            );
+            return Ok(());
+        }
         Some("files-move") => {
             // K5.13: copy every file (or one workspace's) to another store.
             let options = parse_options(arguments)?;

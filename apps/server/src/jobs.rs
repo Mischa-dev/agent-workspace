@@ -392,6 +392,7 @@ pub fn default_registry() -> JobRegistry {
     crate::drafts::register_jobs(&mut registry);
     crate::history::cold::register_jobs(&mut registry);
     crate::export::transfer::register_jobs(&mut registry);
+    crate::export::import::register_jobs(&mut registry);
     crate::scheduled_messages::register_jobs(&mut registry);
     crate::password_reset::register_jobs(&mut registry);
     crate::limits::register_jobs(&mut registry);

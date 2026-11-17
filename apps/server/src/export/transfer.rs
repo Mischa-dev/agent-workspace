@@ -662,8 +662,9 @@ struct Kind<'a> {
     column: &'static str,
 }
 
-/// One kind's rows as lines in `things/<module>/<kind>.jsonl`. Returns how
-/// many.
+/// One kind's rows as lines in `things/<module>/<kind>.jsonl`, oldest
+/// first, so a row comes after the rows of its own kind it points at (a
+/// reply after its parent). Returns how many.
 async fn write_kind(
     connection: &mut PgConnection,
     zip: &mut ZipWriter<std::fs::File>,
@@ -698,7 +699,8 @@ async fn write_kind(
         .map(|column| (*column).to_owned())
         .collect::<Vec<_>>();
     let sql = format!(
-        "{with}SELECT to_jsonb(t) - $2::text[] FROM {table} t WHERE t.{column} = $1{hidden}"
+        "{with}SELECT to_jsonb(t) - $2::text[] FROM {table} t WHERE t.{column} = $1{hidden} \
+         ORDER BY to_jsonb(t)->>'created_at', to_jsonb(t)->>'id'"
     );
     let mut rows = sqlx::query_scalar::<_, Value>(&sql)
         .bind(workspace)
