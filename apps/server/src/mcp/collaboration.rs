@@ -1,17 +1,19 @@
 //! Agent-only reads: the check that an agent's credential and connection are
 //! still active, and the older per-connection event inbox.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::McpPrincipal;
 use crate::{
     AppState,
-    external_events::{ExternalEvent, decode_cursor, encode_cursor},
+    addresses::{Place, Target},
+    error::AppError,
     policy::{Action, ActorKind},
 };
 
@@ -121,9 +123,6 @@ pub(super) enum ExternalEventPollResult {
         retry_category: String,
         resync_path: String,
     },
-    Busy {
-        retry_category: String,
-    },
     PermissionDenied {
         retry_category: String,
     },
@@ -149,42 +148,59 @@ pub(super) struct ExternalEventProjection {
     expires_at: String,
 }
 
+/// The older event feed, read through the caller's connection on the
+/// delivery side (A2.6): the same events `GET /api/v1/events` serves, under
+/// the names this feed always used. A cursor from before is expired.
 pub(super) async fn poll_external_events(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ExternalEventPollArguments,
 ) -> ExternalEventPollResult {
-    let Some(connection_id) = principal.external_agent_connection_id else {
-        return denied();
-    };
-    if !principal.has_scope("events") {
+    if principal.external_agent_connection_id.is_none() || !principal.has_scope("events") {
         return denied();
     }
     let limit = arguments.limit.unwrap_or(50);
     let wait_seconds = arguments.wait_seconds.unwrap_or(0);
     if !(1..=100).contains(&limit) || wait_seconds > 30 {
-        return ExternalEventPollResult::InvalidRequest {
-            retry_category: "do_not_retry_without_change".to_owned(),
-        };
+        return invalid();
     }
-
-    match poll(
+    let cursor = arguments
+        .after_cursor
+        .as_deref()
+        .map(str::trim)
+        .filter(|cursor| !cursor.is_empty());
+    if cursor.is_some_and(|cursor| !cursor.starts_with("c2.")) {
+        return expired();
+    }
+    let caller = crate::access::Caller::of_principal(principal, None);
+    match crate::delivery::poll(
         state,
-        principal,
-        connection_id,
-        arguments.after_cursor.as_deref(),
+        &caller,
+        None,
+        cursor,
         i64::from(limit),
-        wait_seconds,
+        Duration::from_secs(u64::from(wait_seconds)),
     )
     .await
     {
-        Ok(result) => result,
-        Err(PollFailure::InvalidCursor) => ExternalEventPollResult::InvalidRequest {
-            retry_category: "do_not_retry_without_change".to_owned(),
+        Ok(page) => ExternalEventPollResult::Events {
+            events: page
+                .events
+                .iter()
+                .zip(&page.positions)
+                .map(|(event, position)| project(event, *position))
+                .collect(),
+            next_cursor: page.next_cursor,
+            has_more: page.has_more,
         },
-        Err(PollFailure::Authorization) => denied(),
-        Err(PollFailure::Database(category)) => {
-            tracing::error!(category, "external event poll failed");
+        Err(AppError::Conflict("cursor_expired", _)) => expired(),
+        Err(AppError::Validation(_)) => invalid(),
+        Err(AppError::NotFound(_) | AppError::Forbidden) => denied(),
+        Err(error) => {
+            tracing::error!(
+                category = error.log_category(),
+                "external event poll failed"
+            );
             ExternalEventPollResult::TemporarilyUnavailable {
                 retry_category: "retry_with_backoff".to_owned(),
             }
@@ -192,185 +208,39 @@ pub(super) async fn poll_external_events(
     }
 }
 
-async fn poll(
-    state: &AppState,
-    principal: &McpPrincipal,
-    connection_id: Uuid,
-    cursor: Option<&str>,
-    limit: i64,
-    wait_seconds: u8,
-) -> Result<ExternalEventPollResult, PollFailure> {
-    let mut transaction = crate::db::scoped_tx(&state.pool)
-        .await
-        .map_err(|_| PollFailure::Database("begin"))?;
-    let signing_key = revalidate_connection(&mut transaction, principal, connection_id)
-        .await?
-        .ok_or(PollFailure::Authorization)?;
-    let acquired =
-        sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("m9-external-poll:{connection_id}"))
-            .fetch_one(&mut *transaction)
-            .await
-            .map_err(|_| PollFailure::Database("poll_lock"))?;
-    if !acquired {
-        return Ok(ExternalEventPollResult::Busy {
-            retry_category: "retry_with_backoff".to_owned(),
-        });
-    }
-    let after_sequence = match cursor {
-        Some(cursor) => decode_cursor(
-            &signing_key,
-            cursor,
-            connection_id,
-            principal.project_id,
-            principal.credential_id,
-        )
-        .map_err(|_| PollFailure::InvalidCursor)?,
-        None => 0,
-    };
-    if cursor_is_expired(&mut transaction, connection_id, after_sequence).await? {
-        return Ok(ExternalEventPollResult::CursorExpired {
-            retry_category: "resynchronize".to_owned(),
-            resync_path: format!("/projects/{}", principal.project_id),
-        });
-    }
-
-    let deadline = Instant::now() + Duration::from_secs(u64::from(wait_seconds));
-    loop {
-        let mut rows = sqlx::query_as::<_, ExternalEvent>(
-            r#"
-            SELECT id, sequence, kind, summary, resource_kind, resource_id,
-                   canonical_path, created_at::text AS created_at,
-                   expires_at::text AS expires_at
-            FROM external_agent_events
-            WHERE connection_id = $1 AND sequence > $2 AND expires_at > now()
-              AND agent_connection_can_access(connection_id, project_id)
-              AND external_event_visible_to(connection_id, resource_kind, resource_id)
-            ORDER BY sequence
-            LIMIT $3
-            "#,
-        )
-        .bind(connection_id)
-        .bind(after_sequence)
-        .bind(limit + 1)
-        .fetch_all(&mut *transaction)
-        .await
-        .map_err(|_| PollFailure::Database("fetch"))?;
-        if !rows.is_empty() || Instant::now() >= deadline {
-            if revalidate_connection(&mut transaction, principal, connection_id)
-                .await?
-                .is_none()
-            {
-                return Err(PollFailure::Authorization);
-            }
-            let has_more = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
-            if has_more {
-                rows.pop();
-            }
-            let next_sequence = rows.last().map_or(after_sequence, |event| event.sequence);
-            let next_cursor = encode_cursor(
-                &signing_key,
-                connection_id,
-                principal.project_id,
-                principal.credential_id,
-                next_sequence,
-            )
-            .map_err(|_| PollFailure::Database("encode_cursor"))?;
-            transaction
-                .commit()
-                .await
-                .map_err(|_| PollFailure::Database("commit"))?;
-            return Ok(ExternalEventPollResult::Events {
-                events: rows
-                    .into_iter()
-                    .map(ExternalEventProjection::from)
-                    .collect(),
-                next_cursor,
-                has_more,
-            });
+/// One delivered event in the older feed's shape.
+fn project(event: &Value, position: i64) -> ExternalEventProjection {
+    let kind = event["type"].as_str().unwrap_or_default();
+    let entry = crate::delivery::catalogue::get(kind);
+    let data = &event["data"];
+    let id_of = |value: &Value| value.as_str().and_then(|id| id.parse::<Uuid>().ok());
+    let thing_kind = data["thing"]["kind"].as_str().unwrap_or_default();
+    let thing = id_of(&data["thing"]["id"]);
+    let space = id_of(&data["spaceId"]);
+    let conversation = id_of(&data["threadId"]).or_else(|| id_of(&data["conversationId"]));
+    let target = match (thing_kind, thing, space, conversation) {
+        ("task", Some(id), Some(space), _) => Target::task(space, id),
+        ("page", Some(id), Some(space), _) => Target::page(space, id),
+        ("run", Some(id), _, _) => Target::Run(id),
+        ("request", ..) => Target::Inbox,
+        ("saved_item", ..) => Target::Later,
+        (_, _, Some(space), Some(conversation)) => {
+            Target::space(space, Place::Thread(conversation))
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        _ => Target::Home,
+    };
+    let created_at = event["timestamp"].as_str().unwrap_or_default().to_owned();
+    ExternalEventProjection {
+        id: event["id"].as_str().unwrap_or_default().to_owned(),
+        sequence: position,
+        kind: entry.map_or(kind, |entry| entry.feed_name).to_owned(),
+        summary: entry.map_or("", |entry| entry.summary).to_owned(),
+        resource_kind: thing_kind.to_owned(),
+        resource_id: thing.map(|id| id.to_string()).unwrap_or_default(),
+        canonical_path: target.legacy_path(),
+        expires_at: created_at.clone(),
+        created_at,
     }
-}
-
-async fn revalidate_connection(
-    transaction: &mut Transaction<'_, Postgres>,
-    principal: &McpPrincipal,
-    connection_id: Uuid,
-) -> Result<Option<Vec<u8>>, PollFailure> {
-    sqlx::query_scalar::<_, Vec<u8>>(
-        r#"
-        SELECT credential.token_digest
-        FROM mcp_client_credentials credential
-        JOIN external_agent_connections connection
-          ON connection.id = credential.external_agent_connection_id
-        JOIN actors actor ON actor.id = connection.actor_id
-        JOIN projects project ON project.id = connection.project_id
-        JOIN project_memberships membership
-          ON membership.project_id = connection.project_id
-         AND membership.actor_id = connection.actor_id
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = connection.actor_id
-        WHERE credential.id = $1
-          AND agent_connection_can_access(connection.id, $2)
-          AND credential.actor_id = $3
-          AND credential.external_agent_connection_id = $4
-          AND credential.status = 'active'
-          AND credential.revoked_at IS NULL
-          AND credential.expires_at > now()
-          AND credential.scopes @> ARRAY['events']::text[]
-          AND connection.status = 'active'
-          AND connection.scopes = credential.scopes
-          AND actor.kind = 'external_agent'
-          AND actor.status = 'active'
-          AND project.archived_at IS NULL
-          AND membership.enabled
-          AND organization_membership.enabled
-        "#,
-    )
-    .bind(principal.credential_id)
-    .bind(principal.project_id)
-    .bind(principal.actor_id)
-    .bind(connection_id)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(|_| PollFailure::Database("revalidate"))
-}
-
-async fn cursor_is_expired(
-    transaction: &mut Transaction<'_, Postgres>,
-    connection_id: Uuid,
-    after_sequence: i64,
-) -> Result<bool, PollFailure> {
-    let (next_sequence, minimum_available) = sqlx::query_as::<_, (i64, Option<i64>)>(
-        r#"
-        SELECT counter.next_sequence,
-               (SELECT min(sequence) FROM external_agent_events
-                WHERE connection_id = $1 AND expires_at > now())
-        FROM external_agent_event_counters counter
-        WHERE counter.connection_id = $1
-        "#,
-    )
-    .bind(connection_id)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(|_| PollFailure::Database("cursor_retention"))?
-    .unwrap_or((1, None));
-    if after_sequence >= next_sequence {
-        return Ok(true);
-    }
-    Ok(match minimum_available {
-        Some(minimum) => after_sequence + 1 < minimum,
-        None => next_sequence > after_sequence + 1,
-    })
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PollFailure {
-    Authorization,
-    InvalidCursor,
-    Database(&'static str),
 }
 
 fn denied() -> ExternalEventPollResult {
@@ -379,18 +249,15 @@ fn denied() -> ExternalEventPollResult {
     }
 }
 
-impl From<ExternalEvent> for ExternalEventProjection {
-    fn from(event: ExternalEvent) -> Self {
-        Self {
-            id: event.id.to_string(),
-            sequence: event.sequence,
-            kind: event.kind,
-            summary: event.summary,
-            resource_kind: event.resource_kind,
-            resource_id: event.resource_id.to_string(),
-            canonical_path: event.canonical_path,
-            created_at: event.created_at,
-            expires_at: event.expires_at,
-        }
+fn invalid() -> ExternalEventPollResult {
+    ExternalEventPollResult::InvalidRequest {
+        retry_category: "do_not_retry_without_change".to_owned(),
+    }
+}
+
+fn expired() -> ExternalEventPollResult {
+    ExternalEventPollResult::CursorExpired {
+        retry_category: "resynchronize".to_owned(),
+        resync_path: Target::Home.legacy_path(),
     }
 }

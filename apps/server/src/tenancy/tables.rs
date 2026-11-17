@@ -29,11 +29,11 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("account_claims", WORKSPACE_ID),
     ("agent_profiles", ORGANIZATION_ID),
     ("agent_run_acknowledgements", WORKSPACE_ID),
+    ("agent_schedules", WORKSPACE_ID),
     ("agent_templates", WORKSPACE_ID),
     ("agent_runs", WORKSPACE_ID),
     ("agent_sessions", ORGANIZATION_ID),
     ("agent_setup_links", WORKSPACE_ID),
-    ("agent_webhook_deliveries", WORKSPACE_ID),
     ("ai_plan_import_items", WORKSPACE_ID),
     ("ai_plan_imports", ORGANIZATION_ID),
     ("ai_project_scans", ORGANIZATION_ID),
@@ -59,6 +59,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("conversation_read_states", WORKSPACE_ID),
     ("conversations", WORKSPACE_ID),
     ("custom_harnesses", ORGANIZATION_ID),
+    ("deliveries", WORKSPACE_ID),
     ("event_staging", WORKSPACE_ID),
     ("events", WORKSPACE_ID),
     ("events_default", WORKSPACE_ID),
@@ -66,8 +67,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("execution_profiles", WORKSPACE_ID),
     ("execution_workers", WORKSPACE_ID),
     ("external_agent_connections", WORKSPACE_ID),
-    ("external_agent_event_counters", WORKSPACE_ID),
-    ("external_agent_events", WORKSPACE_ID),
     ("external_execution_requests", WORKSPACE_ID),
     ("field_definitions", WORKSPACE_ID),
     ("files", ORGANIZATION_ID),
@@ -231,6 +230,14 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
     ),
     (
+        "agent_connections",
+        "how an account is reached and told: server-wide like the account (R19), reaching every workspace it is in",
+    ),
+    (
+        "connection_signing_secrets",
+        "a connection's webhook signing secrets, by reference: server-wide with the connection",
+    ),
+    (
         "deleted_workspaces",
         "the one line a deleted workspace leaves, for billing and staff: its workspace is gone (H1.24)",
     ),
@@ -245,6 +252,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "event_position_counter",
         "the one row that numbers the server's event log (K3.3)",
+    ),
+    (
+        "event_subscriptions",
+        "what a connection hears beyond what is addressed to it: server-wide with the connection",
     ),
     (
         "host_agents",

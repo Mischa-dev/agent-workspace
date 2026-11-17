@@ -777,7 +777,7 @@ async fn secrets_typed_into_runs_requests_and_hosts_are_never_kept() {
         "project_memberships",
         "events",
         "event_staging",
-        "external_agent_events",
+        "deliveries",
         "audit_events",
         "idempotency_keys",
     ] {
@@ -913,7 +913,7 @@ async fn kept_nowhere(pool: &sqlx::PgPool, secret: &str) {
         "runs",
         "events",
         "event_staging",
-        "external_agent_events",
+        "deliveries",
         "audit_events",
         "background_jobs",
     ] {

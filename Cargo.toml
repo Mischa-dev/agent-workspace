@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "apps/server",
+  "crates/delivery-contract",
   "crates/host-conformance",
   "crates/host-protocol",
   "examples/minimal-host",

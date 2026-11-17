@@ -51,7 +51,6 @@
     "events/route.rs": 4,
     "execution.rs": 1,
     "external_agents.rs": 1,
-    "external_events.rs": 1,
     "external_execution.rs": 6,
     "harnesses.rs": 2,
     "hosts/builtin/http.rs": 1,
@@ -210,7 +209,6 @@
   "hand_built_links": {
     "automations.rs": 1,
     "external_agents.rs": 3,
-    "external_events.rs": 3,
     "external_execution.rs": 1,
     "home.rs": 1,
     "launch.rs": 3,

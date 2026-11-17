@@ -1005,6 +1005,10 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(64),
     };
+    // The agents' connections start reading from here.
+    for agent in [mara, wes] {
+        crate::support::heard(&state, agent).await;
+    }
     let pump = || async {
         let registry = agent_workspace_server::jobs::default_registry();
         let options = agent_workspace_server::jobs::WorkerOptions {
@@ -1070,20 +1074,15 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
     .await
     .expect("ranks");
     assert!(ranks[1] > ranks[0], "the card is at the bottom: {ranks:?}");
-    let event_count = |agent: Uuid| async move {
-        sqlx::query_scalar::<_, i64>(
-            r#"
-            SELECT count(*) FROM external_agent_events event
-            JOIN external_agent_connections connection ON connection.id = event.connection_id
-            WHERE connection.actor_id = $1 AND event.kind = 'work_item.changed'
-              AND event.created_at > now() - interval '1 minute'
-              AND event.summary IN ('An assigned Work Item changed', 'A Work Item you watch changed')
-            "#,
-        )
-        .bind(agent)
-        .fetch_one(pool)
-        .await
-        .expect("events")
+    let event_count = |agent: Uuid| {
+        let state = state.clone();
+        async move {
+            crate::support::heard(&state, agent)
+                .await
+                .iter()
+                .filter(|event| event["type"] == "task.updated" && event["reason"] == "following")
+                .count()
+        }
     };
     assert!(
         event_count(mara).await >= 1,

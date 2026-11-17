@@ -367,15 +367,15 @@ report, retention dry run, and a controlled restart:
 
 ```bash
 sudo /opt/agent-workspace/current/bin/agent-workspace-service-command \
-  retention-external-events
+  retention-deliveries
 sudo systemctl restart agent-workspace
 curl --fail --silent http://127.0.0.1:3100/health/ready
 ```
 
-External-agent event retention is a dry run unless the owner adds the literal
-`--apply true`. It deletes only expired addressed invalidation rows in bounded
-batches; it does not delete Messages, Work Items, approvals, Agent Runs,
-connections, or audit history.
+Delivery retention is a dry run unless the owner adds the literal
+`--apply true`. It deletes only finished webhook delivery rows older than a
+week, in bounded batches; it does not delete events, Messages, Work Items,
+approvals, Agent Runs, connections, or audit history.
 
 Provider profiles can require interactive reauthentication after restore or
 credential rotation. Use the personal profile's normal Codex login ceremony;

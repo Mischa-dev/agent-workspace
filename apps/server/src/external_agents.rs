@@ -17,7 +17,6 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
-    external_events::enqueue_external_event,
     policy::{
         Action, ActorKind, Decision, Membership, MembershipRole, Permission, ProjectScope,
         Resource, RoleGrant, Subject, authorize,
@@ -281,27 +280,21 @@ async fn create_connection(
     .await?;
     let webhook_secret = match &webhook_url {
         Some(url) => {
-            let secret = crate::replies::new_webhook_secret();
-            // The signing secret lives encrypted in the secrets store (S1).
-            let secret_id = crate::secrets::put_webhook_secret(
+            // Pushes go through the connection's delivery side (A2), typed
+            // like before so runners set up in this form keep working.
+            let delivery = crate::delivery::connections::for_source(
                 &mut transaction,
-                &state.config,
+                created.actor_id,
                 created.connection_id,
-                &crate::secrets::SecretValue::new(secret.clone()),
             )
             .await?;
-            sqlx::query(
-                r#"
-                UPDATE external_agent_connections
-                SET webhook_url = $2, webhook_secret = NULL, webhook_secret_id = $3,
-                    wakeup_format = 'typed'
-                WHERE id = $1
-                "#,
+            let secret = crate::delivery::connections::set_webhook(
+                &mut transaction,
+                &state.config,
+                &delivery,
+                Some(url),
+                Some("typed_v1"),
             )
-            .bind(created.connection_id)
-            .bind(url)
-            .bind(secret_id)
-            .execute(&mut *transaction)
             .await?;
             insert_audit(
                 &mut transaction,
@@ -313,7 +306,7 @@ async fn create_connection(
                 serde_json::json!({ "enabled": true }),
             )
             .await?;
-            Some(secret)
+            secret
         }
         None => None,
     };
@@ -491,17 +484,8 @@ pub(crate) async fn connect(
         &token_digest,
     )
     .await?;
-    enqueue_external_event(
-        transaction,
-        connection_id,
-        project_id,
-        "connection.created",
-        "External agent connection is ready",
-        "external_agent_connection",
-        connection_id,
-        &format!("/projects/{project_id}/settings"),
-    )
-    .await?;
+    // Its delivery side, reading from now (A2).
+    crate::delivery::connections::for_source(transaction, actor_id, connection_id).await?;
     Ok((
         connection_id,
         OneTimeCredential {
@@ -513,8 +497,8 @@ pub(crate) async fn connect(
     ))
 }
 
-/// Host command support: point a connection's wakeups at `url` and return the
-/// new signing secret.
+/// Host command support: point a connection's pushes at `url` and return
+/// the new signing secret.
 pub async fn set_webhook_for_host(
     pool: &sqlx::PgPool,
     config: &crate::config::AppConfig,
@@ -524,33 +508,32 @@ pub async fn set_webhook_for_host(
     typed_wakeups: bool,
 ) -> Result<String, AppError> {
     crate::outbound::validate_webhook_url(url, trusted_origins)?;
-    let secret = crate::replies::new_webhook_secret();
     let mut transaction = crate::db::scoped_tx(pool).await?;
-    let secret_id = crate::secrets::put_webhook_secret(
-        &mut transaction,
-        config,
-        connection_id,
-        &crate::secrets::SecretValue::new(secret.clone()),
-    )
-    .await?;
-    let updated = sqlx::query(
-        r#"
-        UPDATE external_agent_connections
-        SET webhook_url = $2, webhook_secret = NULL, webhook_secret_id = $3,
-            version = version + 1, updated_at = now(),
-            wakeup_format = CASE WHEN $4 THEN 'typed' ELSE 'inbox' END
-        WHERE id = $1 AND status = 'active'
-        "#,
+    let account = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM external_agent_connections WHERE id = $1 AND status = 'active'",
     )
     .bind(connection_id)
-    .bind(url)
-    .bind(secret_id)
-    .bind(typed_wakeups)
-    .execute(&mut *transaction)
-    .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::NotFound("external agent connection"));
-    }
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("external agent connection"))?;
+    let delivery =
+        crate::delivery::connections::for_source(&mut transaction, account, connection_id).await?;
+    // A new secret each time, as the command promises.
+    crate::delivery::connections::clear_signing_secrets(&mut transaction, delivery.id, None)
+        .await?;
+    let secret = crate::delivery::connections::set_webhook(
+        &mut transaction,
+        config,
+        &delivery,
+        Some(url),
+        Some(if typed_wakeups {
+            "typed_v1"
+        } else {
+            "inbox_v1"
+        }),
+    )
+    .await?
+    .ok_or(AppError::Internal("a new webhook has a secret"))?;
     transaction.commit().await?;
     Ok(secret)
 }
@@ -700,13 +683,13 @@ async fn set_webhook(
     ApiJson(request): ApiJson<WebhookRequest>,
 ) -> Result<Json<WebhookResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    let to_typed = match request.wakeup_format.as_deref() {
-        None => false,
-        Some("typed") => true,
+    let format = match request.wakeup_format.as_deref() {
+        None => None,
+        Some("typed") => Some("typed_v1"),
+        Some("standard") => Some("standard"),
         Some(_) => return Err(AppError::Validation("wakeupFormat")),
     };
     let url = validate_webhook_url(request.url, &state.config.webhook_trusted_origins)?;
-    let secret = url.as_ref().map(|_| crate::replies::new_webhook_secret());
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     lock_project(&mut transaction, project_id).await?;
     let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
@@ -714,54 +697,38 @@ async fn set_webhook(
         .ok_or(AppError::NotFound("project"))?;
     authorize_management(&principal, &access, project_id)?;
     authorize_agent(&mut transaction, &principal, project_id, connection_id).await?;
-    let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM external_agent_connections WHERE project_id = $1 AND id = $2 AND status <> 'removed')",
+    let account = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM external_agent_connections \
+         WHERE project_id = $1 AND id = $2 AND status <> 'removed'",
     )
     .bind(project_id)
     .bind(connection_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if !exists {
-        return Err(AppError::NotFound("external agent connection"));
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("external agent connection"))?;
+    let delivery =
+        crate::delivery::connections::for_source(&mut transaction, account, connection_id).await?;
+    if url.is_some() {
+        // Each save issues a new signing secret.
+        crate::delivery::connections::clear_signing_secrets(&mut transaction, delivery.id, None)
+            .await?;
     }
-    // The signing secret lives encrypted in the secrets store (S1).
-    let secret_id = match &secret {
-        Some(secret) => Some(
-            crate::secrets::put_webhook_secret(
-                &mut transaction,
-                &state.config,
-                connection_id,
-                &crate::secrets::SecretValue::new(secret.clone()),
-            )
-            .await?,
-        ),
-        None => None,
-    };
-    let updated = sqlx::query(
-        r#"
-        UPDATE external_agent_connections
-        SET webhook_url = $3, webhook_secret = NULL, webhook_secret_id = $4,
-            last_wakeup_error = NULL,
-            -- The format changes only when asked: a runner that reads only
-            -- inbox.available keeps working when its address is saved.
-            wakeup_format = CASE WHEN $5 THEN 'typed' ELSE wakeup_format END,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2 AND status <> 'removed'
-        "#,
+    let secret = crate::delivery::connections::set_webhook(
+        &mut transaction,
+        &state.config,
+        &delivery,
+        url.as_deref(),
+        // A new webhook is typed, like the form always made them.
+        format.or_else(|| delivery.webhook_url.is_none().then_some("typed_v1")),
     )
-    .bind(project_id)
+    .await?;
+    sqlx::query(
+        "UPDATE external_agent_connections SET version = version + 1, updated_at = now() \
+         WHERE id = $1",
+    )
     .bind(connection_id)
-    .bind(&url)
-    .bind(secret_id)
-    .bind(to_typed)
     .execute(&mut *transaction)
     .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::NotFound("external agent connection"));
-    }
-    if secret_id.is_none() {
-        crate::secrets::delete_webhook_secret(&mut transaction, connection_id).await?;
-    }
     insert_audit(
         &mut transaction,
         &headers,
@@ -769,7 +736,7 @@ async fn set_webhook(
         project_id,
         connection_id,
         "external_agent.webhook_updated",
-        serde_json::json!({ "enabled": url.is_some(), "switched_to_typed": to_typed }),
+        serde_json::json!({ "enabled": url.is_some(), "format": format }),
     )
     .await?;
     let row = load_connection_tx(&mut transaction, project_id, connection_id).await?;
@@ -789,7 +756,7 @@ async fn test_webhook(
     headers: HeaderMap,
     principal: AuthenticatedActor,
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Json<crate::replies::TestWakeup>, AppError> {
+) -> Result<Json<crate::delivery::push::TestPing>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
@@ -797,39 +764,31 @@ async fn test_webhook(
         .ok_or(AppError::NotFound("project"))?;
     authorize_management(&principal, &access, project_id)?;
     authorize_agent(&mut transaction, &principal, project_id, connection_id).await?;
-    let (agent_id, url, plaintext, secret_id) =
-        sqlx::query_as::<_, (Uuid, Option<String>, Option<String>, Option<Uuid>)>(
-            r#"
-            SELECT actor_id, webhook_url, webhook_secret, webhook_secret_id
-            FROM external_agent_connections
-            WHERE project_id = $1 AND id = $2 AND status <> 'removed'
-            "#,
-        )
-        .bind(project_id)
-        .bind(connection_id)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or(AppError::NotFound("external agent connection"))?;
-    let Some(url) = url else {
+    let account = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM external_agent_connections \
+         WHERE project_id = $1 AND id = $2 AND status <> 'removed'",
+    )
+    .bind(project_id)
+    .bind(connection_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("external agent connection"))?;
+    let delivery =
+        crate::delivery::connections::for_source(&mut transaction, account, connection_id).await?;
+    let Some(url) = delivery.webhook_url.clone() else {
         return Err(AppError::Conflict(
             "webhook_missing",
             "This agent has no webhook to test. Add its runner's URL first.",
         ));
     };
-    let secret = match (secret_id, plaintext) {
-        (Some(id), _) => {
-            let keys = crate::secrets::keyring(&state.config)?;
-            crate::secrets::reveal(&mut *transaction, keys.as_ref(), id, "agent_webhook.test")
-                .await?
-        }
-        (None, Some(plaintext)) => crate::secrets::SecretValue::new(plaintext),
-        (None, None) => {
-            return Err(AppError::Conflict(
-                "webhook_secret_missing",
-                "This webhook has no signing secret. Save the webhook again to get one.",
-            ));
-        }
-    };
+    let secrets =
+        crate::delivery::push::signing_secrets(&mut transaction, &state, delivery.id).await?;
+    if secrets.is_empty() {
+        return Err(AppError::Conflict(
+            "webhook_secret_missing",
+            "This webhook has no signing secret. Save the webhook again to get one.",
+        ));
+    }
     insert_audit(
         &mut transaction,
         &headers,
@@ -843,11 +802,10 @@ async fn test_webhook(
     // Commit before the network call: the runner may take seconds to answer.
     transaction.commit().await?;
     Ok(Json(
-        crate::replies::send_test_wakeup(
+        crate::delivery::push::send_test(
+            &delivery,
             &url,
-            secret.expose(),
-            agent_id,
-            project_id,
+            &secrets,
             &state.config.webhook_trusted_origins,
         )
         .await,
@@ -1167,24 +1125,6 @@ async fn mutate_connection(
     } else {
         "external_agent.disabled"
     };
-    let event_summary = match action {
-        "external_agent.removed" => "External agent connection was removed",
-        "external_agent.credential_rotated" => "External agent bearer was rotated",
-        "external_agent.updated" if enabled_changed => "External agent connection was enabled",
-        "external_agent.updated" => "External agent permissions were updated",
-        _ => "External agent connection was disabled",
-    };
-    enqueue_external_event(
-        &mut transaction,
-        connection_id,
-        project_id,
-        action,
-        event_summary,
-        "external_agent_connection",
-        connection_id,
-        &format!("/projects/{project_id}/settings"),
-    )
-    .await?;
     insert_audit(
         &mut transaction,
         headers,
@@ -1567,12 +1507,15 @@ fn connection_query(lock: bool) -> &'static str {
                c.last_used_at::text AS last_used_at,
                c.last_error_category, c.disabled_at::text AS disabled_at,
                c.removed_at::text AS removed_at, c.created_at::text AS created_at,
-               c.updated_at::text AS updated_at, c.webhook_url,
-               c.last_wakeup_at::text AS last_wakeup_at, c.last_wakeup_error,
-               c.wakeup_format
+               c.updated_at::text AS updated_at, d.webhook_url,
+               d.last_delivered_at::text AS last_wakeup_at, d.last_error AS last_wakeup_error,
+               CASE d.webhook_format WHEN 'inbox_v1' THEN 'inbox'
+                    WHEN 'standard' THEN 'standard' ELSE 'typed' END AS wakeup_format
         FROM external_agent_connections c
         JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
+        LEFT JOIN agent_connections d
+          ON d.source_connection_id = c.id AND d.state <> 'removed'
         WHERE c.project_id = $1 AND c.id = $2
         FOR UPDATE OF c, pm
         "#
@@ -1584,12 +1527,15 @@ fn connection_query(lock: bool) -> &'static str {
                c.last_used_at::text AS last_used_at,
                c.last_error_category, c.disabled_at::text AS disabled_at,
                c.removed_at::text AS removed_at, c.created_at::text AS created_at,
-               c.updated_at::text AS updated_at, c.webhook_url,
-               c.last_wakeup_at::text AS last_wakeup_at, c.last_wakeup_error,
-               c.wakeup_format
+               c.updated_at::text AS updated_at, d.webhook_url,
+               d.last_delivered_at::text AS last_wakeup_at, d.last_error AS last_wakeup_error,
+               CASE d.webhook_format WHEN 'inbox_v1' THEN 'inbox'
+                    WHEN 'standard' THEN 'standard' ELSE 'typed' END AS wakeup_format
         FROM external_agent_connections c
         JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
+        LEFT JOIN agent_connections d
+          ON d.source_connection_id = c.id AND d.state <> 'removed'
         WHERE c.project_id = $1
         ORDER BY c.created_at DESC, c.id DESC
         LIMIT 100
@@ -1706,19 +1652,6 @@ async fn cancel_pending_execution_requests(
     .bind(&request_ids)
     .execute(&mut **transaction)
     .await?;
-    for request_id in request_ids {
-        enqueue_external_event(
-            transaction,
-            connection_id,
-            project_id,
-            "external_execution.canceled",
-            "Sponsored Worker execution was canceled because the connection was disabled",
-            "external_execution_request",
-            request_id,
-            &format!("/projects/{project_id}/external-execution-requests/{request_id}"),
-        )
-        .await?;
-    }
     Ok(())
 }
 

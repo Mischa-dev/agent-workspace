@@ -101,7 +101,6 @@
     "events/route.rs": "K1.19: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "execution.rs": "K1.18: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "external_agents.rs": "K1.6: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "external_events.rs": "K1.20: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "external_execution.rs": "K1.18: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "harnesses.rs": "K1.18: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "hosts/builtin/http.rs": "K1.18: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",

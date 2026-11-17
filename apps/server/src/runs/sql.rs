@@ -54,6 +54,17 @@ pub fn conversation_has_active_run(conversation: &str) -> String {
     )
 }
 
+/// Whether `account` (SQL text) follows the run `run` (a column): it is the
+/// run's account, asked for it, or sponsored it. A boolean expression (A2).
+pub fn run_followed_by(run: &str, account: &str) -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM runs followed_run \
+         WHERE followed_run.id = {run} \
+           AND {account} IN (followed_run.account_id, followed_run.requested_by_account_id, \
+                             followed_run.sponsored_by_account_id))"
+    )
+}
+
 /// Whether the repository workspace `workspace` (a column) has a built-in
 /// run that hasn't finished: a boolean expression.
 pub fn workspace_has_active_run(workspace: &str) -> String {

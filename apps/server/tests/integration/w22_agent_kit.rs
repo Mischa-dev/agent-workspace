@@ -365,7 +365,8 @@ async fn a_test_wakeup_is_signed_like_a_real_one_and_reports_the_answer() {
         header_value("x-workspace-signature"),
         format!(
             "sha256={}",
-            agent_workspace_server::replies::sign(&secret, &timestamp, &body).expect("sign")
+            agent_workspace_server::delivery::sign::legacy(&secret, &timestamp, &body)
+                .expect("sign")
         ),
         "signed with the webhook's own secret, like every wakeup"
     );

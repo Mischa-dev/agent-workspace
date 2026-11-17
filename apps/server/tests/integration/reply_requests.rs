@@ -840,8 +840,11 @@ async fn channel_tags_open_a_thread_and_follow_ups_stick_to_it() {
     .await
     .expect("count");
     assert_eq!(rook_asked, 0, "an agent who can't answer there isn't asked");
+    agent_workspace_server::events::catch_up(&pool)
+        .await
+        .expect("sequence events");
     let kinds = sqlx::query_scalar::<_, String>(
-        "SELECT kind FROM external_agent_events WHERE resource_id = $1::uuid",
+        "SELECT type FROM events WHERE thing_id = $1::uuid ORDER BY position",
     )
     .bind(&follow_up)
     .fetch_all(&pool)
@@ -949,12 +952,8 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         .await;
     let generation = claim["value"]["request"]["generation"].clone();
 
-    // Agents can't stop each other (or themselves) this way.
-    let refused = mara_mcp
-        .tool(&app, "reply_stop", json!({ "requestId": request_id }))
-        .await;
-    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
-
+    // Who may stop it follows the role (`replies.steer`), not the kind of
+    // account; here the owner stops it.
     let (status, stopped) = owner
         .call(
             &app,
@@ -991,13 +990,16 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         );
     }
     assert_eq!(agent_messages(&pool, &dm_id).await, 0);
+    agent_workspace_server::events::catch_up(&pool)
+        .await
+        .expect("sequence events");
     let events = sqlx::query_scalar::<_, String>(
-        "SELECT event FROM agent_webhook_deliveries WHERE reply_request_id = $1::uuid ORDER BY created_at",
+        "SELECT type FROM events WHERE thing_id = $1::uuid ORDER BY position",
     )
     .bind(&request_id)
     .fetch_all(&pool)
     .await
-    .expect("deliveries");
+    .expect("events");
     assert_eq!(events, ["reply.requested", "reply.cancelled"]);
 
     // Stopping twice is refused; asking again puts it back.
@@ -1032,6 +1034,161 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
 /// webhooks from before typed wakeups keep getting `inbox.available`. That
 /// format is a connected-client contract (the always-on runtime): see
 /// docs/compatibility/connected-clients.md before changing it.
+/// A2.8: anyone's mention asks, and loops end by how deep the chain of asks
+/// is and by the conversation's turns, never by who wrote the message.
+#[tokio::test]
+async fn loops_end_by_chain_depth_not_by_who_wrote() {
+    let Some(Fixture {
+        admin,
+        schema,
+        pool,
+        app,
+        owner,
+        space,
+    }) = fixture("reply_chains").await
+    else {
+        return;
+    };
+    let project = owner.project(&app, &pool, &space, "LOOP").await;
+    let mara = owner.add_agent(&app, &project, "Mara", "mara").await;
+    let rook = owner.add_agent(&app, &project, "Rook", "rook").await;
+    let mara_mcp = mara.connect(&app).await;
+    let rook_mcp = rook.connect(&app).await;
+
+    // An agent's mention in a channel asks the agent it mentions.
+    let (status, channel) = owner
+        .call(
+            &app,
+            "POST",
+            &format!("/api/v1/projects/{project}/channels"),
+            Some("loop-channel"),
+            json!({ "name": "general" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{channel}");
+    let channel_id = channel["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .to_owned();
+    let asked = mara_mcp
+        .tool(
+            &app,
+            "message_send",
+            json!({ "conversationId": channel_id, "text": "@rook can you check the build?" }),
+        )
+        .await;
+    assert_eq!(asked["outcome"], "ok", "{asked}");
+    let request = only_request(&rook_mcp, &app).await;
+    assert_eq!(request["messageAuthor"], "Mara", "{request}");
+    // A mention asks for a reply: let it go with a reason.
+    let claimed = rook_mcp
+        .tool(
+            &app,
+            "reply_claim",
+            json!({ "requestId": request["requestId"] }),
+        )
+        .await;
+    let released = rook_mcp
+        .tool(
+            &app,
+            "reply_release",
+            json!({
+                "requestId": request["requestId"],
+                "generation": claimed["value"]["request"]["generation"],
+                "reason": "Not now."
+            }),
+        )
+        .await;
+    assert_eq!(released["outcome"], "ok", "{released}");
+
+    // Two agents in a group answer each other until the chain is as deep
+    // as the space allows (five by default); then nobody is asked.
+    let (_, group) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v1/direct/groups",
+            Some("loop-group"),
+            json!({ "memberIds": [mara.actor_id, rook.actor_id] }),
+        )
+        .await;
+    let group_id = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    owner
+        .say(&app, &group_id, "loop-1", "Go ahead, both of you.")
+        .await;
+    let depths = || async {
+        sqlx::query_scalar::<_, i16>(
+            "SELECT chain_depth FROM reply_requests WHERE conversation_id = $1::uuid \
+             AND status <> 'superseded' ORDER BY created_at, id",
+        )
+        .bind(&group_id)
+        .fetch_all(&pool)
+        .await
+        .expect("depths")
+    };
+    answer(&mara_mcp, &app, "One.").await;
+    answer(&rook_mcp, &app, "Two.").await;
+    answer(&mara_mcp, &app, "Three.").await;
+    answer(&rook_mcp, &app, "Four.").await;
+    answer(&mara_mcp, &app, "Five.").await;
+    assert_eq!(
+        inbox_len(&rook_mcp, &app).await,
+        0,
+        "the chain is deep enough"
+    );
+    assert_eq!(inbox_len(&mara_mcp, &app).await, 0);
+    assert_eq!(
+        depths().await,
+        [0, 1, 2, 3, 4],
+        "Rook's first ask was superseded"
+    );
+
+    // A fresh message starts again from depth 0 with the turns back.
+    owner
+        .say(&app, &group_id, "loop-2", "Thanks. Once more?")
+        .await;
+    assert_eq!(inbox_len(&rook_mcp, &app).await, 1);
+    assert_eq!(inbox_len(&mara_mcp, &app).await, 1);
+    let remaining = sqlx::query_scalar::<_, i32>(
+        "SELECT agent_turns_remaining FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&group_id)
+    .fetch_one(&pool)
+    .await
+    .expect("turns");
+    assert_eq!(remaining, 6);
+
+    // A space can allow less: at depth 1 an answer asks nobody.
+    let workspace =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1::uuid")
+            .bind(&project)
+            .fetch_one(&pool)
+            .await
+            .expect("workspace");
+    sqlx::query(
+        "INSERT INTO settings (id, organization_id, scope, key, value, updated_by_actor_id) \
+         VALUES ($1, $2, 'workspace', 'replies.max_chain_depth', '1', NULL)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(workspace)
+    .execute(&pool)
+    .await
+    .expect("a shallower limit");
+    answer(&mara_mcp, &app, "Once more.").await;
+    assert_eq!(
+        inbox_len(&rook_mcp, &app).await,
+        1,
+        "only the ask from the fresh message"
+    );
+
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
+        .await
+        .expect("drop schema");
+}
+
 #[tokio::test]
 async fn webhooks_say_what_happened_without_message_text() {
     let Some(Fixture {
@@ -1096,17 +1253,18 @@ async fn webhooks_say_what_happened_without_message_text() {
         .to_owned();
     // Point it at the local receiver, which only a trusted origin may reach.
     let origin = format!("http://{address}");
-    sqlx::query("UPDATE external_agent_connections SET webhook_url = $2 WHERE id = $1::uuid")
-        .bind(&mara.connection_id)
-        .bind(format!("{origin}/wake"))
-        .execute(&pool)
-        .await
-        .expect("local webhook");
-    let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
-    let worker = tokio::spawn(agent_workspace_server::replies::run(
+    sqlx::query(
+        "UPDATE agent_connections SET webhook_url = $2 WHERE source_connection_id = $1::uuid",
+    )
+    .bind(&mara.connection_id)
+    .bind(format!("{origin}/wake"))
+    .execute(&pool)
+    .await
+    .expect("local webhook");
+    let (shutdown, worker) = spawn_pusher(
         test_state_trusting(pool.clone(), &origin),
-        shutdown_receiver,
-    ));
+        mara.connection_id.clone(),
+    );
     let (_, dm) = owner
         .call(
             &app,
@@ -1150,7 +1308,8 @@ async fn webhooks_say_what_happened_without_message_text() {
 
     // A webhook from before typed wakeups gets the old body.
     sqlx::query(
-        "UPDATE external_agent_connections SET wakeup_format = 'inbox' WHERE id = $1::uuid",
+        "UPDATE agent_connections SET webhook_format = 'inbox_v1' \
+         WHERE source_connection_id = $1::uuid",
     )
     .bind(&mara.connection_id)
     .execute(&pool)
@@ -1229,7 +1388,7 @@ async fn saving_an_old_webhook_keeps_its_wake_format() {
             let (status, saved) = owner.call(&app, "POST", &path, None, body).await;
             assert_eq!(status, StatusCode::OK, "{saved}");
             sqlx::query(
-                "UPDATE external_agent_connections SET webhook_url = $2 WHERE id = $1::uuid",
+                "UPDATE agent_connections SET webhook_url = $2 WHERE source_connection_id = $1::uuid",
             )
             .bind(&connection)
             .bind(format!("{origin}/wake"))
@@ -1241,7 +1400,8 @@ async fn saving_an_old_webhook_keeps_its_wake_format() {
     };
     save(json!({ "url": "https://runner.example/wake" })).await;
     sqlx::query(
-        "UPDATE external_agent_connections SET wakeup_format = 'inbox' WHERE id = $1::uuid",
+        "UPDATE agent_connections SET webhook_format = 'inbox_v1' \
+         WHERE source_connection_id = $1::uuid",
     )
     .bind(&mara.connection_id)
     .execute(&pool)
@@ -1260,11 +1420,10 @@ async fn saving_an_old_webhook_keeps_its_wake_format() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
 
-    let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
-    let worker = tokio::spawn(agent_workspace_server::replies::run(
+    let (shutdown, worker) = spawn_pusher(
         test_state_trusting(pool.clone(), &origin),
-        shutdown_receiver,
-    ));
+        mara.connection_id.clone(),
+    );
     let (_, dm) = owner
         .call(
             &app,
@@ -1344,12 +1503,14 @@ async fn a_slow_runner_doesnt_hold_a_database_connection() {
         )
         .await;
     let origin = format!("http://{address}");
-    sqlx::query("UPDATE external_agent_connections SET webhook_url = $2 WHERE id = $1::uuid")
-        .bind(&mara.connection_id)
-        .bind(format!("{origin}/wake"))
-        .execute(&pool)
-        .await
-        .expect("local webhook");
+    sqlx::query(
+        "UPDATE agent_connections SET webhook_url = $2 WHERE source_connection_id = $1::uuid",
+    )
+    .bind(&mara.connection_id)
+    .bind(format!("{origin}/wake"))
+    .execute(&pool)
+    .await
+    .expect("local webhook");
     let (_, dm) = owner
         .call(
             &app,
@@ -1361,11 +1522,10 @@ async fn a_slow_runner_doesnt_hold_a_database_connection() {
         .await;
     let dm_id = dm["conversation"]["id"].as_str().expect("dm").to_owned();
     owner.say(&app, &dm_id, "slow-1", "take your time").await;
-    let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
-    let worker = tokio::spawn(agent_workspace_server::replies::run(
+    let (shutdown, worker) = spawn_pusher(
         test_state_trusting(pool.clone(), &origin),
-        shutdown_receiver,
-    ));
+        mara.connection_id.clone(),
+    );
     tokio::time::timeout(std::time::Duration::from_secs(20), posting.recv())
         .await
         .expect("the wakeup is posted")
@@ -1385,8 +1545,8 @@ async fn a_slow_runner_doesnt_hold_a_database_connection() {
     }
     assert_eq!(in_use, 0, "connections in use while a wakeup is posted");
     let mut transaction = pool.begin().await.expect("begin");
-    let locked = sqlx::query_scalar::<_, uuid::Uuid>(
-        "SELECT id FROM agent_webhook_deliveries WHERE delivered_at IS NULL FOR UPDATE NOWAIT",
+    let locked = sqlx::query_scalar::<_, i64>(
+        "SELECT event_position FROM deliveries WHERE state = 'pending' FOR UPDATE NOWAIT",
     )
     .fetch_all(&mut *transaction)
     .await
@@ -1398,7 +1558,7 @@ async fn a_slow_runner_doesnt_hold_a_database_connection() {
     let mut delivered = false;
     for _ in 0..100 {
         delivered = sqlx::query_scalar::<_, bool>(
-            "SELECT bool_and(delivered_at IS NOT NULL AND attempts = 1) FROM agent_webhook_deliveries",
+            "SELECT COALESCE(bool_and(state = 'delivered' AND attempts = 1), false) FROM deliveries",
         )
         .fetch_one(&pool)
         .await
@@ -1415,6 +1575,45 @@ async fn a_slow_runner_doesnt_hold_a_database_connection() {
     agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
+}
+
+/// Pushes the agent's deliveries every 100 ms, as the pusher's jobs would,
+/// until told to stop.
+fn spawn_pusher(
+    state: AppState,
+    source_connection: String,
+) -> (
+    tokio::sync::watch::Sender<bool>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (shutdown, mut stopped) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(async move {
+        loop {
+            agent_workspace_server::events::catch_up(&state.pool)
+                .await
+                .expect("sequence events");
+            let connection = sqlx::query_scalar::<_, uuid::Uuid>(
+                "SELECT id FROM agent_connections WHERE source_connection_id = $1::uuid",
+            )
+            .bind(&source_connection)
+            .fetch_optional(&state.pool)
+            .await
+            .expect("delivery side");
+            if let Some(connection) = connection {
+                agent_workspace_server::tenancy::system(
+                    "events.log",
+                    agent_workspace_server::delivery::push::push(&state, connection),
+                )
+                .await
+                .expect("push");
+            }
+            tokio::select! {
+                () = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                _ = stopped.changed() => return,
+            }
+        }
+    });
+    (shutdown, worker)
 }
 
 /// Wait for the `count`th wakeup the test runner received.

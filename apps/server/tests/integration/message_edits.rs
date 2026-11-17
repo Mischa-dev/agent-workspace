@@ -1160,7 +1160,7 @@ async fn removed_message_text_vanishes_everywhere() {
         "events",
         "event_staging",
         "audit_events",
-        "external_agent_events",
+        "deliveries",
         "reply_requests",
         "conversation_pins",
         "work_item_links",
@@ -1743,7 +1743,11 @@ async fn edits_keep_every_revision_and_projections_follow() {
         "a newly mentioned agent is asked"
     );
     assert_eq!(requests(mara).await, ["pending"], "nobody is un-asked");
-    let nova_mentions = "SELECT count(*) FROM external_agent_events event JOIN external_agent_connections connection ON connection.id = event.connection_id WHERE connection.actor_id = $1 AND event.kind = 'message.mentioned'";
+    agent_workspace_server::events::catch_up(&setup.pool)
+        .await
+        .expect("sequence events");
+    let nova_mentions =
+        "SELECT count(*) FROM events WHERE audience_account_id = $1 AND type = 'message.mentioned'";
     assert_eq!(
         count(&setup.pool, nova_mentions, &nova.to_string()).await,
         1
@@ -1963,10 +1967,13 @@ async fn edits_and_removals_never_widen_visibility() {
         asked_before,
         "edits in groups ask nobody new"
     );
+    agent_workspace_server::events::catch_up(&setup.pool)
+        .await
+        .expect("sequence events");
     assert_eq!(
         count(
             &setup.pool,
-            "SELECT count(*) FROM external_agent_events event JOIN external_agent_connections connection ON connection.id = event.connection_id WHERE connection.actor_id = $1 AND event.kind IN ('message.mentioned', 'reply.requested')",
+            "SELECT count(*) FROM events WHERE audience_account_id = $1 AND type IN ('message.mentioned', 'reply.requested')",
             &bob.to_string()
         )
         .await,

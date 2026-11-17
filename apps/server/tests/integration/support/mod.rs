@@ -108,3 +108,61 @@ pub(crate) async fn builtin_run_moved(
     .await
     .expect("built-in run moved");
 }
+
+/// The events heard by one account alone (`Audience::Account`), oldest
+/// first, as `(type, thing id)`, after the log has given every staged event
+/// its position.
+pub(crate) async fn addressed_events(
+    pool: &sqlx::PgPool,
+    account: uuid::Uuid,
+) -> Vec<(String, Option<uuid::Uuid>)> {
+    agent_workspace_server::events::catch_up(pool)
+        .await
+        .expect("sequence events");
+    sqlx::query_as::<_, (String, Option<uuid::Uuid>)>(
+        "SELECT type, thing_id FROM events WHERE audience_account_id = $1 ORDER BY position",
+    )
+    .bind(account)
+    .fetch_all(pool)
+    .await
+    .expect("addressed events")
+}
+
+/// How many events of `kind` one account alone heard.
+pub(crate) async fn addressed_count(pool: &sqlx::PgPool, account: uuid::Uuid, kind: &str) -> usize {
+    addressed_events(pool, account)
+        .await
+        .iter()
+        .filter(|(found, _)| found == kind)
+        .count()
+}
+
+/// What `account` hears on its default connection since that connection
+/// was made: the first call makes it, so call once before the change and
+/// again after. Events are sequenced first.
+pub(crate) async fn heard(
+    state: &agent_workspace_server::AppState,
+    account: uuid::Uuid,
+) -> Vec<serde_json::Value> {
+    agent_workspace_server::events::catch_up(&state.pool)
+        .await
+        .expect("sequence events");
+    let caller = agent_workspace_server::access::Caller::person(
+        account,
+        agent_workspace_server::policy::ActorKind::ExternalAgent,
+    );
+    agent_workspace_server::tenancy::system(
+        "events.log",
+        agent_workspace_server::delivery::poll(
+            state,
+            &caller,
+            None,
+            None,
+            100,
+            std::time::Duration::ZERO,
+        ),
+    )
+    .await
+    .expect("events")
+    .events
+}

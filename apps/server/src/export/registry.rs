@@ -531,6 +531,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
         ],
         not_exported: &[
             (
+                "agent_schedules",
+                "runtime state of this server (queues, leases, retries)",
+            ),
+            (
                 "agent_sessions",
                 "runtime state of this server (queues, leases, retries)",
             ),
@@ -538,16 +542,23 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "agent_setup_links",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
-            ("agent_webhook_deliveries", "a delivery log"),
+            (
+                "agent_connections",
+                "a connection to an outside service, reconnected after import (needs/connections.jsonl)",
+            ),
+            (
+                "connection_signing_secrets",
+                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
+            ),
+            ("deliveries", "a delivery log"),
+            (
+                "event_subscriptions",
+                "a connection to an outside service, reconnected after import (needs/connections.jsonl)",
+            ),
             (
                 "external_agent_connections",
                 "a connection to an outside service, reconnected after import (needs/connections.jsonl)",
             ),
-            (
-                "external_agent_event_counters",
-                "runtime state of this server (queues, leases, retries)",
-            ),
-            ("external_agent_events", "a delivery log"),
             (
                 "harness_catalog_refreshes",
                 "runtime state of this server (queues, leases, retries)",

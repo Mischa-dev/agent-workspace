@@ -462,6 +462,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "automation_write",
     "bug_report_link_write",
     "channel_create",
+    "connection_create",
+    "connection_remove",
+    "connection_secret_rotate",
+    "connection_update",
     "conversation_continue",
     "conversation_mark_read",
     "conversation_members",
@@ -488,6 +492,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sheet_write",
     "later_save",
     "later_update",
+    "schedule_create",
+    "schedule_update",
     "request_create",
     "request_respond",
     "request_cancel",
@@ -1301,6 +1307,10 @@ struct Targets {
     /// Runs the owner reports on themselves (A1.3): one to report on, one
     /// to stop, and one whose start is uncertain.
     reported_runs: [Uuid; 3],
+    /// The owner's own delivery connection, with a webhook (A2).
+    connection: Uuid,
+    /// A follow-up the owner set (A2.11).
+    schedule: Uuid,
 }
 
 async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targets {
@@ -1745,9 +1755,39 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .expect("host agent");
         }
     }
+    // The owner's delivery connection, with a webhook to sign for (A2).
+    let connection = {
+        let mut database = pool.acquire().await.expect("connection");
+        let made = agent_workspace_server::delivery::connections::default_for(&mut database, owner)
+            .await
+            .expect("delivery connection");
+        sqlx::query(
+            "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/net', \
+             webhook_format = 'standard' WHERE id = $1",
+        )
+        .bind(made.id)
+        .execute(&mut *database)
+        .await
+        .expect("webhook");
+        made.id
+    };
+    // A follow-up the owner set (A2.11).
+    let schedule = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO agent_schedules (id, workspace_id, account_id, note, next_due_at) \
+         VALUES ($1, $2, $3, 'Net follow-up', now() + interval '1 day')",
+    )
+    .bind(schedule)
+    .bind(organization)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("follow-up");
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
+        connection,
+        schedule,
         hosts,
         questions,
         reported_runs,
@@ -6100,6 +6140,40 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": b.agent, "remove": [a.rook]}),
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
+        ),
+        // A2: an account's delivery connections are its own and its
+        // managers'. B's connection and B's agent aren't A's to change.
+        mcp_case(
+            "connection_create",
+            json!({"name": "Net connection", "clientRequestId": "net-connection"}),
+            vec![json!({"account": b.agent, "name": "Net taken"})],
+        ),
+        mcp_case(
+            "connection_update",
+            json!({"connectionId": ax.connection, "name": "Net renamed"}),
+            vec![json!({"connectionId": bx.connection, "name": "Net taken"})],
+        ),
+        mcp_case(
+            "connection_secret_rotate",
+            json!({"connectionId": ax.connection}),
+            vec![json!({"connectionId": bx.connection})],
+        ),
+        mcp_case(
+            "connection_remove",
+            json!({"connectionId": ax.connection}),
+            vec![json!({"connectionId": bx.connection})],
+        ),
+        // A2.11: a follow-up is its account's, in its workspace, and about
+        // a thing the account can see there.
+        mcp_case(
+            "schedule_create",
+            json!({"inMinutes": 60, "about": a.task, "clientRequestId": "net-schedule"}),
+            vec![json!({"inMinutes": 60, "about": b.task})],
+        ),
+        mcp_case(
+            "schedule_update",
+            json!({"scheduleId": ax.schedule, "note": "Net moved"}),
+            vec![json!({"scheduleId": bx.schedule, "cancel": true})],
         ),
         // H1.24: deleting a workspace, or keeping it, only ever acts on the
         // caller's own. A's own call would stop every later case here;
