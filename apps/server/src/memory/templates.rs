@@ -218,6 +218,12 @@ async fn template_page(
     .await?
     .ok_or(AppError::NotFound("template"))?;
     let (template_project, title, body) = row;
+    if writer
+        .confined_project
+        .is_some_and(|confined| confined != template_project)
+    {
+        return Err(AppError::NotFound("template"));
+    }
     project_access(
         &mut **transaction,
         writer.actor_id,

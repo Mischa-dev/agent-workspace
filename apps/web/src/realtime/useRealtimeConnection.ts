@@ -125,10 +125,13 @@ export function useRealtimeConnection(): RealtimeContextValue {
         invalidationTimers.delete(key)
         void queryClient.invalidateQueries({
           predicate: (query) =>
-            query.queryKey[0] === 'things' &&
-            ((CONVERSATION_THINGS.has(String(query.queryKey[1])) && query.queryKey[2] === conversationId) ||
-              // A message may have added or dropped a link: "Referenced in" lists refetch.
-              query.queryKey[3] === 'references'),
+            (query.queryKey[0] === 'things' &&
+              ((CONVERSATION_THINGS.has(String(query.queryKey[1])) && query.queryKey[2] === conversationId) ||
+                // A message may have added or dropped a link: "Referenced in" lists refetch.
+                query.queryKey[3] === 'references')) ||
+            // A comment or a resolved thread changes the open things' discussion
+            // summaries (cell marks, thread counts); only mounted ones refetch.
+            (query.queryKey[0] === 'op' && query.queryKey[2] === 'comment_list' && query.getObserversCount() > 0),
         })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)

@@ -382,9 +382,41 @@ fn read_only_tools(source: &str) -> BTreeSet<String> {
 // The fixture
 // ---------------------------------------------------------------------------
 
+/// Which edge one test sweeps. The three run as separate tests, each on its
+/// own pair of workspaces, so they run side by side and each stays well
+/// inside the per-test time limit as routes and tools are added.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SweptEdge {
+    Http,
+    /// MCP as A's connected app (acting as A's owner).
+    McpApp,
+    /// MCP as A's agent.
+    McpAgent,
+    Realtime,
+}
+
 #[tokio::test]
-async fn one_workspace_never_sees_another() {
-    let Some(fixture) = two_workspaces("workspace_isolation").await else {
+async fn one_workspace_never_sees_another_over_http() {
+    one_workspace_never_sees_another("workspace_isolation_http", SweptEdge::Http).await;
+}
+
+#[tokio::test]
+async fn one_workspace_never_sees_another_through_an_app() {
+    one_workspace_never_sees_another("workspace_isolation_app", SweptEdge::McpApp).await;
+}
+
+#[tokio::test]
+async fn one_workspace_never_sees_another_through_an_agent() {
+    one_workspace_never_sees_another("workspace_isolation_agent", SweptEdge::McpAgent).await;
+}
+
+#[tokio::test]
+async fn one_workspace_never_sees_another_over_realtime() {
+    one_workspace_never_sees_another("workspace_isolation_realtime", SweptEdge::Realtime).await;
+}
+
+async fn one_workspace_never_sees_another(name: &str, edge: SweptEdge) {
+    let Some(fixture) = two_workspaces(name).await else {
         return;
     };
     let TwoWorkspaces {
@@ -408,9 +440,12 @@ async fn one_workspace_never_sees_another() {
     eprintln!("B owns {} IDs", b_ids.len());
 
     let mut report = Report::default();
-    check_http(app, a, b, &b_ids, &mut report).await;
-    check_mcp(app, pool, a, b, &b_ids, &mut report).await;
-    check_realtime(app, pool, realtime, a, b, &b_ids, &mut report).await;
+    match edge {
+        SweptEdge::Http => check_http(app, a, b, &b_ids, &mut report).await,
+        SweptEdge::McpApp => check_mcp(app, pool, a, b, &b_ids, false, &mut report).await,
+        SweptEdge::McpAgent => check_mcp(app, pool, a, b, &b_ids, true, &mut report).await,
+        SweptEdge::Realtime => check_realtime(app, pool, realtime, a, b, &b_ids, &mut report).await,
+    }
 
     for note in &report.notes {
         eprintln!("note: {note}");
@@ -2678,15 +2713,16 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
     ]
 }
 
-/// Every case runs as A's connected app (acting as A's owner) and as A's
-/// agent. Own calls must succeed for whoever the tool is for; for the other,
-/// only leaks count.
+/// Every case runs as A's connected app (acting as A's owner) or, with
+/// `as_agent`, as A's agent. Own calls must succeed for whoever the tool is
+/// for; for the other, only leaks count.
 async fn check_mcp(
     app: &axum::Router,
     pool: &PgPool,
     a: &World,
     b: &World,
     b_ids: &HashSet<String>,
+    as_agent: bool,
     report: &mut Report,
 ) {
     let cases = mcp_cases(a, b);
@@ -2721,13 +2757,26 @@ async fn check_mcp(
 
     // P0.23: a read-only tool changes nothing. A's rows are digested before
     // and after each tool's calls; only the columns reads may touch differ.
+    // The first read of a project's views makes its built-in ones (until
+    // T1.40 drops saved_views); read them once first, as the web does on
+    // opening a project, so that isn't counted against the first view tool.
+    let (status, body) = get_text(
+        app,
+        &a.browser,
+        &format!("/api/v1/projects/{}/views", a.project),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     let a_ids = sweep_ids(pool, a.organization).await;
     let a_pattern = a_ids.iter().cloned().collect::<Vec<_>>().join("|");
     let mut a_rows = digest_ignoring(pool, &a_pattern, READ_TOUCHES).await;
     for (who, token, session, is_agent) in [
         ("A's app", &a.app_token, &app_session, false),
         ("A's agent", &a.agent_token, &agent_session, true),
-    ] {
+    ]
+    .into_iter()
+    .filter(|(_, _, _, is_agent)| *is_agent == as_agent)
+    {
         for case in &cases {
             let read_only_check = !READ_TOOLS_THAT_WRITE
                 .iter()
