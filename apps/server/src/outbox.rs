@@ -364,6 +364,27 @@ pub struct NotificationKeywordsChangedPayload {
     pub actor_id: Uuid,
 }
 
+/// Someone's theme changed (made, changed, offered or deleted). Their id
+/// and the theme's only, delivered to them alone; their other devices read
+/// the theme again over HTTP.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThemeChangedPayload {
+    pub actor_id: Uuid,
+    pub theme_id: Uuid,
+}
+
+/// A theme a workspace offers changed, or one started or stopped being
+/// offered. Ids only, delivered in the workspace's own space; open theme
+/// lists read again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceThemesChangedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+    pub theme_id: Uuid,
+}
+
 /// A workspace's lifecycle changed (H1.24): suspended, resumed, deletion
 /// scheduled or kept. Ids and the state only; open screens refetch the
 /// session. Delivered in the workspace's own space.
@@ -404,6 +425,8 @@ pub enum OutboxEventPayload {
     CustomEmojiChanged(CustomEmojiChangedPayload),
     MessageDraftChanged(MessageDraftChangedPayload),
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
+    ThemeChanged(ThemeChangedPayload),
+    WorkspaceThemesChanged(WorkspaceThemesChangedPayload),
     WorkspaceLifecycleChanged(WorkspaceLifecycleChangedPayload),
 }
 
@@ -435,6 +458,8 @@ impl OutboxEventPayload {
             Self::CustomEmojiChanged(_) => "custom_emoji.changed",
             Self::MessageDraftChanged(_) => "message_draft.changed",
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
+            Self::ThemeChanged(_) => "theme.changed",
+            Self::WorkspaceThemesChanged(_) => "workspace_themes.changed",
             Self::WorkspaceLifecycleChanged(_) => "workspace.lifecycle.changed",
         }
     }
@@ -469,6 +494,8 @@ impl OutboxEventPayload {
             | Self::CustomEmojiChanged(_)
             | Self::MessageDraftChanged(_)
             | Self::NotificationKeywordsChanged(_)
+            | Self::ThemeChanged(_)
+            | Self::WorkspaceThemesChanged(_)
             | Self::WorkspaceLifecycleChanged(_) => None,
         }
     }
@@ -484,6 +511,7 @@ impl OutboxEventPayload {
             Self::AccountManagersChanged(payload) => Some(payload.actor_id),
             Self::MessageDraftChanged(payload) => Some(payload.actor_id),
             Self::NotificationKeywordsChanged(payload) => Some(payload.actor_id),
+            Self::ThemeChanged(payload) => Some(payload.actor_id),
             _ => None,
         }
     }
@@ -503,9 +531,9 @@ impl OutboxEventPayload {
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
             Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
             Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
-            Self::MessageDraftChanged(_) | Self::NotificationKeywordsChanged(_) => {
-                OutboxResourceKind::Account
-            }
+            Self::MessageDraftChanged(_)
+            | Self::NotificationKeywordsChanged(_)
+            | Self::ThemeChanged(_) => OutboxResourceKind::Account,
             Self::AccountManagersChanged(_) | Self::AccountStatusChanged(_) => {
                 OutboxResourceKind::Account
             }
@@ -514,9 +542,9 @@ impl OutboxEventPayload {
             Self::PageDiscussionUpdated(_) => OutboxResourceKind::Page,
             Self::CollectionUpdated(_) => OutboxResourceKind::Collection,
             Self::SheetUpdated(_) => OutboxResourceKind::Sheet,
-            Self::ProjectModulesUpdated(_) | Self::CustomEmojiChanged(_) => {
-                OutboxResourceKind::Project
-            }
+            Self::ProjectModulesUpdated(_)
+            | Self::CustomEmojiChanged(_)
+            | Self::WorkspaceThemesChanged(_) => OutboxResourceKind::Project,
             Self::WorkspaceLifecycleChanged(_) => OutboxResourceKind::Project,
         }
     }
@@ -552,6 +580,8 @@ impl OutboxEventPayload {
             // Keyed by its writer, like notifications.
             Self::MessageDraftChanged(payload) => payload.actor_id,
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
+            Self::ThemeChanged(payload) => payload.actor_id,
+            Self::WorkspaceThemesChanged(payload) => payload.project_id,
             Self::WorkspaceLifecycleChanged(payload) => payload.project_id,
         }
     }
@@ -680,6 +710,8 @@ impl OutboxEventPayload {
             Self::CustomEmojiChanged(payload) => serde_json::to_value(payload),
             Self::MessageDraftChanged(payload) => serde_json::to_value(payload),
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
+            Self::ThemeChanged(payload) => serde_json::to_value(payload),
+            Self::WorkspaceThemesChanged(payload) => serde_json::to_value(payload),
             Self::WorkspaceLifecycleChanged(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
@@ -763,6 +795,12 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "notification_keywords.changed" => Self::NotificationKeywordsChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "theme.changed" => Self::ThemeChanged(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "workspace_themes.changed" => Self::WorkspaceThemesChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "project.modules.updated" => Self::ProjectModulesUpdated(

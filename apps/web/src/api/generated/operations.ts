@@ -342,6 +342,12 @@ export type TaskSummary = { archived?: boolean; assignee?: string | null; blocke
 
 export type TemplateSubtask = { description?: string | null; title: string }
 
+export type ThemeDocument = { css?: string; dark: ThemeMode; format: number; light: ThemeMode }
+
+export type ThemeMode = { base: string; tokens?: Record<string, string> }
+
+export type ThemeSummary = { darkBase: string; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
 export type ThingInput = { id: string; kind: SubjectKind }
 
 export type ThreadRef = { id: string; name: string; status: string }
@@ -1020,6 +1026,26 @@ export type TemplateUpdateInput = { acceptanceCriteria?: string[] | null; archiv
 
 export type TemplateUpdateOutput = { created: boolean; template: unknown }
 
+export type ThemeCreateInput = { document: ThemeDocument; name: string }
+
+export type ThemeCreateOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
+export type ThemeDeleteInput = { id: string }
+
+export type ThemeDeleteOutput = { deleted: boolean; id: string }
+
+export type ThemeGetInput = { id: string }
+
+export type ThemeGetOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
+export type ThemeListInput = Record<string, never>
+
+export type ThemeListOutput = { builtIn: string[]; canOffer: boolean; format: number; themes: ThemeSummary[] }
+
+export type ThemeUpdateInput = { document?: ThemeDocument | null; expectedVersion: number; id: string; name?: string | null }
+
+export type ThemeUpdateOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
+
 export type ThreadFollowedListInput = { limit?: number | null; openOnly?: boolean }
 
 export type ThreadFollowedListOutput = { threads: FollowedThreadView[] }
@@ -1115,6 +1141,10 @@ export type WorkspaceSearchOutput = { hint: string; results: SearchResult[] }
 export type WorkspaceShapeSetInput = { planHash?: string | null; shape: string }
 
 export type WorkspaceShapeSetOutput = { installed: Installed; name: string; shape: string }
+
+export type WorkspaceThemeSetInput = { offered: boolean; themeId: string }
+
+export type WorkspaceThemeSetOutput = { darkBase: string; document: ThemeDocument; id: string; lightBase: string; mine: boolean; name: string; offered: boolean; ownerAccountId: string; updatedAt: string; version: number }
 
 export type Operations = {
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
@@ -1280,6 +1310,11 @@ export type Operations = {
   template_create: { input: TemplateCreateInput; output: TemplateCreateOutput }
   template_list: { input: TemplateListInput; output: TemplateListOutput }
   template_update: { input: TemplateUpdateInput; output: TemplateUpdateOutput }
+  theme_create: { input: ThemeCreateInput; output: ThemeCreateOutput }
+  theme_delete: { input: ThemeDeleteInput; output: ThemeDeleteOutput }
+  theme_get: { input: ThemeGetInput; output: ThemeGetOutput }
+  theme_list: { input: ThemeListInput; output: ThemeListOutput }
+  theme_update: { input: ThemeUpdateInput; output: ThemeUpdateOutput }
   thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
   thread_start: { input: ThreadStartInput; output: ThreadStartOutput }
   thread_update: { input: ThreadUpdateInput; output: ThreadUpdateOutput }
@@ -1304,6 +1339,7 @@ export type Operations = {
   workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
   workspace_search: { input: WorkspaceSearchInput; output: WorkspaceSearchOutput }
   workspace_shape_set: { input: WorkspaceShapeSetInput; output: WorkspaceShapeSetOutput }
+  workspace_theme_set: { input: WorkspaceThemeSetInput; output: WorkspaceThemeSetOutput }
 }
 
 export type OpName = keyof Operations

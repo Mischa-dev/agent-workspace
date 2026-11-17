@@ -50,6 +50,8 @@ export default function AppearanceSync() {
   const { replaceAppearance } = theme
   const local: AppearancePreferences = {
     theme: theme.theme,
+    customTheme: theme.customTheme,
+    mode: theme.mode,
     overrides: theme.overrides,
     density: theme.density,
     textSize: theme.textSize,

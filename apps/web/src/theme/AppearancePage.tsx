@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Download, Upload } from 'lucide-react'
+import { Suspense, lazy, useEffect, useRef, useState, type CSSProperties } from 'react'
 
+import type { ThemeDocument, ThemeSummary } from '../api/generated/operations'
+import { callOp, invalidateOps, opQuery } from '../api/ops'
 import {
   ActorTag,
   Avatar,
@@ -7,66 +11,28 @@ import {
   Banner,
   Button,
   ButtonLink,
+  ConfirmDialog,
   Dots,
   Icon,
   IconButton,
+  Menu,
   PageHeader,
   Section,
   SegmentedControl,
-  TextField,
-  countLabel,
+  SettingsSkeleton,
+  describeError,
   formatTime,
   showToast,
+  type MenuEntry,
 } from '../ui'
 import type { SettingsPageProps } from '../settings/types'
-import { THEME_PRESETS, loadClassicThemes, toHex, type Rgb } from './slots'
-import {
-  CONTRAST_PAIRS,
-  SLOT_GROUPS,
-  SLOT_LABELS,
-  ThemeCodeError,
-  contrastRatio,
-  decodeTheme,
-  encodeTheme,
-  fixContrast,
-} from './slotEditing'
+import { blankDocument, readDocument } from './contract'
+import type { EditorStart } from './ThemeEditor'
+import { THEME_PRESETS, isDarkScheme, loadThemeSheets } from './slots'
 import type { AppearancePreferences, ThemeChoice } from './preferences'
 import { useTheme } from './themeContext'
 import '../styles/conversation.css'
 import '../styles/pages.css'
-
-/** Read what every slot resolves to on <html>, as sRGB, for swatches and contrast. */
-function useResolvedColors(revision: string) {
-  const [colors, setColors] = useState<Record<string, Rgb>>({})
-  useEffect(() => {
-    const canvas = document.createElement('canvas').getContext('2d', { willReadFrequently: true })
-    if (!canvas) return undefined
-    // Read after the theme provider has applied this revision to <html>.
-    const frame = window.requestAnimationFrame(() => {
-    const probe = document.createElement('span')
-    probe.style.position = 'absolute'
-    probe.style.width = '0'
-    probe.style.height = '0'
-    document.body.appendChild(probe)
-    const next: Record<string, Rgb> = {}
-    for (const group of SLOT_GROUPS) {
-      for (const [slot] of group.slots) {
-        probe.style.color = `var(--${slot})`
-        canvas.clearRect(0, 0, 1, 1)
-        canvas.fillStyle = '#000'
-        canvas.fillStyle = getComputedStyle(probe).color
-        canvas.fillRect(0, 0, 1, 1)
-        const [r, g, b] = canvas.getImageData(0, 0, 1, 1).data
-        next[slot] = [r, g, b]
-      }
-    }
-    probe.remove()
-    setColors(next)
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [revision])
-  return colors
-}
 
 const PRESET_GROUPS = [
   { id: 'workspace', label: 'Agent Workspace' },
@@ -193,286 +159,444 @@ function ThemePreview({ name, seed }: { name: string; seed: string }) {
   )
 }
 
+const ThemeEditor = lazy(() => import('./ThemeEditor'))
+
+/** A theme file: the document with its name, as Export writes and Import reads. */
+function download(name: string, document: ThemeDocument) {
+  const blob = new Blob([JSON.stringify({ name, ...document }, null, 2)], {
+    type: 'application/json',
+  })
+  const link = window.document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = `${
+    name
+      .replace(/[^\p{L}\p{N}]+/gu, '-')
+      .replace(/^-|-$/g, '')
+      .toLowerCase() || 'theme'
+  }.theme.json`
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+}
+
 /** Account › Appearance in settings. */
-export default function AppearancePage({ session }: SettingsPageProps) {
+export default function AppearancePage({ session, workspace }: SettingsPageProps) {
   const theme = useTheme()
-  const [mode, setMode] = useState<'main' | 'all'>('main')
-  const [pasted, setPasted] = useState('')
-  const [pasteError, setPasteError] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
-  const copiedTimer = useRef<number | undefined>(undefined)
-  const revision = `${theme.preset}:${JSON.stringify(theme.overrides)}`
-  const colors = useResolvedColors(revision)
-  const code = encodeTheme(theme.preset, theme.overrides)
-  useEffect(() => () => window.clearTimeout(copiedTimer.current), [])
-  // The classic presets' previews need their stylesheet even when an Agent Workspace preset is in use.
-  useEffect(() => loadClassicThemes(), [])
+  const queryClient = useQueryClient()
+  const workspaceId = workspace?.id
+  const themes = useQuery({
+    ...opQuery('theme_list', {}, { workspaceId }),
+    enabled: Boolean(workspaceId),
+  })
+  const [editing, setEditing] = useState<EditorStart | null>(null)
+  const [deleting, setDeleting] = useState<ThemeSummary | null>(null)
+  const [busy, setBusy] = useState(false)
+  const importInput = useRef<HTMLInputElement>(null)
+  // The built-in themes' previews need their stylesheets even when another theme is in use.
+  useEffect(() => loadThemeSheets(), [])
 
-  const failing = useMemo(
-    () =>
-      CONTRAST_PAIRS.map(([fg, bg, floor]) =>
-        colors[fg] && colors[bg] ? { fg, bg, floor, ratio: contrastRatio(colors[fg], colors[bg]) } : null,
-      ).filter((pair): pair is { fg: string; bg: string; floor: number; ratio: number } => Boolean(pair && pair.ratio < pair.floor)),
-    [colors],
-  )
-  const failingSlots = new Set(failing.map((pair) => pair.fg))
+  const mine = themes.data?.themes.filter((entry) => entry.mine) ?? []
+  const offered = themes.data?.themes.filter((entry) => !entry.mine && entry.offered) ?? []
+  const canOffer = themes.data?.canOffer === true
+  const using = theme.customTheme?.id ?? null
 
-  const setSlot = (slot: string, color: string) => theme.setOverrides({ ...theme.overrides, [slot]: color.toLowerCase() })
-  const resetSlot = (slot: string) => {
-    const next = { ...theme.overrides }
-    delete next[slot]
-    theme.setOverrides(next)
-  }
-  const copy = () => {
-    const done = () => {
-      setCopied(true)
-      window.clearTimeout(copiedTimer.current)
-      copiedTimer.current = window.setTimeout(() => setCopied(false), 1600)
-    }
-    // Without the clipboard, select the code so it can be copied by hand.
-    const selectCode = () => document.getElementById('theme-code')?.focus()
-    if (!navigator.clipboard) selectCode()
-    else void navigator.clipboard.writeText(code).then(done, selectCode)
-  }
-  const apply = () => {
-    try {
-      const decoded = decodeTheme(pasted)
-      theme.setTheme(decoded.preset)
-      theme.setOverrides(decoded.overrides)
-      setPasted('')
-      setPasteError(null)
-    } catch (reason) {
-      setPasteError(reason instanceof ThemeCodeError ? reason.message : 'That theme code couldn’t be read. Copy it again and paste the whole thing.')
-    }
-  }
-  const presetName = THEME_PRESETS.find((preset) => preset.id === theme.preset)?.name ?? 'Indigo'
   const current = (): AppearancePreferences => ({
     theme: theme.theme,
+    customTheme: theme.customTheme,
+    mode: theme.mode,
     overrides: theme.overrides,
     density: theme.density,
     textSize: theme.textSize,
     sidebarWidth: theme.sidebarWidth,
     panelWidth: theme.panelWidth,
   })
-  // Another preset starts from its own colors, so say what went and offer it back.
+  const refresh = () => invalidateOps(queryClient, ['theme_list', 'theme_get'], workspaceId)
+  const read = async (id: string) => callOp('theme_get', { id }, { workspaceId })
+  const failed = (title: string) => (reason: unknown) => showToast({ title, description: describeError(reason).message, tone: 'danger' })
+
   const choose = (next: ThemeChoice) => {
-    if (next === theme.theme) return
+    if (next === theme.theme && !using) return
     const previous = current()
-    const cleared = Object.keys(previous.overrides).length
     theme.setTheme(next)
-    if (cleared) {
+    if (previous.customTheme)
       showToast({
-        title: `${countLabel(cleared, 'custom color')} cleared`,
-        description: 'Each preset starts from its own colors.',
+        title: 'Back to a built-in theme',
         onUndo: () => theme.replaceAppearance(previous),
       })
+  }
+  const use = async (entry: ThemeSummary) => {
+    if (!workspaceId) return
+    try {
+      const found = await read(entry.id)
+      theme.setCustomTheme({
+        id: found.id,
+        workspaceId,
+        version: found.version,
+        name: found.name,
+        document: found.document,
+      })
+    } catch (reason) {
+      failed('That theme couldn’t be opened')(reason)
+    }
+  }
+  const startNew = () => {
+    const light = theme.customDocument?.document.light.base ?? (isDarkScheme(theme.preset) ? 'quiet' : theme.preset)
+    const dark = theme.customDocument?.document.dark.base ?? (isDarkScheme(theme.preset) ? theme.preset : 'quiet-dark')
+    setEditing({
+      id: null,
+      version: 0,
+      name: 'My theme',
+      document: blankDocument(light, dark),
+    })
+  }
+  const edit = async (entry: ThemeSummary) => {
+    try {
+      const found = await read(entry.id)
+      setEditing({
+        id: found.id,
+        version: found.version,
+        name: found.name,
+        document: found.document,
+      })
+    } catch (reason) {
+      failed('That theme couldn’t be opened')(reason)
+    }
+  }
+  const duplicate = async (entry: ThemeSummary) => {
+    try {
+      const found = await read(entry.id)
+      setEditing({
+        id: null,
+        version: 0,
+        name: `${found.name} copy`.slice(0, 60),
+        document: found.document,
+      })
+    } catch (reason) {
+      failed('That theme couldn’t be opened')(reason)
+    }
+  }
+  const exportTheme = async (entry: ThemeSummary) => {
+    try {
+      const found = await read(entry.id)
+      download(found.name, found.document)
+    } catch (reason) {
+      failed('That theme couldn’t be exported')(reason)
+    }
+  }
+  const importFile = async (file: File) => {
+    if (!workspaceId) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await file.text())
+    } catch {
+      parsed = null
+    }
+    const document = readDocument(parsed)
+    if (!document) {
+      showToast({
+        title: 'That file isn’t a theme this app can use',
+        description: 'Export a theme here and import that file.',
+        tone: 'danger',
+      })
+      return
+    }
+    const named = (parsed as { name?: unknown }).name
+    const name = (typeof named === 'string' && named.trim() ? named.trim() : file.name.replace(/\.theme\.json$|\.json$/, '')).slice(0, 60)
+    try {
+      const created = await callOp('theme_create', { name, document }, { workspaceId })
+      theme.setCustomTheme({
+        id: created.id,
+        workspaceId,
+        version: created.version,
+        name: created.name,
+        document: created.document,
+      })
+      await refresh()
+      showToast({ title: `Using ${created.name}` })
+    } catch (reason) {
+      failed('That theme couldn’t be imported')(reason)
+    }
+  }
+  const offer = async (entry: ThemeSummary, next: boolean) => {
+    try {
+      await callOp('workspace_theme_set', { themeId: entry.id, offered: next }, { workspaceId })
+      await refresh()
+      showToast({
+        title: next ? `${entry.name} is offered to everyone here` : `${entry.name} is yours alone again`,
+      })
+    } catch (reason) {
+      failed('That didn’t change')(reason)
+    }
+  }
+  const remove = async (entry: ThemeSummary) => {
+    setBusy(true)
+    try {
+      await callOp('theme_delete', { id: entry.id }, { workspaceId })
+      if (using === entry.id) theme.setTheme(theme.theme)
+      await refresh()
+      setDeleting(null)
+    } catch (reason) {
+      failed('That theme wasn’t deleted')(reason)
+    } finally {
+      setBusy(false)
     }
   }
   const reset = () => {
     const previous = current()
     theme.resetAppearance()
-    showToast({ title: 'Appearance reset', onUndo: () => theme.replaceAppearance(previous) })
+    showToast({
+      title: 'Appearance reset',
+      onUndo: () => theme.replaceAppearance(previous),
+    })
   }
 
-  return (
-      <div className="aw-appearance">
-        <PageHeader
-          actions={
-            <>
-              <ButtonLink to="/design-system" variant="ghost">
-                See every component
-              </ButtonLink>
-              <Button icon="undo" onClick={reset} variant="ghost">
-                Reset everything
-              </Button>
-            </>
-          }
-          icon="palette"
-          title="Appearance"
-        >
-          Start from a preset, then change any color. Changes apply as you make them and follow you to every device you sign in on.
-        </PageHeader>
-
-        <div className="aw-appearance__layout">
-          <div className="aw-appearance__controls">
-            <Section title="Theme">
-              <div aria-label="Theme" className="aw-preset-groups" role="radiogroup">
-                {PRESET_GROUPS.map((group) => (
-                  <div aria-labelledby={`aw-presets-${group.id}`} className="aw-preset-group" key={group.id} role="group">
-                    <h3 className="aw-preset-group__title" id={`aw-presets-${group.id}`}>
-                      {group.label}
-                    </h3>
-                    <div className="aw-presets">
-                      {THEME_PRESETS.filter((preset) => preset.group === group.id).map((preset) => (
-                        <button
-                          aria-checked={theme.theme === preset.id}
-                          className="aw-preset"
-                          key={preset.id}
-                          onClick={() => choose(preset.id)}
-                          role="radio"
-                          type="button"
-                        >
-                          <PresetMini id={preset.id} />
-                          <span className="aw-preset__name">{preset.name}</span>
-                        </button>
-                      ))}
-                      {group.id === 'workspace' ? (
-                        <button
-                          aria-checked={theme.theme === 'system'}
-                          className="aw-preset"
-                          onClick={() => choose('system')}
-                          role="radio"
-                          type="button"
-                        >
-                          <span aria-hidden="true" className="aw-mini aw-mini--split">
-                            <PresetMini id="daylight" />
-                            <PresetMini id="midnight" />
-                          </span>
-                          <span className="aw-preset__name">Match system</span>
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Section>
-
-            <Section
-              actions={
-                <SegmentedControl
-                  label="Which colors to show"
-                  onChange={setMode}
-                  options={[
-                    { value: 'main', label: 'Main' },
-                    { value: 'all', label: 'Every color' },
-                  ]}
-                  value={mode}
-                />
+  const actions = (entry: ThemeSummary): MenuEntry[] => [
+    ...(entry.mine
+      ? [
+          {
+            label: 'Edit',
+            icon: 'pencil' as const,
+            onSelect: () => void edit(entry),
+          },
+        ]
+      : []),
+    { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate(entry) },
+    {
+      label: 'Export as a file',
+      icon: Download,
+      onSelect: () => void exportTheme(entry),
+    },
+    ...(canOffer
+      ? [
+          entry.offered
+            ? {
+                label: 'Stop offering to the workspace',
+                icon: 'users' as const,
+                onSelect: () => void offer(entry, false),
               }
-              description={`Based on ${presetName}. Changing a background also adjusts its hover and divider colors, unless you set those yourself.`}
-              title="Colors"
-            >
-              {failing.length === 0 ? (
-                Object.keys(colors).length ? <Banner tone="success">Every text color reads clearly on its background.</Banner> : null
-              ) : (
-                <div className="aw-contrast">
-                  <Banner tone="warning" title={`${countLabel(failing.length, 'color')} ${failing.length === 1 ? 'is' : 'are'} hard to read.`}>
-                    Fix nudges the text color until it passes.
-                  </Banner>
-                  <ul>
-                    {failing.slice(0, 5).map((pair) => (
-                      <li key={`${pair.fg}-${pair.bg}`}>
-                        <span>
-                          {SLOT_LABELS[pair.fg]} on {(SLOT_LABELS[pair.bg] ?? pair.bg).toLocaleLowerCase()}: <b>{pair.ratio.toFixed(1)}:1</b>, needs{' '}
-                          {pair.floor}:1
-                        </span>
-                        <Button onClick={() => setSlot(pair.fg, fixContrast(colors[pair.fg], colors[pair.bg], pair.floor))} size="sm">
-                          Fix
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {SLOT_GROUPS.map((group) => {
-                const slots = group.slots.filter((entry) => mode === 'all' || entry[2])
-                return (
-                  <div className="aw-slots" key={group.label}>
-                    <h3 className="aw-slots__title">{group.label}</h3>
-                    {slots.map(([slot, label]) => {
-                      const value = colors[slot] ? toHex(colors[slot]) : '#000000'
-                      const set = Boolean(theme.overrides[slot])
-                      return (
-                        <div className={set ? 'aw-slot is-set' : 'aw-slot'} key={slot}>
-                          <span className="aw-slot__swatch" style={{ background: `var(--${slot})` }}>
-                            <input
-                              aria-label={`${group.label} ${label.toLocaleLowerCase()}`}
-                              onChange={(event) => setSlot(slot, event.target.value)}
-                              type="color"
-                              value={value}
-                            />
-                          </span>
-                          <span className="aw-slot__name">{label}</span>
-                          {failingSlots.has(slot) ? <Icon className="aw-slot__warn" label="Hard to read" name="triangle-alert" size={14} /> : null}
-                          <code className="aw-slot__hex">{value}</code>
-                          {set ? (
-                            <IconButton icon="undo" label={`Reset ${label.toLocaleLowerCase()}`} onClick={() => resetSlot(slot)} size="sm" />
-                          ) : (
-                            <span className="aw-slot__spacer" />
-                          )}
-                        </div>
-                      )
-                    })}
+            : {
+                label: 'Offer to everyone in the workspace',
+                icon: 'users' as const,
+                onSelect: () => void offer(entry, true),
+              },
+        ]
+      : []),
+    ...(entry.mine || canOffer
+      ? [
+          { separator: true as const },
+          {
+            label: 'Delete',
+            icon: 'trash' as const,
+            danger: true,
+            onSelect: () => setDeleting(entry),
+          },
+        ]
+      : []),
+  ]
+
+  const themeRows = (entries: ThemeSummary[]) => (
+    <div className="aw-presets">
+      {entries.map((entry) => (
+        <div className="aw-preset aw-preset--custom" key={entry.id}>
+          <button aria-checked={using === entry.id} className="aw-preset__pick" onClick={() => void use(entry)} role="radio" type="button">
+            <span aria-hidden="true" className="aw-mini aw-mini--split">
+              <PresetMini id={entry.lightBase} />
+              <PresetMini id={entry.darkBase} />
+            </span>
+            <span className="aw-preset__name">{entry.name}</span>
+          </button>
+          <Menu
+            items={actions(entry)}
+            label={`${entry.name} actions`}
+            trigger={<IconButton icon="more" label={`${entry.name} actions`} size="sm" />}
+          />
+        </div>
+      ))}
+    </div>
+  )
+
+  return (
+    <div className="aw-appearance">
+      <PageHeader
+        actions={
+          <>
+            <ButtonLink to="/design-system" variant="ghost">
+              See every component
+            </ButtonLink>
+            <Button icon="undo" onClick={reset} variant="ghost">
+              Reset everything
+            </Button>
+          </>
+        }
+        icon="palette"
+        title="Appearance"
+      >
+        Pick a built-in theme or make your own: every colour, font, size, spacing and shape, for light and dark, and CSS. Your choice follows you to every
+        device you sign in on.
+      </PageHeader>
+
+      <div className="aw-appearance__layout">
+        <div className="aw-appearance__controls">
+          {editing && workspaceId ? (
+            <Suspense fallback={<SettingsSkeleton />}>
+              <ThemeEditor onDone={() => setEditing(null)} start={editing} workspaceId={workspaceId} />
+            </Suspense>
+          ) : (
+            <>
+              <Section
+                actions={
+                  workspaceId ? (
+                    <>
+                      <Button icon="plus" onClick={startNew} size="sm">
+                        New theme
+                      </Button>
+                      <Button icon={Upload} onClick={() => importInput.current?.click()} size="sm" variant="ghost">
+                        Import
+                      </Button>
+                      <input
+                        accept="application/json,.json"
+                        hidden
+                        onChange={(event) => {
+                          const file = event.target.files?.[0]
+                          event.target.value = ''
+                          if (file) void importFile(file)
+                        }}
+                        ref={importInput}
+                        type="file"
+                      />
+                    </>
+                  ) : null
+                }
+                description="Themes you made, and ones this workspace offers to everyone. A theme sets light and dark; which shows follows Mode below."
+                title="Your themes"
+              >
+                {themes.isError ? <Banner tone="danger">{describeError(themes.error).message}</Banner> : null}
+                {mine.length ? (
+                  <div aria-label="Your themes" role="radiogroup">
+                    {themeRows(mine)}
                   </div>
-                )
-              })}
-            </Section>
-
-            <Section description="Share a theme as a short code. Paste one to try it." title="Share">
-              <div className="aw-share">
-                <TextField id="theme-code" label="Your theme code" mono onFocus={(event) => event.target.select()} readOnly value={code} />
-                <Button icon={copied ? 'check' : 'copy'} onClick={copy}>
-                  {copied ? 'Copied' : 'Copy'}
-                </Button>
-              </div>
-              <div className="aw-share">
-                <TextField
-                  error={pasteError ?? undefined}
-                  id="theme-code-paste"
-                  label="Use a theme code"
-                  mono
-                  onChange={(event) => {
-                    setPasted(event.target.value)
-                    setPasteError(null)
-                  }}
-                  placeholder="AW1.…"
-                  value={pasted}
-                />
-                <Button disabled={!pasted.trim()} onClick={apply}>
-                  Apply
-                </Button>
-              </div>
-            </Section>
-
-            <Section title="Density and text">
-              <div className="aw-appearance__row">
-                <div>
-                  <p className="aw-appearance__label">Density</p>
-                  <p className="aw-appearance__hint">Compact fits more messages and rows on screen.</p>
+                ) : (
+                  <p className="aw-appearance__hint">None yet. New theme starts from the one you’re using.</p>
+                )}
+                {offered.length ? (
+                  <div aria-labelledby="aw-presets-offered" className="aw-preset-group" role="radiogroup">
+                    <h3 className="aw-preset-group__title" id="aw-presets-offered">
+                      Offered in this workspace
+                    </h3>
+                    {themeRows(offered)}
+                  </div>
+                ) : null}
+                {using ? (
+                  <div className="aw-appearance__row">
+                    <div>
+                      <p className="aw-appearance__label">Mode</p>
+                      <p className="aw-appearance__hint">Which half of {theme.customDocument?.name ?? 'the theme'} shows.</p>
+                    </div>
+                    <SegmentedControl
+                      label="Mode"
+                      onChange={theme.setMode}
+                      options={[
+                        { value: 'system', label: 'Match device' },
+                        { value: 'light', label: 'Light' },
+                        { value: 'dark', label: 'Dark' },
+                      ]}
+                      value={theme.mode}
+                    />
+                  </div>
+                ) : null}
+              </Section>
+              <Section title="Built-in themes">
+                <div aria-label="Theme" className="aw-preset-groups" role="radiogroup">
+                  {PRESET_GROUPS.map((group) => (
+                    <div aria-labelledby={`aw-presets-${group.id}`} className="aw-preset-group" key={group.id} role="group">
+                      <h3 className="aw-preset-group__title" id={`aw-presets-${group.id}`}>
+                        {group.label}
+                      </h3>
+                      <div className="aw-presets">
+                        {THEME_PRESETS.filter((preset) => preset.group === group.id).map((preset) => (
+                          <button
+                            aria-checked={!using && theme.theme === preset.id}
+                            className="aw-preset"
+                            key={preset.id}
+                            onClick={() => choose(preset.id)}
+                            role="radio"
+                            type="button"
+                          >
+                            <PresetMini id={preset.id} />
+                            <span className="aw-preset__name">{preset.name}</span>
+                          </button>
+                        ))}
+                        {group.id === 'workspace' ? (
+                          <button
+                            aria-checked={!using && theme.theme === 'system'}
+                            className="aw-preset"
+                            onClick={() => choose('system')}
+                            role="radio"
+                            type="button"
+                          >
+                            <span aria-hidden="true" className="aw-mini aw-mini--split">
+                              <PresetMini id="quiet" />
+                              <PresetMini id="quiet-dark" />
+                            </span>
+                            <span className="aw-preset__name">Match system</span>
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <SegmentedControl
-                  label="Density"
-                  onChange={theme.setDensity}
-                  options={[
-                    { value: 'comfortable', label: 'Comfortable' },
-                    { value: 'compact', label: 'Compact' },
-                  ]}
-                  value={theme.density}
-                />
-              </div>
-              <div className="aw-appearance__row">
-                <div>
-                  <p className="aw-appearance__label">Text size</p>
-                  <p className="aw-appearance__hint">Scales messages, the sidebar and menus together.</p>
+              </Section>
+
+              <Section title="Density and text">
+                <div className="aw-appearance__row">
+                  <div>
+                    <p className="aw-appearance__label">Density</p>
+                    <p className="aw-appearance__hint">Compact fits more messages and rows on screen.</p>
+                  </div>
+                  <SegmentedControl
+                    label="Density"
+                    onChange={theme.setDensity}
+                    options={[
+                      { value: 'comfortable', label: 'Comfortable' },
+                      { value: 'compact', label: 'Compact' },
+                    ]}
+                    value={theme.density}
+                  />
                 </div>
-                <SegmentedControl
-                  label="Text size"
-                  onChange={theme.setTextSize}
-                  options={[
-                    { value: 'small', label: 'Small' },
-                    { value: 'default', label: 'Default' },
-                    { value: 'large', label: 'Large' },
-                  ]}
-                  value={theme.textSize}
-                />
-              </div>
-            </Section>
-          </div>
-          <div className="aw-appearance__preview">
-            <p className="aw-appearance__label">Preview</p>
-            <ThemePreview name={session.user.displayName} seed={session.user.actorId} />
-          </div>
+                <div className="aw-appearance__row">
+                  <div>
+                    <p className="aw-appearance__label">Text size</p>
+                    <p className="aw-appearance__hint">Scales messages, the sidebar and menus together.</p>
+                  </div>
+                  <SegmentedControl
+                    label="Text size"
+                    onChange={theme.setTextSize}
+                    options={[
+                      { value: 'small', label: 'Small' },
+                      { value: 'default', label: 'Default' },
+                      { value: 'large', label: 'Large' },
+                    ]}
+                    value={theme.textSize}
+                  />
+                </div>
+              </Section>
+            </>
+          )}
+        </div>
+        <div className="aw-appearance__preview">
+          <p className="aw-appearance__label">Preview</p>
+          <ThemePreview name={session.user.displayName} seed={session.user.actorId} />
         </div>
       </div>
+      <ConfirmDialog
+        busy={busy}
+        confirmLabel="Delete theme"
+        onClose={() => setDeleting(null)}
+        onConfirm={() => deleting && void remove(deleting)}
+        open={deleting !== null}
+        title={`Delete ${deleting?.name ?? 'this theme'}?`}
+      >
+        Anyone using it goes back to the built-in theme it started from.
+      </ConfirmDialog>
+    </div>
   )
 }

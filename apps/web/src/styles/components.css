@@ -1279,3 +1279,21 @@
   font-size: calc(12px * var(--text-scale));
   color: var(--content-fg);
 }
+
+/* Quiet (the default theme): no decorative tile, the title leads with its
+   icon a quiet mark beside it; cards and documents lose their boxes, so space
+   and hairlines separate. */
+:root[data-theme^="quiet"] .aw-pagehead__icon {
+  width: auto;
+  height: auto;
+  background: none;
+  color: var(--content-fg-muted);
+}
+
+:root[data-theme^="quiet"] .aw-card,
+:root[data-theme^="quiet"] .aw-doc {
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+  padding-inline: 0;
+}

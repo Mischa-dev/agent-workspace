@@ -101,6 +101,8 @@ pub(crate) struct World {
     pub(crate) link_preview: Uuid,
     /// The workspace's own emoji (C2.19), added by `rook`.
     pub(crate) custom_emoji: Uuid,
+    /// A theme of `rook`'s that the workspace offers to everyone.
+    pub(crate) theme: Uuid,
     /// A built module (M1.6) in the project, holding nothing.
     pub(crate) module: Uuid,
     /// A package install (M1.9) in the project, that made nothing.
@@ -1622,6 +1624,23 @@ async fn build_workspace(
     .execute(pool)
     .await
     .expect("custom emoji");
+    let theme = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO themes (id, workspace_id, owner_account_id, name, document, offered) \
+         VALUES ($1, $2, $3, 'World theme', $4, true)",
+    )
+    .bind(theme)
+    .bind(organization)
+    .bind(rook)
+    .bind(serde_json::json!({
+        "format": 1,
+        "light": {"base": "quiet", "tokens": {"accent": "#224466"}},
+        "dark": {"base": "quiet-dark", "tokens": {}},
+        "css": ".aw-card { border-color: var(--accent); }"
+    }))
+    .execute(pool)
+    .await
+    .expect("theme");
     let module = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -1746,6 +1765,7 @@ async fn build_workspace(
         task_file,
         link_preview,
         custom_emoji,
+        theme,
         module,
         package_install,
         job,

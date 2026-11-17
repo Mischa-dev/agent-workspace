@@ -1,0 +1,321 @@
+/* Paper and Frame, light and dark: built-in themes loaded only when one is
+   in use (theme-boot.js, ThemeProvider) or the Appearance page shows their
+   previews. Each starts from Daylight's or Midnight's tokens (repeated here,
+   since this file can't lean on tokens.css's order). Keep the ids in step
+   with THEME_PRESETS in src/theme/slots.ts and the list in theme-boot.js;
+   src/theme/presets.test.ts checks every pair the editor checks. */
+
+/* Paper: a warm writing surface, ink and one earthy accent. */
+html[data-theme="paper"],
+[data-theme="paper"],
+html[data-theme="paper-dark"],
+[data-theme="paper-dark"] {
+  color-scheme: light;
+  --rail-bg: oklch(0.945 0.004 280);
+  --rail-fg: oklch(0.42 0.015 280);
+  --rail-tile: oklch(0.995 0.002 280);
+  --rail-indicator: oklch(0.25 0.02 280);
+  --sidebar-bg: oklch(0.972 0.003 280);
+  --sidebar-border: oklch(0.915 0.005 280);
+  --sidebar-hover: oklch(0.935 0.005 280);
+  --sidebar-fg: oklch(0.36 0.015 280);
+  --sidebar-fg-strong: oklch(0.18 0.015 280);
+  --sidebar-fg-muted: oklch(0.47 0.015 280);
+  --sidebar-active-bg: oklch(0.915 0.008 280);
+  --sidebar-active-fg: oklch(0.18 0.015 280);
+  --presence-online: oklch(0.6 0.158 152);
+  --agent-working: oklch(0.58 0.098 200);
+  --font-display: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --rail-bg: oklch(0.925 0.012 80);
+  --rail-fg: oklch(0.42 0.02 60);
+  --rail-tile: oklch(0.975 0.008 85);
+  --rail-tile-active: oklch(0.52 0.12 45);
+  --rail-indicator: oklch(0.3 0.03 50);
+  --sidebar-bg: oklch(0.955 0.012 82);
+  --sidebar-border: oklch(0.9 0.014 80);
+  --sidebar-hover: oklch(0.925 0.014 80);
+  --sidebar-fg: oklch(0.36 0.02 60);
+  --sidebar-fg-strong: oklch(0.22 0.02 55);
+  --sidebar-fg-muted: oklch(0.5 0.02 60);
+  --sidebar-active-bg: oklch(0.9 0.025 70);
+  --sidebar-active-fg: oklch(0.22 0.03 50);
+  --content-bg: oklch(0.99 0.006 85);
+  --content-fg: oklch(0.24 0.02 55);
+  --content-fg-muted: oklch(0.5 0.02 60);
+  --content-border: oklch(0.91 0.014 80);
+  --content-hover: oklch(0.965 0.01 82);
+  --control-border: oklch(0.6 0.02 70);
+  --surface-raised: oklch(0.995 0.004 85);
+  --surface-sunken: oklch(0.965 0.01 82);
+  --accent: oklch(0.52 0.13 42);
+  --accent-hover: oklch(0.47 0.13 40);
+  --accent-soft: oklch(0.95 0.025 60);
+  --link: oklch(0.47 0.12 42);
+  --focus-ring: oklch(0.56 0.14 42);
+  --mention-fg: oklch(0.45 0.12 42);
+  --mention-bg: oklch(0.94 0.035 60);
+  --highlight-bg: oklch(0.95 0.05 95);
+  --swatch-indigo: oklch(0.52 0.08 275);
+  --swatch-blue: oklch(0.53 0.08 240);
+  --swatch-teal: oklch(0.52 0.06 195);
+  --swatch-green: oklch(0.53 0.08 140);
+  --swatch-rust: oklch(0.55 0.11 45);
+  --swatch-rose: oklch(0.53 0.1 15);
+  --swatch-orchid: oklch(0.52 0.08 330);
+  --swatch-slate: oklch(0.5 0.02 70);
+  --shadow-card: 0 1px 0 oklch(0.85 0.02 75);
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --t-display: 600 calc(32px * var(--text-scale)) / calc(40px * var(--text-scale)) var(--font-display);
+  --t-headline: 600 calc(26px * var(--text-scale)) / calc(34px * var(--text-scale)) var(--font-display);
+  --t-title: 600 calc(19px * var(--text-scale)) / calc(26px * var(--text-scale)) var(--font-display);
+  --t-body: 400 calc(16px * var(--text-scale)) / calc(26px * var(--text-scale)) var(--font-sans);
+}
+
+html[data-theme="paper-dark"],
+[data-theme="paper-dark"] {
+  color-scheme: dark;
+  --rail-bg: oklch(0.155 0.012 280);
+  --rail-fg: oklch(0.8 0.02 280);
+  --rail-tile: oklch(0.235 0.018 280);
+  --rail-tile-active: oklch(0.52 0.18 277);
+  --rail-indicator: oklch(0.96 0.005 280);
+  --sidebar-bg: oklch(0.185 0.014 280);
+  --sidebar-border: oklch(0.255 0.016 280);
+  --sidebar-hover: oklch(0.235 0.018 280);
+  --sidebar-fg: oklch(0.8 0.02 280);
+  --sidebar-fg-strong: oklch(0.97 0.005 280);
+  --sidebar-fg-muted: oklch(0.71 0.02 280);
+  --sidebar-active-bg: oklch(0.31 0.06 277);
+  --sidebar-active-fg: oklch(0.985 0.005 280);
+  --content-bg: oklch(0.215 0.014 280);
+  --content-fg: oklch(0.93 0.01 280);
+  --content-fg-muted: oklch(0.74 0.018 280);
+  --content-border: oklch(0.29 0.016 280);
+  --content-hover: oklch(0.245 0.016 280);
+  --control-border: oklch(0.555 0.02 280);
+  --surface-raised: oklch(0.255 0.016 280);
+  --surface-sunken: oklch(0.185 0.014 280);
+  --scrim: oklch(0.08 0.01 280 / 0.62);
+  --accent: oklch(0.54 0.18 277);
+  --accent-hover: oklch(0.49 0.18 277);
+  --accent-soft: oklch(0.3 0.06 277);
+  --link: oklch(0.78 0.11 262);
+  --focus-ring: oklch(0.74 0.133 270);
+  --mention-fg: oklch(0.86 0.068 272);
+  --mention-bg: oklch(0.33 0.07 272);
+  --highlight-bg: oklch(0.252 0.032 85);
+  --presence-online: oklch(0.72 0.17 152);
+  --agent: oklch(0.82 0.09 205);
+  --agent-soft: oklch(0.31 0.05 205);
+  --agent-working: oklch(0.76 0.11 200);
+  --success: oklch(0.8 0.14 152);
+  --success-soft: oklch(0.29 0.05 152);
+  --warning: oklch(0.84 0.12 80);
+  --warning-soft: oklch(0.3 0.05 80);
+  --danger: oklch(0.76 0.14 25);
+  --danger-soft: oklch(0.31 0.07 25);
+  --on-danger: oklch(0.18 0.03 25);
+  --tooltip-bg: oklch(0.1 0.01 280);
+  --shadow-card: none;
+  --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
+  --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
+  --rail-bg: oklch(0.17 0.008 60);
+  --rail-fg: oklch(0.76 0.02 75);
+  --rail-tile: oklch(0.24 0.01 60);
+  --rail-tile-active: oklch(0.62 0.12 45);
+  --rail-indicator: oklch(0.95 0.01 80);
+  --sidebar-bg: oklch(0.195 0.008 60);
+  --sidebar-border: oklch(0.26 0.01 60);
+  --sidebar-hover: oklch(0.24 0.01 60);
+  --sidebar-fg: oklch(0.8 0.02 75);
+  --sidebar-fg-strong: oklch(0.96 0.01 80);
+  --sidebar-fg-muted: oklch(0.68 0.02 70);
+  --sidebar-active-bg: oklch(0.3 0.035 50);
+  --sidebar-active-fg: oklch(0.97 0.01 80);
+  --content-bg: oklch(0.215 0.008 60);
+  --content-fg: oklch(0.92 0.015 80);
+  --content-fg-muted: oklch(0.72 0.02 75);
+  --content-border: oklch(0.29 0.01 60);
+  --content-hover: oklch(0.245 0.01 60);
+  --control-border: oklch(0.55 0.02 70);
+  --surface-raised: oklch(0.25 0.01 60);
+  --surface-sunken: oklch(0.19 0.008 60);
+  --accent: oklch(0.68 0.12 45);
+  --accent-hover: oklch(0.73 0.11 45);
+  --on-accent: oklch(0.18 0.02 45);
+  --accent-soft: oklch(0.3 0.04 45);
+  --link: oklch(0.78 0.1 50);
+  --focus-ring: oklch(0.72 0.12 45);
+  --mention-fg: oklch(0.86 0.07 55);
+  --mention-bg: oklch(0.32 0.05 45);
+  --highlight-bg: oklch(0.3 0.04 90);
+  --shadow-card: none;
+}
+
+/* Frame: a strong coloured frame around dense white work. */
+html[data-theme="frame"],
+[data-theme="frame"],
+html[data-theme="frame-dark"],
+[data-theme="frame-dark"] {
+  color-scheme: light;
+  --rail-bg: oklch(0.945 0.004 280);
+  --rail-fg: oklch(0.42 0.015 280);
+  --rail-tile: oklch(0.995 0.002 280);
+  --rail-indicator: oklch(0.25 0.02 280);
+  --sidebar-bg: oklch(0.972 0.003 280);
+  --sidebar-border: oklch(0.915 0.005 280);
+  --sidebar-hover: oklch(0.935 0.005 280);
+  --sidebar-fg: oklch(0.36 0.015 280);
+  --sidebar-fg-strong: oklch(0.18 0.015 280);
+  --sidebar-fg-muted: oklch(0.47 0.015 280);
+  --sidebar-active-bg: oklch(0.915 0.008 280);
+  --sidebar-active-fg: oklch(0.18 0.015 280);
+  --presence-online: oklch(0.6 0.158 152);
+  --agent-working: oklch(0.58 0.098 200);
+  --rail-bg: oklch(0.24 0.07 320);
+  --rail-fg: oklch(0.85 0.03 320);
+  --rail-tile: oklch(0.32 0.08 320);
+  --rail-tile-active: oklch(0.5 0.12 160);
+  --rail-indicator: oklch(0.98 0.005 320);
+  --sidebar-bg: oklch(0.3 0.085 318);
+  --sidebar-border: oklch(0.36 0.08 318);
+  --sidebar-hover: oklch(0.35 0.09 318);
+  --sidebar-fg: oklch(0.88 0.03 318);
+  --sidebar-fg-strong: oklch(0.99 0.005 318);
+  --sidebar-fg-muted: oklch(0.78 0.04 318);
+  --sidebar-active-bg: oklch(0.55 0.12 230);
+  --sidebar-active-fg: oklch(0.99 0.005 230);
+  --content-bg: oklch(1 0 0);
+  --content-fg: oklch(0.2 0.01 300);
+  --content-fg-muted: oklch(0.48 0.012 300);
+  --content-border: oklch(0.91 0.005 300);
+  --content-hover: oklch(0.97 0.004 300);
+  --surface-raised: oklch(1 0 0);
+  --surface-sunken: oklch(0.965 0.004 300);
+  --accent: oklch(0.5 0.12 160);
+  --accent-hover: oklch(0.45 0.12 160);
+  --accent-soft: oklch(0.95 0.03 160);
+  --link: oklch(0.48 0.14 240);
+  --focus-ring: oklch(0.55 0.14 230);
+  --mention-fg: oklch(0.42 0.12 240);
+  --mention-bg: oklch(0.94 0.035 240);
+  --shadow-card: none;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  /* Denser work: shorter rows and tighter messages. */
+  --row-default: 32px;
+  --size-row: 28px;
+  --msg-pad-y: 4px;
+  --t-headline: 800 calc(20px * var(--text-scale)) / calc(28px * var(--text-scale)) var(--font-sans);
+  --t-display: 800 calc(26px * var(--text-scale)) / calc(34px * var(--text-scale)) var(--font-sans);
+  --t-body: 400 calc(15px * var(--text-scale)) / calc(21px * var(--text-scale)) var(--font-sans);
+}
+
+html[data-theme="frame-dark"],
+[data-theme="frame-dark"] {
+  color-scheme: dark;
+  --rail-bg: oklch(0.155 0.012 280);
+  --rail-fg: oklch(0.8 0.02 280);
+  --rail-tile: oklch(0.235 0.018 280);
+  --rail-tile-active: oklch(0.52 0.18 277);
+  --rail-indicator: oklch(0.96 0.005 280);
+  --sidebar-bg: oklch(0.185 0.014 280);
+  --sidebar-border: oklch(0.255 0.016 280);
+  --sidebar-hover: oklch(0.235 0.018 280);
+  --sidebar-fg: oklch(0.8 0.02 280);
+  --sidebar-fg-strong: oklch(0.97 0.005 280);
+  --sidebar-fg-muted: oklch(0.71 0.02 280);
+  --sidebar-active-bg: oklch(0.31 0.06 277);
+  --sidebar-active-fg: oklch(0.985 0.005 280);
+  --content-bg: oklch(0.215 0.014 280);
+  --content-fg: oklch(0.93 0.01 280);
+  --content-fg-muted: oklch(0.74 0.018 280);
+  --content-border: oklch(0.29 0.016 280);
+  --content-hover: oklch(0.245 0.016 280);
+  --control-border: oklch(0.555 0.02 280);
+  --surface-raised: oklch(0.255 0.016 280);
+  --surface-sunken: oklch(0.185 0.014 280);
+  --scrim: oklch(0.08 0.01 280 / 0.62);
+  --accent: oklch(0.54 0.18 277);
+  --accent-hover: oklch(0.49 0.18 277);
+  --accent-soft: oklch(0.3 0.06 277);
+  --link: oklch(0.78 0.11 262);
+  --focus-ring: oklch(0.74 0.133 270);
+  --mention-fg: oklch(0.86 0.068 272);
+  --mention-bg: oklch(0.33 0.07 272);
+  --highlight-bg: oklch(0.252 0.032 85);
+  --presence-online: oklch(0.72 0.17 152);
+  --agent: oklch(0.82 0.09 205);
+  --agent-soft: oklch(0.31 0.05 205);
+  --agent-working: oklch(0.76 0.11 200);
+  --success: oklch(0.8 0.14 152);
+  --success-soft: oklch(0.29 0.05 152);
+  --warning: oklch(0.84 0.12 80);
+  --warning-soft: oklch(0.3 0.05 80);
+  --danger: oklch(0.76 0.14 25);
+  --danger-soft: oklch(0.31 0.07 25);
+  --on-danger: oklch(0.18 0.03 25);
+  --tooltip-bg: oklch(0.1 0.01 280);
+  --shadow-card: none;
+  --shadow-popover: 0 0 0 1px #ffffff14, 0 4px 12px #00000080;
+  --shadow-dialog: 0 0 0 1px #ffffff0f, 0 16px 40px -8px #000000b3;
+  --rail-bg: oklch(0.15 0.03 320);
+  --rail-fg: oklch(0.8 0.03 320);
+  --rail-tile: oklch(0.23 0.04 320);
+  --rail-tile-active: oklch(0.9 0.02 320);
+  --rail-indicator: oklch(0.96 0.005 320);
+  --sidebar-bg: oklch(0.19 0.04 318);
+  --sidebar-border: oklch(0.25 0.04 318);
+  --sidebar-hover: oklch(0.24 0.05 318);
+  --sidebar-fg: oklch(0.84 0.025 318);
+  --sidebar-fg-strong: oklch(0.97 0.005 318);
+  --sidebar-fg-muted: oklch(0.72 0.03 318);
+  --sidebar-active-bg: oklch(0.45 0.1 230);
+  --sidebar-active-fg: oklch(0.99 0.005 230);
+  --content-bg: oklch(0.18 0.006 300);
+  --content-fg: oklch(0.93 0.006 300);
+  --content-fg-muted: oklch(0.72 0.01 300);
+  --content-border: oklch(0.27 0.008 300);
+  --content-hover: oklch(0.22 0.008 300);
+  --surface-raised: oklch(0.22 0.008 300);
+  --surface-sunken: oklch(0.16 0.006 300);
+  --accent: oklch(0.7 0.13 160);
+  --accent-hover: oklch(0.75 0.12 160);
+  --on-accent: oklch(0.16 0.03 160);
+  --accent-soft: oklch(0.3 0.05 160);
+  --link: oklch(0.78 0.1 240);
+  --focus-ring: oklch(0.74 0.12 230);
+  --mention-fg: oklch(0.85 0.07 240);
+  --mention-bg: oklch(0.32 0.06 240);
+}
+
+/* Paper: the page mark is a small ink glyph in the accent, and the body is the page, not a card on it. */
+html[data-theme^="paper"] .aw-pagehead__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--accent);
+}
+
+html[data-theme^="paper"] .aw-doc {
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+  padding-inline: 0;
+}
+
+/* Frame: the title carries the page; its icon sits in the frame's colour, small. */
+html[data-theme^="frame"] .aw-pagehead__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--rail-bg);
+  color: var(--rail-indicator);
+}
+
+html[data-theme^="frame"] .aw-pagehead {
+  margin-bottom: var(--space-4);
+}

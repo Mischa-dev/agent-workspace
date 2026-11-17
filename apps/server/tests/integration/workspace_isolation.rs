@@ -2065,6 +2065,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "message_history",
     "message_draft_list",
     "custom_emoji_list",
+    "theme_list",
+    "theme_get",
     "comment_list",
     "whiteboard_template_list",
     "milestone_list",
@@ -2299,6 +2301,22 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "custom_emoji_list",
             vec![json!({}), json!({"includeRetired": true})],
             vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // B's themes never list or read in A, offered or not.
+        case(
+            "theme_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "theme_get",
+            vec![json!({"id": a.theme})],
+            vec![
+                json!({"id": b.theme}),
+                json!({"workspace": b.organization, "id": b.theme}),
+            ],
             vec![],
         ),
         // C1.3: B's things' discussions never list in A.

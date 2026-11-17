@@ -58,6 +58,18 @@ const ownList =
   (op: string): Handler =>
   () => [{ id: `op:${op}`, filters: { predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === op } }]
 
+/** A theme you made, or one the workspace offers, changed: the theme lists and that theme. */
+const themesChanged: Handler = (event) => {
+  const themeId = payloadId(event, 'themeId', 'theme_id')
+  const named = (query: { queryKey: readonly unknown[] }) => (query.queryKey[3] as { id?: unknown } | undefined)?.id === themeId
+  return [
+    { id: 'op:theme_list', filters: { predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'theme_list' } },
+    ...(themeId
+      ? [{ id: `theme:${themeId}`, filters: { predicate: (query: { queryKey: readonly unknown[] }) => query.queryKey[0] === 'op' && query.queryKey[2] === 'theme_get' && named(query) } }]
+      : []),
+  ]
+}
+
 /** Someone's status changed: the names that show it read it again. */
 const statusChanged: Handler = () => [{ id: 'statuses', filters: { queryKey: queryKeys.statuses } }]
 
@@ -67,6 +79,8 @@ export const peopleHandlers: Record<string, Handler> = {
   'account.managers.changed': managersChanged,
   'workspace.lifecycle.changed': lifecycleChanged,
   'custom_emoji.changed': customEmojiChanged,
+  'theme.changed': themesChanged,
+  'workspace_themes.changed': themesChanged,
   'message_draft.changed': ownList('message_draft_list'),
   'notification_keywords.changed': ownList('notification_keyword_list'),
   'account.status.changed': statusChanged,

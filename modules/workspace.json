@@ -21,6 +21,12 @@
     "custom_emoji_create": "create",
     "custom_emoji_list": "query",
     "custom_emoji_update": "change",
+    "theme_list": "query",
+    "theme_get": "describe",
+    "theme_create": "create",
+    "theme_update": "change",
+    "theme_delete": "change",
+    "workspace_theme_set": "change",
     "notification_list": "query",
     "notification_update": "change",
     "file_upload": "create",
@@ -108,7 +114,7 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["file.attached", "file.removed", "account.status_changed", "custom_emoji.changed", "workspace.lifecycle_changed"],
+    "emits": ["file.attached", "file.removed", "account.status_changed", "custom_emoji.changed", "theme.changed", "workspace_themes.changed", "workspace.lifecycle_changed"],
     "listens": []
   },
   "notifications": ["thing_update"],

@@ -121,6 +121,7 @@ pub mod task_records;
 pub mod telemetry;
 pub mod tenancy;
 pub mod test_support;
+pub mod themes;
 pub mod things;
 pub mod usage;
 pub mod views;
