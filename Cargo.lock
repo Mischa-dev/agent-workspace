@@ -70,6 +70,7 @@ dependencies = [
  "rand_core 0.6.4",
  "reqwest",
  "resvg",
+ "ring",
  "rmcp",
  "roxmltree",
  "rpassword",
