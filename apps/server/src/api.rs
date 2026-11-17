@@ -232,6 +232,16 @@ pub(crate) async fn start_run_in(
     if conversation.conversation_archived {
         return Err(AppError::NotFound("conversation"));
     }
+    // H1.24: no run starts in a suspended or deleting workspace.
+    crate::db::scoped_one(&state.pool, async |connection| {
+        crate::workspace::lifecycle::ensure_open_for_space(
+            connection,
+            conversation.project_id,
+            "run_start",
+        )
+        .await
+    })
+    .await?;
     if conversation.kind != "thread" {
         return Err(AppError::Invalid("agent runs require a Thread"));
     }
@@ -539,6 +549,16 @@ pub(crate) async fn retry_run_in(
     if conversation.conversation_archived {
         return Err(AppError::NotFound("conversation"));
     }
+    // H1.24: no run starts in a suspended or deleting workspace.
+    crate::db::scoped_one(&state.pool, async |connection| {
+        crate::workspace::lifecycle::ensure_open_for_space(
+            connection,
+            conversation.project_id,
+            "run_start",
+        )
+        .await
+    })
+    .await?;
 
     let idempotency_key = idempotency_key?;
     let request_hash = RequestHash::for_value(&EmptyCommand {})?;

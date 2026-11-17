@@ -189,6 +189,27 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .await
     .expect("projects");
     assert_eq!(made, 0);
+    // A channel or thread named by id is A's too.
+    let channel = sqlx::query_scalar::<_, Uuid>(
+        "SELECT conversation.id FROM conversations conversation \
+         JOIN projects space ON space.id = conversation.project_id \
+         WHERE space.organization_id = $1 AND conversation.kind = 'channel' LIMIT 1",
+    )
+    .bind(a.organization)
+    .fetch_one(&t.pool)
+    .await
+    .expect("a channel in A");
+    let (status, body) = send(
+        &t.app,
+        a.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{channel}/messages"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "hi"}]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::LOCKED, "{body}");
     // The session says why.
     let (_, session) = send(
         &t.app,

@@ -118,6 +118,13 @@ pub const ACTIVE_RUN_STATES: [&str; 6] = [
 /// approving a run request through MCP. The web app has no cap.
 pub const MCP_ACTIVE_RUN_CAP: i64 = 5;
 
+/// The space a run is in, by the run's id: one row of `project_id`. For a
+/// check that refuses a write before the handler looks (H1.24).
+pub const SPACE_OF_RUN: &str = "SELECT conversation.project_id FROM agent_runs run \
+     JOIN conversations conversation ON conversation.id = run.conversation_id \
+     -- visibility: the space only, to refuse a write; the handler checks access\n \
+     WHERE run.id = $1";
+
 /// Who is calling a shared run, approval or GitHub job core.
 #[derive(Clone, Debug)]
 pub struct RunCaller {

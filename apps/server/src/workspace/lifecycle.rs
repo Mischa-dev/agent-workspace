@@ -324,7 +324,8 @@ async fn closed_for_route(
     ))
 }
 
-/// The space of a conversation or message a v1 route names by id.
+/// The space of a conversation (channel, thread), message, scheduled
+/// message or run a v1 route names by id.
 async fn conversation_scope(
     state: &AppState,
     template: &str,
@@ -336,6 +337,26 @@ async fn conversation_scope(
             "SELECT project_id FROM conversations \
              -- visibility: the space only, to refuse a write; the handler checks access\n \
              WHERE id = $1",
+        )
+    } else if let Some(rest) = ["/api/v1/threads/{", "/api/v1/channels/{"]
+        .iter()
+        .find_map(|prefix| template.strip_prefix(prefix))
+    {
+        (
+            rest,
+            "SELECT project_id FROM conversations \
+             -- visibility: the space only, to refuse a write; the handler checks access\n \
+             WHERE id = $1",
+        )
+    } else if let Some(rest) = template.strip_prefix("/api/v1/agent-runs/{") {
+        (rest, crate::runs::SPACE_OF_RUN)
+    } else if let Some(rest) = template.strip_prefix("/api/v1/scheduled-messages/{") {
+        (
+            rest,
+            "SELECT conversation.project_id FROM scheduled_messages scheduled \
+             JOIN conversations conversation ON conversation.id = scheduled.conversation_id \
+             -- visibility: the space only, to refuse a write; the handler checks access\n \
+             WHERE scheduled.id = $1",
         )
     } else if let Some(rest) = template.strip_prefix("/api/v1/messages/{") {
         (
