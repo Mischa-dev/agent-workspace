@@ -47,8 +47,8 @@ pub struct DraftSaved {
     /// The draft kept now; none when it was cleared.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub draft: Option<DraftView>,
-    /// True when a newer draft from another device stayed: yours is its
-    /// `previous`.
+    /// True when a newer draft from another device stayed: a save of yours
+    /// is its `previous`, and a clear of yours leaves it.
     pub kept_newer: bool,
 }
 

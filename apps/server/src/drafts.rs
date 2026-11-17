@@ -103,14 +103,31 @@ pub async fn save(
     )
     .await?;
     let Some(draft) = draft else {
-        sqlx::query("DELETE FROM message_drafts WHERE account_id = $1 AND conversation_id = $2")
-            .bind(account_id)
-            .bind(conversation_id)
-            .execute(&mut **transaction)
-            .await?;
+        // A clear dated before a draft another device saved since leaves
+        // that draft alone, as an older save would.
+        sqlx::query(
+            "DELETE FROM message_drafts WHERE account_id = $1 AND conversation_id = $2 \
+             AND updated_at <= LEAST(COALESCE($3::timestamptz, now()), now())",
+        )
+        .bind(account_id)
+        .bind(conversation_id)
+        .bind(saved_at)
+        .execute(&mut **transaction)
+        .await?;
+        // The conversation was checked against the caller already.
+        let kept = listed(
+            transaction,
+            account_id,
+            Reach::default(),
+            None,
+            Some(conversation_id),
+        )
+        .await?
+        .into_iter()
+        .next();
         return Ok(Saved {
-            view: None,
-            kept_newer: false,
+            kept_newer: kept.is_some(),
+            view: kept,
         });
     };
     // One statement, so two devices saving at once can't both miss the

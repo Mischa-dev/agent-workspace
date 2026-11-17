@@ -182,6 +182,12 @@ pub static MESSAGE_DRAFT_CHANGED: EventType = signal(
     None,
     "Someone's draft was saved or cleared",
 );
+pub static NOTIFICATION_KEYWORDS_CHANGED: EventType = signal(
+    "notification_keywords.changed",
+    "messages",
+    None,
+    "Someone's keyword alerts changed",
+);
 pub static THREAD_STATUS_CHANGED: EventType = fact(
     "thread.status_changed",
     "channels",
@@ -467,6 +473,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &MESSAGE_REACTIONS_CHANGED,
         &CONVERSATION_PINS_CHANGED,
         &MESSAGE_DRAFT_CHANGED,
+        &NOTIFICATION_KEYWORDS_CHANGED,
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,

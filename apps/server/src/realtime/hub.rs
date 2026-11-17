@@ -253,6 +253,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "notifications.updated"
                 | "account.managers.changed"
                 | "message_draft.changed"
+                | "notification_keywords.changed"
         );
         let invalid_actor_scope = if actor_targeted_event {
             payload_actor_id.is_none() || payload_actor_id != envelope.recipient_actor_id
@@ -284,6 +285,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "project.modules.updated"
                 | "custom_emoji.changed"
                 | "message_draft.changed"
+                | "notification_keywords.changed"
         );
         let project_scoped_event = matches!(
             envelope.event_type.as_str(),
@@ -300,6 +302,7 @@ fn checked_delivery(envelope: &OutboxEnvelope) -> Result<RealtimeDelivery, Realt
                 | "project.modules.updated"
                 | "custom_emoji.changed"
                 | "message_draft.changed"
+                | "notification_keywords.changed"
         );
         let invalid_conversation_scope = if project_scoped_event {
             envelope.conversation_id.is_some() || envelope.payload.get("conversationId").is_some()

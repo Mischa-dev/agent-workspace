@@ -88,6 +88,20 @@ async fn drafts_follow_their_writer_and_stay_theirs() {
         stale["value"]["draft"]["previous"]["text"],
         "An older thought"
     );
+    // So does a clear from before it (an older device sending its text).
+    let stale_clear = tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "message_draft_set",
+        json!({"conversationId": channel, "savedAt": "2020-01-01T00:00:01Z"}),
+    )
+    .await;
+    assert_eq!(stale_clear["value"]["keptNewer"], true, "{stale_clear}");
+    assert_eq!(
+        stale_clear["value"]["draft"]["draft"]["text"],
+        "Half a thought"
+    );
     let listed = tool(
         app,
         &phone.token,

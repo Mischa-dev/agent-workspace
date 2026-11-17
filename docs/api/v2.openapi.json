@@ -17128,7 +17128,7 @@
                               "description": "The draft kept now; none when it was cleared."
                             },
                             "keptNewer": {
-                              "description": "True when a newer draft from another device stayed: yours is its\n`previous`.",
+                              "description": "True when a newer draft from another device stayed: a save of yours\nis its `previous`, and a clear of yours leaves it.",
                               "type": "boolean"
                             }
                           },
@@ -17498,7 +17498,7 @@
                               "description": "The draft kept now; none when it was cleared."
                             },
                             "keptNewer": {
-                              "description": "True when a newer draft from another device stayed: yours is its\n`previous`.",
+                              "description": "True when a newer draft from another device stayed: a save of yours\nis its `previous`, and a clear of yours leaves it.",
                               "type": "boolean"
                             }
                           },

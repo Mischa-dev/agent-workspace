@@ -5,6 +5,7 @@
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use uuid::Uuid;
 
 use super::{MAX_KEYWORDS, normalize};
 use crate::ops::{
@@ -122,9 +123,27 @@ impl Operation for NotificationKeywordSet {
             return Err(OpError::invalid("keywords", "Keep up to 50 keywords."));
         }
         let (workspace, account) = (call.ctx.workspace_id, call.account_id());
-        let connection = &mut **call.tx().await?;
-        super::replace(connection, workspace, account, &keywords).await?;
-        let keywords = super::list(connection, workspace, account).await?;
+        let tx = call.tx().await?;
+        super::replace(tx, workspace, account, &keywords).await?;
+        // Their other devices hear of it (their id only) in the same
+        // transaction. The envelope needs a space: the workspace's own.
+        let space = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM projects WHERE organization_id = $1 \
+             ORDER BY (kind = 'workspace') DESC, created_at LIMIT 1",
+        )
+        .bind(workspace)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?;
+        crate::outbox::enqueue_typed(
+            tx,
+            space,
+            crate::outbox::OutboxEventPayload::NotificationKeywordsChanged(
+                crate::outbox::NotificationKeywordsChangedPayload { actor_id: account },
+            ),
+        )
+        .await?;
+        let keywords = super::list(tx, workspace, account).await?;
         call.audit_target("account", account, json!({ "keywords": keywords.len() }));
         Ok(KeywordsView {
             keywords,

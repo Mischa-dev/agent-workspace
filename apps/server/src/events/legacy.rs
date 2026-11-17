@@ -193,6 +193,15 @@ pub async fn mirror(
             None,
             Some(p.actor_id),
         ),
+        P::NotificationKeywordsChanged(p) => (
+            &catalog::NOTIFICATION_KEYWORDS_CHANGED,
+            "account",
+            p.actor_id,
+            None,
+            Audience::Account(p.actor_id),
+            None,
+            Some(p.actor_id),
+        ),
         P::AccountStatusChanged(p) => (
             &catalog::ACCOUNT_STATUS_CHANGED,
             "account",
