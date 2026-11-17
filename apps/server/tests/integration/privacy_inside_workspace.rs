@@ -1930,8 +1930,16 @@ async fn dashboards_stay_their_owners_and_read_as_the_viewer() {
         .person("lena", "member")
         .person("mara", "member")
         .person("nate", "member")
-        .custom_role("Tasks only", &["projects.view", "tasks.view", "tasks.edit"])
-        .custom_role("No tasks", &["projects.view"])
+        .custom_role(
+            "Tasks only",
+            &[
+                "projects.view",
+                "tasks.view",
+                "tasks.edit",
+                "dashboards.view",
+            ],
+        )
+        .custom_role("No tasks", &["projects.view", "dashboards.view"])
         .person("olive", "member")
         .build("privacy_dashboards")
         .await
@@ -2001,15 +2009,24 @@ async fn dashboards_stay_their_owners_and_read_as_the_viewer() {
     )
     .await;
     assert_eq!(made["outcome"], "ok", "{made}");
-    let mine = made["value"]["id"].as_str().expect("dashboard id").to_owned();
+    let mine = made["value"]["id"]
+        .as_str()
+        .expect("dashboard id")
+        .to_owned();
 
     let mara = &world.people["mara"].browser;
     let (_, listed) = op(mara, "dashboard_list", json!({"spaceId": work})).await;
     assert_eq!(listed["outcome"], "ok", "{listed}");
-    assert!(!listed.to_string().contains(&mine), "mara sees lena's dashboard: {listed}");
+    assert!(
+        !listed.to_string().contains(&mine),
+        "mara sees lena's dashboard: {listed}"
+    );
     for (name, input) in [
         ("dashboard_get", json!({"dashboard": mine})),
-        ("dashboard_update", json!({"dashboard": mine, "name": "Mara's now"})),
+        (
+            "dashboard_update",
+            json!({"dashboard": mine, "name": "Mara's now"}),
+        ),
         ("dashboard_delete", json!({"dashboard": mine})),
     ] {
         let (status, body) = op(mara, name, input).await;
@@ -2028,7 +2045,10 @@ async fn dashboards_stay_their_owners_and_read_as_the_viewer() {
         json!({"spaceId": work, "name": "Nate's shared"}),
     )
     .await;
-    assert_ne!(body["outcome"], "ok", "nate shares a dashboard: {status} {body}");
+    assert_ne!(
+        body["outcome"], "ok",
+        "nate shares a dashboard: {status} {body}"
+    );
 
     let (_, shared) = op(
         lena,
@@ -2049,8 +2069,14 @@ async fn dashboards_stay_their_owners_and_read_as_the_viewer() {
     .await;
     assert_eq!(unseen["outcome"], "ok", "{unseen}");
     let tile = &unseen["value"]["tiles"][0];
-    assert!(tile["figures"].is_null() && tile["unseen"].is_string(), "{unseen}");
-    assert_eq!(unseen["value"]["tiles"][1]["text"], "Weekly numbers", "{unseen}");
+    assert!(
+        tile["figures"].is_null() && tile["unseen"].is_string(),
+        "{unseen}"
+    );
+    assert_eq!(
+        unseen["value"]["tiles"][1]["text"], "Weekly numbers",
+        "{unseen}"
+    );
     world.finish().await;
 }
 

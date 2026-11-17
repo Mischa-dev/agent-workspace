@@ -1090,7 +1090,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 kind: "collection_view_defaults",
                 table: "collection_view_defaults",
                 references: &[
-                    ("project_id", "projects"),
+                    ("space_id", "projects"),
                     ("collection_id", "collections"),
                     ("role_id", "workspace_roles"),
                     ("actor_id", "actors"),
@@ -1104,7 +1104,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 kind: "collection_view_pins",
                 table: "collection_view_pins",
                 references: &[
-                    ("project_id", "projects"),
+                    ("space_id", "projects"),
                     ("view_id", "collection_views"),
                     ("actor_id", "actors"),
                 ],

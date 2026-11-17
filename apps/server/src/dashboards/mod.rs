@@ -31,9 +31,7 @@ pub const MAX_TEXT_CHARACTERS: usize = 2_000;
 pub const LIST_TILE_RECORDS: i64 = 5;
 
 /// What a tile shows.
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
-)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TileKind {
     /// A collection's view: a chart view as its chart, any other as a
@@ -116,8 +114,7 @@ impl From<Row> for Dashboard {
     }
 }
 
-const COLUMNS: &str =
-    "id, space_id AS project_id, name, description, owner_actor_id, tiles, position, version, updated_at";
+const COLUMNS: &str = "id, space_id AS project_id, name, description, owner_actor_id, tiles, position, version, updated_at";
 
 /// The dashboards of a project `reader` sees: the shared ones in order,
 /// then their own.
@@ -289,6 +286,9 @@ pub struct Figures {
     /// A chart's measure over every record, when it isn't a count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<f64>,
+    /// A chart's look: bar, line, donut or number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
     /// What the chart shows: "count", or "sum", "average", "min" or "max"
     /// of a field.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -304,7 +304,12 @@ pub struct Figures {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FigureGroup {
+    /// The group's value, stable across reads (an option's id, a date).
+    pub key: String,
     pub name: String,
+    /// An option's colour, when the group is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     pub count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<f64>,
@@ -337,14 +342,14 @@ pub async fn figures(
     if collection.acts_like_task && !can_view_tasks {
         return Ok(Err(Unseen::Tasks));
     }
-    let Some(view) = views::one(&mut *connection, project_id, collection_id, view_id).await?
-    else {
+    let Some(view) = views::one(&mut *connection, project_id, collection_id, view_id).await? else {
         return Ok(Err(Unseen::Gone));
     };
     if view.owner_actor_id.is_some_and(|owner| owner != reader) {
         return Ok(Err(Unseen::Gone));
     }
-    let fields = collections::view_fields(&mut *connection, project_id, collection_id, true).await?;
+    let fields =
+        collections::view_fields(&mut *connection, project_id, collection_id, true).await?;
     let config = view.config.active(&fields);
     let chart = view.view_type == ViewKind::Chart;
     let mut spec = query::Spec::from_config(&config, &fields, reader);
@@ -362,31 +367,54 @@ pub async fn figures(
         collection_name: collection.name.clone(),
         total,
         value: None,
+        style: None,
         measure: None,
         groups: Vec::new(),
         records: Vec::new(),
     };
     if chart {
         let measure = config.chart.map(|chart| chart.measure).unwrap_or_default();
-        figures.measure = Some(match measure.field.and_then(|id| fields.iter().find(|field| field.id == id)) {
-            Some(field) if measure.op != views::MeasureOp::Count => {
-                format!("{} of {}", measure.op.as_str(), field.name)
+        figures.style = Some(
+            match config.chart.map(|chart| chart.style).unwrap_or_default() {
+                views::ChartStyle::Bar => "bar",
+                views::ChartStyle::Line => "line",
+                views::ChartStyle::Donut => "donut",
+                views::ChartStyle::Number => "number",
             }
-            _ => "count".to_owned(),
-        });
+            .to_owned(),
+        );
+        figures.measure = Some(
+            match measure
+                .field
+                .and_then(|id| fields.iter().find(|field| field.id == id))
+            {
+                Some(field) if measure.op != views::MeasureOp::Count => {
+                    format!("{} of {}", measure.op.as_str(), field.name)
+                }
+                _ => "count".to_owned(),
+            },
+        );
         figures.value = query::measure_total(&mut *connection, source.as_ref(), &spec).await?;
         figures.groups = query::group_counts(&mut *connection, source.as_ref(), &spec)
             .await?
             .into_iter()
             .map(|group| FigureGroup {
+                key: group.key,
                 name: group.label,
+                color: group.color,
                 count: group.count,
                 value: group.value,
             })
             .collect();
     } else {
-        let Ok(page) =
-            query::page(&mut *connection, source.as_ref(), &spec, None, LIST_TILE_RECORDS).await?
+        let Ok(page) = query::page(
+            &mut *connection,
+            source.as_ref(),
+            &spec,
+            None,
+            LIST_TILE_RECORDS,
+        )
+        .await?
         else {
             return Ok(Ok(figures));
         };

@@ -45,23 +45,23 @@ CREATE INDEX collection_views_owner
 
 CREATE TABLE collection_view_pins (
     workspace_id UUID NOT NULL REFERENCES organizations(id),
-    project_id UUID NOT NULL,
+    space_id UUID NOT NULL,
     view_id UUID NOT NULL,
     actor_id UUID NOT NULL REFERENCES actors(id),
     pinned BOOLEAN NOT NULL,
     position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (view_id, actor_id),
-    FOREIGN KEY (project_id, view_id)
+    FOREIGN KEY (space_id, view_id)
         REFERENCES collection_views(project_id, id) ON DELETE CASCADE
 );
-CREATE INDEX collection_view_pins_actor ON collection_view_pins (actor_id, project_id);
+CREATE INDEX collection_view_pins_actor ON collection_view_pins (actor_id, space_id);
 SELECT tenancy_protect('collection_view_pins', 'workspace_id');
 
 CREATE TABLE collection_view_defaults (
     id UUID PRIMARY KEY,
     workspace_id UUID NOT NULL REFERENCES organizations(id),
-    project_id UUID NOT NULL,
+    space_id UUID NOT NULL,
     collection_id UUID NOT NULL,
     -- Exactly one of the two: a role's default, or one account's own.
     role_id UUID REFERENCES workspace_roles(id) ON DELETE CASCADE,
@@ -70,8 +70,8 @@ CREATE TABLE collection_view_defaults (
     set_by_actor_id UUID NOT NULL REFERENCES actors(id),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK ((role_id IS NULL) <> (actor_id IS NULL)),
-    FOREIGN KEY (project_id, collection_id) REFERENCES collections(project_id, id),
-    FOREIGN KEY (project_id, view_id)
+    FOREIGN KEY (space_id, collection_id) REFERENCES collections(project_id, id),
+    FOREIGN KEY (space_id, view_id)
         REFERENCES collection_views(project_id, id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX collection_view_defaults_role
@@ -316,7 +316,7 @@ LEFT JOIN project_memberships member
 WHERE saved.builtin IS NULL
 ON CONFLICT DO NOTHING;
 
-INSERT INTO collection_view_pins (workspace_id, project_id, view_id, actor_id, pinned, position, updated_at)
+INSERT INTO collection_view_pins (workspace_id, space_id, view_id, actor_id, pinned, position, updated_at)
 SELECT project.organization_id, pin.project_id, COALESCE(builtin_view.id, pin.view_id),
        pin.actor_id, pin.pinned, pin.position, pin.updated_at
 FROM saved_view_pins pin

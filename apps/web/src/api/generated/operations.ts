@@ -74,9 +74,9 @@ export type FieldOp = "is" | "isNot" | "empty" | "notEmpty" | "contains" | "gt" 
 
 export type FieldWrite = { archived?: boolean | null; button?: ButtonInput | null; description?: string | null; field?: string | null; formula?: string | null; name?: string | null; options?: OptionInput[] | null; position?: number | null; target?: string | null; type?: string | null }
 
-export type FigureGroup = { count: number; name: string; value?: number | null }
+export type FigureGroup = { color?: string | null; count: number; key: string; name: string; value?: number | null }
 
-export type Figures = { collectionName: string; groups: FigureGroup[]; measure?: string | null; records: string[]; total: number; value?: number | null; viewName: string; viewType: string }
+export type Figures = { collectionName: string; groups: FigureGroup[]; measure?: string | null; records: string[]; style?: string | null; total: number; value?: number | null; viewName: string; viewType: string }
 
 export type FilterWrite = { field: string; op: FieldOp; values?: string[] }
 
@@ -284,7 +284,7 @@ export type DashboardGetOutput = { description: string; id: string; name: string
 
 export type DashboardListInput = { spaceId: string }
 
-export type DashboardListOutput = { dashboards: DashboardEntry[] }
+export type DashboardListOutput = { canShare: boolean; dashboards: DashboardEntry[] }
 
 export type DashboardUpdateInput = { dashboard: string; description?: string | null; expectedVersion?: number | null; name?: string | null; share?: boolean; tiles?: TileInput[] | null }
 

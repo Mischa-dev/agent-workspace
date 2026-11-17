@@ -526,7 +526,9 @@ async fn timeline_ranges_read_only_bars_that_touch_them() {
     let (status, year) = get(
         &setup,
         &setup.browser,
-        &format!("{uri}/records?dateField={leaves}&endField={returns}&from=2026-01-01&to=2027-01-01"),
+        &format!(
+            "{uri}/records?dateField={leaves}&endField={returns}&from=2026-01-01&to=2027-01-01"
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{year}");
@@ -667,10 +669,22 @@ async fn charts_add_up_a_number_field_by_group() {
         .as_array()
         .expect("groups")
         .iter()
-        .map(|group| (group["label"].as_str().unwrap_or("").to_owned(), group["count"].clone(), group["value"].clone()))
+        .map(|group| {
+            (
+                group["label"].as_str().unwrap_or("").to_owned(),
+                group["count"].clone(),
+                group["value"].clone(),
+            )
+        })
         .collect::<Vec<_>>();
-    assert!(values.contains(&("Big".into(), json!(2), json!(75.0))), "{by_tag}");
-    assert!(values.contains(&("New".into(), json!(2), json!(65.0))), "{by_tag}");
+    assert!(
+        values.contains(&("Big".into(), json!(2), json!(75.0))),
+        "{by_tag}"
+    );
+    assert!(
+        values.contains(&("New".into(), json!(2), json!(65.0))),
+        "{by_tag}"
+    );
     assert_eq!(by_tag["value"], json!(60.0), "{by_tag}");
     let (status, most) = get(
         &setup,

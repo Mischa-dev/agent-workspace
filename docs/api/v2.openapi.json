@@ -944,9 +944,20 @@
       },
       "FigureGroup": {
         "properties": {
+          "color": {
+            "description": "An option's colour, when the group is one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "count": {
             "format": "int64",
             "type": "integer"
+          },
+          "key": {
+            "description": "The group's value, stable across reads (an option's id, a date).",
+            "type": "string"
           },
           "name": {
             "type": "string"
@@ -960,6 +971,7 @@
           }
         },
         "required": [
+          "key",
           "name",
           "count"
         ],
@@ -991,6 +1003,13 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "style": {
+            "description": "A chart's look: bar, line, donut or number.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "total": {
             "description": "Records the view finds.",
@@ -7754,7 +7773,7 @@
     },
     "/api/v2/w/{workspace}/ops/dashboard_create": {
       "post": {
-        "description": "Make a dashboard in a project: tiles that each show one of a collection's views (a chart view as its chart) or a note. Make chart views first with view_create (type chart). Shared dashboards need a role that can build collections.",
+        "description": "Make a dashboard in a project: tiles that each show one of a collection's views (a chart view as its chart) or a note. Make chart views first with view_create (type chart). Shared dashboards need a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
         "operationId": "dashboard_create",
         "parameters": [
           {
@@ -7793,7 +7812,7 @@
                     "type": "string"
                   },
                   "shared": {
-                    "description": "Shared with everyone in the project (the default; needs a role that\ncan build collections), or false for your own.",
+                    "description": "Shared with everyone in the project (the default; needs a role that\ncan edit dashboards), or false for your own.",
                     "type": [
                       "boolean",
                       "null"
@@ -8087,7 +8106,7 @@
     },
     "/api/v2/w/{workspace}/ops/dashboard_delete": {
       "post": {
-        "description": "Remove a dashboard. The views its tiles showed stay. Removing a shared one needs a role that can build collections.",
+        "description": "Remove a dashboard. The views its tiles showed stay. Removing a shared one needs a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
         "operationId": "dashboard_delete",
         "parameters": [
           {
@@ -8331,7 +8350,7 @@
     },
     "/api/v2/w/{workspace}/ops/dashboard_get": {
       "post": {
-        "description": "Read a dashboard and what each tile shows, as you see it: a chart's groups with their counts (and sums or averages), or how many records a view finds and the first few. A tile over records you can't see says so.",
+        "description": "Read a dashboard and what each tile shows, as you see it: a chart's groups with their counts (and sums or averages), or how many records a view finds and the first few. A tile over records you can't see says so. Needs \"See dashboards\" where it acts.",
         "operationId": "dashboard_get",
         "parameters": [
           {
@@ -8636,7 +8655,7 @@
     },
     "/api/v2/w/{workspace}/ops/dashboard_list": {
       "post": {
-        "description": "List a project's dashboards you can see: the shared ones, then your own, each with its tiles. Read one's figures with dashboard_get.",
+        "description": "List a project's dashboards you can see: the shared ones, then your own, each with its tiles. Read one's figures with dashboard_get. Needs \"See dashboards\" where it acts.",
         "operationId": "dashboard_list",
         "parameters": [
           {
@@ -8696,6 +8715,10 @@
                         },
                         "value": {
                           "properties": {
+                            "canShare": {
+                              "description": "Whether you can make, change and remove shared dashboards here.",
+                              "type": "boolean"
+                            },
                             "dashboards": {
                               "description": "The shared dashboards in order, then your own; dashboard_get reads\none with its figures.",
                               "items": {
@@ -8705,7 +8728,8 @@
                             }
                           },
                           "required": [
-                            "dashboards"
+                            "dashboards",
+                            "canShare"
                           ],
                           "title": "DashboardListOutput",
                           "type": "object"
@@ -8790,6 +8814,10 @@
                         },
                         "value": {
                           "properties": {
+                            "canShare": {
+                              "description": "Whether you can make, change and remove shared dashboards here.",
+                              "type": "boolean"
+                            },
                             "dashboards": {
                               "description": "The shared dashboards in order, then your own; dashboard_get reads\none with its figures.",
                               "items": {
@@ -8799,7 +8827,8 @@
                             }
                           },
                           "required": [
-                            "dashboards"
+                            "dashboards",
+                            "canShare"
                           ],
                           "title": "DashboardListOutput",
                           "type": "object"
@@ -8870,7 +8899,7 @@
     },
     "/api/v2/w/{workspace}/ops/dashboard_update": {
       "post": {
-        "description": "Rename a dashboard, change its tiles, or share one of your own. Changing a shared dashboard needs a role that can build collections.",
+        "description": "Rename a dashboard, change its tiles, or share one of your own. Changing a shared dashboard needs a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
         "operationId": "dashboard_update",
         "parameters": [
           {

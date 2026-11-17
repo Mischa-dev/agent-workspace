@@ -4,6 +4,7 @@ import type { FieldDefinition } from '../fields/fieldModel'
 import { Button, EmptyState, ListSkeleton, SWATCHES, countLabel } from '../ui'
 import { recordsParams, useRecords, type CollectionBody, type RecordsQuery, type ViewConfig } from './api'
 import { chartNumber, chartPoints, chartTicks, measureLabel } from './collectionModel'
+import './chart.css'
 
 type Point = ReturnType<typeof chartPoints>[number]
 
@@ -261,4 +262,17 @@ function DonutChart({ additive, label, points }: { additive: boolean; label: str
       </ul>
     </div>
   )
+}
+
+export type ChartPoint = Point
+
+/**
+ * Groups drawn in a chart's style, from figures read elsewhere (a
+ * dashboard's tile): bars, a line or a donut. `additive` says the values add
+ * up to a whole (a count or a sum), so a donut may fold the smallest.
+ */
+export function ChartFigure({ additive, label, points, style }: { additive: boolean; label: string; points: readonly Point[]; style: 'bar' | 'line' | 'donut' }) {
+  if (style === 'line') return <LineChart label={label} points={points} />
+  if (style === 'donut') return <DonutChart additive={additive} label={label} points={points} />
+  return <BarChart label={label} points={points} />
 }

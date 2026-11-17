@@ -1,0 +1,185 @@
+/* A collection as a chart (T1.31): bars, a line, a donut or one number. */
+.aw-cchart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 960px;
+}
+
+.aw-cchart__hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-4) 0;
+}
+
+.aw-cchart__heronumber {
+  color: var(--content-fg);
+  font: var(--t-display);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-cchart__herolabel,
+.aw-cchart__more {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-cchart__pick {
+  align-items: center;
+  color: var(--content-fg-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font: var(--t-small);
+  gap: var(--space-2);
+}
+
+.aw-cchart__bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.aw-cchart__bar {
+  align-items: center;
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: minmax(80px, 200px) 1fr minmax(48px, auto);
+  min-height: 28px;
+}
+
+.aw-cchart__barlabel {
+  color: var(--content-fg);
+  font: var(--t-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-cchart__track {
+  height: 20px;
+  position: relative;
+}
+
+.aw-cchart__fill {
+  background: var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  height: 100%;
+  min-width: 2px;
+  position: absolute;
+  top: 0;
+}
+
+.aw-cchart__fill--below {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.aw-cchart__barvalue {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.aw-cchart__scroll {
+  overflow-x: auto;
+}
+
+.aw-cchart__line {
+  display: block;
+}
+
+.aw-cchart__grid {
+  stroke: var(--content-border);
+  stroke-width: 1;
+}
+
+.aw-cchart__axis {
+  fill: var(--content-fg-muted);
+  font: var(--t-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-cchart__path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.aw-cchart__dot {
+  fill: var(--accent);
+  stroke: var(--content-bg);
+  stroke-width: 2;
+}
+
+.aw-cchart__donut {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.aw-cchart__legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  min-width: 200px;
+  padding: 0;
+}
+
+.aw-cchart__legend li {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.aw-cchart__swatch {
+  border-radius: var(--radius-sm);
+  flex: none;
+  height: 10px;
+  width: 10px;
+}
+
+.aw-cchart__legendlabel {
+  color: var(--content-fg);
+  flex: 1;
+  font: var(--t-ui);
+}
+
+.aw-cchart__legendvalue {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-cchart__table summary {
+  color: var(--content-fg-muted);
+  cursor: pointer;
+  font: var(--t-small);
+}
+
+.aw-cchart__table table {
+  border-collapse: collapse;
+  font: var(--t-small);
+  margin-top: var(--space-2);
+}
+
+.aw-cchart__table th,
+.aw-cchart__table td {
+  border-bottom: 1px solid var(--content-border);
+  padding: var(--space-1) var(--space-3);
+  text-align: left;
+}
+
+.aw-cchart__table td {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

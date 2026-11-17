@@ -229,6 +229,41 @@ async fn announce(
     Ok(())
 }
 
+/// Tells the caller's other screens (or, for a role's default, the space)
+/// that which views they keep or open on changed. It names the view, never
+/// anything in it.
+async fn tell_view_changed(
+    call: &mut OpCall<'_>,
+    held: &Held,
+    view_id: Option<Uuid>,
+    everyone: bool,
+) -> Result<(), OpError> {
+    use crate::events::{Audience, NewEvent};
+    let workspace_id = call.ctx.workspace_id;
+    let actor = call.ctx.caller.account_id;
+    let tx = call.tx().await?;
+    let event = NewEvent {
+        id: Uuid::now_v7(),
+        ty: &crate::events::catalog::VIEW_CHANGED,
+        workspace_id: Some(workspace_id),
+        space_id: Some(held.project_id),
+        thing: view_id.map(|id| (id, "view")),
+        access_thing: None,
+        version: None,
+        changes: &[],
+        audience: if everyone {
+            Audience::Space
+        } else {
+            Audience::Account(actor)
+        },
+        payload: json!({ "collectionId": held.collection_id }),
+        actor: Some(actor),
+        legacy_type: None,
+    };
+    crate::events::emit(tx, event).await?;
+    Ok(())
+}
+
 /// One view as a reader sees it.
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -410,6 +445,7 @@ impl Operation for ViewCreate {
     const MODULE: &'static str = "collections";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["view.changed", "collection.updated"];
     const TITLE: &'static str = "Make a view";
     const DESCRIPTION: &'static str = "Save a way to look at a collection's records (Tasks \
         included): a name, a type and its filters, sort, grouping and columns. It is yours \
@@ -517,6 +553,7 @@ impl Operation for ViewUpdate {
     const MODULE: &'static str = "collections";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["view.changed", "collection.updated"];
     const TITLE: &'static str = "Change a view";
     const DESCRIPTION: &'static str = "Rename a view, change what it shows, move it, or share \
         one of your own. Changing a shared view needs a role that can build collections.";
@@ -623,6 +660,7 @@ impl Operation for ViewDelete {
     const MODULE: &'static str = "collections";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["view.changed", "collection.updated"];
     const TITLE: &'static str = "Remove a view";
     const DESCRIPTION: &'static str = "Remove a view. The records it showed stay. Removing a \
         shared view needs a role that can build collections, and a collection keeps at least \
@@ -691,6 +729,7 @@ impl Operation for ViewPin {
     const MODULE: &'static str = "collections";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["view.changed"];
     const TITLE: &'static str = "Pin a view";
     const DESCRIPTION: &'static str = "Keep a view in your sidebar, or take it out. Only your \
         own sidebar changes.";
@@ -717,6 +756,7 @@ impl Operation for ViewPin {
             held.collection_id,
             json!({ "view": view.id, "pinned": input.pinned }),
         );
+        tell_view_changed(call, &held, Some(view.id), false).await?;
         entry_for(call, &view).await
     }
 }
@@ -761,6 +801,7 @@ impl Operation for ViewDefaultSet {
     const MODULE: &'static str = "collections";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["view.changed"];
     const TITLE: &'static str = "Choose a default view";
     const DESCRIPTION: &'static str = "Choose the view a collection opens on: for you, or for \
         everyone holding a role. Your own choice wins over your role's; with neither it opens \
@@ -818,6 +859,13 @@ impl Operation for ViewDefaultSet {
         .await?;
         let default_view_id =
             views::default_view(tx, held.project_id, held.collection_id, actor).await?;
+        tell_view_changed(
+            call,
+            &held,
+            view.as_ref().map(|view| view.id),
+            matches!(holder, DefaultFor::Role(_)),
+        )
+        .await?;
         call.audit_target(
             "collection",
             held.collection_id,

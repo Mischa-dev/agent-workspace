@@ -138,8 +138,8 @@ pub fn parse_view_type(value: &str) -> Option<ViewType> {
 }
 
 /// What a view or a query asks for when the type isn't one there is.
-pub const VIEW_TYPE_MESSAGE: &str =
-    "A view is a \"table\", \"board\", \"list\", \"gallery\", \"calendar\" or \"timeline\".";
+pub const VIEW_TYPE_MESSAGE: &str = "A view is a \"table\", \"board\", \"list\", \"gallery\", \"calendar\", \"timeline\" \
+     or \"chart\".";
 
 #[derive(
     Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
@@ -1216,8 +1216,8 @@ pub async fn pins(
 ) -> Result<Pins, AppError> {
     let rows = sqlx::query_as::<_, (Uuid, bool, i32)>(
         "SELECT pin.view_id, pin.pinned, pin.position FROM collection_view_pins pin \
-         JOIN collection_views view ON view.project_id = pin.project_id AND view.id = pin.view_id \
-         WHERE pin.project_id = $1 AND view.collection_id = $2 AND pin.actor_id = $3",
+         JOIN collection_views view ON view.project_id = pin.space_id AND view.id = pin.view_id \
+         WHERE pin.space_id = $1 AND view.collection_id = $2 AND pin.actor_id = $3",
     )
     .bind(project_id)
     .bind(collection_id)
@@ -1251,11 +1251,11 @@ pub async fn set_pin(
 ) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        INSERT INTO collection_view_pins (workspace_id, project_id, view_id, actor_id, pinned, position)
+        INSERT INTO collection_view_pins (workspace_id, space_id, view_id, actor_id, pinned, position)
         SELECT project.organization_id, $1, $2, $3, $4,
                COALESCE($5, (SELECT COALESCE(max(other.position) + 1, 0)
                              FROM collection_view_pins other
-                             WHERE other.project_id = $1 AND other.actor_id = $3 AND other.pinned))
+                             WHERE other.space_id = $1 AND other.actor_id = $3 AND other.pinned))
         FROM projects project WHERE project.id = $1
         ON CONFLICT (view_id, actor_id) DO UPDATE
         SET pinned = EXCLUDED.pinned, position = EXCLUDED.position, updated_at = now()
@@ -1293,8 +1293,8 @@ pub async fn default_view(
         r#"
         SELECT preference.view_id FROM collection_view_defaults preference
         JOIN collection_views view
-          ON view.project_id = preference.project_id AND view.id = preference.view_id
-        WHERE preference.project_id = $1 AND preference.collection_id = $2
+          ON view.project_id = preference.space_id AND view.id = preference.view_id
+        WHERE preference.space_id = $1 AND preference.collection_id = $2
           AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $3)
           AND (preference.actor_id = $3
                OR preference.role_id IN (
@@ -1338,7 +1338,7 @@ pub async fn set_default(
     };
     sqlx::query(
         "DELETE FROM collection_view_defaults \
-         WHERE project_id = $1 AND collection_id = $2 \
+         WHERE space_id = $1 AND collection_id = $2 \
            AND role_id IS NOT DISTINCT FROM $3 AND actor_id IS NOT DISTINCT FROM $4",
     )
     .bind(project_id)
@@ -1351,7 +1351,7 @@ pub async fn set_default(
         sqlx::query(
             r#"
             INSERT INTO collection_view_defaults
-                (id, workspace_id, project_id, collection_id, role_id, actor_id, view_id, set_by_actor_id)
+                (id, workspace_id, space_id, collection_id, role_id, actor_id, view_id, set_by_actor_id)
             SELECT $1, project.organization_id, $2, $3, $4, $5, $6, $7
             FROM projects project WHERE project.id = $2
             "#,

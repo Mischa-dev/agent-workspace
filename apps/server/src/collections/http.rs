@@ -1260,13 +1260,14 @@ async fn list_records(
             ..config.chart.unwrap_or_default()
         });
     } else if query.measure_field.is_some() {
-        return Ok(invalid(
-            "measureField",
-            "measureField goes with a measure.",
-        ));
+        return Ok(invalid("measureField", "measureField goes with a measure."));
     }
     if let Err(message) = views::check(&config, &view_fields) {
-        let at = if query.measure.is_some() { "measure" } else { "filters" };
+        let at = if query.measure.is_some() {
+            "measure"
+        } else {
+            "filters"
+        };
         return Ok(invalid(at, message));
     }
     let Some(archived) = Archived::parse(query.archived.as_deref().unwrap_or("")) else {

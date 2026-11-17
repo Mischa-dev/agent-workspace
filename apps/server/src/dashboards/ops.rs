@@ -1,7 +1,7 @@
 //! Dashboards as operations (T1.32): list, read (with each tile's figures,
 //! read as the caller), make, change and remove. Anyone in a project keeps
 //! dashboards of their own; a shared one, or sharing one, needs a role that
-//! can build collections, as shared views do.
+//! can edit dashboards.
 
 use std::borrow::Cow;
 
@@ -54,39 +54,32 @@ async fn holds(call: &mut OpCall<'_>, permission: Perm) -> Result<bool, OpError>
     let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
     let caller = call.ctx.caller.clone();
     let tx = call.tx().await?;
-    Ok(matches!(
-        access::check(
-            tx,
-            &caller,
-            Need::permission(permission),
-            AccessTarget::Space(space)
-        )
-        .await?,
-        Ok(_)
-    ))
+    Ok(access::check(
+        tx,
+        &caller,
+        Need::permission(permission),
+        AccessTarget::Space(space),
+    )
+    .await?
+    .is_ok())
 }
 
-async fn need_build(call: &mut OpCall<'_>) -> Result<(), OpError> {
-    if holds(call, Perm::CollectionsBuild).await? {
+async fn need_share(call: &mut OpCall<'_>) -> Result<(), OpError> {
+    if holds(call, Perm::DashboardsEdit).await? {
         return Ok(());
     }
     Err(OpError::Denied {
         reason: DenyReason::Role {
-            permission: Perm::CollectionsBuild,
+            permission: Perm::DashboardsEdit,
         },
         message: Cow::Borrowed(
-            "Shared dashboards need a role that can build collections. Make a dashboard of \
-             your own instead.",
+            "Shared dashboards need a role that can edit dashboards. Make a dashboard of your \
+             own instead.",
         ),
     })
 }
 
-fn one_line(
-    field: &'static str,
-    value: &str,
-    most: usize,
-    what: &str,
-) -> Result<String, OpError> {
+fn one_line(field: &'static str, value: &str, most: usize, what: &str) -> Result<String, OpError> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > most || value.chars().any(char::is_control) {
         return Err(invalid(
@@ -138,11 +131,14 @@ pub struct TileInput {
 }
 
 /// Checks tiles as written: each view one the dashboard's readers can see
-/// (a shared dashboard's, a shared view), each size in range.
+/// (a shared dashboard's, a shared view), each size in range. A tile it
+/// already had (`before`) whose view has since gone stays as it was, so the
+/// rest of the dashboard can still change; it shows as gone.
 async fn tiles_of(
     call: &mut OpCall<'_>,
     tiles: &[TileInput],
     shared: bool,
+    before: &[Tile],
 ) -> Result<Vec<Tile>, OpError> {
     if tiles.len() > MAX_TILES {
         return Err(invalid(
@@ -202,7 +198,19 @@ async fn tiles_of(
                 .await
                 .map_err(AppError::from)?;
                 let Some((collection, owner)) = found else {
-                    return Err(OpError::not_found("That view"));
+                    let kept = before
+                        .iter()
+                        .find(|old| old.id == tile.id && old.view == Some(view));
+                    let Some(kept) = kept else {
+                        return Err(OpError::not_found("That view"));
+                    };
+                    tile.collection = kept.collection;
+                    tile.view = Some(view);
+                    if written.iter().any(|other: &Tile| other.id == tile.id) {
+                        return Err(invalid("tiles", "Each tile appears once."));
+                    }
+                    written.push(tile);
+                    continue;
                 };
                 if shared && owner.is_some() {
                     return Err(invalid(
@@ -371,13 +379,15 @@ pub struct DashboardListOutput {
     /// The shared dashboards in order, then your own; dashboard_get reads
     /// one with its figures.
     pub dashboards: Vec<DashboardEntry>,
+    /// Whether you can make, change and remove shared dashboards here.
+    pub can_share: bool,
 }
 
 impl Operation for DashboardList {
     const NAME: &'static str = "dashboard_list";
     const KIND: OpKind = OpKind::Query;
     const MODULE: &'static str = "dashboards";
-    const PERMISSION: Option<Perm> = None;
+    const PERMISSION: Option<Perm> = Some(Perm::DashboardsView);
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List dashboards";
     const DESCRIPTION: &'static str = "List a project's dashboards you can see: the shared ones, \
@@ -392,10 +402,12 @@ impl Operation for DashboardList {
     ) -> Result<DashboardListOutput, OpError> {
         let project_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
         let reader = call.ctx.caller.account_id;
+        let can_share = holds(call, Perm::DashboardsEdit).await?;
         let tx = call.tx().await?;
         let dashboards = super::visible(tx, project_id, reader).await?;
         Ok(DashboardListOutput {
             dashboards: dashboards.iter().map(entry).collect(),
+            can_share,
         })
     }
 }
@@ -426,7 +438,7 @@ impl Operation for DashboardGet {
     const NAME: &'static str = "dashboard_get";
     const KIND: OpKind = OpKind::Describe;
     const MODULE: &'static str = "dashboards";
-    const PERMISSION: Option<Perm> = None;
+    const PERMISSION: Option<Perm> = Some(Perm::DashboardsView);
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "Read a dashboard";
     const DESCRIPTION: &'static str = "Read a dashboard and what each tile shows, as you see it: \
@@ -436,7 +448,10 @@ impl Operation for DashboardGet {
     type Input = DashboardGetInput;
     type Output = DashboardEntry;
 
-    async fn run(call: &mut OpCall<'_>, input: DashboardGetInput) -> Result<DashboardEntry, OpError> {
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: DashboardGetInput,
+    ) -> Result<DashboardEntry, OpError> {
         let dashboard = read(call, input.dashboard.id(), false).await?;
         let mut shown = entry(&dashboard);
         if input.figures == Some(false) {
@@ -453,10 +468,12 @@ impl Operation for DashboardGet {
             match super::figures(tx, project_id, tile, reader, can_view_tasks).await? {
                 Ok(figures) => shown.figures = Some(figures),
                 Err(Unseen::Gone) => {
-                    shown.unseen = Some("This tile's view is gone, or isn't one you can see.".into());
+                    shown.unseen =
+                        Some("This tile's view is gone, or isn't one you can see.".into());
                 }
                 Err(Unseen::Tasks) => {
-                    shown.unseen = Some("You can't see this data: your role doesn't see tasks.".into());
+                    shown.unseen =
+                        Some("You can't see this data: your role doesn't see tasks.".into());
                 }
             }
         }
@@ -479,7 +496,7 @@ pub struct DashboardCreateInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Shared with everyone in the project (the default; needs a role that
-    /// can build collections), or false for your own.
+    /// can edit dashboards), or false for your own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared: Option<bool>,
     /// Its tiles, in order, at most 24.
@@ -497,12 +514,13 @@ impl Operation for DashboardCreate {
     const NAME: &'static str = "dashboard_create";
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "dashboards";
-    const PERMISSION: Option<Perm> = None;
+    const PERMISSION: Option<Perm> = Some(Perm::DashboardsView);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["dashboard.updated"];
     const TITLE: &'static str = "Make a dashboard";
     const DESCRIPTION: &'static str = "Make a dashboard in a project: tiles that each show one of \
         a collection's views (a chart view as its chart) or a note. Make chart views first with \
-        view_create (type chart). Shared dashboards need a role that can build collections.";
+        view_create (type chart). Shared dashboards need a role that can edit dashboards.";
 
     type Input = DashboardCreateInput;
     type Output = DashboardEntry;
@@ -515,9 +533,9 @@ impl Operation for DashboardCreate {
         let description = description_of(input.description.as_deref().unwrap_or(""))?;
         let shared = input.shared.unwrap_or(true);
         if shared {
-            need_build(call).await?;
+            need_share(call).await?;
         }
-        let tiles = tiles_of(call, &input.tiles, shared).await?;
+        let tiles = tiles_of(call, &input.tiles, shared, &[]).await?;
         let project_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
         let workspace_id = call.ctx.workspace_id;
         let me = call.ctx.caller.account_id;
@@ -578,11 +596,12 @@ impl Operation for DashboardUpdate {
     const NAME: &'static str = "dashboard_update";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "dashboards";
-    const PERMISSION: Option<Perm> = None;
+    const PERMISSION: Option<Perm> = Some(Perm::DashboardsView);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["dashboard.updated"];
     const TITLE: &'static str = "Change a dashboard";
     const DESCRIPTION: &'static str = "Rename a dashboard, change its tiles, or share one of your \
-        own. Changing a shared dashboard needs a role that can build collections.";
+        own. Changing a shared dashboard needs a role that can edit dashboards.";
 
     type Input = DashboardUpdateInput;
     type Output = DashboardEntry;
@@ -596,11 +615,15 @@ impl Operation for DashboardUpdate {
             .as_deref()
             .map(|name| one_line("name", name, MAX_NAME_CHARACTERS, "dashboard"))
             .transpose()?;
-        let description = input.description.as_deref().map(description_of).transpose()?;
+        let description = input
+            .description
+            .as_deref()
+            .map(description_of)
+            .transpose()?;
         let current = read(call, input.dashboard.id(), true).await?;
         let shared = current.owner_actor_id.is_none() || input.share;
         if shared {
-            need_build(call).await?;
+            need_share(call).await?;
         }
         if let Some(expected) = input.expected_version
             && expected != current.version
@@ -614,7 +637,7 @@ impl Operation for DashboardUpdate {
         // Sharing checks the tiles there too: a shared dashboard shows
         // shared views only.
         let tiles = match &input.tiles {
-            Some(tiles) => Some(tiles_of(call, tiles, shared).await?),
+            Some(tiles) => Some(tiles_of(call, tiles, shared, &current.tiles).await?),
             None if input.share && current.owner_actor_id.is_some() => {
                 let kept = current
                     .tiles
@@ -629,7 +652,7 @@ impl Operation for DashboardUpdate {
                         height: Some(tile.height),
                     })
                     .collect::<Vec<_>>();
-                Some(tiles_of(call, &kept, true).await?)
+                Some(tiles_of(call, &kept, true, &current.tiles).await?)
             }
             None => None,
         };
@@ -682,11 +705,12 @@ impl Operation for DashboardDelete {
     const NAME: &'static str = "dashboard_delete";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "dashboards";
-    const PERMISSION: Option<Perm> = None;
+    const PERMISSION: Option<Perm> = Some(Perm::DashboardsView);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["dashboard.updated"];
     const TITLE: &'static str = "Remove a dashboard";
     const DESCRIPTION: &'static str = "Remove a dashboard. The views its tiles showed stay. \
-        Removing a shared one needs a role that can build collections.";
+        Removing a shared one needs a role that can edit dashboards.";
 
     type Input = DashboardDeleteInput;
     type Output = DashboardDeleteOutput;
@@ -697,7 +721,7 @@ impl Operation for DashboardDelete {
     ) -> Result<DashboardDeleteOutput, OpError> {
         let current = read(call, input.dashboard.id(), true).await?;
         if current.owner_actor_id.is_none() {
-            need_build(call).await?;
+            need_share(call).await?;
         }
         let tx = call.tx().await?;
         super::remove(tx, &current).await?;

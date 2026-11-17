@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": ["collections"],
   "worksWith": ["tasks"],
-  "permissions": [],
+  "permissions": ["dashboards.view", "dashboards.edit"],
   "tools": {
     "dashboard_list": "query",
     "dashboard_get": "describe",
@@ -36,7 +36,7 @@
   "slots": {
     "pages": ["/projects/:projectId/dashboards/*"],
     "parts": ["area.dashboards"],
-    "sidebar": ["dashboards"],
+    "sidebar": [],
     "home": [],
     "settings": [],
     "palette": ["p:dashboards"],

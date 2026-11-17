@@ -1398,7 +1398,11 @@ async fn pause_for_the_day(
         detail: json!({
             "title": "A form you made paused itself",
             "dailyLimit": limit,
-            "href": format!("/projects/{}/collections/{collection_id}", link.project_id),
+            "href": crate::addresses::Target::space(
+                link.project_id,
+                crate::addresses::Place::Collection(collection_id),
+            )
+            .legacy_path(),
             "linkId": link.id,
         }),
         group_key: format!("form-paused:{}", link.id),

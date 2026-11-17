@@ -38,3 +38,4 @@ CREATE UNIQUE INDEX dashboards_name_unique
 
 CREATE INDEX dashboards_by_project ON dashboards (space_id, position);
 CREATE INDEX dashboards_by_workspace ON dashboards (workspace_id);
+SELECT tenancy_protect('dashboards', 'workspace_id');
