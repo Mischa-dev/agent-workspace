@@ -1224,6 +1224,15 @@ async fn api_only_instance_runs_no_jobs() {
     .await
     .expect("leases");
     assert_eq!(held, 0, "an api instance took a lease");
+    // A run started through it wakes the lease holder rather than being
+    // admitted here: it knows its cluster though it isn't the host.
+    let known = cluster
+        .instance(0)
+        .state()
+        .supervisors
+        .cluster()
+        .map(|known| known.instance_id().0);
+    assert_eq!(known, Some(cluster.instance(0).cluster().instance_id().0));
     // It still serves the app.
     let browser = cluster.instance(0).login("owner").await;
     let (status, _) = cluster
