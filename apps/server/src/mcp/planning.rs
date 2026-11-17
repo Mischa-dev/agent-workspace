@@ -167,21 +167,31 @@ pub(crate) struct VisibleLinks {
     pub ready: bool,
 }
 
-pub(crate) fn reader(principal: &McpPrincipal) -> Reader {
+pub(crate) fn reader(state: &AppState, principal: &McpPrincipal) -> Reader {
+    Reader {
+        addresses: crate::addresses::Addresses::of(state),
+        ..reader_of(principal)
+    }
+}
+
+fn reader_of(principal: &McpPrincipal) -> Reader {
     Reader {
         actor_id: principal.actor_id,
         connection_id: principal.external_agent_connection_id,
+        addresses: crate::addresses::Addresses::LEGACY,
     }
 }
 
 pub(crate) async fn visible_links(
+    state: &AppState,
     connection: &mut PgConnection,
     principal: &McpPrincipal,
     project_id: Uuid,
     task_id: Uuid,
 ) -> Result<VisibleLinks, AppError> {
     let links =
-        work_item_planning::task_links(connection, reader(principal), project_id, task_id).await?;
+        work_item_planning::task_links(connection, reader(state, principal), project_id, task_id)
+            .await?;
     let reachable = accessible_project_ids_in(&mut *connection, principal).await?;
     // task_links keeps tasks the reader's role lets them see; in an app's
     // call, its agent limit decides as well.
@@ -336,7 +346,11 @@ async fn resolve_linked(
     for reference in references {
         match work_item_planning::resolve_reference(
             &mut *connection,
-            reader(principal),
+            // Only ids come back: no link is written.
+            Reader {
+                addresses: crate::addresses::Addresses::LEGACY,
+                ..reader_of(principal)
+            },
             project_id,
             reference,
         )
@@ -447,6 +461,7 @@ pub(crate) async fn task_depend(
         };
         let remove = arguments.remove.unwrap_or(false);
         match depend_in(
+            state,
             &mut transaction,
             principal,
             project_id,
@@ -552,6 +567,7 @@ pub(crate) async fn task_depend_many(
                 }
             };
             match depend_in(
+                state,
                 &mut transaction,
                 principal,
                 project_id,
@@ -615,6 +631,7 @@ fn at_index<T, U>(index: usize, refusal: ToolResult<T>) -> ToolResult<U> {
 
 /// One task's dependency change inside the caller's transaction.
 async fn depend_in(
+    state: &AppState,
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     principal: &McpPrincipal,
     project_id: Uuid,
@@ -683,7 +700,7 @@ async fn depend_in(
             }
         };
     let (task, sees) = changed_task(transaction, principal, project_id, task_id).await?;
-    let links = visible_links(transaction, principal, project_id, task_id).await?;
+    let links = visible_links(state, transaction, principal, project_id, task_id).await?;
     Ok(Ok(DependencyValue {
         task,
         blocked_by: links.blocked_by,
@@ -794,7 +811,7 @@ pub(crate) async fn task_relate(
             Err(refusal) => return Ok(link_refusal("otherTaskId", &reference, &refusal)),
         };
         let (task, _) = changed_task(&mut transaction, principal, project_id, task_id).await?;
-        let links = visible_links(&mut transaction, principal, project_id, task_id).await?;
+        let links = visible_links(state, &mut transaction, principal, project_id, task_id).await?;
         transaction.commit().await?;
         Ok::<_, AppError>(ToolResult::ok(RelationsValue {
             task,

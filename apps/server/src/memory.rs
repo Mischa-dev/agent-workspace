@@ -1306,7 +1306,7 @@ async fn workspace_pages_space_http(
 ) -> Result<Json<PagesSpaceResponse>, AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let project_id =
-        crate::workspace_space::join(&mut transaction, organization_id, principal.actor_id)
+        crate::spaces::workspace::join(&mut transaction, organization_id, principal.actor_id)
             .await?
             .ok_or(AppError::NotFound("workspace"))?;
     transaction.commit().await?;

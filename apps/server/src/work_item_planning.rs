@@ -20,6 +20,7 @@ use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
+    addresses::{Addresses, Linker, Target},
     conversations::ActorView,
     error::AppError,
     work_item_commands::{
@@ -40,6 +41,8 @@ pub const MAX_LINKS_PER_TASK: i64 = 200;
 pub struct Reader {
     pub actor_id: Uuid,
     pub connection_id: Option<Uuid>,
+    /// How links to what they read are written.
+    pub addresses: Addresses,
 }
 
 /// The agent connection an actor writes through, as `actor_can_access_project` takes it.
@@ -78,9 +81,16 @@ pub struct TaskRef {
 }
 
 impl TaskRef {
-    fn with_href(mut self) -> Self {
-        self.href = format!("/projects/{}/work-items/{}", self.project_id, self.id);
-        self
+    /// The task, with where it opens filled in.
+    pub async fn linked(
+        mut self,
+        connection: &mut PgConnection,
+        linker: &mut Linker,
+    ) -> Result<Self, AppError> {
+        self.href = linker
+            .path(connection, &Target::task(self.project_id, self.id))
+            .await?;
+        Ok(self)
     }
 }
 
@@ -238,25 +248,28 @@ pub async fn task_links(
                     crate::policy::Permission::TasksView,
                 ))
     };
+    let mut linker = Linker::new(reader.addresses);
+    let mut linked = Vec::new();
+    for task in blocked_by.into_iter().filter(|task| shown(task)) {
+        linked.push(task.linked(connection, &mut linker).await?);
+    }
+    let blocked_by = linked;
+    let mut linked = Vec::new();
+    for task in blocks.into_iter().filter(|task| shown(task)) {
+        linked.push(task.linked(connection, &mut linker).await?);
+    }
+    let blocks = linked;
+    let mut linked = Vec::new();
+    for row in relations.into_iter().filter(|row| shown(&row.task)) {
+        linked.push(RelationView {
+            kind: row.relation_kind,
+            task: row.task.linked(connection, &mut linker).await?,
+        });
+    }
     Ok(TaskLinks {
-        blocked_by: blocked_by
-            .into_iter()
-            .filter(|task| shown(task))
-            .map(TaskRef::with_href)
-            .collect(),
-        blocks: blocks
-            .into_iter()
-            .filter(|task| shown(task))
-            .map(TaskRef::with_href)
-            .collect(),
-        relations: relations
-            .into_iter()
-            .filter(|row| shown(&row.task))
-            .map(|row| RelationView {
-                kind: row.relation_kind,
-                task: row.task.with_href(),
-            })
-            .collect(),
+        blocked_by,
+        blocks,
+        relations: linked,
         ready: !finished && !marked_blocked && open_blockers == 0,
     })
 }

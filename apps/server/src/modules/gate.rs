@@ -347,7 +347,7 @@ async fn off_module(
     if kind == Some("standard") && !set.contains("projects") && module.id != "projects" {
         return Ok(Off::Module("projects"));
     }
-    let here = kind.map_or(set, |kind| set.in_project(kind));
+    let here = kind.map_or(set, |kind| set.in_stored(kind));
     if !here.contains(&module.id) {
         return Ok(Off::Module(module.id.as_str()));
     }

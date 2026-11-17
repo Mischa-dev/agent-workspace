@@ -56,13 +56,16 @@ pub async fn may_manage_account(
         }
         _ => {}
     }
-    // A named manager, in a workspace the account belongs to.
+    // A named manager, in a workspace the account belongs to. The account's
+    // own membership may be disabled (disabling an agent turns it off, and
+    // its managers must still re-enable or remove it); the caller's holding
+    // in that workspace is checked below and must be active.
     let workspaces = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT membership.organization_id
         FROM account_managers manager
         JOIN organization_memberships membership
-          ON membership.actor_id = manager.account_id AND membership.enabled
+          ON membership.actor_id = manager.account_id
         WHERE manager.account_id = $1 AND manager.manager_account_id = $2
         ORDER BY membership.organization_id
         "#,
@@ -103,7 +106,7 @@ async fn shares_a_workspace(
             FROM organization_memberships mine
             JOIN organization_memberships theirs
               ON theirs.organization_id = mine.organization_id
-             AND theirs.actor_id = $2 AND theirs.enabled
+             AND theirs.actor_id = $2
             WHERE mine.actor_id = $1 AND mine.enabled
         )
         "#,

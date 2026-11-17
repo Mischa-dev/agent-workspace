@@ -17,7 +17,7 @@ use super::{
     manifest::{self, Manifest},
     registry::Registry,
 };
-use crate::error::AppError;
+use crate::{error::AppError, spaces::SpaceKind};
 
 /// Where a module switch is kept: the workspace's own, or a narrowing in
 /// one of its spaces.
@@ -221,21 +221,33 @@ impl ModuleSet {
             .is_none_or(|module| self.contains(module))
     }
 
-    /// The modules on in a project of this kind (AWD-96). A project needs
-    /// Projects on for anything in it, Pages included, which doesn't need
-    /// Projects itself; the workspace space holds the workspace's own pages
-    /// and nothing else, so only Pages counts there; the direct space
-    /// follows the set as it is.
-    pub fn in_project(self, project_kind: &str) -> Self {
-        match project_kind {
-            "standard" if !self.contains("projects") => Self::always_on(),
-            "workspace" => {
-                let pages = manifest::index_of("pages")
-                    .map_or(Self::NONE, |index| Self(Bits::EMPTY.with(index)));
-                self.intersect(pages.union(Self::always_on()))
-            }
-            _ => self,
+    /// The modules on in a space of this kind (AWD-96, K4.10). A project
+    /// needs Projects on for anything in it, Pages included, which doesn't
+    /// need Projects itself; a kind with a starting shape
+    /// (`SpaceKind::starting_modules`) holds only those modules.
+    pub fn in_project(self, kind: SpaceKind) -> Self {
+        if kind == SpaceKind::Project && !self.contains("projects") {
+            return Self::always_on();
         }
+        match kind.starting_modules() {
+            Some(modules) => {
+                let shape = modules
+                    .iter()
+                    .filter_map(|module| manifest::index_of(module))
+                    .fold(Self::NONE, |set, index| {
+                        set.union(Self(Bits::EMPTY.with(index)))
+                    });
+                self.intersect(shape.union(Self::always_on()))
+            }
+            None => self,
+        }
+    }
+
+    /// The modules on in a stored space kind: `in_project` for a space,
+    /// the set as it is for the hidden project direct messages live in,
+    /// which is no space.
+    pub fn in_stored(self, kind: &str) -> Self {
+        SpaceKind::from_stored(kind).map_or(self, |kind| self.in_project(kind))
     }
 
     /// Why a module is off in this set, in words, or none when it's on.
@@ -543,7 +555,7 @@ pub async fn for_project(
     };
     let switches = switches(connection, row.organization_id).await?;
     Ok(Some(
-        narrowed(&switches, &row.role_off).in_project(&row.kind),
+        narrowed(&switches, &row.role_off).in_stored(&row.kind),
     ))
 }
 
@@ -639,7 +651,7 @@ impl ProjectModules {
                         .unwrap_or_default();
                     (
                         row.id,
-                        narrowed(&found, &row.role_off).in_project(&row.kind),
+                        narrowed(&found, &row.role_off).in_stored(&row.kind),
                         row.kind == "direct",
                     )
                 })
@@ -825,6 +837,7 @@ pub fn notification_switches_sql() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::ModuleSet;
+    use crate::spaces::SpaceKind;
 
     #[test]
     fn module_switch_sql_names_every_notification_kind() {
@@ -868,9 +881,14 @@ mod tests {
         // AWD-96: pages don't need Projects. They stay on for the
         // workspace's own pages and go with Projects inside a project.
         assert!(set.contains("pages"));
-        assert!(set.in_project("workspace").contains("pages"));
-        assert!(!set.in_project("standard").contains("pages"));
-        assert!(!set.in_project("workspace").contains("tasks"));
+        assert!(set.in_project(SpaceKind::Workspace).contains("pages"));
+        assert!(!set.in_project(SpaceKind::Project).contains("pages"));
+        assert!(!set.in_project(SpaceKind::Workspace).contains("tasks"));
+        assert_eq!(
+            set.in_stored("standard"),
+            set.in_project(SpaceKind::Project)
+        );
+        assert_eq!(set.in_stored("direct"), set);
     }
 
     #[test]

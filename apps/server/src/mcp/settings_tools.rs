@@ -12,13 +12,7 @@ use super::{
     McpPrincipal,
     common::{ToolResult, insert_audit, mark_via, parse_id, project_role},
 };
-use crate::{
-    AppState,
-    error::AppError,
-    memory,
-    policy::{Action, ActorKind},
-    settings,
-};
+use crate::{AppState, error::AppError, memory, policy::Action, settings};
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -186,8 +180,6 @@ pub(super) struct SettingsSetValue {
     pub version: Option<i64>,
 }
 
-const PEOPLE_CHANGE_SETTINGS: &str = "Agents read settings, but only people change them, on the web or through an app connected as themselves.";
-
 pub(super) async fn settings_set(
     state: &AppState,
     principal: &McpPrincipal,
@@ -195,9 +187,6 @@ pub(super) async fn settings_set(
 ) -> ToolResult<SettingsSetValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
-    }
-    if principal.actor_kind != ActorKind::Human {
-        return ToolResult::denied(PEOPLE_CHANGE_SETTINGS);
     }
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
@@ -249,7 +238,7 @@ pub(super) async fn settings_set(
         let target = settings::authorize_target_as(
             &mut transaction,
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             scope,
             Some(organization_id),
             Some(project_id),

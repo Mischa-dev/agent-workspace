@@ -18,7 +18,6 @@ use super::{
 };
 use crate::{
     AppState,
-    access::compare::Mode as AccessMode,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
 };
 
@@ -363,58 +362,19 @@ async fn pipeline<O: Operation>(
         request.workspace,
     )
     .await?;
-    let module = module_here::<O>(&mut connection, &located).await?;
-    let mode = state.config.access_mode("ops");
-    let old = if mode == AccessMode::New {
-        None
-    } else {
-        Some(
-            old_check::<O>(
-                &mut connection,
-                &request.caller,
-                &target,
-                &located,
-                writes,
-                module,
-            )
-            .await,
-        )
-    };
-    if mode != AccessMode::Old {
-        let need = crate::access::Need::maybe(O::PERMISSION)
-            .writing(writes)
-            .in_module(module);
-        let access_target = access_target(&target, &located);
-        let new = crate::access::check(&mut connection, &request.caller, need, access_target)
-            .await
-            .map_err(|error| OpError::logged(O::NAME, &error))?;
-        match &old {
-            Some(old) => {
-                crate::access::compare::compare(
-                    &mut connection,
-                    crate::access::compare::Compared {
-                        area: "ops",
-                        operation: O::NAME,
-                        caller: &request.caller,
-                        need: &need,
-                        target: &access_target,
-                        workspace_id: Some(located.workspace_id),
-                        space_id: located.space_id,
-                        old_allowed: old.is_ok(),
-                    },
-                    &new,
-                )
-                .await;
-            }
-            None => {
-                let _grant =
-                    new.map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
-            }
-        }
-    }
-    if let Some(old) = old {
-        old?;
-    }
+    let module = module_here::<O>(&mut connection, &request.caller, &located).await?;
+    let need = crate::access::Need::maybe(O::PERMISSION)
+        .writing(writes)
+        .in_module(module);
+    let _grant = crate::access::check(
+        &mut connection,
+        &request.caller,
+        need,
+        access_target(&target, &located),
+    )
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error))?
+    .map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
     // H1.24: a suspended workspace, or one being deleted, refuses every
     // call but the ones that still work then (keeping it).
     crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)
@@ -562,50 +522,48 @@ async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid])
 /// The module that must be on where an operation acts: its own, except
 /// that a conversation's follows the space it is in (registered as
 /// conversation filters: Messages in the direct space, Channels in a
-/// project), as the older tools decide.
+/// project), as the older tools decide, and that an operation another
+/// module also serves (`ModuleFilter::AlsoServes`, such as forms' links
+/// under Collections) is held to that module where its own is off.
 async fn module_here<O: Operation>(
     connection: &mut sqlx::PgConnection,
+    caller: &Caller,
     located: &target::Located,
 ) -> Result<&'static str, OpError> {
     let registry = crate::modules::registry::Registry::global();
+    if registry.also_serving(O::NAME).next().is_some() {
+        let modules = match located.space_id {
+            Some(space) => {
+                crate::modules::state::for_project(connection, space, caller.account_id).await
+            }
+            None => crate::modules::state::for_member(
+                connection,
+                located.workspace_id,
+                caller.account_id,
+            )
+            .await
+            .map(Some),
+        }
+        .map_err(|error| OpError::logged(O::NAME, &error))?;
+        if let Some(modules) = modules
+            && !modules.contains(O::MODULE)
+            && let Some(also) = registry
+                .also_serving(O::NAME)
+                .find(|also| modules.contains(also))
+        {
+            return Ok(also);
+        }
+    }
     let Some(space) = located.space_id else {
         return Ok(O::MODULE);
     };
     if !registry.governs_conversations(O::MODULE) {
         return Ok(O::MODULE);
     }
-    let direct =
-        sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-            .bind(space)
-            .fetch_optional(&mut *connection)
-            .await
-            .map_err(|error| OpError::logged(O::NAME, &error.into()))?
-            .unwrap_or(false);
+    let direct = crate::spaces::kind::holds_messages(connection, space)
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     Ok(registry.conversation_module(direct).unwrap_or(O::MODULE))
-}
-
-/// Today's checks, which decide while the `ops` area is in compare mode:
-/// the module gate, then the access shim.
-async fn old_check<O: Operation>(
-    connection: &mut sqlx::PgConnection,
-    caller: &Caller,
-    target: &Target,
-    located: &target::Located,
-    writes: bool,
-    module: &'static str,
-) -> Result<(), OpError> {
-    module_gate(connection, caller, target, located, module, O::NAME).await?;
-    access_shim::check(
-        connection,
-        caller,
-        target,
-        located,
-        O::PERMISSION,
-        writes,
-        O::TITLE,
-    )
-    .await
-    .map(|_| ())
 }
 
 /// What `access` is asked about for a located target.
@@ -672,50 +630,6 @@ fn denied_error<O: Operation>(
             None => OpError::not_found("That workspace"),
         },
     }
-}
-
-/// The operation's module must be on where it acts, or another module that
-/// also serves the operation (`ModuleFilter::AlsoServes`, such as forms'
-/// links under Collections); the operation keeps to that module's part.
-async fn module_gate(
-    connection: &mut sqlx::PgConnection,
-    caller: &Caller,
-    target: &Target,
-    located: &target::Located,
-    module: &'static str,
-    operation: &str,
-) -> Result<(), OpError> {
-    let Some(manifest) = crate::modules::manifest::get(module) else {
-        return Ok(());
-    };
-    if !manifest.switchable || matches!(target, Target::Account) {
-        return Ok(());
-    }
-    let modules = match located.space_id {
-        Some(space) => {
-            crate::modules::state::for_project(connection, space, caller.account_id).await?
-        }
-        None => Some(
-            crate::modules::state::for_member(connection, located.workspace_id, caller.account_id)
-                .await?,
-        ),
-    };
-    let Some(modules) = modules else {
-        return Ok(());
-    };
-    if modules.contains(module)
-        || crate::modules::registry::Registry::global()
-            .also_serving(operation)
-            .any(|also| modules.contains(also))
-    {
-        return Ok(());
-    }
-    Err(OpError::Denied {
-        reason: DenyReason::ModuleOff {
-            module: manifest.id.clone(),
-        },
-        message: format!("{} is turned off here.", manifest.name).into(),
-    })
 }
 
 /// Begin a call's transaction narrowed to the call's workspace

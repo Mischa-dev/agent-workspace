@@ -1,0 +1,111 @@
+//! The kinds of space (K4 §3.4). The stored `standard` is a project until
+//! K4.22 renames it; `direct` (the hidden Messages projects) is not a space
+//! kind and goes in K4.17.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceKind {
+    /// The workspace's own space: every workspace member is in it.
+    Workspace,
+    /// A project (stored `standard`).
+    Project,
+    /// A team's space.
+    Team,
+    /// One account's own space in a workspace.
+    Personal,
+}
+
+impl SpaceKind {
+    pub const ALL: [Self; 4] = [Self::Workspace, Self::Project, Self::Team, Self::Personal];
+
+    /// The one place a stored kind is read. `None` for `direct`, which is
+    /// not a space.
+    pub fn from_stored(value: &str) -> Option<Self> {
+        match value {
+            "workspace" => Some(Self::Workspace),
+            "standard" | "project" => Some(Self::Project),
+            "team" => Some(Self::Team),
+            "personal" => Some(Self::Personal),
+            _ => None,
+        }
+    }
+
+    /// The modules a space of this kind holds when it starts (K4.10), beyond
+    /// the ones always on; `None` when it may hold any. The workspace's own
+    /// space holds the workspace's pages, boards and channels, never tasks
+    /// or the rest of a project. This is data, ready for M1's per-space
+    /// switches: a space's own switches only narrow it further.
+    pub const fn starting_modules(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Workspace => Some(&["pages", "whiteboards", "channels"]),
+            Self::Project | Self::Team | Self::Personal => None,
+        }
+    }
+
+    /// The value stored in `projects.kind` today.
+    pub const fn stored(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Project => "standard",
+            Self::Team => "team",
+            Self::Personal => "personal",
+        }
+    }
+}
+
+/// Whether `space` is one of the hidden Messages projects (stored kind
+/// `direct`, which is not a space kind): read through `SpaceKind`, so no
+/// caller compares the stored literal.
+pub async fn holds_messages(
+    connection: &mut sqlx::PgConnection,
+    space: uuid::Uuid,
+) -> Result<bool, sqlx::Error> {
+    let kind = sqlx::query_scalar::<_, String>("SELECT kind FROM projects WHERE id = $1")
+        .bind(space)
+        .fetch_optional(connection)
+        .await?;
+    Ok(kind.is_some_and(|kind| SpaceKind::from_stored(&kind).is_none()))
+}
+
+/// Who may find and read a space.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceVisibility {
+    /// Only its members.
+    Members,
+    /// Every workspace member may read it and join it.
+    Workspace,
+}
+
+impl SpaceVisibility {
+    pub fn from_stored(value: &str) -> Option<Self> {
+        match value {
+            "members" => Some(Self::Members),
+            "workspace" => Some(Self::Workspace),
+            _ => None,
+        }
+    }
+
+    pub const fn stored(self) -> &'static str {
+        match self {
+            Self::Members => "members",
+            Self::Workspace => "workspace",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpaceKind;
+
+    #[test]
+    fn stored_kinds_round_trip_and_direct_is_not_a_space() {
+        for kind in SpaceKind::ALL {
+            assert_eq!(SpaceKind::from_stored(kind.stored()), Some(kind));
+        }
+        assert_eq!(SpaceKind::from_stored("standard"), Some(SpaceKind::Project));
+        assert_eq!(SpaceKind::from_stored("direct"), None);
+    }
+}

@@ -214,6 +214,38 @@ describe('invitation acceptance', () => {
     expect(requests.some(({ path }) => path.includes('project-invitations'))).toBe(false)
   })
 
+  it('sends an invitation link to the link endpoints', async () => {
+    const linkToken = `aw_lnk_${'c'.repeat(43)}`
+    window.history.replaceState({}, '', `/join#token=${linkToken}`)
+    const requests: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path = String(input)
+        requests.push(path)
+        if (path.endsWith('/api/v1/auth/session')) return jsonResponse(signedOutSession)
+        if (path.endsWith('/api/v1/invite-links/resolve')) {
+          return jsonResponse({ organizationName: 'Demo Workspace', projectName: null, role: 'member', expiresAt: '2026-08-02T12:00:00Z' })
+        }
+        if (path.endsWith('/api/v1/invite-links/accept-new')) return jsonResponse(authenticatedSession)
+        throw new Error(`Unexpected request: ${path}`)
+      }),
+    )
+
+    renderJoin()
+    expect(await screen.findByRole('heading', { name: 'Join a workspace' })).toBeVisible()
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'New Human' } })
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'new.human' } })
+    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'new_human' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery staple' } })
+    fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'correct horse battery staple' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create account and join' }))
+
+    expect(await screen.findByRole('heading', { name: 'Workspace home' })).toBeVisible()
+    expect(requests).toContain('/api/v1/invite-links/accept-new')
+    expect(requests.some((path) => path.includes('-invitations/'))).toBe(false)
+  })
+
   it('asks an existing account with two-factor for a code before joining', async () => {
     const requests: Array<{ path: string; init?: RequestInit }> = []
     let signedIn = false

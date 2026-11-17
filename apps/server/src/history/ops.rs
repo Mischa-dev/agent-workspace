@@ -64,7 +64,7 @@ async fn visible_kind(call: &OpCall<'_>, id: Uuid) -> Result<String, OpError> {
         task_projects: &task_projects,
         modules,
         workspaces: &workspaces,
-        workspace_boards: call.ctx.caller.confined_space.is_none(),
+        addresses: crate::addresses::Addresses::of(state),
     };
     module_things::get(&mut connection, &viewer, &kind, id)
         .await?

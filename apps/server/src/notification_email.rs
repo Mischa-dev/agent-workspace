@@ -143,12 +143,15 @@ async fn organization_of(state: &AppState, project_id: Uuid) -> Result<Uuid, App
 
 async fn send_one(state: &AppState, job: &SendJob) -> Result<(), JobError> {
     // Read as the recipient: anything they can no longer see sends nothing.
-    let Some(notification) =
-        notifications::get_many(&state.pool, job.recipient, &[job.notification_id])
-            .await?
-            .into_iter()
-            .next()
-    else {
+    let Some(notification) = notifications::get_many(
+        &state.pool,
+        crate::addresses::Addresses::of(state),
+        job.recipient,
+        &[job.notification_id],
+    )
+    .await?
+    .into_iter()
+    .next() else {
         return Ok(());
     };
     if notification.read {
@@ -293,7 +296,14 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
     .fetch_all(&mut *connection)
     .await?;
     let mut items = Vec::new();
-    for notification in notifications::get_many(&state.pool, candidate.actor_id, &ids).await? {
+    for notification in notifications::get_many(
+        &state.pool,
+        crate::addresses::Addresses::of(state),
+        candidate.actor_id,
+        &ids,
+    )
+    .await?
+    {
         let decision = notification_settings::decide(
             &mut connection,
             candidate.actor_id,

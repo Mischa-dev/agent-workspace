@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::{Addresses, Place, Target},
     auth::AuthenticatedActor,
     error::{ApiQuery, AppError},
     modules::state::ProjectModules,
@@ -120,13 +121,76 @@ pub struct SearchHit {
     pub author: Option<String>,
     pub at: String,
     /// The path in the web app.
+    #[sqlx(default)]
     pub path: String,
     #[serde(skip)]
     pub rank: f32,
+    /// Where the hit opens, as the query found it: [`SearchHit::target`].
+    #[serde(skip)]
+    pub link_kind: String,
+    #[serde(skip)]
+    pub link_id: Uuid,
+    #[serde(skip)]
+    pub link_child: Option<Uuid>,
 }
 
+impl SearchHit {
+    /// Where the hit opens, and the anchor in it (`#message-<id>`).
+    fn target(&self) -> (Target, Option<String>) {
+        let message = self.link_child.map(|id| format!("#message-{id}"));
+        if self.link_kind == "whiteboard" {
+            return (Target::Whiteboard(self.link_id), None);
+        }
+        // Every other kind lives in a space; only a workspace's own board
+        // has none.
+        let space = self.project_id.unwrap_or_default();
+        match self.link_kind.as_str() {
+            "direct" => (
+                Target::Direct {
+                    id: self.link_id,
+                    thread: None,
+                },
+                message,
+            ),
+            "thread" => (Target::space(space, Place::Thread(self.link_id)), message),
+            "channel" => (Target::space(space, Place::Channel(self.link_id)), message),
+            "page" => (Target::page(space, self.link_id), None),
+            "sheet" => (Target::space(space, Place::Sheet(self.link_id)), None),
+            "decision" => (
+                Target::space(space, Place::Decisions),
+                Some(format!("#{}", self.link_id)),
+            ),
+            "record" => match self.link_child {
+                Some(record) => (
+                    Target::space(
+                        space,
+                        Place::Record {
+                            collection: self.link_id,
+                            record,
+                        },
+                    ),
+                    None,
+                ),
+                None => (Target::space(space, Place::Collection(self.link_id)), None),
+            },
+            _ => (Target::task(space, self.link_id), None),
+        }
+    }
+
+    fn link(&mut self, addresses: Addresses) {
+        let (target, anchor) = self.target();
+        self.path = format!(
+            "{}{}",
+            addresses.in_workspace(self.workspace_id, &target),
+            anchor.unwrap_or_default()
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn search(
     pool: &PgPool,
+    addresses: Addresses,
     viewer: Uuid,
     projects: &[Uuid],
     text: &str,
@@ -247,7 +311,10 @@ pub async fn search(
             query = query.bind(&board_workspaces[..]);
         }
         let rows = query.fetch_all(crate::db::scoped(pool)).await?;
-        hits.extend(rows);
+        hits.extend(rows.into_iter().map(|mut hit| {
+            hit.link(addresses);
+            hit
+        }));
     }
     hits.sort_by(|left, right| {
         right
@@ -280,16 +347,17 @@ const MESSAGES_SQL: &str = r#"
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
            author.display_name AS author, message.created_at::text AS at,
-           CASE WHEN project.kind = 'direct' THEN
-                    '/messages/' || COALESCE(conversation.parent_channel_id, conversation.id)::text
-                ELSE '/projects/' || message.project_id::text ||
-                     CASE WHEN conversation.kind = 'thread' THEN '/threads/' ELSE '/channels/' END ||
-                     conversation.id::text
-           END AS path,
+           CASE WHEN space.direct THEN 'direct'
+                WHEN conversation.kind = 'thread' THEN 'thread' ELSE 'channel' END AS link_kind,
+           CASE WHEN space.direct
+                THEN COALESCE(conversation.parent_channel_id, conversation.id)
+                ELSE conversation.id END AS link_id,
+           NULL::uuid AS link_child,
            (ts_rank(message.search_vector, query.q) * 1.0)::real AS rank
     FROM query, messages message
     JOIN conversations conversation ON conversation.id = message.conversation_id
     JOIN projects project ON project.id = message.project_id
+    CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
     LEFT JOIN project_memberships author
       ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
     WHERE message.search_vector @@ query.q
@@ -315,14 +383,15 @@ const THREADS_SQL: &str = r#"
            parent.id AS conversation_id, parent.name AS conversation_name,
            NULL::text AS author,
            COALESCE(thread.thread_status_changed_at, thread.created_at)::text AS at,
-           CASE WHEN project.kind = 'direct' THEN '/messages/' || parent.id::text
-                ELSE '/projects/' || thread.project_id::text || '/threads/' || thread.id::text
-           END AS path,
+           CASE WHEN space.direct THEN 'direct' ELSE 'thread' END AS link_kind,
+           CASE WHEN space.direct THEN parent.id ELSE thread.id END AS link_id,
+           NULL::uuid AS link_child,
            (ts_rank(to_tsvector('english', thread.name || ' ' || COALESCE(thread.thread_outcome, '')),
                     query.q) * 1.5)::real AS rank
     FROM query, conversations thread
     JOIN conversations parent ON parent.id = thread.parent_channel_id
     JOIN projects project ON project.id = thread.project_id
+    CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
     WHERE thread.kind = 'thread'
       AND to_tsvector('english', thread.name || ' ' || COALESCE(thread.thread_outcome, '')) @@ query.q
       AND thread.project_id = ANY($2)
@@ -346,7 +415,8 @@ const TASKS_SQL: &str = r#"
            item.project_id, project.organization_id AS workspace_id, project.name AS project_name,
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
            NULL::text AS author, item.updated_at::text AS at,
-           '/projects/' || item.project_id::text || '/work-items/' || item.id::text AS path,
+           'task' AS link_kind, item.id AS link_id,
+           NULL::uuid AS link_child,
            (ts_rank(item.search_vector, query.q) * 1.3)::real AS rank
     FROM query, task_rows item
     JOIN projects project ON project.id = item.project_id
@@ -375,7 +445,8 @@ const PAGES_SQL: &str = r#"
            page.project_id, project.organization_id AS workspace_id, project.name AS project_name,
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
            editor.display_name AS author, page.updated_at::text AS at,
-           '/projects/' || page.project_id::text || '/pages/' || page.id::text AS path,
+           'page' AS link_kind, page.id AS link_id,
+           NULL::uuid AS link_child,
            (ts_rank(page.search_vector, query.q) * 1.6)::real AS rank
     FROM query, project_pages page
     JOIN projects project ON project.id = page.project_id
@@ -404,7 +475,8 @@ const DECISIONS_SQL: &str = r#"
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
            decision.source_conversation_id AS conversation_id, source.name AS conversation_name,
            decider.display_name AS author, decision.created_at::text AS at,
-           '/projects/' || decision.project_id::text || '/decisions#' || decision.id::text AS path,
+           'decision' AS link_kind,
+           decision.id AS link_id, NULL::uuid AS link_child,
            (ts_rank(decision.search_vector, query.q)
                * CASE WHEN decision.status = 'active' THEN 2.0 ELSE 0.8 END)::real AS rank
     FROM query, project_decisions decision
@@ -436,8 +508,8 @@ const RECORDS_SQL: &str = r#"
            record.project_id, project.organization_id AS workspace_id, project.name AS project_name,
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
            editor.display_name AS author, record.updated_at::text AS at,
-           '/projects/' || record.project_id::text || '/collections/' ||
-               record.collection_id::text || '?record=' || record.id::text AS path,
+           'record' AS link_kind,
+           record.collection_id AS link_id, record.id AS link_child,
            (ts_rank(record.search_vector, query.q) * 1.2)::real AS rank
     FROM query, collection_records record
     JOIN collections collection
@@ -480,7 +552,7 @@ const WHITEBOARDS_SQL: &str = r#"
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
            COALESCE(profile.display_name, account.display_name) AS author,
            board.updated_at::text AS at,
-           '/whiteboards/' || board.id::text AS path,
+           'whiteboard' AS link_kind, board.id AS link_id, NULL::uuid AS link_child,
            (CASE WHEN board.search_vector @@ query.q
                  THEN ts_rank(board.search_vector, query.q) * 1.2 ELSE 0.05 END)::real AS rank
     FROM query, whiteboards board
@@ -514,7 +586,7 @@ const SHEETS_SQL: &str = r#"
            sheet.project_id, project.organization_id AS workspace_id, project.name AS project_name,
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
            editor.display_name AS author, sheet.updated_at::text AS at,
-           '/projects/' || sheet.project_id::text || '/sheets/' || sheet.id::text AS path,
+           'sheet' AS link_kind, sheet.id AS link_id, NULL::uuid AS link_child,
            (ts_rank(sheet.search_vector, query.q) * 1.2)::real AS rank
     FROM query, sheets sheet
     JOIN projects project ON project.id = sheet.project_id
@@ -548,20 +620,19 @@ const FILES_SQL: &str = r#"
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
            uploader.display_name AS author, file.created_at::text AS at,
-           CASE
-               WHEN file.message_id IS NULL THEN
-                    '/projects/' || file.project_id::text || '/work-items/' || file.work_item_id::text
-               WHEN project.kind = 'direct' THEN
-                    '/messages/' || COALESCE(conversation.parent_channel_id, conversation.id)::text
-                    || '#message-' || file.message_id::text
-               ELSE '/projects/' || file.project_id::text ||
-                    CASE WHEN conversation.kind = 'thread' THEN '/threads/' ELSE '/channels/' END ||
-                    conversation.id::text || '#message-' || file.message_id::text
-           END AS path,
+           CASE WHEN file.message_id IS NULL THEN 'task'
+                WHEN space.direct THEN 'direct'
+                WHEN conversation.kind = 'thread' THEN 'thread' ELSE 'channel' END AS link_kind,
+           CASE WHEN file.message_id IS NULL THEN file.work_item_id
+                WHEN space.direct
+                THEN COALESCE(conversation.parent_channel_id, conversation.id)
+                ELSE conversation.id END AS link_id,
+           file.message_id AS link_child,
            (CASE WHEN file.search_vector @@ query.q
                  THEN ts_rank(file.search_vector, query.q) * 1.2 ELSE 0.05 END)::real AS rank
     FROM query, files file
     JOIN projects project ON project.id = file.project_id
+    CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
     LEFT JOIN conversations conversation ON conversation.id = file.conversation_id
     LEFT JOIN messages message ON message.id = file.message_id
     LEFT JOIN task_rows item
@@ -689,6 +760,7 @@ async fn search_http(
         .collect::<Vec<_>>();
     let hits = search(
         &state.pool,
+        Addresses::of(&state),
         principal.actor_id,
         &projects,
         &query.q,

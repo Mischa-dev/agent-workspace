@@ -16,9 +16,9 @@
 
 use crate::policy::Permission::{
     self, ChannelsCreate, ChannelsPost, CodeManage, CodePublish, CodeView, CollectionsBuild,
-    CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesEdit, ProjectsCreate,
-    ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch, SettingsManage,
-    SheetsEdit, TasksCreate, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    CollectionsEdit, MembersInvite, MembersManage, MembersView, PagesComment, PagesSuggest,
+    ProjectsCreate, ProjectsManage, RolesManage, RunsApprove, RunsInterrupt, RunsLaunch,
+    SettingsManage, SheetsEdit, TasksCreate, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
@@ -102,13 +102,13 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("page_blocks", None),
     ("skill_list", None),
     ("skill_get", None),
-    ("page_write", Some(PagesEdit)),
-    ("page_edit", Some(PagesEdit)),
+    ("page_write", Some(PagesSuggest)),
+    ("page_edit", Some(PagesSuggest)),
     ("page_comments", None),
     ("page_suggestions", None),
-    ("page_comment", Some(PagesEdit)),
-    ("page_comment_update", Some(PagesEdit)),
-    ("page_suggestion_decide", Some(PagesEdit)),
+    ("page_comment", Some(PagesComment)),
+    ("page_comment_update", Some(PagesComment)),
+    ("page_suggestion_decide", Some(PagesSuggest)),
     ("whiteboard_list", None),
     ("whiteboard_read", None),
     ("whiteboard_render", None),
@@ -234,11 +234,7 @@ mod tests {
     #[test]
     fn viewers_keep_the_read_tools_they_had() {
         let viewer = PermissionSet::built_in(MembershipRole::Viewer);
-        for tool in [
-            "repository_list",
-            "workflow_get",
-            "project_export",
-        ] {
+        for tool in ["repository_list", "workflow_get", "project_export"] {
             let need = super::needs(tool).expect("listed");
             assert!(need.is_none_or(|need| viewer.contains(need)), "{tool}");
         }

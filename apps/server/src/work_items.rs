@@ -1590,8 +1590,8 @@ async fn work_with_worker(
         let thread_name = worker_thread_name(&work_item_key, &current.title, thread_id);
         sqlx::query(
             r#"
-            INSERT INTO conversations (id, project_id, kind, parent_channel_id, name)
-            VALUES ($1, $2, 'thread', $3, $4)
+            INSERT INTO conversations (id, project_id, workspace_id, kind, parent_channel_id, name)
+            VALUES ($1, $2, (SELECT organization_id FROM projects WHERE id = $2), 'thread', $3, $4)
             "#,
         )
         .bind(thread_id)

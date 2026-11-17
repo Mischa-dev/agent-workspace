@@ -504,7 +504,7 @@ fn conforms(root: &Value, schema: &Value, value: &Value, path: &str) -> Result<(
     Ok(())
 }
 
-async fn mcp(
+pub(crate) async fn mcp(
     app: &axum::Router,
     token: &str,
     session: Option<&str>,
