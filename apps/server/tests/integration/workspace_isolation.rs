@@ -1960,7 +1960,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "label_list",
     "field_list",
     "later_list",
-    "question_list",
+    "request_list",
+    "request_get",
     "launch_list",
     "message_history",
     "milestone_list",
@@ -2387,12 +2388,19 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
             vec![],
         ),
+        // A1.8: a request (the run's approval) is read where its run is.
         case(
-            "question_list",
+            "request_get",
+            vec![json!({"requestId": a.approval.to_string()})],
+            vec![json!({"requestId": b.approval.to_string()})],
+            vec![],
+        ),
+        case(
+            "request_list",
             vec![
                 json!({}),
-                json!({"role": "for_me"}),
-                json!({"status": "answered"}),
+                json!({"role": "raised"}),
+                json!({"role": "raised", "status": "answered"}),
             ],
             vec![],
             vec![],

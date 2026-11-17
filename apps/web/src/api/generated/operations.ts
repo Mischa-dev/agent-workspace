@@ -22,6 +22,8 @@ export type ActivityLine = { kind: string; occurredAt: string; parentRef?: strin
 
 export type AgentUsageLine = { accountId: string; cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; handle?: string | null; inputTokens: number; name?: string | null; outputTokens: number; runs: number }
 
+export type AudienceInput = { accounts?: string[]; roles?: string[] }
+
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
@@ -48,7 +50,15 @@ export type PullRequest = { baseRef: string; checksState: string; draft: boolean
 
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
+export type RequestAnswerView = { label?: string | null; optionId?: string | null; text?: string | null }
+
 export type RequestLine = { answeredAt?: string | null; conversationId?: string | null; createdAt: string; id: string; kind: string; status: string; title: string }
+
+export type RequestOption = { id: string; label: string; style?: string | null }
+
+export type RequestOptionInput = { id: string; label: string; style?: string | null }
+
+export type RequestView = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
 
 export type Requires = { contract?: string | null; modules?: string[] }
 
@@ -102,6 +112,26 @@ export type PackageExportInput = { includePages?: boolean; includeSkills?: boole
 
 export type PackageExportOutput = { digest: string; package: Package }
 
+export type RequestCancelInput = { requestId: string }
+
+export type RequestCancelOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
+
+export type RequestCreateInput = { allowText?: boolean | null; audience: AudienceInput; conversationId?: string | null; detail?: string | null; expiresInSeconds?: number | null; kind?: string | null; onExpiry?: string | null; options?: RequestOptionInput[]; spaceId?: string | null; taskId?: string | null; title: string }
+
+export type RequestCreateOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
+
+export type RequestGetInput = { requestId: string }
+
+export type RequestGetOutput = { mayAnswer: boolean; request: RequestView }
+
+export type RequestListInput = { limit?: number | null; role?: string | null; spaceId?: string | null; status?: string | null }
+
+export type RequestListOutput = { requests: RequestView[] }
+
+export type RequestRespondInput = { optionId?: string | null; requestId: string; text?: string | null }
+
+export type RequestRespondOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
+
 export type RunActivityListInput = { afterSeq?: number | null; limit?: number | null; runId: string }
 
 export type RunActivityListOutput = { activities: ActivityLine[]; nextAfterSeq?: number | null }
@@ -149,6 +179,11 @@ export type Operations = {
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
   package_export: { input: PackageExportInput; output: PackageExportOutput }
+  request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
+  request_create: { input: RequestCreateInput; output: RequestCreateOutput }
+  request_get: { input: RequestGetInput; output: RequestGetOutput }
+  request_list: { input: RequestListInput; output: RequestListOutput }
+  request_respond: { input: RequestRespondInput; output: RequestRespondOutput }
   run_activity_list: { input: RunActivityListInput; output: RunActivityListOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }

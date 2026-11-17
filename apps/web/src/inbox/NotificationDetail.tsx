@@ -15,7 +15,7 @@ import {
   plainPreview,
 } from '../ui'
 import { BatchLaunch } from './BatchLaunch'
-import { isExternalHref, snoozeChoices, type InboxNotification, type InboxQuestion, type InboxView } from './api'
+import { isExternalHref, snoozeChoices, type InboxNotification, type InboxRequest, type InboxView } from './api'
 import { KIND_ICON } from './kinds'
 
 /** What became of a question or approval someone already answered. */
@@ -25,23 +25,32 @@ function answeredText(status: string) {
   return 'Answered. Open the thread to see the reply.'
 }
 
-/** What you answered, in one line. */
-function answerText(answer: NonNullable<InboxQuestion['answer']>) {
+/** What was answered, in one line. */
+function answerText(answer: NonNullable<InboxRequest['answer']>) {
   return [answer.label, answer.text].filter(Boolean).join(' · ')
 }
 
+/** What became of a request that is no longer open. */
+function settledText(request: InboxRequest) {
+  if (request.status === 'answered' && request.answer) return `Answered: ${answerText(request.answer)}`
+  if (request.status === 'expired') return 'Nobody answered in time.'
+  if (request.status === 'superseded') return 'A newer request replaced this one.'
+  return 'This request was withdrawn.'
+}
+
 /**
- * A question someone asked you (AWD-62): pick one of its answers or type
- * your own. Once answered it shows what you said; an answer is final.
+ * A request for you (a question, approval or proposal): pick one of its
+ * answers or type your own. Once settled it shows what became of it; an
+ * answer is final.
  */
-function QuestionCard({ onSend, question }: { onSend: (answer: { optionId?: string; text?: string }) => Promise<void>; question: InboxQuestion }) {
+function RequestCard({ onSend, request }: { onSend: (answer: { optionId?: string; text?: string }) => Promise<void>; request: InboxRequest }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
-  if (question.status === 'answered' && question.answer) {
+  if (request.status !== 'open') {
     return (
       <>
-        <blockquote className="aw-inbox__quote aw-inbox__question">{question.question}</blockquote>
-        <Banner tone="success">You answered: {answerText(question.answer)}</Banner>
+        <blockquote className="aw-inbox__quote aw-inbox__question">{request.title}</blockquote>
+        <Banner tone={request.status === 'answered' ? 'success' : 'info'}>{settledText(request)}</Banner>
       </>
     )
   }
@@ -63,25 +72,27 @@ function QuestionCard({ onSend, question }: { onSend: (answer: { optionId?: stri
         if (typed) void send('text', { text: typed })
       }}
     >
-      <blockquote className="aw-inbox__quote aw-inbox__question">{question.question}</blockquote>
-      {question.options.length ? (
+      <blockquote className="aw-inbox__quote aw-inbox__question">{request.title}</blockquote>
+      {request.options.length ? (
         <div className="aw-inbox__options" role="group" aria-label="Answers">
-          {question.options.map((option) => (
+          {request.options.map((option) => (
             <Button
               busy={busy === option.id}
               disabled={busy !== null}
               key={option.id}
               onClick={() => void send(option.id, typed ? { optionId: option.id, text: typed } : { optionId: option.id })}
-              variant={option.id === question.options[0]?.id ? 'primary' : 'secondary'}
+              variant={option.style === 'deny' ? 'danger' : option.id === request.options[0]?.id ? 'primary' : 'secondary'}
             >
               {option.label}
             </Button>
           ))}
         </div>
       ) : null}
+      {request.allowText || !request.options.length ? (
+        <>
       <TextArea
-        hint={question.options.length ? 'Typed words go with the answer you pick, or on their own with Send.' : undefined}
-        label={question.options.length ? 'Or answer in your own words' : 'Your answer'}
+        hint={request.options.length ? 'Typed words go with the answer you pick, or on their own with Send.' : undefined}
+        label={request.options.length ? 'Or answer in your own words' : 'Your answer'}
         maxLength={4000}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
@@ -94,10 +105,12 @@ function QuestionCard({ onSend, question }: { onSend: (answer: { optionId?: stri
         value={text}
       />
       <div className="aw-inbox__answer-send">
-        <Button busy={busy === 'text'} disabled={busy !== null || !typed} icon="send" type="submit" variant={question.options.length ? 'secondary' : 'primary'}>
+        <Button busy={busy === 'text'} disabled={busy !== null || !typed} icon="send" type="submit" variant={request.options.length ? 'secondary' : 'primary'}>
           Send
         </Button>
       </div>
+        </>
+      ) : null}
     </form>
   )
 }
@@ -113,7 +126,7 @@ export function NotificationDetail({
   busyApproval,
   item,
   onAnswer,
-  onAnswerQuestion,
+  onAnswerRequest,
   onArchive,
   onBack,
   onOpen,
@@ -125,7 +138,7 @@ export function NotificationDetail({
   busyApproval: string | null
   item: InboxNotification
   onAnswer: (decision: 'approve' | 'deny') => void
-  onAnswerQuestion: (answer: { optionId?: string; text?: string }) => Promise<void>
+  onAnswerRequest: (answer: { optionId?: string; text?: string }) => Promise<void>
   onArchive: () => void
   onBack: () => void
   onOpen: () => void
@@ -160,8 +173,8 @@ export function NotificationDetail({
           <span title={formatFullDate(item.snoozedUntil)}> · Snoozed until {atPhrase(item.snoozedUntil)}</span>
         ) : null}
       </p>
-      {item.question ? (
-        <QuestionCard key={item.question.id} onSend={onAnswerQuestion} question={item.question} />
+      {item.request ? (
+        <RequestCard key={item.request.id} onSend={onAnswerRequest} request={item.request} />
       ) : preview ? (
         <blockquote className="aw-inbox__quote">{preview}</blockquote>
       ) : null}
@@ -189,7 +202,7 @@ export function NotificationDetail({
             </Button>
           </>
         ) : null}
-        {item.question && item.href === '/inbox' ? null : external ? (
+        {item.request && item.href === '/inbox' ? null : external ? (
           <Button icon="external" onClick={onOpen} variant={pendingApproval ? 'secondary' : 'primary'}>
             Open on GitHub
           </Button>

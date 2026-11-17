@@ -1668,6 +1668,52 @@ pub async fn host_answered(
     Ok(saved)
 }
 
+/// A1.8: one of a run's requests was answered or ran out (`by` answered
+/// it, or the run's own account when it expired). The run's log says so,
+/// and a run that waits on nothing else works again. A finished run is
+/// left as it is. Returns the run when it changed.
+pub async fn request_settled(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    request_id: Uuid,
+    by: Uuid,
+    summary: &str,
+) -> Result<Option<RunRow>, RunOpError> {
+    let Some(run) = load(transaction, run_id).await? else {
+        return Ok(None);
+    };
+    let state = run.run_state()?;
+    if state.is_terminal() {
+        return Ok(None);
+    }
+    let open = requests::open_count(transaction, run.id).await?;
+    let activity = activities::clean(
+        NewActivity {
+            client_id: format!("request_settled:{request_id}"),
+            kind: "interrupt_resolved".to_owned(),
+            occurred_at: Utc::now(),
+            step_ref: None,
+            parent_ref: None,
+            summary: Some(summary.to_owned()),
+            payload: serde_json::json!({"requestId": request_id}),
+        },
+        open,
+    )?;
+    if !insert_activity_row(transaction, &run, run.activity_seq + 1, &activity, by).await? {
+        return Ok(None);
+    }
+    let next = reduce(state, RunEvent::Activity(activity.effect)).unwrap_or(state);
+    let saved = save_state(transaction, &run, next, false).await?;
+    let saved = sqlx::query_as::<_, RunRow>(&format!(
+        "UPDATE runs run SET activity_seq = run.activity_seq + 1 WHERE run.id = $1 RETURNING {RUN_COLUMNS}"
+    ))
+    .bind(saved.id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    emit(transaction, &saved, "activity").await?;
+    Ok(Some(saved))
+}
+
 /// A host acknowledged a start after a person marked its run as not started:
 /// the run started after all. It is `accepted` again, and its log says so.
 /// A run in any other state is left as it is.

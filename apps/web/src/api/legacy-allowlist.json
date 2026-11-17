@@ -22,7 +22,7 @@
   "fields/FieldEditor.tsx": 1,
   "files/api.ts": 3,
   "github/api.ts": 8,
-  "inbox/api.ts": 5,
+  "inbox/api.ts": 4,
   "invitations/api.ts": 3,
   "later/api.ts": 12,
   "launch/api.ts": 11,

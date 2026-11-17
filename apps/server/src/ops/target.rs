@@ -101,6 +101,13 @@ const KINDS: &[(&str, &str)] = &[
     ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
+    // A1.8: a request goes by request_visible_to, which holds its
+    // conversation's and run's visibility.
+    (
+        "request",
+        "SELECT request.workspace_id, request.space_id FROM requests request \
+         WHERE request.id = $1 AND request_visible_to(request.id, $2)",
+    ),
 ];
 
 /// The kinds `locate` knows; a test checks every operation's thing kind is
@@ -167,7 +174,8 @@ async fn thing(
     let Some((_, sql)) = KINDS.iter().find(|(known, _)| *known == kind) else {
         return Err(OpError::Unavailable);
     };
-    let row = sqlx::query_as::<_, (Uuid, Uuid)>(sql)
+    // A workspace-level thing (a request with no space) has no space.
+    let row = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(sql)
         .bind(id)
         .bind(viewer)
         .fetch_optional(&mut *connection)
@@ -176,7 +184,7 @@ async fn thing(
     let (workspace_id, space_id) = row.ok_or(OpError::not_found(what_of(kind)))?;
     Ok(Located {
         workspace_id,
-        space_id: Some(space_id),
+        space_id,
     })
 }
 
@@ -196,6 +204,7 @@ fn what_of(kind: &str) -> &'static str {
         "decision" => "That decision",
         "task" => "That task",
         "run" => "That run",
+        "request" => "That request",
         _ => "That",
     }
 }

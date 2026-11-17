@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": ["tasks", "channels", "code"],
   "worksWith": ["agents", "automations"],
-  "permissions": ["runs.launch", "runs.approve", "runs.interrupt", "runs.accounts", "runs.report", "requests.raise"],
+  "permissions": ["runs.launch", "runs.approve", "runs.interrupt", "runs.accounts", "runs.report", "requests.raise", "requests.answer"],
   "tools": {
     "run_start": "create",
     "task_launch": "create",
@@ -39,6 +39,11 @@
     "approval_list": "query",
     "approval_get": "describe",
     "approval_respond": "change",
+    "request_create": "create",
+    "request_respond": "change",
+    "request_cancel": "change",
+    "request_get": "describe",
+    "request_list": "query",
     "usage_windows": "query",
     "usage_batch": "query",
     "usage_batch_launch": "create"
@@ -65,6 +70,8 @@
   "events": { "emits": ["run.updated", "run.finished"], "listens": ["task.created", "task.updated"] },
   "notifications": [
     "approval_requested",
+    "request_raised",
+    "request_answered",
     "run_waiting",
     "run_completed",
     "run_failed",

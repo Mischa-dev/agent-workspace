@@ -352,6 +352,7 @@ pub fn default_registry() -> JobRegistry {
     crate::ai::register_jobs(&mut registry);
     crate::launch::register_jobs(&mut registry);
     crate::runs::register_jobs(&mut registry);
+    crate::requests::register_jobs(&mut registry);
     crate::hosts::builtin::lease::register_jobs(&mut registry);
     crate::hosts::commands::register_jobs(&mut registry);
     crate::work_items::templates::register_jobs(&mut registry);

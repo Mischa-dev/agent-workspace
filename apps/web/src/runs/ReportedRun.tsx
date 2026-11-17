@@ -49,7 +49,7 @@ export function ReportedRun({ now, onRefresh, run, usage }: { now: number; onRef
   const quiet = livenessLabel(run, now)
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: runKeys.view(run.id) })
-    void queryClient.invalidateQueries({ queryKey: ['runs', 'list'] })
+    void queryClient.invalidateQueries({ queryKey: runKeys.lists })
   }
   const stop = useMutation({
     mutationFn: () => cancelRun(run.id),

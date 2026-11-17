@@ -401,6 +401,21 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
     }
     if let Some(request_id) = row.request_id {
         command.insert("requestId".into(), json!(request_id));
+        // The answer is read when fetched, never stored in the command.
+        if row.kind == "answer"
+            && let Some(request) = crate::requests::get(&mut transaction, request_id).await?
+        {
+            let options = crate::requests::options_of(&request.options);
+            command.insert(
+                "answer".into(),
+                json!({
+                    "status": request.status,
+                    "answer": crate::requests::answer_of(request.answer.as_ref(), &options),
+                    "answeredBy": request.answered_by_account_id,
+                    "answeredAt": request.answered_at.map(timestamp),
+                }),
+            );
+        }
     }
     if let Some(start_key) = &row.start_key {
         command.insert("startKey".into(), json!(start_key));
