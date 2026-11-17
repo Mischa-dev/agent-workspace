@@ -1469,10 +1469,12 @@ async fn invitation_links_admit_up_to_their_uses_within_their_makers_role() {
         refused["outcome"], "ok",
         "a member's role holds more than Inviter: {status} {refused}"
     );
+    // Inviter is based on Admin: only an owner lets someone in with it,
+    // even though it is her own role.
     let (status, own) = send(&world.app, lena("lena-own", json!({ "roleId": inviter }))).await;
-    assert_eq!(
+    assert_ne!(
         own["outcome"], "ok",
-        "her own role is within hers: {status} {own}"
+        "an Admin-tier role comes from an owner: {status} {own}"
     );
 
     // The token is in no row.

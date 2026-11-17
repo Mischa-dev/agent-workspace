@@ -52,11 +52,32 @@ BEGIN
 END
 $$;
 
--- A custom role in the way of a new starting role's key moves aside,
--- before the checks below would refuse it.
-UPDATE workspace_roles
-SET key = left(key, 32) || '-custom'
-WHERE NOT built_in AND key IN ('guest', 'worker');
+-- A custom role in the way of a new starting role's key moves aside to the
+-- first free `<key>-custom`, `<key>-custom-2`, ... in its workspace, before
+-- the checks below would refuse it.
+DO $$
+DECLARE
+    role_row RECORD;
+    candidate TEXT;
+    attempt INT;
+BEGIN
+    FOR role_row IN
+        SELECT id, organization_id, key FROM workspace_roles
+        WHERE NOT built_in AND key IN ('guest', 'worker')
+    LOOP
+        attempt := 1;
+        candidate := role_row.key || '-custom';
+        WHILE EXISTS (
+            SELECT 1 FROM workspace_roles
+            WHERE organization_id = role_row.organization_id AND key = candidate
+        ) LOOP
+            attempt := attempt + 1;
+            candidate := role_row.key || '-custom-' || attempt;
+        END LOOP;
+        UPDATE workspace_roles SET key = candidate WHERE id = role_row.id;
+    END LOOP;
+END;
+$$;
 
 ALTER TABLE workspace_roles
     ADD CONSTRAINT workspace_roles_base_role_check

@@ -349,12 +349,23 @@ pub(crate) async fn issuer_still_grants(
         Err(AppError::NotFound(_)) => return Ok(false),
         Err(error) => return Err(error),
     };
+    // A starting role is read as it is now, an admin's edits included.
+    let role_id = match role_id {
+        Some(role_id) => Some(role_id),
+        None => {
+            crate::invitations::engine::starting_role_id(connection, organization_id, role).await?
+        }
+    };
     let invited =
         sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT workspace_role_permissions($1)")
             .bind(role_id)
             .fetch_one(&mut *connection)
             .await?;
     let invited = RoleGrant::stored(role, invited.as_deref())?;
+    // Admin-tier roles come only from an owner.
+    if invited.role() == MembershipRole::Admin && !issuer.is_owner() {
+        return Ok(false);
+    }
     Ok(issuer.may(Permission::MembersInvite)
         && invited.permissions().is_subset_of(issuer.permissions))
 }

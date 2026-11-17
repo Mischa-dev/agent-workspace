@@ -206,7 +206,8 @@ pub async fn agent_role(
 }
 
 /// Nobody lets someone in with more than they hold: the role's permissions
-/// are within the issuer's holding in `scope`.
+/// are within the issuer's holding in `scope`, and a role of the Admin tier
+/// comes only from an owner (as assigning one does, `roles::assign`).
 pub async fn issuer_may_grant(
     connection: &mut PgConnection,
     issuer: &Caller,
@@ -220,19 +221,35 @@ pub async fn issuer_may_grant(
     let role_id = match (role_id, scope) {
         (Some(role_id), _) => Some(role_id),
         (None, Scope::Workspace(workspace_id)) => {
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM workspace_roles \
-                 WHERE organization_id = $1 AND built_in AND key = $2",
-            )
-            .bind(workspace_id)
-            .bind(role)
-            .fetch_optional(&mut *connection)
-            .await?
+            starting_role_id(connection, workspace_id, role).await?
         }
         (None, Scope::Space(_)) => None,
     };
+    if MembershipRole::parse(role) == Some(MembershipRole::Admin)
+        && !access::holding(connection, issuer, scope)
+            .await?
+            .is_some_and(|holding| holding.tier == access::Tier::Owner)
+    {
+        return Ok(false);
+    }
     let grants = role_permissions(connection, role, role_id).await?;
     access::may_grant(connection, issuer, scope, grants).await
+}
+
+/// The row of the workspace's starting role `key`, so a check reads the role
+/// as it is now, an admin's edits included, not the catalogue's defaults.
+pub async fn starting_role_id(
+    connection: &mut PgConnection,
+    workspace_id: Uuid,
+    key: &str,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM workspace_roles WHERE organization_id = $1 AND built_in AND key = $2",
+    )
+    .bind(workspace_id)
+    .bind(key)
+    .fetch_optional(&mut *connection)
+    .await?)
 }
 
 /// Whether `role` is ownership, which is handed over (Transfer ownership)

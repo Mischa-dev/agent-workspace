@@ -12,7 +12,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::support::{
-    app::{create_agent, initialize, send, tool},
+    app::{Browser, create_agent, initialize, send, tool},
     world::WorldBuilder,
 };
 
@@ -576,11 +576,92 @@ async fn an_edited_starting_role_is_given_as_it_is_now() {
             "person_create",
             json!({ "displayName": "Nia", "handle": "nia", "roleId": member }),
         ),
+        ("invite_link_create", json!({ "roleId": member })),
     ] {
         let route = format!("/api/v2/w/{}/ops/{op}", world.organization);
         let (status, made) = send(
             &world.app,
             ada.browser.request("POST", &route, Some(op), body),
+        )
+        .await;
+        assert_eq!(made["outcome"], "ok", "{op}: {status} {made}");
+        // The link still opens: its role is checked as stored when it is
+        // used, too.
+        if let Some(token) = made["value"]["token"].as_str() {
+            let anonymous = Browser {
+                cookie: String::new(),
+                csrf: String::new(),
+            };
+            let (status, resolved) = send(
+                &world.app,
+                anonymous.request(
+                    "POST",
+                    "/api/v1/invite-links/resolve",
+                    None,
+                    json!({ "token": token }),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{resolved}");
+        }
+    }
+    world.finish().await;
+}
+
+/// Only an owner lets someone in with a role of the Admin tier, as only an
+/// owner assigns one: an admin can't make an admin agent, person or link.
+#[tokio::test]
+async fn only_an_owner_lets_someone_in_as_an_admin() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("ada", "admin")
+        .build("k129_admin_tier")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    let ada = &world.people["ada"];
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin' WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(ada.actor)
+    .execute(pool)
+    .await
+    .expect("ada runs the workspace");
+    let admin = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM workspace_roles WHERE organization_id = $1 AND key = 'admin'",
+    )
+    .bind(world.organization)
+    .fetch_one(pool)
+    .await
+    .expect("admin role");
+    let bodies = [
+        (
+            "agent_create",
+            json!({ "displayName": "Ivy", "handle": "ivy", "roleId": admin }),
+        ),
+        (
+            "person_create",
+            json!({ "displayName": "Nia", "handle": "nia", "roleId": admin }),
+        ),
+        ("invite_link_create", json!({ "roleId": admin })),
+    ];
+    for (op, body) in bodies.clone() {
+        let route = format!("/api/v2/w/{}/ops/{op}", world.organization);
+        let (status, refused) = send(
+            &world.app,
+            ada.browser.request("POST", &route, Some(op), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    for (op, body) in bodies {
+        let route = format!("/api/v2/w/{}/ops/{op}", world.organization);
+        let (status, made) = send(
+            &world.app,
+            world.owner.browser.request("POST", &route, Some(op), body),
         )
         .await;
         assert_eq!(made["outcome"], "ok", "{op}: {status} {made}");
