@@ -88,7 +88,10 @@ impl Group {
         match kind {
             kind::MENTION | kind::COMMENT_MENTION | kind::CONVERSATION_MESSAGE => Self::Mentions,
             kind::REMINDER | kind::SCHEDULED_SEND_FAILED => Self::Reminders,
-            kind::APPROVAL_REQUESTED | kind::RUN_WAITING | kind::QUESTION_ASKED => Self::Approvals,
+            kind::APPROVAL_REQUESTED
+            | kind::RUN_WAITING
+            | kind::REQUEST_RAISED
+            | kind::REQUEST_ANSWERED => Self::Approvals,
             kind::RUN_COMPLETED | kind::RUN_FAILED => Self::Runs,
             kind::ASSIGNED | kind::TASK_CHANGED => Self::Tasks,
             kind::CHECKS_FAILED | kind::REVIEW_REQUESTED => Self::PullRequests,

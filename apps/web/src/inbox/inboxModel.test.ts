@@ -19,7 +19,7 @@ const base: InboxNotification = {
   href: '/projects/p1/channels/c1',
   launchHref: null,
   approval: null,
-  question: null,
+  request: null,
   batch: null,
 }
 
@@ -36,16 +36,16 @@ describe('inbox model', () => {
     expect(needs.groups).toHaveLength(1)
   })
 
-  it('counts a question as needing you until it is answered', () => {
+  it('counts a request as needing you until it is answered', () => {
     const asked = {
       ...base,
       id: 'q',
-      kind: 'question_asked',
-      question: { id: 'q1', status: 'pending' as const, question: 'Ship it?', options: [], answer: null },
+      kind: 'request_raised',
+      request: { id: 'q1', kind: 'question', status: 'open', title: 'Ship it?', options: [], allowText: true, answer: null },
     }
     const answered = {
       ...asked,
-      question: { ...asked.question, status: 'answered' as const, answer: { optionId: null, label: null, text: 'Yes' } },
+      request: { ...asked.request, status: 'answered', answer: { optionId: null, label: null, text: 'Yes' } },
     }
     expect([asked, answered].map(needsYou)).toEqual([true, false])
   })

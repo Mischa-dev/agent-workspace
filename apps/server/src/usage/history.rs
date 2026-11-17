@@ -222,18 +222,7 @@ async fn runs_between(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Result<i64, AppError> {
-    Ok(sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT count(*) FROM agent_runs run
-        JOIN execution_profiles profile ON profile.id = run.execution_profile_id
-        WHERE profile.provider_account_id = $1 AND run.created_at >= $2 AND run.created_at < $3
-        "#,
-    )
-    .bind(account_id)
-    .bind(from)
-    .bind(to)
-    .fetch_one(executor)
-    .await?)
+    crate::hosts::builtin::capacity::account_runs_between(executor, account_id, from, to).await
 }
 
 /// How much of the window one run used, on average over its finished
@@ -427,42 +416,12 @@ pub(crate) async fn account_history(
     // Cost comes from W12's per-run usage records (U2), in each record's
     // currency; mixed currencies are rare enough to report as USD.
     let projects = crate::db::scoped_one(pool, async |connection| {
-        sqlx::query_as::<
-            _,
-            (
-                Option<Uuid>,
-                Option<String>,
-                i64,
-                Option<f64>,
-                Option<String>,
-            ),
-        >(&format!(
-            r#"
-        SELECT CASE WHEN actor_can_access_project($2, NULL, project.id) THEN project.id END,
-               CASE WHEN actor_can_access_project($2, NULL, project.id) THEN project.name END,
-               count(*),
-               sum(usage.cost),
-               min(usage.currency)
-        FROM agent_runs run
-        JOIN execution_profiles profile ON profile.id = run.execution_profile_id
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        JOIN projects project ON project.id = conversation.project_id
-        LEFT JOIN LATERAL (
-            SELECT sum(COALESCE(estimated_cost, reported_cost_usd)) AS cost,
-                   min(COALESCE(currency, 'USD')) AS currency
-            FROM agent_run_usage
-            WHERE agent_run_id = run.id
-        ) usage ON true
-        WHERE profile.provider_account_id = $1
-          AND run.created_at >= now() - interval '{PROJECT_DAYS} days'
-        GROUP BY 1, 2
-        ORDER BY 3 DESC
-        LIMIT 50
-        "#
-        ))
-        .bind(account_id)
-        .bind(viewer)
-        .fetch_all(connection)
+        crate::hosts::builtin::capacity::account_runs_by_project(
+            connection,
+            account_id,
+            viewer,
+            PROJECT_DAYS,
+        )
         .await
     })
     .await?;

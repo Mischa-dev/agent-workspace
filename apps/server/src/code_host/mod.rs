@@ -1,14 +1,13 @@
-//! A1.18: the code-host seam (A1 section 3.14), part 1. What the rest of the
-//! server needs from wherever a repository lives (GitHub today), behind one
-//! trait, so another code host is an implementation rather than a rewrite.
-//!
-//! Part 1 holds what callers use now: naming a repository from its address,
-//! reading a pull request's address, and deciding which remotes a branch
-//! may be pushed to. Short-lived repository tokens join when hosts receive
-//! `start` commands (A1.12), and opening and reading pull requests when
-//! their callers move behind the seam (A1.19).
+//! A1.18, A1.19: the code-host seam (A1 section 3.14). What the rest of
+//! the server needs from wherever a repository lives (GitHub today), behind
+//! one trait, so another code host is an implementation rather than a
+//! rewrite: naming a repository from its address, reading a pull request's
+//! address, deciding which remotes a branch may be pushed to, and the pull
+//! request read model (`pull_requests`), which ties pull requests that
+//! hosts report to their runs.
 
 pub mod github;
+pub mod pull_requests;
 
 /// A repository as its code host names it.
 #[derive(Clone, Debug, Eq, PartialEq)]

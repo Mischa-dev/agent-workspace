@@ -230,6 +230,7 @@ pub enum Permission {
     RunsAccounts,
     RunsReport,
     RequestsRaise,
+    RequestsAnswer,
     CodeView,
     CodePublish,
     CodeManage,
@@ -326,7 +327,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 35] = [
+pub const PERMISSIONS: [PermissionInfo; 36] = [
     required(permission(
         Permission::ProjectsView,
         "projects.view",
@@ -523,6 +524,15 @@ pub const PERMISSIONS: [PermissionInfo; 35] = [
         "runs",
         "Raise requests",
         "Ask someone for an approval or an answer from a run.",
+        PermissionScope::Project,
+        ALL_ROLES,
+    ),
+    permission(
+        Permission::RequestsAnswer,
+        "requests.answer",
+        "runs",
+        "Answer requests",
+        "Answer the questions and proposals people and agents raise.",
         PermissionScope::Project,
         ALL_ROLES,
     ),

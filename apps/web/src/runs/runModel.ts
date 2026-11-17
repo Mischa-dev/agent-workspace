@@ -1,7 +1,22 @@
 import { eventLabel, formatTime, type ChipTone, type IconName } from '../ui'
-import type { RunState, RunStep, RunSummary, UsageTotals } from './api'
+import type { CostConfidence, Liveness, RunActivity, RunLine, RunState, RunStep, RunSummary, UsageTotals } from './api'
 
-export const LIVE_STATES: readonly RunState[] = ['created', 'queued', 'starting', 'working', 'blocked', 'recovering']
+export const LIVE_STATES: readonly RunState[] = [
+  'queued',
+  'starting',
+  'start_uncertain',
+  'accepted',
+  'working',
+  'waiting',
+  'cancel_requested',
+  // The built-in host's own.
+  'created',
+  'blocked',
+  'recovering',
+]
+
+/** States where the run waits on someone's answer. */
+export const WAITING_STATES: readonly RunState[] = ['waiting', 'blocked']
 
 export function isLiveRun(state: RunState) {
   return LIVE_STATES.includes(state)
@@ -12,20 +27,87 @@ export function isLiveRun(state: RunState) {
  * page, and (to be shared) the thread's run card and the agent sidebar.
  */
 export const RUN_STATUS: Record<RunState, { label: string; tone: ChipTone; icon: IconName; spin?: boolean }> = {
-  created: { label: 'Queued', tone: 'muted', icon: 'clock' },
   queued: { label: 'Queued', tone: 'muted', icon: 'clock' },
   starting: { label: 'Starting', tone: 'agent', icon: 'loader', spin: true },
+  start_uncertain: { label: 'Start uncertain', tone: 'warning', icon: 'circle-help' },
+  accepted: { label: 'Accepted', tone: 'agent', icon: 'loader', spin: true },
   working: { label: 'Working', tone: 'agent', icon: 'loader', spin: true },
+  waiting: { label: 'Waiting on an answer', tone: 'warning', icon: 'circle-help' },
+  cancel_requested: { label: 'Stopping…', tone: 'muted', icon: 'loader', spin: true },
+  done: { label: 'Done', tone: 'success', icon: 'circle-check' },
+  failed: { label: 'Failed', tone: 'danger', icon: 'circle-alert' },
+  cancelled: { label: 'Stopped', tone: 'muted', icon: 'circle-minus' },
+  refused: { label: 'Refused', tone: 'danger', icon: 'circle-minus' },
+  interrupted: { label: 'Interrupted', tone: 'danger', icon: 'triangle-alert' },
+  // The built-in host's own states.
+  created: { label: 'Queued', tone: 'muted', icon: 'clock' },
   blocked: { label: 'Waiting on you', tone: 'warning', icon: 'circle-help' },
   recovering: { label: 'Recovering', tone: 'warning', icon: 'retry' },
   completed: { label: 'Done', tone: 'success', icon: 'circle-check' },
-  failed: { label: 'Failed', tone: 'danger', icon: 'circle-alert' },
   canceled: { label: 'Stopped', tone: 'muted', icon: 'circle-minus' },
-  interrupted: { label: 'Interrupted', tone: 'danger', icon: 'triangle-alert' },
 }
 
 export function runStatus(state: string) {
   return RUN_STATUS[state as RunState] ?? { label: eventLabel(state), tone: 'muted' as ChipTone, icon: 'info' as IconName }
+}
+
+/** "12 min", "3 hr": how long since a time, for a badge. */
+function since(time: string | null | undefined, now: number) {
+  if (!time) return null
+  const elapsed = now - new Date(time).getTime()
+  return Number.isFinite(elapsed) && elapsed >= 0 ? formatDuration(elapsed) : null
+}
+
+/**
+ * Whether a run is still reporting, in words, or null while it is (or once
+ * it has finished, when it no longer has to).
+ */
+export function livenessLabel(
+  run: { liveness: Liveness; state: RunState; lastReportAt: string | null; startedAt?: string | null },
+  now = Date.now(),
+): { label: string; tone: ChipTone } | null {
+  if (run.liveness === 'ok' || !isLiveRun(run.state)) return null
+  const quiet = since(run.lastReportAt ?? run.startedAt, now)
+  if (run.liveness === 'not_responding') {
+    return { label: quiet ? `Not responding for ${quiet}` : 'Not responding', tone: 'danger' }
+  }
+  return { label: quiet ? `Quiet for ${quiet}` : 'Quiet', tone: 'warning' }
+}
+
+/**
+ * The cost as the Runs page shows it: exact, or "≈" with why when it was
+ * shared out from a usage window. Null when nobody knows it.
+ */
+export function costText(cost: number | null | undefined, currency: string | null | undefined, confidence: CostConfidence | null | undefined) {
+  const amount = formatCost(cost, currency)
+  if (!amount) return null
+  if (confidence === 'estimated') return { text: `≈ ${amount}`, hint: 'Estimated from usage windows' }
+  return { text: amount, hint: null }
+}
+
+const CAUSES: Record<string, string> = {
+  task: 'From a task',
+  thread: 'From a thread',
+  message: 'From a message',
+  schedule: 'On a schedule',
+  host_trigger: 'Started by its host',
+  automation: 'From an automation',
+  request: 'From a request',
+  manual: 'Started by hand',
+}
+
+/** Why the run exists, in words. */
+export function causeLabel(run: Pick<RunLine, 'causeKind' | 'causeRef' | 'taskKey'>) {
+  if (run.causeKind === 'task' && run.taskKey) return run.taskKey
+  if (run.causeKind === 'schedule' && run.causeRef) return `Scheduled: ${run.causeRef}`
+  return CAUSES[run.causeKind] ?? eventLabel(run.causeKind)
+}
+
+/** Where the run runs: its host, this server, or the agent itself. */
+export function hostLabel(run: Pick<RunLine, 'builtin' | 'hostName' | 'harnessName' | 'backend'>) {
+  if (run.builtin) return run.harnessName ?? 'This server'
+  if (!run.hostName) return 'Reports itself'
+  return run.backend ? `${run.hostName} · ${run.backend}` : run.hostName
 }
 
 /** 950, 12.3k, 4.1M: short enough for a table cell. */
@@ -104,6 +186,63 @@ export function stepView(step: RunStep): StepView {
   }
 }
 
+/**
+ * How one reported activity reads on the run's timeline. A gap is a stretch
+ * the run didn't report, so it stands out.
+ */
+export function activityView(activity: RunActivity): StepView {
+  const payload = activity.payload ?? {}
+  const text = (key: string) => (typeof payload[key] === 'string' ? (payload[key] as string) : null)
+  const title = activity.summary || eventLabel(activity.kind)
+  switch (activity.kind) {
+    case 'run_started':
+      return { icon: 'play', tone: 'muted', title }
+    case 'run_finished': {
+      const outcome = text('outcome')
+      if (outcome === 'failed') return { icon: 'circle-alert', tone: 'danger', title }
+      if (outcome === 'cancelled' || outcome === 'canceled') return { icon: 'circle-minus', tone: 'muted', title }
+      return { icon: 'circle-check', tone: 'success', title }
+    }
+    case 'run_error':
+      return { icon: 'circle-alert', tone: 'danger', title }
+    case 'step_started':
+    case 'step_finished':
+      return { icon: 'checklist', tone: 'muted', title }
+    case 'text_message':
+      return { icon: 'message', tone: 'agent', title }
+    case 'reasoning':
+      return { icon: 'info', tone: 'muted', title }
+    case 'tool_call':
+      return { icon: 'terminal', tone: 'muted', title }
+    case 'plan':
+      return { icon: 'list', tone: 'muted', title }
+    case 'interrupt':
+      return { icon: 'circle-help', tone: 'warning', title }
+    case 'interrupt_resolved':
+      return { icon: 'check', tone: 'muted', title }
+    case 'result':
+      return { icon: 'link', tone: 'success', title }
+    case 'gap':
+      return { icon: 'triangle-alert', tone: 'warning', title }
+    default:
+      return { icon: 'info', tone: 'muted', title }
+  }
+}
+
+const PLAN_STATUS: Record<string, { icon: IconName; label: string }> = {
+  done: { icon: 'circle-check', label: 'Done' },
+  completed: { icon: 'circle-check', label: 'Done' },
+  in_progress: { icon: 'loader', label: 'In progress' },
+  working: { icon: 'loader', label: 'In progress' },
+  skipped: { icon: 'circle-minus', label: 'Skipped' },
+  failed: { icon: 'circle-alert', label: 'Failed' },
+}
+
+/** One plan item's mark: done, in progress, skipped, failed, or still to do. */
+export function planMark(status: string | undefined) {
+  return PLAN_STATUS[status ?? ''] ?? { icon: 'clock' as IconName, label: 'To do' }
+}
+
 /** "40 sec", "14 min", "1 hr 5 min", "2 days 3 hr": how long a run took. */
 export function formatDuration(milliseconds: number) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return ''
@@ -118,7 +257,7 @@ export function formatDuration(milliseconds: number) {
 }
 
 /** How long the run has taken so far, or took. Empty before it starts. */
-export function runDuration(run: Pick<RunSummary, 'startedAt' | 'finishedAt'>, now = Date.now()) {
+export function runDuration(run: { startedAt: string | null; finishedAt: string | null }, now = Date.now()) {
   if (!run.startedAt) return ''
   const end = run.finishedAt ? new Date(run.finishedAt).getTime() : now
   return formatDuration(end - new Date(run.startedAt).getTime())
@@ -162,7 +301,7 @@ export function splitPatch(patch: string): PatchFile[] {
   return files
 }
 
-export function runTitle(run: Pick<RunSummary, 'taskKey' | 'taskTitle' | 'threadName'>) {
+export function runTitle(run: Pick<RunSummary, 'taskKey' | 'taskTitle' | 'threadName'> & { title?: string | null }) {
   if (run.taskKey && run.taskTitle) return `${run.taskKey} ${run.taskTitle}`
-  return run.taskTitle ?? run.threadName ?? 'Run'
+  return run.taskTitle ?? run.threadName ?? run.title ?? 'Run'
 }

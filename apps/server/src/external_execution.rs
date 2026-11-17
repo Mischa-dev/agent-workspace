@@ -14,7 +14,7 @@ use crate::{
     api::{ApprovalResponse, select_run_setup},
     auth::AuthenticatedActor,
     conversations::{ApprovalCapabilities, ApprovalRow, ApprovalView},
-    domain::{RunState, allocate_conversation_sequence, transition_run},
+    domain::allocate_conversation_sequence,
     error::{ApiPath, AppError},
     external_events::enqueue_external_event,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
@@ -844,24 +844,9 @@ async fn launch_sponsored_run(
         "run_start",
     )
     .await?;
-    if sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM agent_runs
-            WHERE conversation_id = $1
-              AND state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        )
-        "#,
-    )
-    .bind(context.conversation_id())
-    .fetch_one(&mut **transaction)
-    .await?
-    {
-        return Err(AppError::Conflict(
-            "agent_run",
-            "Thread already has an active run",
-        ));
-    }
+    // Approvals come from the browser and phone, not an app: no cap, as for
+    // a start there.
+    crate::hosts::builtin::admit(transaction, context.conversation_id(), None).await?;
     let setup = select_run_setup(
         transaction,
         context.project_id(),
@@ -923,49 +908,42 @@ async fn launch_sponsored_run(
     .bind(prompt_message_id)
     .execute(&mut **transaction)
     .await?;
-    // Settings freeze when the run is created, as for every other start:
-    // the sponsor's account defaults, each one that no longer fits the
-    // catalog falling back to the harness's own.
-    let config = crate::provider::resolve_stored_run_config(
+    // Settings freeze when the run is created, by the same rule as every
+    // other start: the sponsor's and the project's run settings over the
+    // sponsor's account defaults, each checked against the harness.
+    let config = crate::hosts::builtin::resolve_config(
         state,
-        setup.organization_id,
-        &setup.adapter_kind,
-        &setup.run_defaults,
+        transaction,
+        context.project_id(),
+        context.sponsoring_actor_id(),
+        &setup,
         &RunConfig::default(),
     )
     .await?;
-    let run_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_runs (
-            id, conversation_id, execution_worker_id, requesting_actor_id,
-            sponsoring_actor_id, external_execution_request_id,
-            execution_profile_id, repository_id, state, prompt,
-            authorization_snapshot, prompt_message_id, config
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'created', $9, $10, $11, $12)
-        "#,
+    let created = crate::hosts::builtin::create(
+        transaction,
+        crate::hosts::builtin::NewRun {
+            project_id: context.project_id(),
+            conversation_id: context.conversation_id(),
+            setup: &setup,
+            requested_by: context.requesting_actor_id(),
+            sponsored_by: Some(context.sponsoring_actor_id()),
+            external_execution_request_id: Some(external_request_id),
+            predecessor_run_id: None,
+            prompt: &prompt,
+            prompt_message_id: Some(prompt_message_id),
+            authorization: serde_json::json!({
+                "actor_id": context.requesting_actor_id(),
+                "sponsor_actor_id": context.sponsoring_actor_id(),
+                "project_id": context.project_id(),
+                "external_execution_request_id": external_request_id,
+                "scope": ["repository.read", "repository.write", "provider.turn"]
+            }),
+            config: &config,
+            made_through_app: false,
+        },
     )
-    .bind(run_id)
-    .bind(context.conversation_id())
-    .bind(setup.execution_worker_id)
-    .bind(context.requesting_actor_id())
-    .bind(context.sponsoring_actor_id())
-    .bind(external_request_id)
-    .bind(setup.execution_profile_id)
-    .bind(setup.repository_id)
-    .bind(&prompt)
-    .bind(serde_json::json!({
-        "actor_id": context.requesting_actor_id(),
-        "sponsor_actor_id": context.sponsoring_actor_id(),
-        "project_id": context.project_id(),
-        "external_execution_request_id": external_request_id,
-        "scope": ["repository.read", "repository.write", "provider.turn"]
-    }))
-    .bind(prompt_message_id)
-    .bind(serde_json::to_value(&config).map_err(|_| AppError::Internal("serialize run settings"))?)
-    .execute(&mut **transaction)
     .await?;
-    transition_run(transaction, run_id, RunState::Queued, None).await?;
     outbox::enqueue_message_created(
         transaction,
         context.project_id(),
@@ -975,14 +953,7 @@ async fn launch_sponsored_run(
         context.requesting_actor_id(),
     )
     .await?;
-    outbox::enqueue_agent_run_updated(
-        transaction,
-        context.project_id(),
-        context.conversation_id(),
-        run_id,
-    )
-    .await?;
-    Ok(run_id)
+    Ok(created.run_id)
 }
 
 trait SponsoredRunContext {

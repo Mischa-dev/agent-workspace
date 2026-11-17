@@ -589,18 +589,10 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
             agent_run_id,
             state,
         } => {
-            let (requester, work_item_id) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
-                r#"
-                SELECT run.requesting_actor_id,
-                       (SELECT launch.work_item_id FROM launches launch
-                        WHERE launch.agent_run_id = run.id LIMIT 1)
-                FROM agent_runs run WHERE run.id = $1
-                "#,
-            )
-            .bind(agent_run_id)
-            .fetch_optional(crate::db::scoped(pool))
-            .await?
-            .unwrap_or((Uuid::nil(), None));
+            let (requester, work_item_id) =
+                crate::runs::reads::requester_and_task(pool, *agent_run_id)
+                    .await?
+                    .unwrap_or((Uuid::nil(), None));
             let state_name = state.to_string();
             let subject = Subject {
                 agent_run_id: Some(*agent_run_id),

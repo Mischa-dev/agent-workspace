@@ -194,6 +194,32 @@ pub static RUN_FINISHED: EventType = fact(
     "A run finished, failed or was stopped",
 )
 .automatable();
+pub static REQUEST_RAISED: EventType = fact(
+    "request.raised",
+    "runs",
+    Some("request"),
+    "Someone asked for an answer or an approval",
+)
+.automatable();
+pub static REQUEST_ANSWERED: EventType = fact(
+    "request.answered",
+    "runs",
+    Some("request"),
+    "A request was answered",
+)
+.automatable();
+pub static REQUEST_CANCELLED: EventType = fact(
+    "request.cancelled",
+    "runs",
+    Some("request"),
+    "A request was withdrawn",
+);
+pub static REQUEST_EXPIRED: EventType = fact(
+    "request.expired",
+    "runs",
+    Some("request"),
+    "A request went unanswered until it expired",
+);
 
 // --- tasks -----------------------------------------------------------------
 pub static TASK_CREATED: EventType =
@@ -428,19 +454,6 @@ pub static ACCOUNT_MANAGERS_CHANGED: EventType = signal(
     "Who manages an agent or app changed",
 )
 .legacy(&["account.managers.changed"]);
-pub static QUESTION_ASKED: EventType = fact(
-    "question.asked",
-    "inbox",
-    Some("question"),
-    "Someone was asked a question",
-);
-pub static QUESTION_ANSWERED: EventType = fact(
-    "question.answered",
-    "inbox",
-    Some("question"),
-    "A question was answered",
-);
-
 /// Every event type, in module order.
 pub fn catalog() -> &'static [&'static EventType] {
     static CATALOG: &[&EventType] = &[
@@ -458,6 +471,10 @@ pub fn catalog() -> &'static [&'static EventType] {
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,
+        &REQUEST_RAISED,
+        &REQUEST_ANSWERED,
+        &REQUEST_CANCELLED,
+        &REQUEST_EXPIRED,
         &TASK_CREATED,
         &TASK_UPDATED,
         &TASK_PLACEMENT_CHANGED,
@@ -492,8 +509,6 @@ pub fn catalog() -> &'static [&'static EventType] {
         &FILE_REMOVED,
         &NOTIFICATION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
-        &QUESTION_ASKED,
-        &QUESTION_ANSWERED,
     ];
     CATALOG
 }
@@ -560,7 +575,10 @@ mod tests {
                 && piece
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c == '.' || c == '_');
-            if dotted && !piece.starts_with("aw.") {
+            // Questions became requests (A1.8), whose events are staged
+            // from Rust; their trigger went with person_questions.
+            let retired = matches!(piece, "question.asked" | "question.answered");
+            if dotted && !retired && !piece.starts_with("aw.") {
                 assert!(
                     get(piece).is_some(),
                     "{piece} is staged but not in the catalogue"
@@ -568,7 +586,7 @@ mod tests {
                 found += 1;
             }
         }
-        assert!(found >= 17, "{found}");
+        assert!(found >= 15, "{found}");
     }
 
     #[test]
