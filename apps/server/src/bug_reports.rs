@@ -1391,7 +1391,6 @@ async fn pause_for_the_day(
         conversation_id: None,
         message_id: None,
         work_item_id: None,
-        comment_id: None,
         agent_run_id: None,
         pull_request_id: None,
         detail: json!({

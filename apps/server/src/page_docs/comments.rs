@@ -421,7 +421,7 @@ pub(crate) async fn create(
                     "A reply goes in its thread, which has the anchor; leave out blockId and quote.",
                 )));
             }
-            match thread_of(&mut *connection, page_id, reply_to).await? {
+            match thread_of(&mut connection, page_id, reply_to).await? {
                 Some((thread_id, _)) => (CommentPlace::Thread(thread_id), Some(thread_id)),
                 None => return Ok(Err(Refusal::NotFound)),
             }
