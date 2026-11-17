@@ -1374,6 +1374,10 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     );
     assert_eq!(received.lock().expect("received").len(), before);
 
+    // Every connection of the test's pool is returned and closed first: one
+    // still finishing a delivery's write held a row lock that deadlocked
+    // with the drop.
+    pool.close().await;
     agent_workspace_server::test_support::drop_schema(&administrative_pool, &schema)
         .await
         .expect("drop schema");
