@@ -497,8 +497,12 @@ async fn create_many(
         return Ok(BatchResult::invalid("projectId", PROJECT_MESSAGE));
     }
     let project_id = principal.project_id;
-    let Some((project_key, direct)) = sqlx::query_as::<_, (String, bool)>(
-        "SELECT project_key, kind = 'direct' FROM projects WHERE id = $1",
+    // Tasks never go where DMs live, which is no space at all.
+    if crate::spaces::kind::holds_messages(project_id) {
+        return Ok(BatchResult::invalid("projectId", PROJECT_MESSAGE));
+    }
+    let Some(project_key) = sqlx::query_scalar::<_, String>(
+        "SELECT project_key FROM projects WHERE id = $1",
     )
     .bind(project_id)
     .fetch_optional(crate::db::scoped(&state.pool))
@@ -508,12 +512,6 @@ async fn create_many(
             "That project wasn't found, or you can't see it.",
         ));
     };
-    // Tasks never go in the hidden Messages space, where nobody would see
-    // them.
-    if direct {
-        return Ok(BatchResult::invalid("projectId", PROJECT_MESSAGE));
-    }
-
     let (mut drafts, mut problems) = task_drafts::check_shapes(&arguments.tasks);
     // Existing parents, found only among projects the caller can reach, and
     // only in this project. Another project's task is never named.

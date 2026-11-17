@@ -208,8 +208,13 @@ pub(super) async fn accessible_project_ids_in(
          AND membership.enabled
         WHERE project.archived_at IS NULL
           AND actor_can_access_project($1, $2, project.id)
-        ORDER BY project.id
-        LIMIT 500
+        -- DMs and groups live in no space (K4.17): their place, where the
+        -- caller reaches them.
+        UNION ALL
+        SELECT direct_scope_id()
+        WHERE $2::uuid IS NULL OR agent_connection_can_reach_direct($2)
+        ORDER BY 1
+        LIMIT 501
         "#,
     )
     .bind(principal.actor_id)
@@ -708,32 +713,78 @@ fn is_handle_character(value: char) -> bool {
     value.is_ascii_alphanumeric() || value == '_' || value == '-'
 }
 
-/// Resolve people given as actor IDs or `@handles` among a Project's members.
-pub(super) async fn resolve_people(
+/// People and agents by actor ID or @handle whom `caller` may name in a DM
+/// or group: active accounts in a workspace the caller is an enabled member
+/// of, by the handle they go by in one of those. Returns the first one
+/// that isn't.
+pub(super) async fn resolve_direct_people(
     state: &AppState,
-    project_id: Uuid,
+    caller: Uuid,
     people: &[String],
 ) -> Result<Result<Vec<Uuid>, String>, AppError> {
     let mut resolved = Vec::new();
     for person in people {
         let person = person.trim();
-        let found = if let Ok(actor_id) = person.parse::<Uuid>() {
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2 AND enabled",
-            )
-            .bind(project_id)
-            .bind(actor_id)
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-        } else {
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND lower(handle) = lower($2) AND enabled",
-            )
-            .bind(project_id)
-            .bind(person.trim_start_matches('@'))
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-        };
+        let found = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT actor.id
+            FROM actors actor
+            JOIN organization_memberships theirs
+              ON theirs.actor_id = actor.id AND theirs.enabled
+            JOIN organization_memberships mine
+              ON mine.organization_id = theirs.organization_id
+             AND mine.actor_id = $1 AND mine.enabled
+            LEFT JOIN organization_actor_profiles profile
+              ON profile.organization_id = theirs.organization_id
+             AND profile.actor_id = actor.id
+            WHERE actor.status = 'active'
+              AND (actor.id::text = lower($2) OR lower(profile.handle) = lower($3))
+            ORDER BY actor.id
+            LIMIT 1
+            "#,
+        )
+        .bind(caller)
+        .bind(person)
+        .bind(person.trim_start_matches('@'))
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
+        match found {
+            Some(actor_id) => resolved.push(actor_id),
+            None => return Ok(Err(person.to_owned())),
+        }
+    }
+    Ok(Ok(resolved))
+}
+
+/// Members of a DM or group by actor ID or @handle, so a former member can
+/// still be removed. Returns the first one that isn't a member.
+pub(super) async fn resolve_conversation_members(
+    state: &AppState,
+    conversation_id: Uuid,
+    people: &[String],
+) -> Result<Result<Vec<Uuid>, String>, AppError> {
+    let mut resolved = Vec::new();
+    for person in people {
+        let person = person.trim();
+        let found = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT member.actor_id
+            FROM conversation_members member
+            WHERE member.conversation_id = $1
+              AND (member.actor_id::text = lower($2)
+                   OR EXISTS (
+                       SELECT 1 FROM organization_actor_profiles profile
+                       WHERE profile.actor_id = member.actor_id
+                         AND lower(profile.handle) = lower($3)))
+            ORDER BY member.actor_id
+            LIMIT 1
+            "#,
+        )
+        .bind(conversation_id)
+        .bind(person)
+        .bind(person.trim_start_matches('@'))
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
         match found {
             Some(actor_id) => resolved.push(actor_id),
             None => return Ok(Err(person.to_owned())),

@@ -257,6 +257,11 @@ async fn off_module(
         Scope::Workspace(id) => (*id, None),
         Scope::Project(project_id) => {
             let project_id = *project_id;
+            // DMs live in no space and follow the Messages switch, which
+            // their own handlers check.
+            if crate::spaces::kind::holds_messages(project_id) {
+                return Ok(Off::No);
+            }
             let known = PROJECTS
                 .lock()
                 .ok()
@@ -279,7 +284,6 @@ async fn off_module(
                         return Ok(Off::No);
                     };
                     let kind = match kind.as_str() {
-                        "direct" => "direct",
                         "workspace" => "workspace",
                         _ => "standard",
                     };
@@ -292,11 +296,6 @@ async fn off_module(
                     (organization_id, kind)
                 }
             };
-            // DMs live in a hidden project and follow the Messages switch,
-            // which their own handlers check.
-            if kind == "direct" {
-                return Ok(Off::No);
-            }
             if kind == "workspace" && plumbing {
                 return Ok(Off::No);
             }

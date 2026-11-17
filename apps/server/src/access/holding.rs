@@ -47,6 +47,89 @@ pub async fn load_archived(
     load_with(connection, caller, Scope::Space(space), lock, true).await
 }
 
+/// The caller's holding in a DM or group (K4.17), which is in no space:
+/// `None` when they can't see it; else what their roles allow there
+/// (`direct_permissions`), narrowed by an app's delegation limit. A
+/// credential confined to one space reaches no DM.
+pub async fn load_direct(
+    connection: &mut PgConnection,
+    caller: &Caller,
+    conversation: Uuid,
+) -> Result<Option<Holding>, AppError> {
+    if let Reach::Space(_) = caller.reach() {
+        return Ok(None);
+    }
+    let row = sqlx::query_as::<_, (Uuid, Vec<String>)>(
+        "SELECT conversation.workspace_id, direct_permissions(conversation.id, $2) \
+         FROM conversations conversation \
+         WHERE conversation.id = $1 AND conversation.project_id IS NULL \
+           AND conversation_visible_to(conversation.id, $2)",
+    )
+    .bind(conversation)
+    .bind(caller.account_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some((workspace_id, keys)) = row else {
+        return Ok(None);
+    };
+    let mut permissions = PermissionSet::from_keys(&keys);
+    if let Some(limits) = &caller.limits {
+        // A kept DM follows its workspace's limit; a personal one what the
+        // limit allows in any workspace.
+        let limit = match limits.organizations.get(&workspace_id) {
+            Some(limit) => *limit,
+            None => limits
+                .organizations
+                .values()
+                .fold(PermissionSet::EMPTY, |all, limit| all.union(*limit)),
+        };
+        permissions = permissions.intersect(limit);
+    }
+    if let Some(requester) = caller.requested_by
+        && requester != caller.account_id
+    {
+        let theirs = sqlx::query_scalar::<_, Vec<String>>(
+            "SELECT direct_permissions($1, $2) WHERE conversation_visible_to($1, $2)",
+        )
+        .bind(conversation)
+        .bind(requester)
+        .fetch_optional(&mut *connection)
+        .await?;
+        if let Some(theirs) = theirs
+            && within_requester_held(connection, caller.account_id, workspace_id).await?
+        {
+            permissions = permissions.intersect(PermissionSet::from_keys(&theirs));
+        }
+    }
+    Ok(Some(Holding {
+        scope: Scope::Workspace(workspace_id),
+        workspace_id,
+        permissions,
+        tier: Tier::Member,
+        modules: None,
+        delegated: caller.limits.is_some(),
+    }))
+}
+
+/// Whether any role `account` holds in `workspace` acts only within its
+/// requester (K1.25).
+async fn within_requester_held(
+    connection: &mut PgConnection,
+    account: Uuid,
+    workspace: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM organization_memberships membership \
+         JOIN workspace_roles held ON held.id = membership.role_id \
+         WHERE membership.actor_id = $1 AND membership.organization_id = $2 \
+           AND held.act_within_requester)",
+    )
+    .bind(account)
+    .bind(workspace)
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
 async fn load_with(
     connection: &mut PgConnection,
     caller: &Caller,

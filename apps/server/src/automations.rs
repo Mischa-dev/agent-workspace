@@ -700,11 +700,7 @@ async fn module_off(
     }
     // A conversation trigger or action in a project needs Channels; in the
     // direct space, Messages.
-    let direct =
-        sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-            .bind(rule.project_id)
-            .fetch_one(&mut *connection)
-            .await?;
+    let direct = crate::spaces::kind::holds_messages(rule.project_id);
     let mut needed = vec![manifest::get("automations")];
     if let Ok(trigger) = rule.trigger() {
         needed.push(in_project_kind(
@@ -2192,7 +2188,7 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
         let place = if in_project {
             Some(rule.project_id)
         } else {
-            crate::direct::space_for_member(
+            crate::spaces::workspace::join(
                 &mut transaction,
                 rule.organization_id,
                 rule.owner_actor_id,

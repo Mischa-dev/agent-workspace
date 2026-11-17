@@ -106,10 +106,60 @@ struct ProjectAccessRow {
     membership_enabled: bool,
 }
 
+/// The columns of `ConversationAccessRow`, with `ACCESS_FROM` (binds: `$1`
+/// the conversation, `$2` the account). A conversation in a space takes the
+/// account's role there; a DM or group (no space) takes what
+/// `direct_permissions` gives: what the account's role allows in a
+/// workspace it shares with everyone else in it (K4.12).
+const ACCESS_COLUMNS: &str = r#"
+            conversation.id,
+            conversation.project_id,
+            conversation.workspace_id,
+            conversation.kind,
+            conversation.parent_channel_id,
+            conversation.origin_message_id,
+            conversation.name,
+            conversation.version,
+            conversation.archived_at::text AS archived_at,
+            COALESCE(project.archived_at IS NOT NULL, false) AS project_archived,
+            COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
+            parent.kind AS parent_kind,
+            conversation.thread_status,
+            conversation.thread_outcome,
+            conversation.next_entry_sequence,
+            CASE WHEN conversation.project_id IS NULL THEN 'admin'
+                 ELSE membership.role END AS membership_role,
+            CASE WHEN conversation.project_id IS NULL
+                 THEN direct_permissions(conversation.id, $2)
+                 ELSE workspace_role_permissions(membership.role_id)
+            END AS membership_role_permissions,
+            COALESCE(membership.enabled, conversation.project_id IS NULL) AS membership_enabled
+"#;
+
+const ACCESS_FROM: &str = r#"
+        FROM conversations conversation
+        LEFT JOIN projects project ON project.id = conversation.project_id
+        LEFT JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+         AND organization_membership.enabled
+        LEFT JOIN project_memberships membership
+          ON membership.project_id = conversation.project_id
+         AND membership.actor_id = $2
+        LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
+        WHERE conversation.id = $1
+          AND conversation_visible_to(conversation.id, $2)
+          AND (conversation.project_id IS NULL
+               OR (organization_membership.actor_id IS NOT NULL
+                   AND membership.actor_id IS NOT NULL))
+"#;
+
 #[derive(Clone, Debug, FromRow)]
 pub(crate) struct ConversationAccessRow {
     pub(crate) id: Uuid,
-    pub(crate) project_id: Uuid,
+    /// The space it's in; none for a DM or group (and threads under them).
+    pub(crate) project_id: Option<Uuid>,
+    pub(crate) workspace_id: Uuid,
     pub(crate) kind: String,
     pub(crate) parent_channel_id: Option<Uuid>,
     origin_message_id: Option<Uuid>,
@@ -128,6 +178,12 @@ pub(crate) struct ConversationAccessRow {
 }
 
 impl ConversationAccessRow {
+    /// Where it is, as the API and realtime name it: its space, or the
+    /// direct scope for a DM or group.
+    pub(crate) fn place(&self) -> Uuid {
+        self.project_id.unwrap_or(crate::spaces::DIRECT)
+    }
+
     /// The kind whose reply rules and members apply: a thread under a DM or
     /// group behaves like its parent.
     /// A thing's comments (and threads in them) follow a thread's reply
@@ -160,16 +216,25 @@ impl ConversationAccessRow {
     /// considered, and visibility was settled when the row was loaded: every
     /// lookup that returns this row goes through `conversation_visible_to`.
     pub(crate) fn allows(&self, actor_id: Uuid, action: Action) -> Result<bool, AppError> {
-        Ok(crate::access::membership_allows(
-            actor_id,
-            self.project_id,
-            RoleGrant::stored(
-                &self.membership_role,
-                self.membership_role_permissions.as_deref(),
-            )?,
-            self.membership_enabled,
-            action.permission(),
-        ))
+        let grant = RoleGrant::stored(
+            &self.membership_role,
+            self.membership_role_permissions.as_deref(),
+        )?;
+        Ok(match self.project_id {
+            Some(space) => crate::access::membership_allows(
+                actor_id,
+                space,
+                grant,
+                self.membership_enabled,
+                action.permission(),
+            ),
+            None => crate::access::direct_grant_allows(
+                actor_id,
+                self.workspace_id,
+                grant,
+                action.permission(),
+            ),
+        })
     }
 }
 
@@ -271,7 +336,7 @@ impl From<&ConversationAccessRow> for ConversationView {
         let is_thread = row.kind == "thread";
         Self {
             id: row.id,
-            project_id: row.project_id,
+            project_id: row.place(),
             kind: row.kind.clone(),
             parent_channel_id: row.parent_channel_id,
             origin_message_id: row.origin_message_id,
@@ -1108,7 +1173,7 @@ async fn create_thread(
     let body = ConversationCreateResponse {
         conversation: ConversationView {
             id: thread_id,
-            project_id: channel.project_id,
+            project_id: channel.place(),
             kind: "thread".to_owned(),
             parent_channel_id: Some(channel.id),
             origin_message_id: command.origin_message_id,
@@ -1239,9 +1304,7 @@ pub(crate) async fn thread_summaries(
                 FROM conversation_entries entry
                 JOIN messages message ON message.id = entry.message_id
                 JOIN actors author ON author.id = message.author_actor_id
-                JOIN project_memberships membership
-                  ON membership.project_id = thread.project_id
-                 AND membership.actor_id = message.author_actor_id
+                CROSS JOIN LATERAL place_profile(thread.project_id, message.author_actor_id) membership
                 WHERE entry.conversation_id = thread.id
                   AND message.removed_at IS NULL
                 GROUP BY message.author_actor_id, author.kind,
@@ -1392,7 +1455,7 @@ pub(crate) async fn update_thread(
     let version = thread.version + 1;
     enqueue_event(
         transaction,
-        thread.project_id,
+        thread.place(),
         OutboxEventPayload::ConversationUpdated(crate::outbox::ConversationUpdatedPayload {
             conversation_id: thread.id,
             version,
@@ -1452,7 +1515,7 @@ pub(crate) async fn rename_conversation(
     view.name = name;
     enqueue_event(
         transaction,
-        conversation.project_id,
+        conversation.place(),
         OutboxEventPayload::ConversationUpdated(crate::outbox::ConversationUpdatedPayload {
             conversation_id: conversation.id,
             version: view.version,
@@ -1727,7 +1790,7 @@ pub(crate) async fn append_message_command_with(
     // any edge.
     crate::workspace::lifecycle::ensure_open_for_space(
         &mut transaction,
-        conversation.project_id,
+        conversation.place(),
         "message_send",
     )
     .await?;
@@ -1792,7 +1855,7 @@ pub(crate) async fn append_message_command_with(
 
     let message_id = Uuid::now_v7();
     let notify_everyone =
-        may_notify_everyone(&mut *transaction, actor.actor_id, conversation.project_id).await?;
+        may_notify_everyone(&mut *transaction, actor.actor_id, conversation.place()).await?;
     sqlx::query(
         r#"
         INSERT INTO messages (
@@ -1817,7 +1880,7 @@ pub(crate) async fn append_message_command_with(
     .await?;
     insert_message_projections(
         &mut transaction,
-        conversation.project_id,
+        conversation.place(),
         message_id,
         &mentioned_actor_ids,
         &work_item_references,
@@ -1833,7 +1896,7 @@ pub(crate) async fn append_message_command_with(
     .await?;
     crate::link_previews::add_for_message(
         &mut transaction,
-        conversation.project_id,
+        conversation.place(),
         message_id,
         &plain_text,
     )
@@ -1859,7 +1922,7 @@ pub(crate) async fn append_message_command_with(
     // forward).
     crate::read_state::mark_seen(
         &mut transaction,
-        conversation.project_id,
+        conversation.place(),
         conversation.id,
         actor.actor_id,
         sequence,
@@ -1872,7 +1935,7 @@ pub(crate) async fn append_message_command_with(
             .collect::<Vec<_>>();
         crate::notification_settings::follow_automatically(
             &mut transaction,
-            conversation.project_id,
+            conversation.place(),
             conversation.id,
             &followers,
         )
@@ -1881,7 +1944,7 @@ pub(crate) async fn append_message_command_with(
     if conversation.kind == "thread" {
         refresh_auto_thread_names(
             &mut transaction,
-            conversation.project_id,
+            conversation.place(),
             conversation.id,
             None,
             true,
@@ -1890,7 +1953,7 @@ pub(crate) async fn append_message_command_with(
     }
     enqueue_event(
         &mut transaction,
-        conversation.project_id,
+        conversation.place(),
         OutboxEventPayload::MessageCreated(MessageCreatedPayload {
             conversation_id: conversation.id,
             message_id,
@@ -1913,9 +1976,7 @@ pub(crate) async fn append_message_command_with(
         FROM messages message
         JOIN conversation_entries entry ON entry.message_id = message.id
         JOIN actors actor ON actor.id = message.author_actor_id
-        JOIN project_memberships membership
-          ON membership.project_id = message.project_id
-         AND membership.actor_id = message.author_actor_id
+        CROSS JOIN LATERAL place_profile(message.project_id, message.author_actor_id) membership
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
@@ -1940,12 +2001,12 @@ pub(crate) async fn append_message_command_with(
                 title: Some(title),
                 status_category: Some(status_category),
                 archived_at,
-                href: Target::task(conversation.project_id, id).legacy_path(),
-                project_id: Some(conversation.project_id),
+                href: Target::task(conversation.place(), id).legacy_path(),
+                project_id: conversation.project_id,
             },
         )
         .collect();
-    if !sees_tasks_in(&mut *transaction, actor.actor_id, conversation.project_id).await? {
+    if !sees_tasks_in(&mut *transaction, actor.actor_id, conversation.place()).await? {
         hide_work_item_details(&mut referenced_work_items);
     }
     let message = MessageView {
@@ -2018,7 +2079,7 @@ pub(crate) async fn append_message_command_with(
     replies::ask_for_replies(
         &mut transaction,
         replies::NewMessage {
-            project_id: conversation.project_id,
+            project_id: conversation.place(),
             conversation_id: conversation.id,
             members_conversation_id: conversation.membership_conversation_id(),
             conversation_kind: conversation.effective_kind(),
@@ -2095,20 +2156,34 @@ pub(crate) async fn resolve_message_content(
     project_id: Uuid,
     content: MessageContent,
 ) -> Result<ResolvedContent, AppError> {
-    resolve_message_content_with(transaction, project_id, content, false).await
+    resolve_message_content_with(transaction, crate::spaces::space_of(project_id), content, false).await
 }
 
 /// `resolve_message_content`, allowing blank text when `allow_blank` (a
 /// message that carries files).
 pub(crate) async fn resolve_message_content_with(
     transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
+    project_id: Option<Uuid>,
     content: MessageContent,
     allow_blank: bool,
 ) -> Result<ResolvedContent, AppError> {
     let mention_ids = content.mentioned_actor_ids();
     let mention_rows = if mention_ids.is_empty() {
         Vec::new()
+    } else if project_id.is_none() {
+        // A DM or group: anyone active, by the handle they go by.
+        sqlx::query_as::<_, (Uuid, String)>(
+            r#"
+            SELECT actor.id, profile.handle
+            FROM actors actor
+            CROSS JOIN LATERAL account_profile(actor.id, NULL) profile
+            WHERE actor.id = ANY($1) AND actor.status = 'active'
+            FOR SHARE OF actor
+            "#,
+        )
+        .bind(&mention_ids)
+        .fetch_all(&mut **transaction)
+        .await?
     } else {
         sqlx::query_as::<_, (Uuid, String)>(
             r#"
@@ -2133,7 +2208,8 @@ pub(crate) async fn resolve_message_content_with(
         .iter()
         .map(|(_, work_item_id)| *work_item_id)
         .collect::<Vec<_>>();
-    let work_item_rows = if work_item_ids.is_empty() {
+    // Tasks live in spaces: a DM or group references none.
+    let work_item_rows = if work_item_ids.is_empty() || project_id.is_none() {
         Vec::new()
     } else {
         sqlx::query_as::<_, (Uuid, String, String, String, Option<String>)>(
@@ -2182,6 +2258,7 @@ pub(crate) async fn resolve_message_content_with(
 /// match its current content (the database checks).
 pub(crate) async fn insert_message_projections(
     transaction: &mut Transaction<'_, Postgres>,
+    // The message's place: its space, or the direct scope.
     project_id: Uuid,
     message_id: Uuid,
     mentioned_actor_ids: &[Uuid],
@@ -2191,7 +2268,7 @@ pub(crate) async fn insert_message_projections(
         sqlx::query(
             r#"
             INSERT INTO message_mentions (project_id, message_id, actor_id)
-            VALUES ($1, $2, $3)
+            VALUES (NULLIF($1, direct_scope_id()), $2, $3)
             "#,
         )
         .bind(project_id)
@@ -2206,7 +2283,7 @@ pub(crate) async fn insert_message_projections(
             INSERT INTO message_work_item_references (
                 project_id, message_id, work_item_id, node_index
             )
-            VALUES ($1, $2, $3, $4)
+            VALUES (NULLIF($1, direct_scope_id()), $2, $3, $4)
             "#,
         )
         .bind(project_id)
@@ -2231,16 +2308,18 @@ pub(crate) async fn lock_message_conversation(
     action: Action,
 ) -> Result<ConversationAccessRow, AppError> {
     lock_conversation_scope(transaction, actor.actor_id, conversation_id).await?;
-    let mcp_project_id = if let Some(proof) = actor.mcp_credential {
+    let mcp_checked = if let Some(proof) = actor.mcp_credential {
         Some(
-            sqlx::query_scalar::<_, Uuid>(
+            sqlx::query_scalar::<_, bool>(
                 r#"
-                SELECT target.project_id
+                SELECT true
                 FROM conversations target
                 JOIN external_agent_connections connection ON connection.id = $2
                 JOIN actors actor ON actor.id = $3
                 WHERE target.id = $4 AND conversation_visible_to(target.id, $3)
-                  AND agent_connection_can_access(connection.id, target.project_id)
+                  AND (CASE WHEN target.project_id IS NULL
+                            THEN agent_connection_can_reach_direct(connection.id)
+                            ELSE agent_connection_can_access(connection.id, target.project_id) END)
                   AND connection.actor_id = $3
                   AND connection.status = 'active'
                   AND actor.status = 'active'
@@ -2276,73 +2355,37 @@ pub(crate) async fn lock_message_conversation(
     } else {
         None
     };
-    let row = sqlx::query_as::<_, ConversationAccessRow>(
+    // The account holds still until the write commits.
+    sqlx::query("SELECT 1 FROM actors WHERE id = $1 FOR SHARE")
+        .bind(actor.actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    let row = sqlx::query_as::<_, ConversationAccessRow>(&format!(
         r#"
-        SELECT conversation.id, conversation.project_id, conversation.kind,
-               conversation.parent_channel_id, conversation.origin_message_id,
-               conversation.name, conversation.version,
-               conversation.archived_at::text AS archived_at,
-               project.archived_at IS NOT NULL AS project_archived,
-               COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
-               parent.kind AS parent_kind,
-               conversation.thread_status,
-               conversation.thread_outcome,
-               conversation.next_entry_sequence,
-               -- The Messages (direct) space follows the workspace role as it is
-            -- now: its base and its permissions together, never the base stored
-            -- when they first opened Messages with today's permissions.
-            -- That's a person's: an agent keeps the role it was given there (Viewer,
-            -- for one joined to a direct message), as before.
-            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                 THEN organization_membership.role
-                 ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
-               membership.enabled AS membership_enabled
-        FROM conversations conversation
-        JOIN projects project ON project.id = conversation.project_id
-        JOIN actors actor ON actor.id = $2
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = $2
-         AND organization_membership.enabled
-        JOIN project_memberships membership
-          ON membership.project_id = conversation.project_id
-         AND membership.actor_id = $2
-        LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
-        WHERE conversation.id = $1
-          AND conversation_visible_to(conversation.id, $2)
-          AND actor.kind = $3 AND actor.status = 'active'
-          AND (
-              -- Browser authentication, including the loopback-only development
-              -- principal, was validated before entering this command path.
-              ($4::uuid IS NULL AND actor.kind = 'human')
-              OR
-              ($4::uuid = conversation.project_id AND actor.kind = 'external_agent')
-          )
+        SELECT {ACCESS_COLUMNS}
+        {ACCESS_FROM}
+          AND EXISTS (
+              SELECT 1 FROM actors actor
+              WHERE actor.id = $2 AND actor.kind = $3 AND actor.status = 'active'
+                AND (
+                    -- Browser authentication, including the loopback-only
+                    -- development principal, was validated before entering
+                    -- this command path.
+                    ($4::boolean IS NULL AND actor.kind = 'human')
+                    OR
+                    ($4::boolean AND actor.kind = 'external_agent')
+                ))
         FOR UPDATE OF conversation
-        FOR SHARE OF project, actor, organization_membership, membership
         "#,
-    )
+    ))
     .bind(conversation_id)
     .bind(actor.actor_id)
     .bind(&actor.actor_kind)
-    .bind(mcp_project_id)
+    .bind(mcp_checked)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
-    if !crate::access::membership_allows(
-        actor.actor_id,
-        row.project_id,
-        RoleGrant::stored(
-            &row.membership_role,
-            row.membership_role_permissions.as_deref(),
-        )?,
-        row.membership_enabled,
-        action.permission(),
-    ) {
+    if !row.allows(actor.actor_id, action)? {
         return Err(AppError::NotFound("conversation"));
     }
     Ok(row)
@@ -2376,18 +2419,16 @@ pub(crate) async fn enqueue_external_message_events(
         SELECT connection.id, connection.actor_id
         FROM external_agent_connections connection
         JOIN actors actor ON actor.id = connection.actor_id
-        JOIN project_memberships membership
-          ON membership.project_id = $1
-         AND membership.actor_id = connection.actor_id
-        WHERE agent_connection_can_access(connection.id, $1)
+        WHERE (CASE WHEN $1::uuid IS NULL
+                    THEN agent_connection_can_reach_direct(connection.id)
+                    ELSE agent_connection_can_access(connection.id, $1) END)
           AND connection.actor_id = ANY($2)
           AND connection.actor_id <> $3
           AND connection.status = 'active'
           AND actor.status = 'active'
-          AND membership.enabled
           AND conversation_visible_to($4, connection.actor_id)
         ORDER BY connection.id
-        FOR SHARE OF connection, actor, membership
+        FOR SHARE OF connection, actor
         "#,
     )
     .bind(conversation.project_id)
@@ -2407,11 +2448,11 @@ pub(crate) async fn enqueue_external_message_events(
     };
     let path = subject_href.unwrap_or_else(|| {
         Target::conversation(
-            conversation.project_id,
+            conversation.place(),
             &conversation.kind,
             conversation.id,
-            None,
-            !matches!(conversation.kind.as_str(), "thread" | "channel"),
+            conversation.parent_channel_id,
+            conversation.project_id.is_none(),
             true,
         )
         .legacy_path()
@@ -2420,7 +2461,7 @@ pub(crate) async fn enqueue_external_message_events(
         enqueue_external_event(
             transaction,
             connection_id,
-            conversation.project_id,
+            conversation.place(),
             "message.mentioned",
             "You were mentioned in a Message",
             "message",
@@ -2487,9 +2528,7 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
             ) AS actors
             FROM message_mentions mention
             JOIN actors mentioned_actor ON mentioned_actor.id = mention.actor_id
-            JOIN project_memberships mentioned_membership
-              ON mentioned_membership.project_id = mention.project_id
-             AND mentioned_membership.actor_id = mention.actor_id
+            CROSS JOIN LATERAL place_profile(mention.project_id, mention.actor_id) mentioned_membership
             WHERE mention.message_id = message.id
         ) mentions ON true
         LEFT JOIN LATERAL (
@@ -2644,7 +2683,7 @@ async fn conversation_timeline(
     crate::forwarding::attach_forwards(&state.pool, &mut entries, principal.actor_id).await?;
     // Task chips name their task only for a reader who sees tasks here.
     let sees_tasks =
-        sees_tasks_in(&state.pool, principal.actor_id, conversation.project_id).await?;
+        sees_tasks_in(&state.pool, principal.actor_id, conversation.place()).await?;
     if !sees_tasks {
         hide_entry_work_item_details(&mut entries);
     }
@@ -2770,7 +2809,7 @@ async fn mark_conversation_seen(
 
     let row = crate::read_state::mark_seen(
         &mut transaction,
-        conversation.project_id,
+        conversation.place(),
         conversation.id,
         principal.actor_id,
         request.highest_seen_sequence,
@@ -2907,7 +2946,7 @@ pub(crate) async fn mark_unread_from(
         r#"
         UPDATE conversation_read_states
         SET highest_seen_sequence = $4, version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND conversation_id = $2 AND actor_id = $3
+        WHERE project_id IS NOT DISTINCT FROM $1 AND conversation_id = $2 AND actor_id = $3
           AND version = $5
         RETURNING highest_seen_sequence, version
         "#,
@@ -2924,7 +2963,7 @@ pub(crate) async fn mark_unread_from(
         .await?;
     enqueue_event(
         transaction,
-        conversation.project_id,
+        conversation.place(),
         OutboxEventPayload::ReadStateUpdated(ReadStateUpdatedPayload {
             conversation_id: conversation.id,
             actor_id,
@@ -3000,7 +3039,7 @@ async fn archive_conversation(
         &mut transaction,
         headers,
         principal,
-        conversation.project_id,
+        conversation.place(),
         "conversation.archived",
         conversation.id,
         serde_json::json!({"previous_version": conversation.version}),
@@ -3092,7 +3131,7 @@ async fn restore_conversation(
         &mut transaction,
         headers,
         principal,
-        conversation.project_id,
+        conversation.place(),
         "conversation.restored",
         conversation.id,
         serde_json::json!({"previous_version": conversation.version}),
@@ -3240,7 +3279,7 @@ pub(crate) async fn set_conversation_archived(
             version: changed.version,
         })
     };
-    enqueue_event(transaction, conversation.project_id, payload).await?;
+    enqueue_event(transaction, conversation.place(), payload).await?;
     Ok((conversation, Some(changed)))
 }
 
@@ -3686,18 +3725,8 @@ async fn authorized_project(
         SELECT
             project.id AS project_id,
             project.archived_at IS NOT NULL AS project_archived,
-            -- The Messages (direct) space follows the workspace role as it is
-            -- now: its base and its permissions together, never the base stored
-            -- when they first opened Messages with today's permissions.
-            -- That's a person's: an agent keeps the role it was given there (Viewer,
-            -- for one joined to a direct message), as before.
-            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                 THEN organization_membership.role
-                 ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
+            membership.role AS membership_role,
+            workspace_role_permissions(membership.role_id) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -3737,18 +3766,8 @@ async fn lock_project_access(
         SELECT
             project.id AS project_id,
             project.archived_at IS NOT NULL AS project_archived,
-            -- The Messages (direct) space follows the workspace role as it is
-            -- now: its base and its permissions together, never the base stored
-            -- when they first opened Messages with today's permissions.
-            -- That's a person's: an agent keeps the role it was given there (Viewer,
-            -- for one joined to a direct message), as before.
-            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                 THEN organization_membership.role
-                 ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
+            membership.role AS membership_role,
+            workspace_role_permissions(membership.role_id) AS membership_role_permissions,
             membership.enabled AS membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -3797,50 +3816,12 @@ pub(crate) async fn fetch_conversation_access(
     actor_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<Option<ConversationAccessRow>, AppError> {
-    Ok(sqlx::query_as::<_, ConversationAccessRow>(
+    Ok(sqlx::query_as::<_, ConversationAccessRow>(&format!(
         r#"
-        SELECT
-            conversation.id,
-            conversation.project_id,
-            conversation.kind,
-            conversation.parent_channel_id,
-            conversation.origin_message_id,
-            conversation.name,
-            conversation.version,
-            conversation.archived_at::text AS archived_at,
-            project.archived_at IS NOT NULL AS project_archived,
-            COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
-            parent.kind AS parent_kind,
-            conversation.thread_status,
-            conversation.thread_outcome,
-            conversation.next_entry_sequence,
-            -- The Messages (direct) space follows the workspace role as it is
-            -- now: its base and its permissions together, never the base stored
-            -- when they first opened Messages with today's permissions.
-            -- That's a person's: an agent keeps the role it was given there (Viewer,
-            -- for one joined to a direct message), as before.
-            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                 THEN organization_membership.role
-                 ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
-            membership.enabled AS membership_enabled
-        FROM conversations conversation
-        JOIN projects project ON project.id = conversation.project_id
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = $2
-         AND organization_membership.enabled
-        JOIN project_memberships membership
-          ON membership.project_id = conversation.project_id
-         AND membership.actor_id = $2
-        LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
-        WHERE conversation.id = $1
-          AND conversation_visible_to(conversation.id, $2)
+        SELECT {ACCESS_COLUMNS}
+        {ACCESS_FROM}
         "#,
-    )
+    ))
     .bind(conversation_id)
     .bind(actor_id)
     .fetch_optional(crate::db::scoped(pool))
@@ -3872,16 +3853,36 @@ async fn lock_conversation_scope(
     actor_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<(), AppError> {
-    let (project_id, parent_id) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+    let (project_id, parent_id) = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>)>(
         "SELECT project_id, parent_channel_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
     )
     .bind(conversation_id).bind(actor_id)
     .fetch_optional(&mut **transaction).await?
     .ok_or(AppError::NotFound("conversation"))?;
-    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR SHARE")
+    if let Some(project_id) = project_id {
+        // The space, and the account's place in it, hold still until the
+        // write commits.
+        sqlx::query("SELECT id FROM projects WHERE id = $1 FOR SHARE")
+            .bind(project_id)
+            .execute(&mut **transaction)
+            .await?;
+        sqlx::query(
+            r#"
+            SELECT 1
+            FROM project_memberships membership
+            JOIN projects project ON project.id = membership.project_id
+            JOIN organization_memberships organization_membership
+              ON organization_membership.organization_id = project.organization_id
+             AND organization_membership.actor_id = membership.actor_id
+            WHERE membership.project_id = $1 AND membership.actor_id = $2
+            FOR SHARE OF membership, organization_membership
+            "#,
+        )
         .bind(project_id)
+        .bind(actor_id)
         .execute(&mut **transaction)
         .await?;
+    }
     if let Some(parent_id) = parent_id {
         sqlx::query("SELECT id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2) FOR SHARE")
             .bind(parent_id).bind(actor_id).execute(&mut **transaction).await?;
@@ -3915,52 +3916,13 @@ pub(crate) async fn lock_conversation_for(
     include_archived: bool,
 ) -> Result<ConversationAccessRow, AppError> {
     lock_conversation_scope(transaction, actor_id, conversation_id).await?;
-    let row = sqlx::query_as::<_, ConversationAccessRow>(
+    let row = sqlx::query_as::<_, ConversationAccessRow>(&format!(
         r#"
-        SELECT
-            conversation.id,
-            conversation.project_id,
-            conversation.kind,
-            conversation.parent_channel_id,
-            conversation.origin_message_id,
-            conversation.name,
-            conversation.version,
-            conversation.archived_at::text AS archived_at,
-            project.archived_at IS NOT NULL AS project_archived,
-            COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
-            parent.kind AS parent_kind,
-            conversation.thread_status,
-            conversation.thread_outcome,
-            conversation.next_entry_sequence,
-            -- The Messages (direct) space follows the workspace role as it is
-            -- now: its base and its permissions together, never the base stored
-            -- when they first opened Messages with today's permissions.
-            -- That's a person's: an agent keeps the role it was given there (Viewer,
-            -- for one joined to a direct message), as before.
-            CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                 THEN organization_membership.role
-                 ELSE membership.role END AS membership_role,
-            workspace_role_permissions(CASE WHEN project.kind = 'direct' AND EXISTS (SELECT 1 FROM actors direct_person
-                     WHERE direct_person.id = membership.actor_id AND direct_person.kind = 'human')
-                THEN organization_membership.role_id ELSE membership.role_id END) AS membership_role_permissions,
-            membership.enabled AS membership_enabled
-        FROM conversations conversation
-        JOIN projects project ON project.id = conversation.project_id
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = $2
-         AND organization_membership.enabled
-        JOIN project_memberships membership
-          ON membership.project_id = conversation.project_id
-         AND membership.actor_id = $2
-        LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
-        WHERE conversation.id = $1
-          AND conversation_visible_to(conversation.id, $2)
+        SELECT {ACCESS_COLUMNS}
+        {ACCESS_FROM}
         FOR UPDATE OF conversation
-        FOR SHARE OF project, organization_membership, membership
         "#,
-    )
+    ))
     .bind(conversation_id)
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
@@ -3972,7 +3934,8 @@ pub(crate) async fn lock_conversation_for(
             r#"
             SELECT archived_at IS NULL
             FROM conversations
-            WHERE id = $1 AND project_id = $2 AND kind IN ('channel', 'dm', 'group', 'comments')
+            WHERE id = $1 AND project_id IS NOT DISTINCT FROM $2
+              AND kind IN ('channel', 'dm', 'group', 'comments')
             FOR SHARE
             "#,
         )
@@ -4159,7 +4122,7 @@ async fn fetch_read_state(
 
 pub(crate) async fn fetch_actor_views(
     transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
+    project_id: Option<Uuid>,
     actor_ids: &[Uuid],
 ) -> Result<Vec<ActorView>, AppError> {
     if actor_ids.is_empty() {
@@ -4172,14 +4135,20 @@ pub(crate) async fn fetch_actor_views(
         display_name: String,
         handle: String,
     }
+    // In a space, the names they go by there; in a DM or group, by their
+    // workspace profile.
     let rows = sqlx::query_as::<_, Row>(
         r#"
-        SELECT actor.id, actor.kind, membership.display_name, membership.handle
-        FROM project_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id
-        WHERE membership.project_id = $1
-          AND membership.actor_id = ANY($2)
-        ORDER BY lower(membership.display_name), actor.id
+        SELECT actor.id, actor.kind,
+               COALESCE(membership.display_name, profile.display_name) AS display_name,
+               COALESCE(membership.handle, profile.handle) AS handle
+        FROM actors actor
+        CROSS JOIN LATERAL account_profile(actor.id, NULL) profile
+        LEFT JOIN project_memberships membership
+          ON membership.project_id = $1 AND membership.actor_id = actor.id
+        WHERE actor.id = ANY($2)
+          AND ($1::uuid IS NULL OR membership.actor_id IS NOT NULL)
+        ORDER BY lower(COALESCE(membership.display_name, profile.display_name)), actor.id
         "#,
     )
     .bind(project_id)
@@ -4474,7 +4443,7 @@ async fn fetch_run_projection(
     if crate::search::projects_allowing(
         &state.pool,
         principal.actor_id,
-        &[conversation.project_id],
+        &[conversation.place()],
         crate::policy::Permission::CodeView,
     )
     .await?
@@ -4520,7 +4489,7 @@ async fn fetch_run_projection(
             &conversation.membership_role,
             conversation.membership_role_permissions.as_deref(),
             conversation.membership_enabled,
-            conversation.project_id,
+            conversation.place(),
             Action::RunInterrupt,
         )
         .unwrap_or(false);
@@ -4543,7 +4512,7 @@ async fn fetch_run_projection(
                 &conversation.membership_role,
                 conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
-                conversation.project_id,
+                conversation.place(),
                 Action::WorkerInvoke,
             )
             .unwrap_or(false);
@@ -4555,7 +4524,7 @@ async fn fetch_run_projection(
                 &conversation.membership_role,
                 conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
-                conversation.project_id,
+                conversation.place(),
                 Action::RepositoryPublish,
             )
             .unwrap_or(false);
@@ -4568,7 +4537,7 @@ async fn fetch_run_projection(
                 &conversation.membership_role,
                 conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
-                conversation.project_id,
+                conversation.place(),
                 Action::PullRequestCreate,
             )
             .unwrap_or(false);
@@ -4579,7 +4548,7 @@ async fn fetch_run_projection(
                 &conversation.membership_role,
                 conversation.membership_role_permissions.as_deref(),
                 conversation.membership_enabled,
-                conversation.project_id,
+                conversation.place(),
                 Action::PullRequestRefresh,
             )
             .unwrap_or(false);
@@ -4737,6 +4706,7 @@ pub(crate) fn thread_name_from_text(text: &str) -> Option<String> {
 /// new message can only name a thread that has no text to go by yet.
 pub(crate) async fn refresh_auto_thread_names(
     transaction: &mut Transaction<'_, Postgres>,
+    // The conversation's place: its space, or the direct scope.
     project_id: Uuid,
     conversation_id: Uuid,
     started_from: Option<Uuid>,
@@ -4746,7 +4716,8 @@ pub(crate) async fn refresh_auto_thread_names(
     let threads = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
         r#"
         SELECT id, name, origin_message_id FROM conversations
-        WHERE auto_named AND kind = 'thread' AND project_id = $1
+        WHERE auto_named AND kind = 'thread'
+          AND project_id IS NOT DISTINCT FROM NULLIF($1, direct_scope_id())
           AND (id = $2 OR ($3::uuid IS NOT NULL AND parent_channel_id = $2
                            AND origin_message_id = $3))
           AND (NOT $4 OR name = $5)
@@ -4928,6 +4899,7 @@ pub(crate) async fn insert_audit_event_for(
     transaction: &mut Transaction<'_, Postgres>,
     headers: &HeaderMap,
     principal: &AuthenticatedActor,
+    // The target's place: a DM's audit row has no space.
     project_id: Uuid,
     action: &'static str,
     target_kind: &'static str,
@@ -4952,7 +4924,7 @@ pub(crate) async fn insert_audit_event_for(
     )
     .bind(Uuid::now_v7())
     .bind(principal.actor_id)
-    .bind(project_id)
+    .bind(crate::spaces::space_of(project_id))
     .bind(principal.session_id)
     .bind(action)
     .bind(target_kind)

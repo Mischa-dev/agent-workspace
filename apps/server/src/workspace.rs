@@ -343,7 +343,7 @@ async fn load_workspace(
                    AND actor.kind = 'external_agent') AS agent_count,
                (SELECT count(*) FROM projects project
                  WHERE project.organization_id = organization.id
-                   AND project.archived_at IS NULL AND project.kind NOT IN ('direct', 'workspace')) AS project_count,
+                   AND project.archived_at IS NULL AND project.kind <> 'workspace') AS project_count,
                (SELECT count(*) FROM organization_memberships membership
                  WHERE membership.organization_id = organization.id AND membership.enabled
                    AND membership.role = 'owner') AS owner_count,
@@ -579,7 +579,7 @@ const MEMBER_COLUMNS: &str = r#"
     (SELECT count(*) FROM project_memberships project_membership
       JOIN projects project ON project.id = project_membership.project_id
       WHERE project.organization_id = membership.organization_id
-        AND project.archived_at IS NULL AND project.kind NOT IN ('direct', 'workspace')
+        AND project.archived_at IS NULL AND project.kind <> 'workspace'
         AND project_membership.actor_id = membership.actor_id
         AND project_membership.enabled) AS project_count
 "#;
@@ -874,7 +874,7 @@ async fn remove_from_workspace(
             SELECT 1 FROM project_memberships mine
             JOIN projects project ON project.id = mine.project_id
             WHERE project.organization_id = $1 AND project.archived_at IS NULL
-              AND project.kind NOT IN ('direct', 'workspace')
+              AND project.kind <> 'workspace'
               AND mine.actor_id = $2 AND mine.enabled AND mine.role = 'owner'
               AND NOT EXISTS (
                   SELECT 1 FROM project_memberships other

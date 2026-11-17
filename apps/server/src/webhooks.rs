@@ -439,7 +439,7 @@ pub(crate) async fn list_in(
           AND ($2::uuid IS NULL OR project.id = $2)
           AND actor_can_access_project($1, NULL, project.id)
           AND NOT (project.id = ANY($3))
-        ORDER BY (project.kind = 'direct'), lower(project.name), project.id
+        ORDER BY lower(project.name), project.id
         LIMIT 300
         "#,
     )
@@ -1224,7 +1224,7 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
         let (modules, direct) = crate::db::scoped_one(pool, async |connection| {
             let modules =
                 crate::modules::state::in_space(connection, organization_id, project_id).await?;
-            let direct = crate::spaces::kind::holds_messages(connection, project_id).await?;
+            let direct = crate::spaces::kind::holds_messages(project_id);
             Ok::<_, AppError>((modules, direct))
         })
         .await?;

@@ -37,6 +37,7 @@ struct CursorPayload {
 pub async fn enqueue_external_event(
     transaction: &mut Transaction<'_, Postgres>,
     connection_id: Uuid,
+    // The resource's place; a DM's is filed under the connection's space.
     project_id: Uuid,
     kind: &str,
     summary: &str,
@@ -64,13 +65,16 @@ pub async fn enqueue_external_event(
             resource_kind, resource_id, canonical_path,
             expires_at
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9,
+            -- Something outside a space (a DM) is filed under the
+            -- connection's own space.
+            $1, COALESCE($2, (SELECT project_id FROM external_agent_connections WHERE id = $3)),
+            $3, $4, $5, $6, $7, $8, $9,
             now() + make_interval(days => $10)
         )
         "#,
     )
     .bind(Uuid::now_v7())
-    .bind(project_id)
+    .bind(crate::spaces::space_of(project_id))
     .bind(connection_id)
     .bind(sequence)
     .bind(kind)

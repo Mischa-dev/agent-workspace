@@ -305,8 +305,10 @@ pub async fn stage(
         NewEvent {
             id: event_id,
             ty,
-            workspace_id: None,
-            space_id: Some(project_id),
+            // A DM or group has no space: its events belong to the direct
+            // scope and are heard by its participants.
+            workspace_id: (project_id == crate::spaces::DIRECT).then_some(project_id),
+            space_id: (project_id != crate::spaces::DIRECT).then_some(project_id),
             thing,
             access_thing: access,
             version,

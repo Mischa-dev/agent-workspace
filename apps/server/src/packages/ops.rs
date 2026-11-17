@@ -380,6 +380,7 @@ impl Operation for PackageInstall {
         let located = crate::ops::Located {
             workspace_id: workspace,
             space_id: None,
+            direct: None,
         };
         let workspace_target = Target::Workspace(Some(workspace));
         // A connection held to one space installs only into that space, and

@@ -1,8 +1,8 @@
 //! K4.3: the spaces guard rails (K4 plan, section 6), as unit tests that
 //! read the server's source and migrations, like `structure_guards`.
 //!
-//! - G1: the stored kinds are exactly the ones `SpaceKind` knows (plus
-//!   `direct` until K4.17); kind literals in code only go down
+//! - G1: the stored kinds are exactly the ones `SpaceKind` knows; kind
+//!   literals in code only go down
 //!   (`guards/kind_literals.json`); only the spaces module makes a space.
 //! - G2: every SQL string that reads `conversations` or `messages` carries
 //!   the visibility rule, or its file and function are in
@@ -21,24 +21,16 @@ use crate::test_support::source::{
 
 use super::SpaceKind;
 
-/// Kinds stored in `projects.kind` that aren't spaces, and why.
-const NOT_SPACE_KINDS: [(&str, &str); 1] = [(
-    "direct",
-    "the hidden Messages project behind direct conversations; K4.17 removes it",
-)];
+/// Kinds stored in `projects.kind` that aren't spaces, and why. Empty
+/// since K4.17 took DMs out of the hidden Messages projects.
+const NOT_SPACE_KINDS: [(&str, &str); 0] = [];
 
 /// Files that may insert a space row today, and why. Only ever shrinks:
 /// `spaces::create` becomes the one way to make a space.
-const SPACE_CREATORS: [(&str, &str); 2] = [
-    (
-        "direct.rs",
-        "makes the hidden Messages project for direct conversations; K4.17 removes it",
-    ),
-    (
-        "seed.rs",
-        "the development seed writes its sample projects directly",
-    ),
-];
+const SPACE_CREATORS: [(&str, &str); 1] = [(
+    "seed.rs",
+    "the development seed writes its sample projects directly",
+)];
 
 /// The first migration held to G4: K4.1's, which named spaces.
 const NAMING_BASELINE: u64 = 20_261_114_190_300;

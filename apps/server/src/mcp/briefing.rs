@@ -160,8 +160,7 @@ pub(super) async fn briefing(
             SELECT conversation.id::text AS conversation_id,
                    CASE WHEN conversation.kind = 'dm' THEN 'DM' ELSE conversation.name END
                        AS conversation,
-                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
-                       AS project,
+                   COALESCE(project.name, 'Messages') AS project,
                    entry.sequence, message.id::text AS message_id,
                    COALESCE(author.display_name, 'Someone') AS author,
                    left(message.plain_text, 280) AS text,
@@ -169,14 +168,14 @@ pub(super) async fn briefing(
             FROM message_mentions mention
             JOIN messages message ON message.id = mention.message_id
             JOIN conversations conversation ON conversation.id = message.conversation_id
-            JOIN projects project ON project.id = conversation.project_id
+            LEFT JOIN projects project ON project.id = conversation.project_id
             JOIN conversation_entries entry ON entry.message_id = message.id
             LEFT JOIN conversation_read_states read_state
               ON read_state.conversation_id = conversation.id AND read_state.actor_id = $1
-            LEFT JOIN project_memberships author
-              ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
+            LEFT JOIN LATERAL place_profile(message.project_id, message.author_actor_id) author
+              ON true
             WHERE mention.actor_id = $1
-              AND message.project_id = ANY($2)
+              AND COALESCE(message.project_id, direct_scope_id()) = ANY($2)
               AND message.author_actor_id <> $1
               AND message.removed_at IS NULL
               AND message.created_at > now() - interval '30 days'
@@ -223,9 +222,7 @@ pub(super) async fn briefing(
                    thread.thread_status_changed_at::text AS changed_at
             FROM conversations thread
             JOIN conversations parent ON parent.id = thread.parent_channel_id
-            LEFT JOIN project_memberships changer
-              ON changer.project_id = thread.project_id
-             AND changer.actor_id = thread.thread_status_changed_by_actor_id
+            LEFT JOIN LATERAL place_profile(thread.project_id, thread.thread_status_changed_by_actor_id) changer ON true
             WHERE thread.kind = 'thread'
               AND thread.project_id = ANY($2)
               AND thread.thread_status_changed_at > now() - interval '7 days'
@@ -395,8 +392,8 @@ pub(super) async fn projects_list(
         let mut rows = sqlx::query_as::<_, ProjectLine>(
             r#"
             SELECT project.id::text AS id, project.project_key AS key,
-                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS name,
-                   membership.role, project.kind = 'direct' AS messages_space,
+                   project.name AS name,
+                   membership.role, false AS messages_space,
                    project.archived_at IS NOT NULL AS archived, project.version,
                    (SELECT count(*) FROM task_rows item
                     JOIN work_item_statuses status
@@ -416,8 +413,21 @@ pub(super) async fn projects_list(
             JOIN project_memberships membership
               ON membership.project_id = project.id AND membership.actor_id = $1
             WHERE project.id = ANY($2)
-            ORDER BY project.archived_at IS NOT NULL, (project.kind = 'direct'), project.name,
-                     project.id
+            UNION ALL
+            -- DMs and groups, which live in no space (K4.17).
+            SELECT direct_scope_id()::text, '', 'Messages', 'member', true, false, 0, 0,
+                   (SELECT count(*) FROM conversations conversation
+                    LEFT JOIN conversation_read_states read_state
+                      ON read_state.conversation_id = conversation.id AND read_state.actor_id = $1
+                    WHERE conversation.project_id IS NULL
+                      AND conversation.kind IN ('dm', 'group') AND conversation.archived_at IS NULL
+                      AND conversation.last_message_sequence
+                          > COALESCE(read_state.highest_seen_sequence, 0)
+                      AND conversation_notification_level($1, conversation.id) <> 'nothing'
+                      AND conversation_visible_to(conversation.id, $1)),
+                   ''
+            WHERE direct_scope_id() = ANY($2)
+            ORDER BY 6, 5, 3, 1
             "#,
         )
         .bind(principal.actor_id)

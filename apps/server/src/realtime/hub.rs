@@ -620,6 +620,22 @@ async fn event_is_authorized(
         return crate::whiteboards::visible_to(&state.pool, whiteboard_id, principal.actor_id)
             .await;
     }
+    // A DM or group (and threads under one) has no space: its participants
+    // hear it, by `conversation_visible_to` alone; an event for one account
+    // reached `is_visible_to_actor` above.
+    if event.project_id() == crate::spaces::DIRECT {
+        return match event.conversation_id() {
+            Some(conversation_id) => {
+                sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
+                    .bind(conversation_id)
+                    .bind(principal.actor_id)
+                    .fetch_one(crate::db::scoped(&state.pool))
+                    .await
+                    .map_err(AppError::from)
+            }
+            None => Ok(event.recipient_actor_id().is_some()),
+        };
+    }
     if event.is_workspace_wide() {
         // The envelope's space names the workspace; its members hear of it.
         return sqlx::query_scalar::<_, bool>(

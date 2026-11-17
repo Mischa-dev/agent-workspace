@@ -26,6 +26,7 @@ pub struct ReadState {
 /// None when it was already at or past `sequence`.
 pub async fn mark_seen(
     transaction: &mut Transaction<'_, Postgres>,
+    // The conversation's place: its space, or the direct scope.
     project_id: Uuid,
     conversation_id: Uuid,
     actor_id: Uuid,
@@ -37,7 +38,7 @@ pub async fn mark_seen(
             project_id, conversation_id, actor_id, highest_seen_sequence, version
         )
         VALUES ($1, $2, $3, $4, 1)
-        ON CONFLICT (project_id, conversation_id, actor_id) DO UPDATE
+        ON CONFLICT (conversation_id, actor_id) DO UPDATE
         SET highest_seen_sequence = EXCLUDED.highest_seen_sequence,
             version = conversation_read_states.version + 1,
             updated_at = now()
@@ -45,7 +46,7 @@ pub async fn mark_seen(
         RETURNING highest_seen_sequence, version
         "#,
     )
-    .bind(project_id)
+    .bind(crate::spaces::space_of(project_id))
     .bind(conversation_id)
     .bind(actor_id)
     .bind(sequence)

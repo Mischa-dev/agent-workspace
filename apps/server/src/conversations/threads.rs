@@ -219,9 +219,11 @@ pub(crate) async fn create(
         false,
     )
     .await?;
+    // An agent's call scoped to a space reaches that space's conversations
+    // and DMs and groups (which have none).
     if creator
         .project_id
-        .is_some_and(|project_id| project_id != parent.project_id)
+        .is_some_and(|project_id| parent.project_id.is_some_and(|space| space != project_id))
     {
         return Err(AppError::NotFound("conversation"));
     }
@@ -345,7 +347,7 @@ pub(crate) async fn create(
         .collect::<Vec<_>>();
     crate::notification_settings::follow_automatically(
         transaction,
-        parent.project_id,
+        parent.place(),
         thread_id,
         &followers,
     )
@@ -367,7 +369,7 @@ pub(crate) async fn create(
     }
     enqueue_event(
         transaction,
-        parent.project_id,
+        parent.place(),
         OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
             conversation_id: thread_id,
             kind: OutboxConversationKind::Thread,
@@ -386,7 +388,7 @@ pub(crate) async fn create(
         transaction,
         creator,
         "conversation.thread_created",
-        parent.project_id,
+        parent.place(),
         thread_id,
         metadata,
     )
@@ -485,7 +487,8 @@ async fn audit(
 /// both, so every made conversation passes the same constraints.
 struct NewConversation<'a> {
     id: Uuid,
-    project_id: Uuid,
+    /// None under a DM or group: the thread takes its parent's workspace.
+    project_id: Option<Uuid>,
     kind: &'static str,
     parent_id: Option<Uuid>,
     origin_message_id: Option<Uuid>,
@@ -509,7 +512,10 @@ async fn insert(
             auto_named, visibility, subject_kind, subject_id, anchor
         )
         VALUES (
-            $1, $2, (SELECT organization_id FROM projects WHERE id = $2), $3, $4, $5, $6, $7,
+            $1, $2,
+            COALESCE((SELECT organization_id FROM projects WHERE id = $2),
+                     (SELECT workspace_id FROM conversations WHERE id = $4)),
+            $3, $4, $5, $6, $7,
             $8, $9, $10, $11
         )
         ON CONFLICT (subject_kind, subject_id) WHERE kind = 'comments' DO NOTHING
@@ -553,7 +559,7 @@ pub(crate) async fn open_comments(
         transaction,
         NewConversation {
             id,
-            project_id,
+            project_id: Some(project_id),
             kind: "comments",
             parent_id: None,
             origin_message_id: None,

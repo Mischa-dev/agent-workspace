@@ -223,14 +223,11 @@ async fn agents_to_ask(
         SELECT member.actor_id
         FROM conversation_members member
         JOIN actors actor ON actor.id = member.actor_id
-        JOIN project_memberships membership
-          ON membership.project_id = member.project_id
-         AND membership.actor_id = member.actor_id
         WHERE member.conversation_id = $1
           AND member.actor_id <> $2
           AND actor.kind = 'external_agent'
           AND actor.status = 'active'
-          AND membership.enabled
+          AND conversation_visible_to($1, member.actor_id)
         ORDER BY member.actor_id
         "#,
     )
@@ -347,7 +344,7 @@ async fn insert_requests(
                 required, mentioned, follows_request_id
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7,
+                $1, NULLIF($2, direct_scope_id()), $3, $4, $5, $6, $7,
                 (
                     SELECT claimed.id FROM reply_requests claimed
                     WHERE claimed.agent_actor_id = $5
@@ -436,7 +433,7 @@ pub(crate) async fn withdraw_requests(
                 WHERE conversation_id = $1
                   AND message_id = $2
                   AND status IN ('pending', 'claimed', 'expired', 'released')
-                RETURNING project_id, conversation_id
+                RETURNING COALESCE(project_id, direct_scope_id()), conversation_id
                 "#,
             )
             .bind(conversation_id)
@@ -462,7 +459,7 @@ pub(crate) async fn withdraw_requests(
                   AND conversation_visible_to(conversation.id, $3)
                   AND request.agent_actor_id = ANY($2)
                   AND request.status IN ('pending', 'claimed', 'expired', 'released')
-                RETURNING request.project_id, request.conversation_id
+                RETURNING COALESCE(request.project_id, direct_scope_id()), request.conversation_id
                 "#,
             )
             .bind(group_id)
@@ -525,7 +522,8 @@ async fn wake(
         r#"
         SELECT id, webhook_url IS NOT NULL
         FROM external_agent_connections
-        WHERE agent_connection_can_access(id, $1) AND actor_id = $2 AND status = 'active'
+        WHERE agent_connection_can_reach(id, NULLIF($1, direct_scope_id()))
+          AND actor_id = $2 AND status = 'active'
         "#,
     )
     .bind(project_id)
@@ -613,7 +611,7 @@ pub(crate) async fn complete_with_reply(
         WHERE id = $1 AND generation = $2 AND agent_actor_id = $3
           AND COALESCE(thread_id, conversation_id) = $4 AND status = 'claimed'
           AND lease_expires_at > clock_timestamp()
-        RETURNING project_id, conversation_id, thread_id
+        RETURNING COALESCE(project_id, direct_scope_id()), conversation_id, thread_id
         "#,
     )
     .bind(request_id)
@@ -724,8 +722,8 @@ pub(crate) async fn timeline_requests(
     let rows = sqlx::query_as::<_, ReplyRequestRow>(
         r#"
         SELECT request.id, request.message_id, request.agent_actor_id,
-               membership.display_name AS agent_name,
-               membership.handle AS agent_handle,
+               agent_name.display_name AS agent_name,
+               agent_name.handle AS agent_handle,
                request.required, request.mentioned, request.status, request.reason,
                -- A status describes work in progress, so only a live claim shows one.
                CASE WHEN request.status = 'claimed' THEN request.progress_text END
@@ -736,15 +734,13 @@ pub(crate) async fn timeline_requests(
                (
                    SELECT max(connection.last_used_at)::text
                    FROM external_agent_connections connection
-                   WHERE agent_connection_can_access(connection.id, request.project_id)
+                   WHERE agent_connection_can_reach(connection.id, request.project_id)
                      AND connection.actor_id = request.agent_actor_id
                ) AS agent_last_seen_at,
                request.thread_id,
                request.follows_request_id
         FROM reply_requests request
-        JOIN project_memberships membership
-          ON membership.project_id = request.project_id
-         AND membership.actor_id = request.agent_actor_id
+        CROSS JOIN LATERAL place_profile(request.project_id, request.agent_actor_id) agent_name
         WHERE (request.conversation_id = $1 OR request.thread_id = $1)
           AND request.status <> 'superseded'
           AND conversation_visible_to($1, $2)
@@ -887,7 +883,7 @@ pub(crate) async fn continue_conversation_in(
         ask(
             transaction,
             &NewMessage {
-                project_id: conversation.project_id,
+                project_id: conversation.place(),
                 conversation_id,
                 members_conversation_id: conversation.membership_conversation_id(),
                 conversation_kind: "group",
@@ -900,21 +896,19 @@ pub(crate) async fn continue_conversation_in(
         )
         .await?;
     }
-    notify(transaction, conversation.project_id, conversation_id).await?;
+    notify(transaction, conversation.place(), conversation_id).await?;
     let latest_message_id = latest.map(|(message_id, _, _)| message_id);
     let asked = match latest_message_id {
         Some(message_id) => sqlx::query_as::<_, (Uuid, String, String, String)>(
             r#"
-            SELECT actor.id, actor.kind, membership.display_name, membership.handle
+            SELECT actor.id, actor.kind, agent_name.display_name, agent_name.handle
             FROM reply_requests request
             JOIN actors actor ON actor.id = request.agent_actor_id
-            JOIN project_memberships membership
-              ON membership.project_id = request.project_id
-             AND membership.actor_id = request.agent_actor_id
+            CROSS JOIN LATERAL place_profile(request.project_id, request.agent_actor_id) agent_name
             WHERE request.conversation_id = $1
               AND request.message_id = $2
               AND request.status IN ('pending', 'claimed')
-            ORDER BY lower(membership.display_name), actor.id
+            ORDER BY lower(agent_name.display_name), actor.id
             "#,
         )
         .bind(conversation_id)
@@ -933,7 +927,7 @@ pub(crate) async fn continue_conversation_in(
         None => Vec::new(),
     };
     Ok(ContinueOutcome {
-        project_id: conversation.project_id,
+        project_id: conversation.place(),
         conversation_id,
         agent_turns_remaining: TURN_ALLOWANCE,
         latest_message_id,
@@ -999,11 +993,12 @@ pub(crate) async fn retry_request_in(
     // was removed; the update below refuses them anyway.
     let answerable = sqlx::query_scalar::<_, bool>(
         r#"
-        SELECT actor.status = 'active' AND membership.enabled
+        SELECT actor.status = 'active'
+               AND (request.project_id IS NULL OR COALESCE(membership.enabled, false))
                AND conversation_visible_to(request.conversation_id, request.agent_actor_id)
         FROM reply_requests request
         JOIN actors actor ON actor.id = request.agent_actor_id
-        JOIN project_memberships membership
+        LEFT JOIN project_memberships membership
           ON membership.project_id = request.project_id
          AND membership.actor_id = request.agent_actor_id
         WHERE request.id = $1
@@ -1038,7 +1033,7 @@ pub(crate) async fn retry_request_in(
     }
     wake(
         transaction,
-        conversation.project_id,
+        conversation.place(),
         conversation_id,
         agent_actor_id,
         request_id,
@@ -1047,13 +1042,13 @@ pub(crate) async fn retry_request_in(
     .await?;
     notify_request(
         transaction,
-        conversation.project_id,
+        conversation.place(),
         conversation_id,
         thread_id,
     )
     .await?;
     Ok(RetryOutcome {
-        project_id: conversation.project_id,
+        project_id: conversation.place(),
         agent_actor_id,
     })
 }
@@ -1147,9 +1142,9 @@ pub(crate) async fn stop_request_in(
         Err(error) => return Err(error),
     };
     let name = sqlx::query_scalar::<_, String>(
-        "SELECT display_name FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+        "SELECT display_name FROM place_profile(NULLIF($1, direct_scope_id()), $2)",
     )
-    .bind(conversation.project_id)
+    .bind(conversation.place())
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?
@@ -1186,7 +1181,7 @@ pub(crate) async fn stop_request_in(
     for (id, request_conversation_id, thread_id) in &stopped {
         wake(
             transaction,
-            conversation.project_id,
+            conversation.place(),
             *request_conversation_id,
             agent_actor_id,
             *id,
@@ -1197,12 +1192,12 @@ pub(crate) async fn stop_request_in(
         conversations.extend(*thread_id);
     }
     for conversation_id in conversations {
-        notify(transaction, conversation.project_id, conversation_id).await?;
+        notify(transaction, conversation.place(), conversation_id).await?;
     }
     let mut ids = stopped.into_iter().map(|(id, _, _)| id).collect::<Vec<_>>();
     ids.sort_by_key(|id| *id != request_id);
     Ok(StopOutcome {
-        project_id: conversation.project_id,
+        project_id: conversation.place(),
         agent_actor_id,
         stopped: ids,
     })
@@ -1220,7 +1215,7 @@ pub(crate) async fn stop_for_run(
     reason: Option<String>,
 ) -> Result<bool, AppError> {
     let Some((project_id, conversation_id)) = sqlx::query_as::<_, (Uuid, Uuid)>(
-        "SELECT project_id, conversation_id FROM reply_requests WHERE id = $1",
+        "SELECT COALESCE(project_id, direct_scope_id()), conversation_id FROM reply_requests WHERE id = $1",
     )
     .bind(request_id)
     .fetch_optional(&mut **transaction)
@@ -1237,7 +1232,7 @@ pub(crate) async fn stop_for_run(
         .execute(&mut **transaction)
         .await?;
     let name = sqlx::query_scalar::<_, String>(
-        "SELECT display_name FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+        "SELECT display_name FROM place_profile(NULLIF($1, direct_scope_id()), $2)",
     )
     .bind(project_id)
     .bind(by)
@@ -1307,7 +1302,7 @@ async fn expire_leases(pool: &PgPool) -> Result<(), AppError> {
         SET status = 'expired', lease_expires_at = NULL, updated_at = now(),
             reason = 'The agent stopped checking in before replying.'
         WHERE status = 'claimed' AND lease_expires_at < now()
-        RETURNING project_id, conversation_id
+        RETURNING COALESCE(project_id, direct_scope_id()), conversation_id
         "#,
     )
     .fetch_all(&mut *transaction)
@@ -1397,14 +1392,15 @@ async fn claim_due_wakeups(state: &AppState) -> Result<Vec<ClaimedWakeup>, AppEr
         r#"
         SELECT delivery.id, delivery.connection_id, delivery.reply_request_id,
                delivery.event, delivery.attempts, request.agent_actor_id,
-               request.project_id, request.conversation_id, request.thread_id,
+               COALESCE(request.project_id, direct_scope_id()) AS project_id,
+               request.conversation_id, request.thread_id,
                request.message_id, request.generation, request.follows_request_id,
                (
                    CASE delivery.event
                        WHEN 'reply.cancelled' THEN request.status = 'cancelled'
                        ELSE request.status = 'pending'
                    END
-                   AND agent_connection_can_access(connection.id, request.project_id)
+                   AND agent_connection_can_reach(connection.id, request.project_id)
                    AND conversation_visible_to(request.conversation_id, request.agent_actor_id)
                ) AS still_true,
                session.external_ref AS session_ref, session.harness AS session_harness,

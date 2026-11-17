@@ -440,11 +440,7 @@ pub(crate) async fn route(state: &AppState, payload: &RoutePayload) -> Result<us
         return Ok(0);
     }
     for event in events {
-        let direct =
-            sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-                .bind(event.project_id)
-                .fetch_one(crate::db::scoped(&state.pool))
-                .await?;
+        let direct = crate::spaces::kind::holds_messages(event.project_id);
         if shut_out(modules, &event.event_type, direct) {
             continue;
         }

@@ -646,17 +646,19 @@ async fn conversation_destination(
     )
     .await?;
     require_active_conversation(&conversation)?;
-    let limit = files::upload_limit(&mut transaction, conversation.project_id).await?;
+    let limit = files::upload_limit(&mut transaction, conversation.place()).await?;
     transaction.commit().await?;
-    if !accessible_project_ids(state, principal)
-        .await?
-        .contains(&conversation.project_id)
+    // A DM or group is in no space: seeing it was the check.
+    if let Some(space) = conversation.project_id
+        && !accessible_project_ids(state, principal)
+            .await?
+            .contains(&space)
     {
         return Err(AppError::NotFound("conversation"));
     }
     Ok((
         Destination::Conversation {
-            project_id: conversation.project_id,
+            project_id: conversation.place(),
             conversation_id: conversation.id,
         },
         limit,

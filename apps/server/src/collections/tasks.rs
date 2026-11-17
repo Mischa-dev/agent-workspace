@@ -648,7 +648,7 @@ pub async fn ensure(
         FROM projects project
         JOIN project_memberships member
           ON member.project_id = project.id AND member.actor_id = $2
-        WHERE project.id = $1 AND project.kind <> 'direct'
+        WHERE project.id = $1
         "#,
     )
     .bind(project_id)

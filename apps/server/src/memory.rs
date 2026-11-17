@@ -1233,7 +1233,7 @@ pub async fn set_pin(
         .bind(target_id)
         .execute(&mut **transaction)
         .await?;
-        return Ok(conversation.project_id);
+        return Ok(conversation.place());
     }
     let exists = match kind {
         "page" => {
@@ -1291,7 +1291,7 @@ pub async fn set_pin(
     .bind(writer.actor_id)
     .execute(&mut **transaction)
     .await?;
-    Ok(conversation.project_id)
+    Ok(conversation.place())
 }
 
 // ---------------------------------------------------------------------------

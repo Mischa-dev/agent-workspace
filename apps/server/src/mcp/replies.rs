@@ -307,9 +307,7 @@ const INBOX_ITEM_SELECT: &str = r#"
            COALESCE((
                SELECT string_agg(membership.display_name, ', ' ORDER BY lower(membership.display_name))
                FROM conversation_members member
-               JOIN project_memberships membership
-                 ON membership.project_id = member.project_id
-                AND membership.actor_id = member.actor_id
+               CROSS JOIN LATERAL place_profile(member.project_id, member.actor_id) membership
                WHERE member.conversation_id = request.conversation_id
                  AND member.actor_id <> request.agent_actor_id
            ), '') AS other_members,
@@ -329,9 +327,7 @@ const INBOX_ITEM_SELECT: &str = r#"
     FROM reply_requests request
     JOIN conversations conversation ON conversation.id = request.conversation_id
     JOIN messages message ON message.id = request.message_id
-    JOIN project_memberships author_membership
-      ON author_membership.project_id = message.project_id
-     AND author_membership.actor_id = message.author_actor_id
+    CROSS JOIN LATERAL place_profile(message.project_id, message.author_actor_id) author_membership
 "#;
 
 fn agent_identity(principal: &McpPrincipal) -> Option<Uuid> {
@@ -525,9 +521,7 @@ pub(super) async fn reply_claim(
             FROM conversations thread
             JOIN messages message ON message.id = thread.origin_message_id
             JOIN actors actor ON actor.id = message.author_actor_id
-            JOIN project_memberships membership
-              ON membership.project_id = message.project_id
-             AND membership.actor_id = message.author_actor_id
+            CROSS JOIN LATERAL place_profile(message.project_id, message.author_actor_id) membership
             WHERE thread.id = $1 AND thread.kind = 'thread'
               AND conversation_visible_to(message.conversation_id, $3)
             UNION ALL
@@ -544,9 +538,7 @@ pub(super) async fn reply_claim(
             FROM conversation_entries entry
             JOIN messages message ON message.id = entry.message_id
             JOIN actors actor ON actor.id = message.author_actor_id
-            JOIN project_memberships membership
-              ON membership.project_id = message.project_id
-             AND membership.actor_id = message.author_actor_id
+            CROSS JOIN LATERAL place_profile(message.project_id, message.author_actor_id) membership
             WHERE entry.conversation_id = $1
             ORDER BY entry.sequence DESC
             LIMIT $2

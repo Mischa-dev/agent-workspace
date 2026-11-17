@@ -169,7 +169,7 @@ pub(super) async fn message_react(
             insert_audit(
                 &mut transaction,
                 principal,
-                outcome.conversation.project_id,
+                outcome.conversation.place(),
                 if reacted {
                     "conversation.message_reacted"
                 } else {

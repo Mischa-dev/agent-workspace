@@ -64,6 +64,9 @@ pub trait Targeted {
 pub struct Located {
     pub workspace_id: Uuid,
     pub space_id: Option<Uuid>,
+    /// The DM or group the target lives in, which is in no space (K4.17):
+    /// access is decided by the conversation (`access::Target::Conversation`).
+    pub direct: Option<Uuid>,
 }
 
 /// Kinds `locate` finds, with the query that returns `(workspace, space)`
@@ -75,33 +78,30 @@ const KINDS: &[(&str, &str)] = &[
     ),
     (
         "conversation",
-        "SELECT project.organization_id, project.id FROM conversations conversation \
-         JOIN projects project ON project.id = conversation.project_id \
+        "SELECT conversation.workspace_id, conversation.project_id FROM conversations conversation \
          WHERE conversation.id = $1 AND conversation_visible_to(conversation.id, $2) \
-           AND EXISTS (SELECT 1 FROM project_memberships membership \
-             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
-               AND membership.enabled)",
+           AND (conversation.project_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = conversation.project_id AND membership.actor_id = $2 \
+               AND membership.enabled))",
     ),
     (
         "message",
-        "SELECT project.organization_id, project.id FROM messages message \
-         JOIN projects project ON project.id = message.project_id \
+        "SELECT message.workspace_id, message.project_id FROM messages message \
          WHERE message.id = $1 AND message.removed_at IS NULL \
            AND conversation_visible_to(message.conversation_id, $2) \
-           AND EXISTS (SELECT 1 FROM project_memberships membership \
-             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
-               AND membership.enabled)",
+           AND (message.project_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = message.project_id AND membership.actor_id = $2 \
+               AND membership.enabled))",
     ),
     // K2.7: a message found after it was removed too (its history, a
     // removal retried); still only in a conversation the caller may see.
     (
         "message_record",
-        "SELECT project.organization_id, project.id FROM messages message \
-         JOIN projects project ON project.id = message.project_id \
+        "SELECT message.workspace_id, message.project_id FROM messages message \
          WHERE message.id = $1 AND conversation_visible_to(message.conversation_id, $2) \
-           AND EXISTS (SELECT 1 FROM project_memberships membership \
-             WHERE membership.project_id = project.id AND membership.actor_id = $2 \
-               AND membership.enabled)",
+           AND (message.project_id IS NULL OR EXISTS (SELECT 1 FROM project_memberships membership \
+             WHERE membership.project_id = message.project_id AND membership.actor_id = $2 \
+               AND membership.enabled))",
     ),
     // K2.7: a scheduled message is found only by its author.
     (
@@ -239,10 +239,12 @@ pub async fn locate(
                 message: "Say which workspace (workspace: its id or slug).".into(),
             })?,
             space_id: None,
+            direct: None,
         },
         Target::Workspace(Some(id)) => Located {
             workspace_id: *id,
             space_id: None,
+            direct: None,
         },
         Target::Space(id) => thing(connection, "project", *id, viewer).await?,
         Target::Thing { kind, id, .. } => thing(connection, kind, *id, viewer).await?,
@@ -292,9 +294,25 @@ async fn thing(
         .await
         .map_err(|error| OpError::logged("locate", &error.into()))?;
     let (workspace_id, space_id) = row.ok_or(OpError::not_found(what_of(kind)))?;
+    // A conversation or message with no space is in a DM or group.
+    let direct = match (kind, space_id) {
+        ("conversation", None) => Some(id),
+        ("message" | "message_record", None) => {
+            sqlx::query_scalar::<_, Uuid>(
+                "-- visibility: the message was just found through conversation_visible_to\n\
+                 SELECT conversation_id FROM messages WHERE id = $1",
+            )
+                .bind(id)
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(|error| OpError::logged("locate", &error.into()))?
+        }
+        _ => None,
+    };
     Ok(Located {
         workspace_id,
         space_id,
+        direct,
     })
 }
 

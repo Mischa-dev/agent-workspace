@@ -19,7 +19,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ToolResult, insert_audit, mark_via, parse_id, project_role, public_url, resolve_people,
+        ToolResult, insert_audit, mark_via, parse_id, project_role, public_url,
+        resolve_conversation_members, resolve_direct_people,
     },
 };
 use crate::{
@@ -145,55 +146,17 @@ async fn visible_conversation(
     else {
         return Ok(None);
     };
-    if row.project_id != principal.project_id
-        || project_role(state, principal, row.project_id)
-            .await?
-            .is_none()
+    if row.place() != principal.project_id {
+        return Ok(None);
+    }
+    // A DM or group is reached by seeing it; a space's, through the
+    // caller's place there.
+    if let Some(space) = row.project_id
+        && project_role(state, principal, space).await?.is_none()
     {
         return Ok(None);
     }
     Ok(Some(row))
-}
-
-/// Members of a space by actor ID or @handle, enabled or not, so a former
-/// member can still be removed from a group. Returns the first one that
-/// isn't a member.
-async fn resolve_members(
-    state: &AppState,
-    project_id: Uuid,
-    people: &[String],
-) -> Result<Result<Vec<Uuid>, String>, AppError> {
-    let mut resolved = Vec::new();
-    for person in people {
-        let person = person.trim();
-        let found = if let Ok(actor_id) = person.parse::<Uuid>() {
-            sqlx::query_scalar::<_, Uuid>(
-                "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
-            )
-            .bind(project_id)
-            .bind(actor_id)
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-        } else {
-            sqlx::query_scalar::<_, Uuid>(
-                r#"
-                SELECT actor_id FROM project_memberships
-                WHERE project_id = $1 AND lower(handle) = lower($2)
-                ORDER BY enabled DESC, actor_id
-                LIMIT 1
-                "#,
-            )
-            .bind(project_id)
-            .bind(person.trim_start_matches('@'))
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-        };
-        match found {
-            Some(actor_id) => resolved.push(actor_id),
-            None => return Ok(Err(person.to_owned())),
-        }
-    }
-    Ok(Ok(resolved))
 }
 
 pub(super) async fn conversation_members(
@@ -259,24 +222,24 @@ pub(super) async fn conversation_members(
                 ));
             }
         };
-        let add_ids = match resolve_people(state, row.project_id, &add).await? {
+        let add_ids = match resolve_direct_people(state, principal.actor_id, &add).await? {
             Ok(ids) => ids.into_iter().collect::<BTreeSet<_>>(),
             Err(who) => {
                 return Ok(ToolResult::invalid(
                     "add",
                     format!(
-                        "{who} isn't someone you can add. People and agents need to be in Messages first; try people_search."
+                        "{who} isn't someone you can add: they need to share a workspace with you. Try people_search."
                     ),
                 ));
             }
         };
-        let remove_ids = match resolve_members(state, row.project_id, &remove).await? {
+        let remove_ids = match resolve_conversation_members(state, group_id, &remove).await? {
             Ok(ids) => ids.into_iter().collect::<BTreeSet<_>>(),
             Err(who) => {
                 return Ok(ToolResult::invalid(
                     "remove",
                     format!(
-                        "{who} isn't in Messages. Use an actor ID or @handle from conversation_open."
+                        "{who} isn't in this group. Use an actor ID or @handle from conversation_open."
                     ),
                 ));
             }
@@ -366,7 +329,7 @@ pub(super) async fn conversation_members(
             insert_audit(
                 &mut transaction,
                 principal,
-                change.project_id,
+                crate::spaces::place(change.project_id),
                 "conversation.mcp_members_changed",
                 "conversation",
                 group_id,

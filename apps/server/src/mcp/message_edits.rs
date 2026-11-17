@@ -166,11 +166,11 @@ fn message_url(state: &AppState, conversation: &ConversationAccessRow, message_i
         (_, "dm" | "group") => format!("/messages/{}", conversation.id),
         ("thread", _) => format!(
             "/projects/{}/threads/{}",
-            conversation.project_id, conversation.id
+            conversation.place(), conversation.id
         ),
         _ => format!(
             "/projects/{}/channels/{}",
-            conversation.project_id, conversation.id
+            conversation.place(), conversation.id
         ),
     };
     public_url(state, &format!("{path}#message-{message_id}"))
@@ -586,7 +586,7 @@ pub(super) async fn message_history(
         else {
             return Ok(ToolResult::not_found("That message"));
         };
-        if conversation.project_id != principal.project_id
+        if conversation.place() != principal.project_id
             || authorize_conversation_row_for(
                 principal.actor_id,
                 &conversation,

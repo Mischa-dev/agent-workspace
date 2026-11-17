@@ -345,6 +345,26 @@ pub fn agent_limit_hides(actor_id: Uuid, project_id: Uuid, permission: Permissio
         .is_some_and(|limit| !limit.contains(permission))
 }
 
+/// Whether an app acting for `actor_id` is kept from `permission` in a DM
+/// or group of `workspace_id` by its agent limit: a kept DM follows its
+/// workspace's limit; a personal one (the direct scope) is open to what
+/// the limit allows in any workspace. False outside such a call.
+pub fn agent_limit_hides_direct(actor_id: Uuid, workspace_id: Uuid, permission: Permission) -> bool {
+    AGENT_LIMITS
+        .try_with(|limits| {
+            (limits.actor_id == actor_id).then(|| match limits.organizations.get(&workspace_id) {
+                Some(limit) => !limit.contains(permission),
+                None => !limits
+                    .organizations
+                    .values()
+                    .any(|limit| limit.contains(permission)),
+            })
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
 /// While an app acts for `actor_id`: the projects its agent limit allows
 /// `permission` in (every other project allows nothing). None outside such
 /// a call, meaning no limit applies. For queries that can't filter rows in

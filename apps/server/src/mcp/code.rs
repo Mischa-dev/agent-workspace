@@ -413,7 +413,7 @@ pub(super) async fn repository_list(
         let rows = sqlx::query_as::<_, RepositoryRow>(
             r#"
             SELECT repository.id, repository.project_id, project.project_key,
-                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project,
+                   project.name AS project,
                    repository.owner, repository.name, repository.default_branch,
                    repository.clone_url, repository.preparation_state,
                    repository.preparation_failure_category, repository.prepared_at,
@@ -617,7 +617,7 @@ fn pull_requests_sql() -> String {
               AND ($8::uuid[] IS NULL OR pr.id = ANY($8))
         )
         SELECT pr.id, pr.project_id, project.project_key,
-               CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project,
+               project.name AS project,
                pr.repository_id, repository.owner || '/' || repository.name AS repository,
                pr.pull_request_number, pr.title, pr.html_url, pr.state, pr.draft,
                pr.checks_state, pr.review_state, pr.requested_reviewers,
@@ -1086,12 +1086,12 @@ async fn page_details(
     let thread_rows = sqlx::query_as::<_, ThreadLinkRow>(
         r#"
         SELECT DISTINCT ON (link.github_pull_request_id)
-               link.github_pull_request_id AS pull_request_id, thread.id, thread.project_id,
+               link.github_pull_request_id AS pull_request_id, thread.id,
+               COALESCE(thread.project_id, direct_scope_id()) AS project_id,
                COALESCE(thread.name, '') AS name, thread.kind,
-               project.kind = 'direct' AS direct
+               thread.project_id IS NULL AS direct
         FROM github_pull_request_conversation_links link
         JOIN conversations thread ON thread.id = link.conversation_id
-        JOIN projects project ON project.id = thread.project_id
         WHERE link.github_pull_request_id = ANY($1) AND link.source = 'run_artifact'
           AND conversation_visible_to(thread.id, $2)
         ORDER BY link.github_pull_request_id, link.created_at, thread.id

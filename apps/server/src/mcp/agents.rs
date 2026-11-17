@@ -296,7 +296,7 @@ pub(super) async fn agent_list(
         let memberships = sqlx::query_as::<_, MembershipRow>(
             r#"
             SELECT membership.actor_id, project.id AS project_id, project.project_key,
-                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project,
+                   project.name AS project,
                    membership.role
             FROM project_memberships membership
             JOIN projects project ON project.id = membership.project_id
@@ -327,7 +327,7 @@ pub(super) async fn agent_list(
             r#"
             SELECT claim.actor_id, item.id AS task_id,
                    project.project_key || '-' || item.number::text AS key, item.title,
-                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project,
+                   project.name AS project,
                    claim.claimed_at, claim.expires_at, claim.note
             FROM work_item_claims claim
             JOIN task_rows item

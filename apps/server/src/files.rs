@@ -109,7 +109,8 @@ impl FileRow {
 }
 
 const FILE_COLUMNS: &str = r#"
-    file.id, file.project_id, file.work_item_id, file.comment_id,
+    file.id, COALESCE(file.project_id, direct_scope_id()) AS project_id,
+    file.work_item_id, file.comment_id,
     file.uploaded_by_actor_id, file.name, file.content_type, file.byte_size,
     file.storage_key, file.image_width, file.image_height, file.thumbnail_key,
     file.attached_at::text AS attached_at, file.created_at::text AS created_at
@@ -336,7 +337,11 @@ async fn organization_of(
     executor: impl sqlx::PgExecutor<'_>,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+    // A place: a space's workspace, or the direct scope for a DM's file.
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT organization_id FROM projects WHERE id = $1 \
+         UNION ALL SELECT id FROM organizations WHERE id = $1 AND id = direct_scope_id()",
+    )
         .bind(project_id)
         .fetch_optional(executor)
         .await?
@@ -472,7 +477,7 @@ pub(crate) async fn store_prepared(
             storage_key, image_width, image_height, thumbnail_key,
             thumbnail_bytes, attached_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+        VALUES ($1, $2, NULLIF($3, direct_scope_id()), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
                 CASE WHEN $16 THEN now() END)
         RETURNING {FILE_COLUMNS}
         "#

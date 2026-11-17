@@ -522,7 +522,7 @@ async fn project_rows(
                    -- The hidden project DMs live in follows the workspace role.
                    (SELECT {project_off} FROM project_memberships membership
                     WHERE membership.project_id = project.id AND membership.actor_id = $2
-                      AND membership.enabled AND project.kind NOT IN ('direct', 'workspace')),
+                      AND membership.enabled AND project.kind <> 'workspace'),
                    (SELECT {workspace_off} FROM organization_memberships membership
                     WHERE membership.organization_id = project.organization_id
                       AND membership.actor_id = $2 AND membership.enabled),
@@ -604,7 +604,7 @@ pub async fn anywhere(
         SELECT membership.project_id FROM project_memberships membership
         JOIN projects project ON project.id = membership.project_id
         WHERE membership.actor_id = $1 AND membership.enabled AND project.archived_at IS NULL
-          AND project.kind NOT IN ('direct', 'workspace')
+          AND project.kind <> 'workspace'
         "#,
     )
     .bind(actor_id)
@@ -642,21 +642,31 @@ impl ProjectModules {
         organizations.sort();
         organizations.dedup();
         let switches = switches_of(connection, &organizations).await?;
+        let mut found_projects = rows
+            .iter()
+            .map(|row| {
+                let found = switches
+                    .get(&row.organization_id)
+                    .cloned()
+                    .unwrap_or_default();
+                (
+                    row.id,
+                    narrowed(&found, &row.role_off).in_stored(&row.kind),
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+        // DMs and groups live in no space (K4.17): there, what any of the
+        // account's workspaces has on for them.
+        if projects.contains(&crate::spaces::DIRECT) {
+            let direct = by_workspace(connection, actor_id)
+                .await?
+                .into_values()
+                .fold(ModuleSet::always_on(), ModuleSet::union);
+            found_projects.push((crate::spaces::DIRECT, direct, true));
+        }
         Ok(Self {
-            projects: rows
-                .iter()
-                .map(|row| {
-                    let found = switches
-                        .get(&row.organization_id)
-                        .cloned()
-                        .unwrap_or_default();
-                    (
-                        row.id,
-                        narrowed(&found, &row.role_off).in_stored(&row.kind),
-                        row.kind == "direct",
-                    )
-                })
-                .collect(),
+            projects: found_projects,
         })
     }
 
@@ -782,11 +792,9 @@ pub fn notification_switches_sql() -> &'static str {
                             .map(required_switches)
                             .unwrap_or_default()
                     };
-                    format!(
-                        "CASE WHEN module_project.kind = 'direct' THEN {} ELSE {} END",
-                        sql_array(&switches(true)),
-                        sql_array(&switches(false)),
-                    )
+                    // A DM's notification has no space row, so only a
+                    // space's conversations reach here (K4.17).
+                    sql_array(&switches(false))
                 } else if module.id == "pages" {
                     // AWD-96: a project's pages need Projects; the
                     // workspace space's don't.
@@ -822,7 +830,7 @@ pub fn notification_switches_sql() -> &'static str {
                       (SELECT {project_off} FROM project_memberships membership
                        WHERE membership.project_id = module_project.id
                          AND membership.actor_id = n.recipient_actor_id
-                         AND membership.enabled AND module_project.kind NOT IN ('direct', 'workspace')),
+                         AND membership.enabled AND module_project.kind <> 'workspace'),
                       (SELECT {workspace_off} FROM organization_memberships membership
                        WHERE membership.organization_id = module_project.organization_id
                          AND membership.actor_id = n.recipient_actor_id AND membership.enabled),
@@ -844,14 +852,14 @@ mod tests {
     fn module_switch_sql_names_every_notification_kind() {
         let sql = super::notification_switches_sql();
         assert!(sql.contains("WHEN 'assigned' THEN ARRAY['projects', 'tasks']::text[]"));
-        assert!(sql.contains("WHEN 'mention' THEN CASE WHEN module_project.kind = 'direct'"));
+        assert!(sql.contains("WHEN 'mention' THEN ARRAY["));
         // The recipient's role narrows it too: their project role, or their
         // workspace role in the direct space.
         assert!(sql.contains("held.modules_off"));
         // A space's own narrowing counts as the workspace's does.
         assert!(sql.contains("module_switch.space_id = module_project.id"));
         assert!(sql.contains("membership.actor_id = n.recipient_actor_id"));
-        assert!(sql.contains("module_project.kind NOT IN ('direct', 'workspace')"));
+        assert!(sql.contains("module_project.kind <> 'workspace'"));
         assert_eq!(
             super::required_switches("runs"),
             ["channels", "code", "messages", "projects", "runs", "tasks"]

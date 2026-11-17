@@ -149,6 +149,9 @@ pub enum Target {
     Account,
     Workspace(Uuid),
     Space(Uuid),
+    /// A DM or group, which lives in no space (K4.17): what the caller's
+    /// roles allow there (`direct_permissions`).
+    Conversation(Uuid),
 }
 
 impl Target {
@@ -158,6 +161,7 @@ impl Target {
             Self::Account => ("account", None),
             Self::Workspace(id) => ("workspace", Some(*id)),
             Self::Space(id) => ("space", Some(*id)),
+            Self::Conversation(id) => ("conversation", Some(*id)),
         }
     }
 }
@@ -307,6 +311,10 @@ async fn check_with(
         }
         Target::Workspace(id) => Scope::Workspace(id),
         Target::Space(id) => Scope::Space(id),
+        Target::Conversation(conversation) => {
+            let held = holding::load_direct(connection, caller, conversation).await?;
+            return Ok(decide(held.as_ref(), &need, credential_of(caller)));
+        }
     };
     let started = std::time::Instant::now();
     let held = holding::load(connection, caller, scope, lock).await?;
@@ -422,6 +430,19 @@ pub fn membership_allows(
         && grant.role() != MembershipRole::Worker
         && grant.permissions().contains(permission)
         && !limit_hides(account, space, permission)
+}
+
+/// Whether a grant read for a DM or group (`direct_permissions`, which
+/// already checked the account's roles) allows `permission`, after the
+/// delegation limit of an app acting for `account`.
+pub fn direct_grant_allows(
+    account: Uuid,
+    workspace: Uuid,
+    grant: crate::policy::RoleGrant,
+    permission: Permission,
+) -> bool {
+    grant.permissions().contains(permission)
+        && !crate::policy::agent_limit_hides_direct(account, workspace, permission)
 }
 
 /// Whether the delegation limit of an app acting for `account` keeps it

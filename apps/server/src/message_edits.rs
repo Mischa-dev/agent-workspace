@@ -316,10 +316,11 @@ pub(crate) async fn lock_message_for_change(
         };
     let message = sqlx::query_as::<_, MessageLockRow>(
         r#"
-        SELECT id, project_id, author_actor_id, content, plain_text, revision,
+        SELECT id, COALESCE(project_id, direct_scope_id()) AS project_id,
+               author_actor_id, content, plain_text, revision,
                removed_at IS NOT NULL AS removed
         FROM messages
-        WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+        WHERE id = $1 AND conversation_id = $2 AND project_id IS NOT DISTINCT FROM $3
         FOR UPDATE
         "#,
     )
@@ -384,7 +385,7 @@ async fn locked_entry(
     if !crate::conversations::sees_tasks_in(
         &mut **transaction,
         viewer,
-        locked.conversation.project_id,
+        locked.conversation.place(),
     )
     .await?
     {
@@ -481,7 +482,7 @@ pub(crate) async fn apply_edit(
             project_id, message_id, revision, content, plain_text,
             written_by_actor_id, via_oauth_grant_id, written_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        VALUES (NULLIF($1, direct_scope_id()), $2, $3, $4, $5, $6, $7, now())
         "#,
     )
     .bind(locked.project_id)
@@ -1034,7 +1035,7 @@ pub(crate) async fn message_revisions_in(
         r#"
         SELECT revision, removed_at IS NOT NULL
         FROM messages
-        WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+        WHERE id = $1 AND conversation_id = $2 AND project_id IS NOT DISTINCT FROM $3
         "#,
     )
     .bind(message_id)
@@ -1055,13 +1056,11 @@ pub(crate) async fn message_revisions_in(
                revision.redacted_at IS NOT NULL AS redacted
         FROM message_revisions revision
         JOIN actors writer ON writer.id = revision.written_by_actor_id
-        LEFT JOIN project_memberships membership
-          ON membership.project_id = revision.project_id
-         AND membership.actor_id = revision.written_by_actor_id
+        LEFT JOIN LATERAL place_profile(revision.project_id, revision.written_by_actor_id) membership ON true
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = revision.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
-        WHERE revision.message_id = $1 AND revision.project_id = $2
+        WHERE revision.message_id = $1 AND revision.project_id IS NOT DISTINCT FROM $2
         ORDER BY revision.revision
         "#,
     )
@@ -1082,9 +1081,7 @@ pub(crate) async fn message_revisions_in(
                    message.removed_at IS NOT NULL AS redacted
             FROM messages message
             JOIN actors author ON author.id = message.author_actor_id
-            LEFT JOIN project_memberships membership
-              ON membership.project_id = message.project_id
-             AND membership.actor_id = message.author_actor_id
+            LEFT JOIN LATERAL place_profile(message.project_id, message.author_actor_id) membership ON true
             LEFT JOIN mcp_oauth_grants via_grant
               ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
             LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
@@ -1169,7 +1166,7 @@ async fn get_message(
     if !crate::conversations::sees_tasks_in(
         &state.pool,
         principal.actor_id,
-        conversation.project_id,
+        conversation.place(),
     )
     .await?
     {

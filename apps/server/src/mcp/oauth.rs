@@ -524,13 +524,18 @@ async fn consent(
         (project_id, agent_actor_id, Some(connection_id))
     } else if selection == "self" || selection.starts_with("self:") {
         // The app acts as this person across their whole account. The grant is
-        // anchored to their Messages space, which every person belongs to;
-        // each call is checked against their current memberships.
+        // anchored to their current workspace's own space, which every member
+        // belongs to; each call is checked against their current memberships.
         let mut transaction = crate::db::scoped_tx(&state.pool)
             .await
             .map_err(AppError::from)?;
-        let (home, _) =
-            crate::direct::space_for_actor(&mut transaction, principal.actor_id, None).await?;
+        let (workspace, _) =
+            crate::workspace::default_workspace(&mut *transaction, principal.actor_id)
+                .await?
+                .ok_or(AppError::NotFound("organization"))?;
+        let home = crate::spaces::workspace::join(&mut transaction, workspace, principal.actor_id)
+            .await?
+            .ok_or(AppError::NotFound("organization"))?;
         transaction.commit().await.map_err(AppError::from)?;
         (home, principal.actor_id, None)
     } else {

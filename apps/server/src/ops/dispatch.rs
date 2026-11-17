@@ -354,7 +354,7 @@ async fn pipeline<O: Operation>(
         request.workspace,
     )
     .await?;
-    let module = module_here::<O>(&mut connection, &located).await?;
+    let module = module_here::<O>(&located)?;
     let need = crate::access::Need::maybe(O::PERMISSION)
         .writing(writes)
         .in_module(module);
@@ -518,29 +518,26 @@ async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid])
 /// that a conversation's follows the space it is in (registered as
 /// conversation filters: Messages in the direct space, Channels in a
 /// project), as the older tools decide.
-async fn module_here<O: Operation>(
-    connection: &mut sqlx::PgConnection,
-    located: &target::Located,
-) -> Result<&'static str, OpError> {
+fn module_here<O: Operation>(located: &target::Located) -> Result<&'static str, OpError> {
     let registry = crate::modules::registry::Registry::global();
-    let Some(space) = located.space_id else {
+    if located.space_id.is_none() && located.direct.is_none() {
         return Ok(O::MODULE);
-    };
+    }
     if !registry.governs_conversations(O::MODULE) {
         return Ok(O::MODULE);
     }
-    let direct = crate::spaces::kind::holds_messages(connection, space)
-        .await
-        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
-    Ok(registry.conversation_module(direct).unwrap_or(O::MODULE))
+    Ok(registry
+        .conversation_module(located.direct.is_some())
+        .unwrap_or(O::MODULE))
 }
 
 /// What `access` is asked about for a located target.
 fn access_target(target: &Target, located: &target::Located) -> crate::access::Target {
-    match (target, located.space_id) {
-        (Target::Account, _) => crate::access::Target::Account,
-        (_, Some(space)) => crate::access::Target::Space(space),
-        (_, None) => crate::access::Target::Workspace(located.workspace_id),
+    match (target, located.space_id, located.direct) {
+        (Target::Account, _, _) => crate::access::Target::Account,
+        (_, Some(space), _) => crate::access::Target::Space(space),
+        (_, None, Some(conversation)) => crate::access::Target::Conversation(conversation),
+        (_, None, None) => crate::access::Target::Workspace(located.workspace_id),
     }
 }
 
@@ -552,9 +549,10 @@ fn denied_error<O: Operation>(
 ) -> OpError {
     use crate::access::{Denied, DenyReason as Because};
     match denied {
-        Denied::NotFound => match located.space_id {
-            Some(_) => OpError::not_found("That space"),
-            None => OpError::not_found("That workspace"),
+        Denied::NotFound => match (located.space_id, located.direct) {
+            (Some(_), _) => OpError::not_found("That space"),
+            (None, Some(_)) => OpError::not_found("That conversation"),
+            (None, None) => OpError::not_found("That workspace"),
         },
         Denied::ModuleOff { module } => OpError::Denied {
             reason: DenyReason::ModuleOff {

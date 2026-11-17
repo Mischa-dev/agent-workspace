@@ -1134,9 +1134,7 @@ impl RunContext<'_> {
                    conversation_visible_to(conversation.id, NULL) AS shared
             FROM messages message
             JOIN conversations conversation ON conversation.id = message.conversation_id
-            LEFT JOIN project_memberships membership
-              ON membership.project_id = conversation.project_id
-             AND membership.actor_id = message.author_actor_id
+            LEFT JOIN LATERAL place_profile(conversation.project_id, message.author_actor_id) membership ON true
             WHERE conversation.project_id = $1
               AND conversation.archived_at IS NULL
               AND message.removed_at IS NULL

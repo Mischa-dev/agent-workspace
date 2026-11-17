@@ -2430,14 +2430,7 @@ pub(super) async fn task_create(
     if arguments.parent_id.is_none() {
         // Tasks never go in the hidden Messages space, where nobody would
         // see them. A subtask goes where its parent is.
-        let in_messages_space =
-            sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-                .bind(principal.project_id)
-                .fetch_optional(crate::db::scoped(&state.pool))
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(true);
+        let in_messages_space = crate::spaces::kind::holds_messages(principal.project_id);
         if !project_is_chosen(principal) || in_messages_space {
             const PROJECT_MESSAGE: &str = "Say which project with projectId (see projects_list).";
             return writes::WriteResult::InvalidRequest {

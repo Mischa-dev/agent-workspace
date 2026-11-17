@@ -60,9 +60,7 @@ const SESSION_SELECT: &str = r#"
            session.state, session.agent_run_id, session.last_activity_at,
            session.created_at
     FROM agent_sessions session
-    LEFT JOIN project_memberships membership
-      ON membership.project_id = session.project_id
-     AND membership.actor_id = session.agent_actor_id
+    LEFT JOIN LATERAL place_profile(session.project_id, session.agent_actor_id) membership ON true
 "#;
 
 fn named(state: &AppState, mut session: SessionView) -> SessionView {

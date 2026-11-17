@@ -94,7 +94,7 @@ async fn upload_to_conversation(
     )
     .await?;
     require_active_conversation(&conversation)?;
-    let limit = upload_limit(&mut transaction, conversation.project_id).await?;
+    let limit = upload_limit(&mut transaction, conversation.place()).await?;
     // Nothing stays locked while the bytes arrive.
     transaction.commit().await?;
     let bytes = read_body(body, limit).await?;
@@ -102,7 +102,7 @@ async fn upload_to_conversation(
         &state,
         principal.actor_id,
         Destination::Conversation {
-            project_id: conversation.project_id,
+            project_id: conversation.place(),
             conversation_id: conversation.id,
         },
         Upload {

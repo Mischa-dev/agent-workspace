@@ -437,6 +437,11 @@ pub(crate) async fn add_person(
     .await
     .expect("organization membership");
     for project in projects {
+        // DMs live in no space (K4.17): the workspace membership is enough.
+        let project = project.parse::<Uuid>().expect("project");
+        if project == agent_workspace_server::spaces::DIRECT {
+            continue;
+        }
         sqlx::query(
             r#"
             INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
@@ -444,7 +449,7 @@ pub(crate) async fn add_person(
             "#,
         )
         .bind(Uuid::now_v7())
-        .bind(project.parse::<Uuid>().expect("project"))
+        .bind(project)
         .bind(actor_id)
         .bind(display_name)
         .bind(handle)

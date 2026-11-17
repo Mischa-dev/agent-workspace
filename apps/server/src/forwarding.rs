@@ -98,10 +98,11 @@ struct SourceRow {
 /// agent acts through (NULL for a person), which decides the projects it
 /// reaches.
 const SOURCE_SQL: &str = r#"
-    SELECT message.id, message.project_id, message.conversation_id,
+    SELECT message.id, COALESCE(message.project_id, direct_scope_id()) AS project_id,
+           message.conversation_id,
            conversation.kind AS conversation_kind, conversation.name AS conversation_name,
            conversation.parent_channel_id AS parent_conversation_id,
-           project.kind = 'direct' AS direct_space,
+           message.project_id IS NULL AS direct_space,
            message.removed_at IS NOT NULL AS removed,
            CASE WHEN message.removed_at IS NULL
                 THEN left(message.plain_text, $3) ELSE '' END AS text,
@@ -109,12 +110,12 @@ const SOURCE_SQL: &str = r#"
            message.created_at
     FROM messages message
     JOIN conversations conversation ON conversation.id = message.conversation_id
-    JOIN projects project ON project.id = message.project_id
     JOIN actors author_actor ON author_actor.id = message.author_actor_id
-    LEFT JOIN project_memberships author
-      ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
+    LEFT JOIN LATERAL place_profile(message.project_id, message.author_actor_id) author ON true
     WHERE message.id = ANY($1)
-      AND actor_can_access_project($2, $4::uuid, message.project_id)
+      AND (CASE WHEN message.project_id IS NULL
+                THEN $4::uuid IS NULL OR agent_connection_can_reach_direct($4::uuid)
+                ELSE actor_can_access_project($2, $4::uuid, message.project_id) END)
       AND conversation_visible_to(message.conversation_id, $2)
 "#;
 

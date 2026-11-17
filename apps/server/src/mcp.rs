@@ -3313,11 +3313,7 @@ async fn module_off_here(
         // unscoped list acts, and those lists leave out what's off themselves.
         let registry = crate::modules::registry::Registry::global();
         if principal.project_explicit && registry.governs_conversations(&module.id) {
-            let direct =
-                sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-                    .bind(principal.project_id)
-                    .fetch_one(&mut *connection)
-                    .await?;
+            let direct = crate::spaces::kind::holds_messages(principal.project_id);
             let governing = registry
                 .conversation_module(direct)
                 .and_then(|id| registry.describe(id));
@@ -5542,11 +5538,11 @@ const PRIMARY_SCOPES: &[(&str, &str)] = &[
     ),
     (
         "threadId",
-        "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
+        "SELECT COALESCE(project_id, direct_scope_id()) FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
     ),
     (
         "conversationId",
-        "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
+        "SELECT COALESCE(project_id, direct_scope_id()) FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
     ),
 ];
 
@@ -5557,7 +5553,7 @@ const OTHER_SCOPES: &[(&str, &str)] = &[
     // the tool's own answer, never a module refusal.
     (
         "requestId",
-        r#"SELECT request.project_id FROM reply_requests request
+        r#"SELECT COALESCE(request.project_id, direct_scope_id()) FROM reply_requests request
            WHERE request.id = $1
              AND conversation_visible_to(request.conversation_id, $2)
              AND (request.agent_actor_id = $2
@@ -5577,15 +5573,15 @@ const OTHER_SCOPES: &[(&str, &str)] = &[
     ),
     (
         "messageId",
-        "SELECT project_id FROM messages WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
+        "SELECT COALESCE(project_id, direct_scope_id()) FROM messages WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
     ),
     (
         "fromMessageId",
-        "SELECT project_id FROM messages WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
+        "SELECT COALESCE(project_id, direct_scope_id()) FROM messages WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
     ),
     (
         "fileId",
-        "SELECT project_id FROM files WHERE id = $1 AND removed_at IS NULL AND (conversation_id IS NULL OR conversation_visible_to(conversation_id, $2))",
+        "SELECT COALESCE(project_id, direct_scope_id()) FROM files WHERE id = $1 AND removed_at IS NULL AND (conversation_id IS NULL OR conversation_visible_to(conversation_id, $2))",
     ),
     (
         "pageId",
@@ -5670,7 +5666,10 @@ async fn scoped_project(
     }
     // An account-wide grant's own project is only where it was anchored; the
     // person may since have left it, so it's checked like any other.
+    // DMs and groups (the direct scope) are in no space: the lookup above
+    // already checked the caller sees the one named.
     if let Some(target) = target
+        && target != crate::spaces::DIRECT
         && (target != principal.project_id
             || (principal.actor_kind == ActorKind::Human && principal.account_wide))
     {

@@ -1274,7 +1274,7 @@ async fn list_api_tokens(
          AND organization_membership.enabled
         WHERE membership.actor_id = $1 AND membership.enabled
           AND membership.role IN ('owner', 'admin', 'member', 'viewer')
-        ORDER BY (project.kind = 'direct'), lower(project.name), project.id
+        ORDER BY lower(project.name), project.id
         "#,
     )
     .bind(principal.actor_id)

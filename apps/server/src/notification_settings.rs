@@ -197,15 +197,26 @@ pub async fn decide(
     kind: &str,
 ) -> Result<Decision, AppError> {
     let group = Group::of(kind);
+    // A DM (no space) follows the recipient's default workspace's choices.
+    let workspace = if crate::spaces::kind::holds_messages(project_id) {
+        crate::workspace::default_workspace(&mut *connection, recipient)
+            .await?
+            .map(|(organization_id, _)| organization_id)
+    } else {
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(&mut *connection)
+            .await?
+    };
     let rows = sqlx::query_as::<_, (String, bool)>(
         r#"
         SELECT preference.channel, preference.enabled
         FROM notification_channel_preferences preference
-        JOIN projects project ON project.organization_id = preference.organization_id
-        WHERE project.id = $1 AND preference.actor_id = $2 AND preference.kind_group = $3
+        WHERE preference.organization_id = $1 AND preference.actor_id = $2
+          AND preference.kind_group = $3
         "#,
     )
-    .bind(project_id)
+    .bind(workspace)
     .bind(recipient)
     .bind(group.as_str())
     .fetch_all(&mut *connection)
@@ -489,7 +500,7 @@ pub async fn read(
     let mutes = sqlx::query_as::<_, MuteView>(
         r#"
         SELECT mute.project_id,
-               CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
+               project.name
                    AS project_name,
                mute.kind_group AS "group"
         FROM notification_project_mutes mute
@@ -766,7 +777,8 @@ pub(crate) async fn follow_automatically(
     )
     .bind(actors)
     .bind(thread_id)
-    .bind(project_id)
+    // The place: a DM's row has no space.
+    .bind(crate::spaces::space_of(project_id))
     .execute(&mut **transaction)
     .await?;
     Ok(())
