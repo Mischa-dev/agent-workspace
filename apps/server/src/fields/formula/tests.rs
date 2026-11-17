@@ -193,7 +193,7 @@ fn number_functions() {
     assert_eq!(eval("MAX(3, 1, 2)"), json!(3));
     assert_eq!(eval("AVG(1, 2, 3, 4)"), json!(2.5));
     assert_eq!(eval("AVERAGE(2, 4)"), json!(3));
-    assert_eq!(eval("ROUND(3.14159, 2)"), json!(3.14));
+    assert_eq!(eval("ROUND(2.71828, 2)"), json!(2.72));
     assert_eq!(eval("ROUND(2.5)"), json!(3));
     assert_eq!(eval("FLOOR(2.7)"), json!(2));
     assert_eq!(eval("CEIL(2.1)"), json!(3));
@@ -358,9 +358,9 @@ fn steps_are_capped() {
 #[test]
 fn a_formula_cant_use_itself() {
     let mut definitions = fields();
-    let a = compile("{Price} * 2", &scope(&definitions)).unwrap();
+    let a = compile("{Price} * 2", &scope(&definitions)).expect("valid");
     definitions.push(formula_field(100, "A", a));
-    let b = compile("{A} + 1", &scope(&definitions)).unwrap();
+    let b = compile("{A} + 1", &scope(&definitions)).expect("valid");
     definitions.push(formula_field(101, "B", b));
     let own = Scope {
         fields: &definitions,
@@ -369,10 +369,10 @@ fn a_formula_cant_use_itself() {
     };
     assert!(
         compile("{A} + 1", &own)
-            .unwrap_err()
+            .expect_err("refused")
             .contains("its own field")
     );
-    let error = compile("{B} * 2", &own).unwrap_err();
+    let error = compile("{B} * 2", &own).expect_err("refused");
     assert!(error.contains("use itself"), "{error}");
     assert!(error.contains("\"B\""), "{error}");
 }
@@ -380,10 +380,10 @@ fn a_formula_cant_use_itself() {
 #[test]
 fn formulas_read_formulas_in_order() {
     let mut definitions = fields();
-    let a = compile("{Price} * 2", &scope(&definitions)).unwrap();
+    let a = compile("{Price} * 2", &scope(&definitions)).expect("valid");
     let a_field = formula_field(100, "A", a);
     definitions.push(a_field.clone());
-    let b = compile("{A} + 1", &scope(&definitions)).unwrap();
+    let b = compile("{A} + 1", &scope(&definitions)).expect("valid");
     // B comes first in the list, but runs after A.
     definitions.pop();
     definitions.push(formula_field(101, "B", b));
@@ -396,7 +396,7 @@ fn formulas_read_formulas_in_order() {
 #[test]
 fn renaming_a_field_keeps_the_formula_working() {
     let mut definitions = fields();
-    let config = compile("{Price} * 2 & {name}", &scope(&definitions)).unwrap();
+    let config = compile("{Price} * 2 & {name}", &scope(&definitions)).expect("valid");
     assert_eq!(
         config.source,
         format!("{{#{}}} * 2 & {{#title}}", Uuid::from_u128(1)),
@@ -414,7 +414,7 @@ fn renaming_a_field_keeps_the_formula_working() {
 #[test]
 fn result_types_and_time() {
     let fields = fields();
-    let typed = |source: &str| compile(source, &scope(&fields)).unwrap();
+    let typed = |source: &str| compile(source, &scope(&fields)).expect("valid");
     assert_eq!(typed("{Price} * 2").result, ResultType::Number);
     assert_eq!(typed("{Qty} > 1").result, ResultType::Boolean);
     assert_eq!(typed("DATEADD({Due}, 1)").result, ResultType::Date);
@@ -428,11 +428,11 @@ fn result_types_and_time() {
 fn archived_fields_are_refused_and_read_nothing() {
     let mut definitions = fields();
     definitions[0].archived = true;
-    let error = compile("{Price} + 1", &scope(&definitions)).unwrap_err();
+    let error = compile("{Price} + 1", &scope(&definitions)).expect_err("refused");
     assert!(error.contains("archived"), "{error}");
     // An archived formula isn't run.
     let mut definitions = fields();
-    let config = compile("1 + 1", &scope(&definitions)).unwrap();
+    let config = compile("1 + 1", &scope(&definitions)).expect("valid");
     let mut archived = formula_field(100, "F", config);
     archived.archived = true;
     definitions.push(archived);

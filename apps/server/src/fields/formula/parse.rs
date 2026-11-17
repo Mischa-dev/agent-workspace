@@ -576,7 +576,7 @@ mod tests {
     }
 
     fn round_trip(source: &str) -> String {
-        let expr = parse(source, &by_name).unwrap();
+        let expr = parse(source, &by_name).expect("valid");
         print(&expr, &|reference| match reference {
             FieldRef::Title => "{Title}".to_owned(),
             FieldRef::Field(id) if id == Uuid::from_u128(1) => "{Price}".to_owned(),
@@ -620,7 +620,7 @@ mod tests {
             ("{Nope}", "No field Nope"),
             ("1 $ 2", "can't be used here"),
         ] {
-            let error = parse(source, &by_name).unwrap_err();
+            let error = parse(source, &by_name).expect_err("refused");
             assert!(error.contains(part), "{source}: {error}");
         }
     }
@@ -628,16 +628,24 @@ mod tests {
     #[test]
     fn depth_is_capped() {
         let deep = format!("{}1{}", "(".repeat(40), ")".repeat(40));
-        assert!(parse(&deep, &by_name).unwrap_err().contains("levels deep"));
+        assert!(
+            parse(&deep, &by_name)
+                .expect_err("refused")
+                .contains("levels deep")
+        );
         let calls = format!("{}1{}", "ABS(".repeat(40), ")".repeat(40));
-        assert!(parse(&calls, &by_name).unwrap_err().contains("levels deep"));
+        assert!(
+            parse(&calls, &by_name)
+                .expect_err("refused")
+                .contains("levels deep")
+        );
         let fine = format!("{}1{}", "(".repeat(20), ")".repeat(20));
         assert!(parse(&fine, &by_name).is_ok());
     }
 
     #[test]
     fn references_are_collected() {
-        let expr = parse("{Price} * {Quantity} + {Price} & {Title}", &by_name).unwrap();
+        let expr = parse("{Price} * {Quantity} + {Price} & {Title}", &by_name).expect("valid");
         assert_eq!(
             expr.references(),
             vec![

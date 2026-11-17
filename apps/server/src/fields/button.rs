@@ -464,11 +464,14 @@ mod tests {
     #[test]
     fn a_whole_placeholder_keeps_its_value() {
         let arguments = json!({"n": "{{record.number}}", "text": "#{{record.number}} {{tags}}", "list": ["{{tags}}"]});
-        let filled = render(arguments.as_object().unwrap(), &|inside| match inside {
-            "record.number" => json!(7),
-            "tags" => json!(["a", "b"]),
-            _ => Value::Null,
-        });
+        let filled = render(
+            arguments.as_object().expect("valid"),
+            &|inside| match inside {
+                "record.number" => json!(7),
+                "tags" => json!(["a", "b"]),
+                _ => Value::Null,
+            },
+        );
         assert_eq!(
             filled,
             json!({"n": 7, "text": "#7 a, b", "list": [["a", "b"]]})

@@ -3368,7 +3368,7 @@ mod tests {
     fn every_type_is_listed_for_the_web_registry() {
         // The schema lists every variant the type has; EVERY must too, or
         // the web app's registry check (fieldTypes.generated.json) misses one.
-        let schema = serde_json::to_value(schemars::schema_for!(FieldType)).unwrap();
+        let schema = serde_json::to_value(schemars::schema_for!(FieldType)).expect("valid");
         let mut named = schema["enum"]
             .as_array()
             .or_else(|| schema["oneOf"].as_array())

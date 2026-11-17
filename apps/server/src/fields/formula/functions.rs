@@ -139,7 +139,7 @@ pub fn check(name: &str, args: &[Ty]) -> Result<Ty, String> {
             None => args[1],
         },
         "IFS" => {
-            if args.len() % 2 != 0 {
+            if !args.len().is_multiple_of(2) {
                 return Err(
                     "IFS takes pairs: a condition, then its value, for each case.".to_owned(),
                 );
