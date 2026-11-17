@@ -136,6 +136,29 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["capabilities"]["delete"], true, "{body}");
 
+    // A run each agent reports for itself (not one the built-in host
+    // drives): A's ends when A closes, B's goes on.
+    let mut reported = Vec::new();
+    for side in [a, b] {
+        reported.push(
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                INSERT INTO runs (id, workspace_id, space_id, account_id, title, cause_kind,
+                                  state, last_report_at, started_at)
+                VALUES (gen_random_uuid(), $1, $2, $3, 'Reported run', 'manual', 'working',
+                        now(), now())
+                RETURNING id
+                "#,
+            )
+            .bind(side.organization)
+            .bind(Uuid::parse_str(&side.project).expect("space id"))
+            .bind(side.agent)
+            .fetch_one(&t.pool)
+            .await
+            .expect("reported run"),
+        );
+    }
+
     // Suspended by the operator: A's agent is refused, B's isn't.
     let a_slug = slug_of(&t.pool, a.organization).await;
     lifecycle::operator_command(
@@ -282,10 +305,22 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
         lifecycle::stop_runs(&t.state, a.organization)
             .await
             .expect("stop runs"),
-        1
+        2
     );
     assert_eq!(run_state(a.run).await, "interrupted");
     assert_eq!(run_state(b.run).await, "blocked");
+    let reported_state = |run: Uuid| {
+        let pool = t.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
+                .bind(run)
+                .fetch_one(&pool)
+                .await
+                .expect("reported run state")
+        }
+    };
+    assert_eq!(reported_state(reported[0]).await, "cancelled");
+    assert_eq!(reported_state(reported[1]).await, "working");
     // B is open, so its stop (were one queued) leaves its run alone.
     assert_eq!(
         lifecycle::stop_runs(&t.state, b.organization)

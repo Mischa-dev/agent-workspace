@@ -680,8 +680,15 @@ pub async fn stop_runs(state: &AppState, workspace: Uuid) -> Result<usize, AppEr
                 Some(Lifecycle::Deleting) => "workspace_deleting",
                 _ => return Ok(0),
             };
-            let stopped =
+            let mut stopped =
                 crate::api::interrupt_workspace_runs(&mut transaction, workspace, why).await?;
+            // Runs that report for themselves end through the run service.
+            stopped += crate::runs::ops::end_for_closed_workspace(
+                &mut transaction,
+                workspace,
+                "Stopped because the workspace was suspended or is being deleted.",
+            )
+            .await?;
             transaction.commit().await?;
             Ok::<_, AppError>(stopped)
         },
