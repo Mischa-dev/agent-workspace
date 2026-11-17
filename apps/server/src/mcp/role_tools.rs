@@ -118,8 +118,6 @@ pub(super) struct PermissionLine {
     /// higher level holds every lower one on the same kind.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
-    /// Agents never get it, whatever their role says.
-    pub people_only: bool,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -155,7 +153,6 @@ pub(super) async fn role_list(
                     meaning: entry.meaning.to_owned(),
                     thing_kind: entry.thing_kind.map(str::to_owned),
                     level: entry.level.map(str::to_owned),
-                    people_only: entry.people_only,
                 })
                 .collect(),
         }))

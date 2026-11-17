@@ -654,7 +654,7 @@ async fn update_connection(
     if request
         .role
         .as_deref()
-        .is_some_and(|role| !matches!(role, "member" | "viewer"))
+        .is_some_and(|role| !matches!(role, "admin" | "member" | "viewer"))
     {
         return Err(AppError::Validation("external_agent_role"));
     }
@@ -1268,7 +1268,7 @@ fn validate_create(request: CreateConnectionRequest) -> Result<NormalizedCreate,
                 || character.is_ascii_digit()
                 || (index > 0 && matches!(character, '_' | '-'))
         })
-        || !matches!(request.role.as_str(), "member" | "viewer")
+        || !matches!(request.role.as_str(), "admin" | "member" | "viewer")
     {
         return Err(AppError::Validation("external_agent_identity"));
     }

@@ -194,9 +194,9 @@ raising a number.
     registry lands, a new module is a manifest, a server folder and a web
     `module.ts`. A user-facing part checks `shows(part)`.
 13. **Addresses are built in one place.** Build links to things with the
-    builder that exists (`projects/locations.ts` on the web; K3's links module
-    and W1's `app/href.ts` replace it), never by pasting `"/projects/…"` or
-    `"/w/…"`.
+    builder that exists (the server's `addresses` module; on the web
+    `projects/locations.ts`, which W1's `app/href.ts` replaces), never by
+    pasting `"/projects/…"` or `"/w/…"`.
 14. **Built for cheap hosting** (ruling R24). Database use is pooler-safe:
     settings only by `SET LOCAL` inside a transaction, no session advisory
     locks (take a lease), no hand `PREPARE`, no transaction held across a

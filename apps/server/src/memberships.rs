@@ -528,9 +528,6 @@ fn authorize_target(
     target: &MemberRow,
     next_role: &str,
 ) -> Result<(), AppError> {
-    if target.actor_kind == "external_agent" && !matches!(next_role, "member" | "viewer") {
-        return Err(AppError::Forbidden);
-    }
     match access.organization_role.as_str() {
         "owner" => Ok(()),
         "admin"

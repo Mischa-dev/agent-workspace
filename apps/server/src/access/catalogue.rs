@@ -149,8 +149,6 @@ pub struct PermissionInfo {
     /// The kind of thing and the level on it, for a level; `None` for a
     /// capability.
     pub level: Option<(&'static str, Level)>,
-    /// Never for an agent, even when a role and its limit allow it.
-    pub people_only: bool,
     /// Every role holds it: without it a role could see nothing at all.
     pub required: bool,
 }
@@ -173,7 +171,6 @@ const fn permission(
         scope,
         built_in,
         level: None,
-        people_only: false,
         required: false,
     }
 }
@@ -182,13 +179,6 @@ const fn permission(
 const fn on(kind: &'static str, level: Level, info: PermissionInfo) -> PermissionInfo {
     PermissionInfo {
         level: Some((kind, level)),
-        ..info
-    }
-}
-
-const fn people_only(info: PermissionInfo) -> PermissionInfo {
-    PermissionInfo {
-        people_only: true,
         ..info
     }
 }
@@ -799,7 +789,7 @@ pub const PERMISSIONS: [PermissionInfo; 64] = [
     on(
         "agent",
         Level::Manage,
-        people_only(permission(
+        permission(
             Permission::AgentsManage,
             "agents.manage",
             "agents",
@@ -807,7 +797,7 @@ pub const PERMISSIONS: [PermissionInfo; 64] = [
             "Connect agents to a project and change or remove them.",
             PermissionScope::Project,
             MANAGERS,
-        )),
+        ),
     ),
     permission(
         Permission::AgentsCreate,
@@ -820,7 +810,7 @@ pub const PERMISSIONS: [PermissionInfo; 64] = [
     ),
     // K1.4: the owner starting role only, so a workspace never loses control
     // of an agent whose named managers left.
-    people_only(permission(
+    permission(
         Permission::AgentsManageAny,
         "agents.manage_any",
         "agents",
@@ -828,8 +818,8 @@ pub const PERMISSIONS: [PermissionInfo; 64] = [
         "Manage any agent or app the workspace owns, without being named as its manager.",
         PermissionScope::Workspace,
         OWNERS,
-    )),
-    people_only(permission(
+    ),
+    permission(
         Permission::HostsManage,
         "hosts.manage",
         "agents",
@@ -837,7 +827,7 @@ pub const PERMISSIONS: [PermissionInfo; 64] = [
         "Link machines and services that run agents for the workspace, choose which agents they run, and unlink them.",
         PermissionScope::Workspace,
         MANAGERS,
-    )),
+    ),
     permission(
         Permission::MembersView,
         "members.view",
@@ -878,7 +868,7 @@ pub const PERMISSIONS: [PermissionInfo; 64] = [
         PermissionScope::Both,
         MANAGERS,
     ),
-    people_only(permission(
+    permission(
         Permission::RolesManage,
         "roles.manage",
         "members",
@@ -886,8 +876,8 @@ pub const PERMISSIONS: [PermissionInfo; 64] = [
         "Create, change and remove the workspace's roles.",
         PermissionScope::Workspace,
         MANAGERS,
-    )),
-    people_only(permission(
+    ),
+    permission(
         Permission::SettingsManage,
         "settings.manage",
         "settings",
@@ -895,7 +885,7 @@ pub const PERMISSIONS: [PermissionInfo; 64] = [
         "Change workspace and project settings, keys and layouts.",
         PermissionScope::Both,
         MANAGERS,
-    )),
+    ),
     permission(
         Permission::WebhooksManage,
         "webhooks.manage",

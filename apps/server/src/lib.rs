@@ -202,7 +202,6 @@ pub fn router(state: AppState) -> Router {
         .merge(roles::router())
         .merge(workspace_templates::router())
         .merge(server_status::router())
-        .merge(access::http::router())
         .merge(onboarding::router())
         .merge(audit_log::router())
         .merge(search::router())

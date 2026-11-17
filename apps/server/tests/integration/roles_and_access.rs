@@ -856,8 +856,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     .await;
     assert_eq!(opened["value"]["tasks"]["next"], json!([]), "{opened}");
 
-    // Only a person changes roles: never an agent as itself, never a
-    // member's app.
+    // Changing roles takes "Manage roles", which a member's role doesn't
+    // hold: not the member agent, not a member's app.
     let refused = tool(
         app,
         &mara_token,
@@ -6337,4 +6337,57 @@ async fn suggesting_is_a_role_not_an_account_kind() {
     assert_eq!(status, StatusCode::OK, "{written}");
     let (vale, _) = create_agent(app, &setup.browser, &space, "Vale", "vale").await;
     assert_eq!(workspace_role(vale).await, "member-suggests");
+}
+
+/// K1.14a: an agent may hold any role. An owner makes an agent an admin of
+/// the workspace, and it then does what an admin does, such as making a
+/// role; nothing is held back because it is an agent. It still can't make
+/// itself, or anyone, an owner.
+#[tokio::test]
+async fn an_agent_made_admin_does_what_an_admin_does() {
+    let Some(setup) = setup("k114a_agent_admin").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let (rook, rook_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Rook", "rook").await;
+    add_member(&setup, &work, rook, "member").await;
+    let listed = roles(&setup, &setup.browser).await;
+    let (status, made) = assign(
+        &setup,
+        &setup.browser,
+        rook,
+        &role(&listed, "admin")["id"],
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let session = initialize(app, &rook_token).await.expect("Rook");
+    let written = tool(
+        app,
+        &rook_token,
+        &session,
+        "role_write",
+        json!({"projectId": work, "name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let ownership = tool(
+        app,
+        &rook_token,
+        &session,
+        "role_assign",
+        json!({"projectId": work, "person": "@rook", "role": "owner"}),
+    )
+    .await;
+    assert_ne!(ownership["outcome"], "ok", "{ownership}");
+    let owners = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' AND enabled",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owners");
+    assert_eq!(owners, 1);
 }

@@ -1,7 +1,7 @@
 -- K1.6: agents belong to the workspace, not a project (K1 §4.7).
 --
--- * external_agent_connections.workspace_id: the workspace the connection
---   is in, backfilled from its project (ruling R1's name). `project_id`
+-- * external_agent_connections.workspace_id (added with row security) is
+--   the workspace the connection is in, indexed for listing. `project_id`
 --   stays, meaning where the agent was first added; an agent added at
 --   workspace level is first added to the workspace's own space.
 -- * The connection and its credentials no longer hang off a project
@@ -23,17 +23,7 @@
 -- * `external_agent_connections_name_manager` (K1.4's stopgap) is dropped:
 --   `accounts::create_agent` names the creator as a manager itself.
 
-ALTER TABLE external_agent_connections
-    ADD COLUMN workspace_id UUID REFERENCES organizations(id);
-
-UPDATE external_agent_connections connection
-SET workspace_id = project.organization_id
-FROM projects project
-WHERE project.id = connection.project_id AND connection.workspace_id IS NULL;
-
-ALTER TABLE external_agent_connections ALTER COLUMN workspace_id SET NOT NULL;
-
-CREATE INDEX external_agent_connections_workspace
+CREATE INDEX external_agent_connections_workspace_listing
     ON external_agent_connections (workspace_id, status, created_at, id);
 
 DO $$

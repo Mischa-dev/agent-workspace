@@ -437,7 +437,6 @@ function RoleEditor({
                     description={
                       <>
                         {permission.meaning}
-                        {permission.peopleOnly ? ' People only: never an agent.' : ''}
                         {permission.scope === 'workspace' ? ' Workspace-wide.' : ''}
                       </>
                     }

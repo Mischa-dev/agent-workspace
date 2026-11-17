@@ -116,7 +116,6 @@ export type PermissionInfo = {
   thingKind: string | null
   /** see < comment < suggest < edit_own < edit < manage; a level holds the lower ones. */
   level: 'see' | 'comment' | 'suggest' | 'edit_own' | 'edit' | 'manage' | null
-  peopleOnly: boolean
   required: boolean
 }
 

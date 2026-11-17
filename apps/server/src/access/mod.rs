@@ -20,10 +20,8 @@
 
 pub mod caller;
 pub mod catalogue;
-pub mod compare;
 pub mod decide;
 pub mod holding;
-pub mod http;
 pub mod manage;
 
 use sqlx::{PgConnection, Postgres, Transaction};

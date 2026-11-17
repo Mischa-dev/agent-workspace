@@ -351,7 +351,8 @@ async fn slug_rename_keeps_old_links() {
 }
 
 /// K4.2: `space_membership` and `space_readable_by` for each way someone is
-/// or isn't in a space.
+/// or isn't in a space, and `conversation_visible_to` agreeing with
+/// `space_readable_by` for a channel open to the space in every case.
 #[tokio::test]
 async fn membership_matrix() {
     let Some(setup) = setup("k42_membership_matrix").await else {
@@ -427,6 +428,34 @@ async fn membership_matrix() {
                 .fetch_one(&pool)
                 .await
                 .expect("space_readable_by");
+            // conversation_visible_to writes the space check out in place
+            // (for speed, K4.4); a channel open to its space must give the
+            // same answer as space_readable_by, so the two never drift.
+            let channel = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM conversations WHERE project_id = $1 AND name = 'agreement'",
+            )
+            .bind(space)
+            .fetch_optional(&pool)
+            .await
+            .expect("the agreement channel");
+            let channel = match channel {
+                Some(channel) => channel,
+                None => sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO conversations (id, project_id, kind, name, visibility) \
+                     VALUES (gen_random_uuid(), $1, 'channel', 'agreement', 'project') RETURNING id",
+                )
+                .bind(space)
+                .fetch_one(&pool)
+                .await
+                .expect("a channel open to the space"),
+            };
+            let visible = sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
+                .bind(channel)
+                .bind(account)
+                .fetch_one(&pool)
+                .await
+                .expect("conversation_visible_to");
+            assert_eq!(visible, readable, "the channel rule and space_readable_by");
             (membership, readable)
         }
     };

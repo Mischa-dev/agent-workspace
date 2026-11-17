@@ -18,7 +18,6 @@ use super::{
 };
 use crate::{
     AppState,
-    access::compare::Mode as AccessMode,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
 };
 
@@ -252,47 +251,18 @@ async fn pipeline<O: Operation>(
         request.workspace,
     )
     .await?;
-    let mode = state.config.access_mode("ops");
-    let old = if mode == AccessMode::New {
-        None
-    } else {
-        Some(old_check::<O>(&mut connection, &request.caller, &target, &located, writes).await)
-    };
-    if mode != AccessMode::Old {
-        let need = crate::access::Need::maybe(O::PERMISSION)
-            .writing(writes)
-            .in_module(O::MODULE);
-        let access_target = access_target(&target, &located);
-        let new = crate::access::check(&mut connection, &request.caller, need, access_target)
-            .await
-            .map_err(|error| OpError::logged(O::NAME, &error))?;
-        match &old {
-            Some(old) => {
-                crate::access::compare::compare(
-                    &mut connection,
-                    crate::access::compare::Compared {
-                        area: "ops",
-                        operation: O::NAME,
-                        caller: &request.caller,
-                        need: &need,
-                        target: &access_target,
-                        workspace_id: Some(located.workspace_id),
-                        space_id: located.space_id,
-                        old_allowed: old.is_ok(),
-                    },
-                    &new,
-                )
-                .await;
-            }
-            None => {
-                let _grant =
-                    new.map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
-            }
-        }
-    }
-    if let Some(old) = old {
-        old?;
-    }
+    let need = crate::access::Need::maybe(O::PERMISSION)
+        .writing(writes)
+        .in_module(O::MODULE);
+    let _grant = crate::access::check(
+        &mut connection,
+        &request.caller,
+        need,
+        access_target(&target, &located),
+    )
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error))?
+    .map_err(|denied| denied_error::<O>(denied, &request.caller, &located))?;
     drop(connection);
 
     let key = request_id_for::<O>(&request)?;
@@ -414,29 +384,6 @@ async fn name_the_workspace(connection: &mut sqlx::PgConnection, reach: &[Uuid])
     }
 }
 
-/// Today's checks, which decide while the `ops` area is in compare mode:
-/// the module gate, then the access shim.
-async fn old_check<O: Operation>(
-    connection: &mut sqlx::PgConnection,
-    caller: &Caller,
-    target: &Target,
-    located: &target::Located,
-    writes: bool,
-) -> Result<(), OpError> {
-    module_gate::<O>(connection, caller, target, located).await?;
-    access_shim::check(
-        connection,
-        caller,
-        target,
-        located,
-        O::PERMISSION,
-        writes,
-        O::TITLE,
-    )
-    .await
-    .map(|_| ())
-}
-
 /// What `access` is asked about for a located target.
 fn access_target(target: &Target, located: &target::Located) -> crate::access::Target {
     match (target, located.space_id) {
@@ -501,39 +448,6 @@ fn denied_error<O: Operation>(
             None => OpError::not_found("That workspace"),
         },
     }
-}
-
-/// The operation's module must be on where it acts.
-async fn module_gate<O: Operation>(
-    connection: &mut sqlx::PgConnection,
-    caller: &Caller,
-    target: &Target,
-    located: &target::Located,
-) -> Result<(), OpError> {
-    let Some(manifest) = crate::modules::manifest::get(O::MODULE) else {
-        return Ok(());
-    };
-    if !manifest.switchable || matches!(target, Target::Account) {
-        return Ok(());
-    }
-    let modules = match located.space_id {
-        Some(space) => {
-            crate::modules::state::for_project(connection, space, caller.account_id).await?
-        }
-        None => Some(
-            crate::modules::state::for_member(connection, located.workspace_id, caller.account_id)
-                .await?,
-        ),
-    };
-    if modules.is_some_and(|modules| !modules.contains(O::MODULE)) {
-        return Err(OpError::Denied {
-            reason: DenyReason::ModuleOff {
-                module: manifest.id.clone(),
-            },
-            message: format!("{} is turned off here.", manifest.name).into(),
-        });
-    }
-    Ok(())
 }
 
 /// Begin a call's transaction narrowed to the call's workspace

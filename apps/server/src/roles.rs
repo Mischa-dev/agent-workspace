@@ -91,28 +91,14 @@ pub fn router() -> Router<AppState> {
 // What someone may do
 
 /// What a membership lets someone do: their role's permissions, cut down by
-/// an agent limit when an app or agent is acting for them. Agents never get
-/// the people-only permissions. Later layers (modules, AWD-75) join here.
-pub(crate) fn effective(
-    grant: RoleGrant,
-    limit: Option<PermissionSet>,
-    kind: ActorKind,
-) -> PermissionSet {
+/// an agent limit when an app or agent is acting for them. The same for
+/// every kind of account. Later layers (modules, AWD-75) join here.
+pub(crate) fn effective(grant: RoleGrant, limit: Option<PermissionSet>) -> PermissionSet {
     let mut permissions = grant.permissions();
     if let Some(limit) = limit {
         permissions = permissions.intersect(limit.union(PermissionSet::required()));
     }
-    if kind != ActorKind::Human {
-        permissions = without_people_only(permissions);
-    }
     permissions
-}
-
-pub(crate) fn without_people_only(permissions: PermissionSet) -> PermissionSet {
-    PERMISSIONS
-        .iter()
-        .filter(|info| info.people_only)
-        .fold(permissions, |set, info| set.without(info.permission))
 }
 
 /// A limit as stored: NULL is no limit.
@@ -196,7 +182,7 @@ pub(crate) async fn app_access(
             .union(PermissionSet::required());
         limits.organizations.insert(row.scope_id, limit);
         if let Ok(grant) = RoleGrant::stored(&row.role, row.role_permissions.as_deref()) {
-            union = union.union(effective(grant, Some(limit), ActorKind::Human));
+            union = union.union(effective(grant, Some(limit)));
         }
     }
     for row in &projects {
@@ -214,7 +200,7 @@ pub(crate) async fn app_access(
         if let Ok(grant) = RoleGrant::stored(&row.role, row.role_permissions.as_deref())
             && grant.role() != MembershipRole::Worker
         {
-            union = union.union(effective(grant, Some(limit), ActorKind::Human));
+            union = union.union(effective(grant, Some(limit)));
         }
     }
     Ok(AppAccess { limits, union })
@@ -243,7 +229,7 @@ pub(crate) async fn agent_union(
         .filter_map(|(role, permissions)| RoleGrant::stored(role, permissions.as_deref()).ok())
         .filter(|grant| grant.role() != MembershipRole::Worker)
         .fold(PermissionSet::EMPTY, |set, grant| {
-            set.union(effective(grant, None, ActorKind::ExternalAgent))
+            set.union(effective(grant, None))
         }))
 }
 
@@ -277,31 +263,25 @@ pub(crate) async fn project_holding(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<PermissionSet>, AppError> {
-    let Some((kind, role, role_permissions)) =
-        sqlx::query_as::<_, (String, String, Option<Vec<String>>)>(
-            r#"
-            SELECT actor.kind, membership.role, workspace_role_permissions(membership.role_id)
+    let Some((role, role_permissions)) = sqlx::query_as::<_, (String, Option<Vec<String>>)>(
+        r#"
+            SELECT membership.role, workspace_role_permissions(membership.role_id)
             FROM project_memberships membership
             JOIN actors actor ON actor.id = membership.actor_id
             WHERE membership.project_id = $1 AND membership.actor_id = $2
               AND membership.enabled AND actor.status = 'active'
             "#,
-        )
-        .bind(project_id)
-        .bind(actor_id)
-        .fetch_optional(&mut *connection)
-        .await?
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut *connection)
+    .await?
     else {
         return Ok(None);
     };
-    let kind = if kind == "human" {
-        ActorKind::Human
-    } else {
-        ActorKind::ExternalAgent
-    };
     let grant = RoleGrant::stored(&role, role_permissions.as_deref())?;
     let limit = current_agent_limit(actor_id, MembershipScope::Project(project_id));
-    Ok(Some(project_checked(effective(grant, limit, kind))))
+    Ok(Some(project_checked(effective(grant, limit))))
 }
 
 /// The permissions of `set` that a project checks, leaving out the
@@ -349,7 +329,7 @@ pub(crate) async fn standing(
         actor_id,
         kind,
         role: grant.role(),
-        permissions: effective(grant, limit, kind),
+        permissions: effective(grant, limit),
     })
 }
 
@@ -693,7 +673,6 @@ pub(crate) struct PermissionEntry {
     /// For a level: `see`, `comment`, `suggest`, `edit_own`, `edit` or
     /// `manage`. A higher level holds every lower one on the same kind.
     pub level: Option<&'static str>,
-    pub people_only: bool,
     pub required: bool,
 }
 
@@ -724,7 +703,6 @@ pub(crate) fn catalogue() -> (Vec<ModuleEntry>, Vec<PermissionEntry>) {
                 .collect(),
             thing_kind: info.level.map(|(kind, _)| kind),
             level: info.level.map(|(_, level)| level.key()),
-            people_only: info.people_only,
             required: info.required,
         })
         .collect();
@@ -1561,14 +1539,6 @@ pub(crate) async fn assign(
     if (target.role == "admin" || base == MembershipRole::Admin) && !caller.is_owner() {
         return Err(AppError::Forbidden);
     }
-    if target.kind == "external_agent"
-        && !matches!(base, MembershipRole::Member | MembershipRole::Viewer)
-    {
-        return Err(AppError::Refused {
-            field: "roleId",
-            message: "Agents can hold roles based on Member or Viewer.",
-        });
-    }
     if !grant.permissions().is_subset_of(caller.permissions) {
         return Err(AppError::Forbidden);
     }
@@ -1983,14 +1953,14 @@ pub(crate) async fn permissions_of(
         .union(PermissionSet::required());
     let scope = |row: &HeldRow, limit: PermissionSet| -> Result<ScopePermissions, AppError> {
         let grant = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?;
-        let own = effective(grant, None, kind);
+        let own = effective(grant, None);
         Ok(ScopePermissions {
             role: row.role.clone(),
             role_id: row.role_id,
             role_name: row.role_name.clone().unwrap_or_else(|| row.role.clone()),
             permissions: own.keys(),
             for_apps: if kind == ActorKind::Human {
-                effective(grant, Some(limit), kind).keys()
+                effective(grant, Some(limit)).keys()
             } else {
                 own.keys()
             },
@@ -2400,18 +2370,14 @@ mod tests {
         let limited = effective(
             grant,
             Some(PermissionSet::EMPTY.with(Permission::TasksView)),
-            ActorKind::Human,
         );
         assert!(limited.contains(Permission::ProjectsView));
         assert!(limited.contains(Permission::TasksView));
         assert!(!limited.contains(Permission::TasksEdit));
-        let admin = effective(
-            RoleGrant::built_in(MembershipRole::Admin),
-            None,
-            ActorKind::ExternalAgent,
-        );
-        assert!(!admin.contains(Permission::RolesManage));
-        assert!(!admin.contains(Permission::AgentsManage));
+        // Every kind of account gets what its role holds (K1.14a).
+        let admin = effective(RoleGrant::built_in(MembershipRole::Admin), None);
+        assert!(admin.contains(Permission::RolesManage));
+        assert!(admin.contains(Permission::AgentsManage));
     }
 
     #[test]

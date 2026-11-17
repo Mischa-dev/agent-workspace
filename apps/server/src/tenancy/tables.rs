@@ -213,10 +213,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
 pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     ("_sqlx_migrations", "the schema's migration ledger"),
     (
-        "access_disagreements",
-        "the server's log of where the old and new access checks differ during K1's cutover; a row names a workspace when there is one",
-    ),
-    (
         "account_managers",
         "who manages an agent or app account: accounts and their naming are server-wide (R19)",
     ),

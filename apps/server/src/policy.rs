@@ -697,9 +697,6 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
     }
 
     let permission = action.permission();
-    if permission.info().people_only && subject.actor_kind != ActorKind::Human {
-        return Decision::Deny(DenyReason::HumanRequired);
-    }
 
     if membership.role() == MembershipRole::Worker {
         if !worker_action_is_delegatable(action) {
@@ -1075,9 +1072,6 @@ mod tests {
             MembershipRole::Viewer,
         ] {
             for action in Action::ALL {
-                if action.permission().info().people_only {
-                    continue;
-                }
                 let resource = project_resource(action, role);
                 let human = subject(ActorKind::Human, action, role, true, true, None);
                 let external_agent =
@@ -1089,37 +1083,6 @@ mod tests {
                     "{role:?} performing {action:?}"
                 );
             }
-        }
-    }
-
-    #[test]
-    fn only_a_human_owner_or_admin_can_manage_external_connections() {
-        for role in [MembershipRole::Owner, MembershipRole::Admin] {
-            let resource = Resource::Project(ProjectScope::project(PROJECT_ID));
-            let human = subject(
-                ActorKind::Human,
-                Action::ExternalAgentManage,
-                role,
-                true,
-                true,
-                None,
-            );
-            let external = subject(
-                ActorKind::ExternalAgent,
-                Action::ExternalAgentManage,
-                role,
-                true,
-                true,
-                None,
-            );
-            assert_eq!(
-                authorize(&human, Action::ExternalAgentManage, resource),
-                Decision::Allow
-            );
-            assert_eq!(
-                authorize(&external, Action::ExternalAgentManage, resource),
-                Decision::Deny(DenyReason::HumanRequired)
-            );
         }
     }
 
@@ -1574,7 +1537,7 @@ mod tests {
         assert_eq!(directory.key, "directory.view");
         assert_eq!(directory.scope, PermissionScope::Workspace);
         assert_eq!(directory.built_in, [true; 4]);
-        assert!(!directory.required && !directory.people_only);
+        assert!(!directory.required);
         // Projects' member lists stay with "See the member list", which
         // only owners and admins hold.
         let members = Permission::MembersView.info();
@@ -1748,35 +1711,5 @@ mod tests {
         // A project the call didn't load allows nothing.
         assert_eq!(elsewhere, Decision::Deny(DenyReason::AgentLimit));
         assert!(authorize(&person, Action::WorkItemEdit, resource).is_allowed());
-    }
-
-    #[test]
-    fn people_only_permissions_refuse_agents_whatever_their_role() {
-        for info in PERMISSIONS.iter().filter(|info| info.people_only) {
-            // `agents.manage_any` (K1.4) has no action in this older engine:
-            // `access::may_manage_account` reads it.
-            let Some(action) = Action::ALL
-                .into_iter()
-                .find(|action| action.permission() == info.permission)
-            else {
-                assert_eq!(info.permission, Permission::AgentsManageAny);
-                continue;
-            };
-            let resource = project_resource(action, MembershipRole::Owner);
-            let agent = subject(
-                ActorKind::ExternalAgent,
-                action,
-                MembershipRole::Owner,
-                true,
-                true,
-                None,
-            );
-            assert_eq!(
-                authorize(&agent, action, resource),
-                Decision::Deny(DenyReason::HumanRequired),
-                "{}",
-                info.key
-            );
-        }
     }
 }
