@@ -7,7 +7,7 @@
 //!
 //! A part's owner is a row in `module_parts`; nothing is added to the parts'
 //! own tables. Readers of a part kind add [`object_on_sql`] (the SQL
-//! function `module_part_on`, migration `20261116220000_built_modules`).
+//! function `module_part_on`, migration `20261116220030_built_modules`).
 //! The operations are in [`ops`].
 
 pub mod ops;

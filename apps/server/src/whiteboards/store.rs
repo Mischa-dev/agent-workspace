@@ -99,6 +99,8 @@ pub async fn write_elements(
     scene_seq: i64,
     incoming: Vec<Element>,
 ) -> Result<WriteOutcome, AppError> {
+    crate::events::ensure_actor(transaction, caller.actor_id).await?;
+    crate::domain::set_via_grant(transaction, caller.via_grant_id).await?;
     let mut outcome = WriteOutcome {
         scene_seq,
         ..WriteOutcome::default()

@@ -21,7 +21,7 @@
     "/api/v1/projects/{id}/conversation-sidebar",
     "/api/v1/conversations/{id}/threads"
   ],
-  "events": { "emits": [], "listens": ["message.created"] },
+  "events": { "emits": ["thread.status_changed"], "listens": ["message.created"] },
   "notifications": [],
   "search": ["threads"],
   "automations": { "triggers": [], "actions": [] },

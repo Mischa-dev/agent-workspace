@@ -75,7 +75,7 @@ async fn upload_to_conversation(
     ApiQuery(query): ApiQuery<UploadQuery>,
     body: Body,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     if query.purpose.is_some() {
         return Err(AppError::Validation("for"));
     }
@@ -123,7 +123,7 @@ async fn upload_to_task(
     ApiQuery(query): ApiQuery<UploadQuery>,
     body: Body,
 ) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let for_comment = match query.purpose.as_deref() {
         None => false,
         Some("comment") => true,
@@ -181,7 +181,7 @@ async fn remove(
     principal: AuthenticatedActor,
     ApiPath(file_id): ApiPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let row = readable_file(
         &state.pool,
         Reader::Browser {

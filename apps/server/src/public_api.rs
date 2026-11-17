@@ -76,15 +76,19 @@ async fn call(
     body: &[u8],
 ) -> Result<Response, AppError> {
     let authentication_key = mcp::exact_bearer_token(headers).unwrap_or("invalid");
-    state.rate_limits.check_mcp_auth(authentication_key)?;
+    state.rate_limits.check_mcp_auth(authentication_key).await?;
     let Some(principal) = mcp::resolve_bearer_principal(state, headers).await? else {
-        state.rate_limits.note_mcp_auth_failure();
+        state.rate_limits.note_mcp_auth_failure().await;
         return Err(AppError::AuthenticationRequired);
     };
-    state.rate_limits.note_mcp_auth_success(authentication_key);
     state
         .rate_limits
-        .check_mcp_request(principal.credential_id)?;
+        .note_mcp_auth_success(authentication_key)
+        .await;
+    state
+        .rate_limits
+        .check_mcp_request(principal.credential_id)
+        .await?;
     if body.len() > MAX_BODY_BYTES {
         return Err(AppError::PayloadTooLarge);
     }

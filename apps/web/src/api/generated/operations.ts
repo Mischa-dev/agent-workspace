@@ -50,6 +50,10 @@ export type FieldWrite = { archived?: boolean | null; description?: string | nul
 
 export type FilterWrite = { field: string; op: FieldOp; values?: string[] }
 
+export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
+
+export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
+
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
 export type HostOwnerChoice = "person" | "workspace"
@@ -151,6 +155,18 @@ export type DecisionListOutput = { decisions: DecisionView[] }
 export type DecisionRecordInput = { detail?: string | null; pin?: boolean; sourceConversationId?: string | null; sourceMessageId?: string | null; spaceId?: string | null; supersedes?: string | null; title: string }
 
 export type DecisionRecordOutput = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
+
+export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
+
+export type HistoryListOutput = { caps: HistoryCaps; entries: HistoryEntry[]; kind: string }
+
+export type HistoryRestoreInput = { expectedVersion: number; thing: string; version: number }
+
+export type HistoryRestoreOutput = { kind: string; restored: number; version: number }
+
+export type HistoryShowInput = { thing: string; version: number }
+
+export type HistoryShowOutput = { content: unknown; kind: string; version: number }
 
 export type HostAgentBindInput = { accountId: string; hostAgentRef: string; hostId: string }
 
@@ -346,6 +362,9 @@ export type Operations = {
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
+  history_list: { input: HistoryListInput; output: HistoryListOutput }
+  history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
+  history_show: { input: HistoryShowInput; output: HistoryShowOutput }
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
   host_agent_unbind: { input: HostAgentUnbindInput; output: HostAgentUnbindOutput }
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }

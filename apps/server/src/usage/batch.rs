@@ -666,7 +666,7 @@ pub(super) async fn launch_http(
     ApiPath(account_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<BatchLaunchRequest>,
 ) -> Result<(StatusCode, Json<BatchResult>), AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let key = IdempotencyKey::from_headers(&headers)?;
     let account = owned_account(&state.pool, principal.actor_id, account_id).await?;
     let caller = LaunchCaller::browser(&principal, &headers)?;
