@@ -663,9 +663,10 @@ AS $$
     LIMIT 1
 $$;
 
--- Whether an agent's connection may act in DMs and groups at all: it and
--- its agent are active, in an active workspace the agent is still in.
--- What it may do in one comes from `direct_allows`.
+-- Whether an agent's connection may act in DMs and groups at all (R19):
+-- it and its agent are active, and the agent is an enabled member of some
+-- active workspace. DMs belong to the account, not to the workspace the
+-- connection was made in. What it may do in one comes from `direct_allows`.
 CREATE FUNCTION agent_connection_can_reach_direct(connection_uuid UUID)
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -675,10 +676,10 @@ AS $$
         SELECT 1
         FROM external_agent_connections c
         JOIN actors a ON a.id = c.actor_id AND a.status = 'active'
-        JOIN organizations workspace
-          ON workspace.id = c.workspace_id AND workspace.lifecycle = 'active'
         JOIN organization_memberships om
-          ON om.organization_id = c.workspace_id AND om.actor_id = a.id AND om.enabled
+          ON om.actor_id = a.id AND om.enabled
+        JOIN organizations workspace
+          ON workspace.id = om.organization_id AND workspace.lifecycle = 'active'
         WHERE c.id = connection_uuid AND c.status = 'active'
     )
 $$;

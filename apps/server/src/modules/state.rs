@@ -793,15 +793,25 @@ pub fn notification_switches_sql() -> &'static str {
                             .unwrap_or_default()
                     };
                     // A DM's notification has no space row, so only a
-                    // space's conversations reach here (K4.17).
-                    sql_array(&switches(false))
+                    // space's conversations reach here (K4.17). Like pages,
+                    // a project's channels need Projects; the workspace
+                    // space's don't (K4.25).
+                    let mut in_projects = switches(false);
+                    in_projects.extend(required_switches("projects"));
+                    format!(
+                        "CASE WHEN module_project.kind = '{}' THEN {} ELSE {} END",
+                        SpaceKind::Project.stored(),
+                        sql_array(&in_projects),
+                        sql_array(&switches(false)),
+                    )
                 } else if module.id == "pages" {
                     // AWD-96: a project's pages need Projects; the
                     // workspace space's don't.
                     let mut in_projects = required_switches("pages");
                     in_projects.extend(required_switches("projects"));
                     format!(
-                        "CASE WHEN module_project.kind = 'standard' THEN {} ELSE {} END",
+                        "CASE WHEN module_project.kind = '{}' THEN {} ELSE {} END",
+                        SpaceKind::Project.stored(),
                         sql_array(&in_projects),
                         sql_array(&required_switches("pages")),
                     )
@@ -852,7 +862,11 @@ mod tests {
     fn module_switch_sql_names_every_notification_kind() {
         let sql = super::notification_switches_sql();
         assert!(sql.contains("WHEN 'assigned' THEN ARRAY['projects', 'tasks']::text[]"));
-        assert!(sql.contains("WHEN 'mention' THEN ARRAY["));
+        // A mention in a project's channel needs Projects; in the workspace
+        // space's, only chat (K4.25).
+        assert!(sql.contains(
+            "WHEN 'mention' THEN CASE WHEN module_project.kind = 'standard' THEN ARRAY["
+        ));
         // The recipient's role narrows it too: their project role, or their
         // workspace role in the direct space.
         assert!(sql.contains("held.modules_off"));
@@ -870,7 +884,6 @@ mod tests {
     fn needs_carry_switches_down() {
         let set = ModuleSet::from_switches(|module| module == "projects");
         for module in [
-            "channels",
             "tasks",
             "whiteboards",
             "collections",
@@ -887,6 +900,11 @@ mod tests {
         for module in ["workspace", "messages", "agents", "inbox", "suggestions"] {
             assert!(set.contains(module), "{module} should stay on");
         }
+        // K4.25: channels don't need Projects either. A chat-only workspace
+        // talks in its own space's channels; a project's go with Projects.
+        assert!(set.contains("channels"));
+        assert!(set.in_project(SpaceKind::Workspace).contains("channels"));
+        assert!(!set.in_project(SpaceKind::Project).contains("channels"));
         // AWD-96: pages don't need Projects. They stay on for the
         // workspace's own pages and go with Projects inside a project.
         assert!(set.contains("pages"));
