@@ -1,4 +1,7 @@
+import base64
+import io
 import json
+import os
 import threading
 import time
 import unittest
@@ -6,15 +9,38 @@ import unittest
 import agent_workspace_runner as aw
 from agent_workspace_runner import HttpResponse
 
-SECRET = "test-webhook-secret"
+SECRET = "whsec_" + base64.b64encode(b"test-webhook-secret").decode()
+OTHER = "whsec_" + base64.b64encode(b"other").decode()
+FIXTURES = os.path.join(os.path.dirname(__file__), "..", "..", "fixtures", "delivery")
+
+
+def fixture(name):
+    with open(os.path.join(FIXTURES, name), encoding="utf-8") as file:
+        return file.read()
+
+
+def event_body(kind, request_id, event_id, **data):
+    """A ``reply.*`` event, as the server pushes it."""
+    return json.dumps(
+        {
+            "type": kind,
+            "timestamp": "2026-11-17T10:00:00Z",
+            "id": event_id,
+            "cursor": f"c-{event_id}",
+            "reason": "reply_required",
+            "data": {"thing": {"kind": "reply_request", "id": request_id}, "conversationId": "c", "generation": 3, **data},
+        }
+    )
 
 
 def signed(body, timestamp=None, secret=SECRET):
+    """Signed the Standard Webhooks way, as a push to a ``standard`` connection."""
     timestamp = str(int(time.time()) if timestamp is None else timestamp)
+    event_id = json.loads(body)["id"]
     return {
-        "x-workspace-timestamp": timestamp,
-        "x-workspace-signature": aw.sign_wakeup(secret, timestamp, body),
-        "x-workspace-delivery": json.loads(body)["deliveryId"],
+        "webhook-id": event_id,
+        "webhook-timestamp": timestamp,
+        "webhook-signature": aw.sign_standard(secret, event_id, timestamp, body),
     }
 
 
@@ -67,24 +93,35 @@ def request(request_id, text, follows=None):
     }
 
 
-class WakeupTests(unittest.TestCase):
-    def test_genuine_wakeup_verifies(self):
-        body = json.dumps({"event": "reply.requested", "deliveryId": "d1", "agentId": "a", "replyRequestId": "r1"})
-        self.assertEqual(aw.verify_wakeup(SECRET, signed(body), body)["replyRequestId"], "r1")
+class PushTests(unittest.TestCase):
+    def test_genuine_push_verifies(self):
+        body = event_body("reply.requested", "r1", "evt_1")
+        self.assertEqual(aw.reply_request_id(aw.verify_push(SECRET, signed(body), body)), "r1")
+        self.assertEqual(aw.verify_push([OTHER, SECRET], signed(body), body)["id"], "evt_1")
 
     def test_tampered_stale_unsigned_or_wrong_secret_fail(self):
-        body = json.dumps({"event": "reply.requested", "deliveryId": "d1", "agentId": "a", "replyRequestId": "r1"})
-        with self.assertRaises(aw.WakeupError):
-            aw.verify_wakeup(SECRET, signed(body), body.replace("r1", "r2"))
-        with self.assertRaises(aw.WakeupError):
-            aw.verify_wakeup(SECRET, signed(body, timestamp=int(time.time()) - 301), body)
-        with self.assertRaises(aw.WakeupError):
-            aw.verify_wakeup(SECRET, {}, body)
-        with self.assertRaises(aw.WakeupError):
-            aw.verify_wakeup(SECRET, signed(body, secret="other"), body)
+        body = event_body("reply.requested", "r1", "evt_1")
+        with self.assertRaises(aw.PushError):
+            aw.verify_push(SECRET, signed(body), body.replace("r1", "r2"))
+        with self.assertRaises(aw.PushError):
+            aw.verify_push(SECRET, signed(body, timestamp=int(time.time()) - 301), body)
+        with self.assertRaises(aw.PushError):
+            aw.verify_push(SECRET, {}, body)
+        with self.assertRaises(aw.PushError):
+            aw.verify_push(SECRET, signed(body, secret=OTHER), body)
 
-    def test_deliveries_are_handled_once(self):
-        deduper = aw.DeliveryDeduper(limit=2)
+    def test_the_published_fixtures_verify(self):
+        standard = json.loads(fixture("webhook-standard.json"))
+        now = int(standard["headers"]["webhook-timestamp"])
+        event = aw.verify_push(standard["secret"], standard["headers"], standard["body"], now=now)
+        self.assertEqual(event["type"], "message.mentioned")
+        typed = json.loads(fixture("webhook-typed_v1.json"))
+        legacy = aw.verify_push(typed["secret"], typed["headers"], typed["body"], now=now)
+        self.assertEqual(legacy["type"], "reply.requested")
+        self.assertEqual(aw.reply_request_id(legacy), "01a2b3c4-0000-7000-8000-0000000000f1")
+
+    def test_events_are_handled_once(self):
+        deduper = aw.Deduper(limit=2)
         self.assertTrue(deduper.first("a"))
         self.assertFalse(deduper.first("a"))
         deduper.first("b")
@@ -158,7 +195,7 @@ class RunnerTests(unittest.TestCase):
         runner = aw.Runner("https://example.test/mcp", "test-token", "custom", on_request, webhook_secret=SECRET, transport=fake)
 
         def wake(event, request_id, delivery, **extra):
-            body = json.dumps({"event": event, "deliveryId": delivery, "agentId": "a", "replyRequestId": request_id, **extra})
+            body = event_body(event, request_id, delivery, **extra)
             return runner.receive(signed(body), body)
 
         self.assertEqual(wake("reply.requested", "r1", "d1"), 204)
@@ -184,24 +221,24 @@ class RunnerTests(unittest.TestCase):
 
     def test_bad_signature_is_refused(self):
         runner = aw.Runner("https://example.test/mcp", "test-token", "custom", lambda c: None, webhook_secret=SECRET, transport=FakeMcp(lambda n, a: {}))
-        body = json.dumps({"event": "reply.requested", "deliveryId": "d1", "agentId": "a", "replyRequestId": "r1"})
-        self.assertEqual(runner.receive(signed(body, secret="other"), body), 401)
+        body = event_body("reply.requested", "r1", "evt_1")
+        self.assertEqual(runner.receive(signed(body, secret=OTHER), body), 401)
 
-    def test_a_test_wakeup_is_answered_and_claims_nothing(self):
+    def test_a_test_push_is_answered_and_claims_nothing(self):
         fake = FakeMcp(lambda n, a: {})
         runner = aw.Runner("https://example.test/mcp", "test-token", "custom", lambda c: None, webhook_secret=SECRET, transport=fake)
-        body = json.dumps({"event": "ping", "deliveryId": "d1", "agentId": "a", "projectId": "p"})
+        body = json.dumps({"type": "ping", "id": "evt_ping", "timestamp": "now", "cursor": None, "data": {}})
         self.assertEqual(runner.receive(signed(body), body), 204)
         self.assertEqual(fake.calls, [])
 
-    def test_the_listener_answers_wakeups(self):
+    def test_the_listener_answers_pushes(self):
         import urllib.error
         import urllib.request
 
         runner = aw.Runner("https://example.test/mcp", "test-token", "custom", lambda c: None, webhook_secret=SECRET, transport=FakeMcp(lambda n, a: {}))
         server = runner.listen(0)
         try:
-            body = json.dumps({"event": "reply.cancelled", "deliveryId": "d9", "agentId": "a", "replyRequestId": "r9"})
+            body = event_body("reply.cancelled", "r9", "evt_9")
             url = f"http://127.0.0.1:{server.server_address[1]}/wake"
             with urllib.request.urlopen(urllib.request.Request(url, body.encode(), signed(body), method="POST")) as answer:
                 self.assertEqual(answer.status, 204)
@@ -220,7 +257,7 @@ class RunnerTests(unittest.TestCase):
             raise RuntimeError("boom")
 
         runner = aw.Runner("https://example.test/mcp", "test-token", "custom", on_request, transport=fake, on_error=errors.append)
-        runner.dispatch({"event": "reply.requested", "replyRequestId": "r1"})
+        runner.dispatch({"requestId": "r1"})
         self.assertEqual(fake.calls[-1], ("reply_release", {"requestId": "r1", "reason": "The runner hit an error and stopped.", "generation": 3}))
         self.assertEqual(len(errors), 1)
 
@@ -248,8 +285,8 @@ if __name__ == "__main__":
             context.reply("done")
 
         runner = aw.Runner("https://example.test/mcp", "test-token", "custom", on_request, transport=fake)
-        runner.dispatch({"event": "reply.requested", "replyRequestId": "r1"})
-        runner.dispatch({"event": "reply.requested", "replyRequestId": "r2"})
+        runner.dispatch({"requestId": "r1"})
+        runner.dispatch({"requestId": "r2"})
         self.assertEqual(seen, {"r1": "run-1", "r2": None})
         run_calls = [(name, args) for name, args in fake.calls if name.startswith("run_")]
         self.assertEqual([name for name, _ in run_calls], ["run_activity_report", "run_result_report"], "a request without a run reports nothing")
@@ -262,3 +299,121 @@ if __name__ == "__main__":
         tools = aw.ReplyTools(aw.McpClient("https://example.test/mcp", "test-token", transport=fake))
         tools.session_bind("thread-1", "session-1")
         self.assertEqual(fake.calls[-1], ("session_bind", {"conversationId": "thread-1", "externalRef": "session-1"}))
+
+
+class FakeOpened:
+    def __init__(self, status, content_type, body):
+        self.status = status
+        self.headers = {"content-type": content_type}
+        self._body = io.BytesIO(body.encode() if isinstance(body, str) else body)
+
+    def readline(self):
+        return self._body.readline()
+
+    def read(self):
+        return self._body.read()
+
+    def close(self):
+        pass
+
+
+class FakeEvents:
+    """The events address: the first read answers the fixture, later ones nothing."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.reads = []
+
+    def __call__(self, url, headers, timeout):
+        if url.endswith("/files/f1"):
+            return FakeOpened(200, "text/plain", "hello")
+        self.reads.append((headers.get("accept"), headers.get("last-event-id"), url))
+        streamed = self.stream and headers.get("accept") == "text/event-stream"
+        if len(self.reads) > 1:
+            if streamed:
+                return FakeOpened(200, "text/event-stream", ": stream open\n\n")
+            return FakeOpened(200, "application/json", json.dumps({"events": [], "nextCursor": "c-none", "hasMore": False}))
+        if streamed:
+            return FakeOpened(200, "text/event-stream", fixture("stream.txt"))
+        return FakeOpened(200, "application/json", fixture("poll-page.json"))
+
+
+class ChannelTests(unittest.TestCase):
+    CURSOR = "c1.AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAq.example"
+
+    def read_with(self, stream):
+        events = FakeEvents(stream)
+        saved = []
+        heard = []
+        states = []
+
+        class Store:
+            def load(self):
+                return None
+
+            def save(self, cursor):
+                saved.append(cursor)
+
+        channel = aw.WorkspaceChannel(
+            "https://aw.example", "test-token", None, cursor=Store(), opener=events, on_state=states.append
+        )
+        channel.on("message.*", heard.append)
+        stop = threading.Event()
+        thread = threading.Thread(target=channel.connect, args=(stop,))
+        thread.start()
+        deadline = time.time() + 5
+        while time.time() < deadline and len(events.reads) < 2:
+            time.sleep(0.01)
+        stop.set()
+        thread.join(5)
+        self.assertEqual([event["type"] for event in heard], ["message.mentioned"])
+        self.assertEqual(saved[0], self.CURSOR)
+        accept, last_event_id, url = events.reads[1]
+        if stream:
+            self.assertEqual(last_event_id, self.CURSOR)
+        else:
+            self.assertIn("cursor=" + self.CURSOR, url)
+        self.assertIn("streaming" if stream else "polling", states)
+        self.assertEqual(states[-1], "closed")
+
+    def test_reads_a_stream_once_each_and_keeps_its_place(self):
+        self.read_with(stream=True)
+
+    def test_long_polls_where_nothing_streams(self):
+        self.read_with(stream=False)
+
+    def test_talks_through_the_tools_and_fetches_files_by_link(self):
+        answers = {
+            "reply_send": {"outcome": "ok", "value": {"messageId": "m1"}},
+            "message_send": {"outcome": "ok", "value": {"messageId": "m2"}},
+            "message_edit": {"outcome": "ok", "value": {}},
+            "message_react": {"outcome": "ok", "value": {}},
+            "reply_progress": {"outcome": "ok", "value": {}},
+            "file_link_get": {
+                "outcome": "ok",
+                "value": {"url": "https://aw.example/files/f1", "name": "note.txt", "contentType": "text/plain"},
+            },
+        }
+        fake = FakeMcp(lambda name, args: answers.get(name, {"outcome": "not_found"}))
+        channel = aw.WorkspaceChannel(
+            "https://aw.example", "test-token", aw.McpClient("https://aw.example/api/v1/mcp", "test-token", fake), opener=FakeEvents(False)
+        )
+        self.assertEqual(channel.send("c", "done", reply={"requestId": "r1", "generation": 2}, client_message_id="mine-1"), "m1")
+        self.assertEqual(channel.send("c", "hello", client_message_id="mine-2"), "m2")
+        channel.edit("m2", "hello again")
+        channel.react("m2", "👀")
+        channel.typing("r1", 2, "Reading")
+        self.assertEqual(channel.download("f1"), ("note.txt", "text/plain", b"hello"))
+        self.assertEqual(
+            fake.calls,
+            [
+                ("reply_send", {"requestId": "r1", "generation": 2, "text": "done", "clientRequestId": "mine-1"}),
+                ("message_send", {"conversationId": "c", "text": "hello", "clientRequestId": "mine-2"}),
+                ("message_edit", {"messageId": "m2", "text": "hello again"}),
+                ("message_react", {"messageId": "m2", "emoji": "👀", "reacted": True}),
+                ("reply_progress", {"requestId": "r1", "generation": 2, "status": "Reading"}),
+                ("file_link_get", {"fileId": "f1"}),
+            ],
+        )
+        with self.assertRaises(aw.ToolError):
+            channel.delete("m2")
