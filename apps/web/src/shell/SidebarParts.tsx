@@ -1,69 +1,7 @@
-import {
-  Children,
-  createContext,
-  isValidElement,
-  useContext,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from 'react'
+import { Children, isValidElement, useId, useState, type ReactElement, type ReactNode } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 
 import { Avatar, Badge, Dots, Icon, IconButton, Menu, type ActorKind, type IconName, type MenuEntry } from '../ui'
-
-/*
- * Each page renders its own shell, so the sidebar mounts afresh on many
- * clicks (a channel to a thread, the list to a page). Where it was scrolled to
- * and which sections were folded are kept here, per space, for as long as the
- * tab is open, so it comes back as it was.
- */
-const scrollPositions = new Map<string, number>()
-const openSections = new Map<string, boolean>()
-const SidebarSpace = createContext('')
-
-/** Puts the list back where it was in this space, waiting for rows that load just after. */
-function useRememberedScroll(space: string) {
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => {
-    const scroller = scrollRef.current
-    if (!scroller) return undefined
-    const target = scrollPositions.get(space) ?? 0
-    let restoring = target > 0
-    const apply = () => {
-      if (!restoring) return
-      scroller.scrollTop = target
-      if (Math.abs(scroller.scrollTop - target) < 2) restoring = false
-    }
-    const stop = () => {
-      restoring = false
-    }
-    const remember = () => {
-      if (!restoring) scrollPositions.set(space, scroller.scrollTop)
-    }
-    apply()
-    // Scrolling by hand takes over; so does running out of time to wait for rows.
-    scroller.addEventListener('wheel', stop, { passive: true })
-    scroller.addEventListener('touchstart', stop, { passive: true })
-    scroller.addEventListener('keydown', stop)
-    scroller.addEventListener('scroll', remember, { passive: true })
-    const observer = typeof ResizeObserver === 'function' && contentRef.current ? new ResizeObserver(apply) : null
-    if (observer && contentRef.current) observer.observe(contentRef.current)
-    const timer = window.setTimeout(stop, 2000)
-    return () => {
-      window.clearTimeout(timer)
-      observer?.disconnect()
-      scroller.removeEventListener('wheel', stop)
-      scroller.removeEventListener('touchstart', stop)
-      scroller.removeEventListener('keydown', stop)
-      scroller.removeEventListener('scroll', remember)
-    }
-  }, [space])
-  return { scrollRef, contentRef }
-}
 
 /** The sidebar column: a header with the space name and its menu, then the scrolling list. */
 export function SidebarFrame({
@@ -73,7 +11,6 @@ export function SidebarFrame({
   label,
   menu,
   mobileOpen,
-  space,
   title,
 }: {
   actions?: ReactNode
@@ -82,12 +19,9 @@ export function SidebarFrame({
   label: string
   menu?: MenuEntry[]
   mobileOpen: boolean
-  /** Names the space ("home", "project:<id>") for remembering scroll and folded sections. */
-  space?: string
   title: string
 }) {
-  const spaceKey = space ?? label
-  const { contentRef, scrollRef } = useRememberedScroll(spaceKey)
+  // The persistent shell (W1.11) keeps this mounted from page to page, so it keeps its own scroll.
   return (
     <aside aria-label={label} className="aw-sidebar" data-mobile-open={mobileOpen} data-region="sidebar" id={id}>
       <header className="aw-sidebar__header">
@@ -109,11 +43,7 @@ export function SidebarFrame({
         )}
         {actions ? <div className="aw-sidebar__actions">{actions}</div> : null}
       </header>
-      <div className="aw-sidebar__scroll" ref={scrollRef}>
-        <div ref={contentRef}>
-          <SidebarSpace.Provider value={spaceKey}>{children}</SidebarSpace.Provider>
-        </div>
-      </div>
+      <div className="aw-sidebar__scroll">{children}</div>
     </aside>
   )
 }
@@ -132,13 +62,7 @@ export function SidebarSection({
   label: string
   onAdd?: () => void
 }) {
-  const space = useContext(SidebarSpace)
-  const memoryKey = `${space}\u0000${label}`
-  const [open, setOpenState] = useState(() => openSections.get(memoryKey) ?? true)
-  const setOpen = (next: boolean) => {
-    openSections.set(memoryKey, next)
-    setOpenState(next)
-  }
+  const [open, setOpen] = useState(true)
   const id = useId()
   const rows = Children.toArray(children).filter(
     (child) => open || (isValidElement(child) && (child as ReactElement<RowProps>).props.keep),

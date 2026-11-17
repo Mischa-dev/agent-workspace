@@ -42,21 +42,5 @@
     "work-items/codexDeepLink.ts": 3
   },
   "web_inline_query_keys": {},
-  "web_app_shell_in_pages": {
-    "app/NotFoundPage.tsx": 1,
-    "app/TaskKeyRedirect.tsx": 1,
-    "app/boundaries.tsx": 1,
-    "collections/CollectionPage.tsx": 5,
-    "collections/CollectionsListPage.tsx": 3,
-    "design/DesignSystemPage.tsx": 1,
-    "modules/TurnedOffPage.tsx": 1,
-    "onboarding/OnboardingPage.tsx": 1,
-    "pieces/PieceGallery.tsx": 1,
-    "quick-add/QuickAddPage.tsx": 1,
-    "settings/SettingsArea.tsx": 1,
-    "sheets/SheetPage.tsx": 5,
-    "sheets/SheetsListPage.tsx": 3,
-    "whiteboards/WhiteboardPage.tsx": 1,
-    "whiteboards/WhiteboardsPage.tsx": 1
-  }
+  "web_app_shell_in_pages": {}
 }

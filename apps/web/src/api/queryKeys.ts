@@ -18,12 +18,14 @@ export const queryKeys = {
   /** Search results, by query and the project they're narrowed to. */
   searchAll: ['search'] as const,
   search: (query: string, projectId: string | undefined) => ['search', query, projectId] as const,
-  /** One workspace as Settings › General reads it (its lifecycle too). */
-  workspace: (organizationId: string) => ['organization', organizationId] as const,
+  /** Everything cached about one workspace (its settings, members, agents' managers). */
+  organization: (organizationId: string) => ['organization', organizationId] as const,
   /** A workspace's module switches (Settings › Modules). */
   workspaceModules: (organizationId: string) => ['organization', organizationId, 'modules'] as const,
   /** Which project a task key opens. */
   taskKey: (projectId: string, key: string) => ['project', projectId, 'task-key', key] as const,
+  /** Everything the command menu cached for one project. */
+  commandMenu: (projectId: string) => ['project', projectId, 'command-menu'] as const,
   /** The command menu's task results for one project. */
   commandMenuTasks: (projectId: string, query: string) =>
     ['project', projectId, 'command-menu', 'tasks', query] as const,

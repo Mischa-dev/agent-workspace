@@ -125,7 +125,6 @@ export function ProjectSidebar({
       label={`${project.name} navigation`}
       menu={menu}
       mobileOpen={mobileOpen}
-      space={`project:${project.id}`}
       title={project.name}
     >
       <ul className="aw-section__list aw-sidebar__top">

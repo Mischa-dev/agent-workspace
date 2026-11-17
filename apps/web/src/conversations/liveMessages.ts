@@ -292,13 +292,7 @@ export function setCachedReactions(
 
 /** Refetch a conversation's cached queries (its timelines), and nothing else. */
 export function invalidateConversation(queryClient: QueryClient, projectId: string, conversationId: string) {
-  void queryClient.invalidateQueries({
-    predicate: (query) =>
-      query.queryKey[0] === 'project' &&
-      query.queryKey[1] === projectId &&
-      query.queryKey[2] === 'conversation' &&
-      query.queryKey[3] === conversationId,
-  })
+  void queryClient.invalidateQueries({ queryKey: queryKeys.conversation(projectId, conversationId) })
 }
 
 /**

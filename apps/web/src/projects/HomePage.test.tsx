@@ -12,9 +12,6 @@ import { homeGreeting } from './greeting'
 import { HomePage } from './HomePage'
 import type { Project } from './types'
 
-vi.mock('../shell/AppShell', () => ({
-  AppShell: ({ children }: { children: React.ReactNode }) => children,
-}))
 
 vi.mock('./HomeSections', () => ({
   Capacity: () => null,

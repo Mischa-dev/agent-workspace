@@ -93,10 +93,7 @@ export type AgentPresence = {
   taskTitle: string | null
 }
 
-export const agentKeys = {
-  profiles: (projectId: string) => ['project', projectId, 'agent-profiles'] as const,
-  presence: (projectId: string) => ['project', projectId, 'agents'] as const,
-}
+export { agentKeys } from './keys'
 
 /** Presence changes without an event of its own, so it's polled. */
 export const PRESENCE_REFRESH_MS = 15_000

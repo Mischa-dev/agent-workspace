@@ -1,8 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 
+import type { RouteHandle } from '../app/routes'
 import type { SessionUser } from '../auth/session'
-import { useProjects } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { syncThemeColor } from '../theme/themeColor'
@@ -10,10 +10,9 @@ import { Banner, Icon } from '../ui'
 import { staticPageTitle } from './documentTitleModel'
 import { loadShellLazy } from './loadShellLazy'
 import { MenuButton } from './MenuButton'
-import { MOBILE_QUERY, ShellHeaderContext, isMobileWidth, useMobileNavigation } from './mobileNavigation'
+import { MOBILE_QUERY, ShellHeaderContext, isMobileWidth } from './mobileNavigation'
 import { ProjectRail } from './ProjectRail'
 import { ProjectSidebar } from './ProjectSidebar'
-import { useShellPresence } from './shellStore'
 import { useKeyboardViewport } from './useKeyboardViewport'
 import { useSwipe } from './useSwipe'
 
@@ -31,20 +30,6 @@ const HomeSidebar = lazy(() => loadShellLazy().then((module) => ({ default: modu
 const DirectSidebar = lazy(() => loadShellLazy().then((module) => ({ default: module.DirectSidebar })))
 const ResizeEdge = lazy(() => loadShellLazy().then((module) => ({ default: module.ResizeEdge })))
 
-/**
- * The listed project a /projects/… address belongs to, so a project page
- * that's still loading (or failed) keeps its sidebar instead of jumping.
- */
-function useAddressProject(enabled: boolean): Project | null {
-  const location = useLocation()
-  const projects = useProjects()
-  if (!enabled) return null
-  const match = /^\/projects\/([^/]+)/.exec(location.pathname)
-  if (!match || match[1] === 'new') return null
-  const id = decodeURIComponent(match[1])
-  return projects.data?.projects.find((candidate) => candidate.id === id && !candidate.archivedAt) ?? null
-}
-
 /** A home-screen app on a touch screen, where there's no reload button. */
 function isInstalledTouchApp() {
   if (typeof window.matchMedia !== 'function') return false
@@ -61,9 +46,9 @@ function setInert(element: HTMLElement | null, inert: boolean) {
 }
 
 /** What a page tells the shell about itself: everything but its content and the person. */
-export type ShellPresence = Omit<AppShellProps, 'children' | 'user'>
+export type ShellPresence = Omit<ShellFrameProps, 'children' | 'user' | 'space'>
 
-export type AppShellProps = {
+export type ShellFrameProps = {
   children: ReactNode
   /** The details panel (thread details, group members). */
   context?: ReactNode
@@ -84,24 +69,25 @@ export type AppShellProps = {
   onContextDismiss?: () => void
   project?: Project | null
   selectedChannelId?: string
+  /** The space the route belongs to (its handle), for what the rail marks as current. */
+  space?: RouteHandle['space']
   thread?: { id: string; name: string } | null
   user: SessionUser
 }
 
 /**
- * A page's frame. Inside the persistent shell (W1.11, `ShellLayout`) it
- * passes the page through and tells the shell what to draw beside it, so the
- * rail and sidebar stay mounted from page to page; on its own (a page
- * rendered outside the route table) it draws the whole frame.
+ * The phone navigation drawer. The frame outlives each page (W1.11), so it
+ * holds the drawer itself: any navigation closes it, except right after a
+ * space was chosen from it, which swaps the sidebar beside the rail so the
+ * next tap can pick a channel or conversation.
  */
-export function AppShell({ children, user, ...presence }: AppShellProps) {
-  const inShell = useShellPresence(presence)
-  if (inShell) return <>{children}</>
-  return (
-    <ShellFrame {...presence} user={user}>
-      {children}
-    </ShellFrame>
-  )
+function useNavigationDrawer() {
+  const location = useLocation()
+  const [state, setState] = useState({ open: false, keep: false, key: location.key })
+  if (state.key !== location.key) setState({ open: state.open && state.keep, keep: false, key: location.key })
+  const setOpen = useCallback((open: boolean) => setState((current) => ({ ...current, open, keep: open && current.keep })), [])
+  const keepOpenOnNextNavigation = useCallback(() => setState((current) => ({ ...current, keep: true })), [])
+  return { open: state.open, setOpen, keepOpenOnNextNavigation }
 }
 
 /**
@@ -117,16 +103,15 @@ export function ShellFrame({
   home = false,
   mainClassName,
   onContextDismiss,
-  project: givenProject = null,
+  project = null,
   selectedChannelId,
   thread = null,
   user,
-}: AppShellProps) {
+  space,
+}: ShellFrameProps) {
   useKeyboardViewport()
   const location = useLocation()
-  const addressProject = useAddressProject(!givenProject && !home && !direct)
-  const project = givenProject ?? addressProject
-  const navigation = useMobileNavigation()
+  const navigation = useNavigationDrawer()
   const navOpen = navigation.open
   const setNavOpen = navigation.setOpen
   const [contextOpenState, setContextOpen] = useState(false)
@@ -309,6 +294,7 @@ export function ShellFrame({
         </a>
         <ProjectRail
           currentProjectId={project?.id ?? null}
+          homeActive={space === 'home'}
           mobileOpen={navOpen}
           onNavigate={closeDrawers}
           onSpaceSelected={navigation.keepOpenOnNextNavigation}
@@ -316,6 +302,8 @@ export function ShellFrame({
         />
         {project ? (
           <ProjectSidebar
+            // Another project's sidebar starts at its top, with its sections open.
+            key={project.id}
             mobileOpen={navOpen}
             onNavigate={closeDrawers}
             project={project}

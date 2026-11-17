@@ -66,9 +66,6 @@ vi.mock('./hooks', () => ({
   useWorkItemTimeline: vi.fn(),
 }))
 vi.mock('../launch/hooks', () => ({ useCreateLaunches: vi.fn(), useLaunchPlan: vi.fn() }))
-vi.mock('../shell/AppShell', () => ({
-  AppShell: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
-}))
 vi.mock('../projects/ProjectContextDrawer', () => ({
   ProjectContextDrawer: () => null,
 }))

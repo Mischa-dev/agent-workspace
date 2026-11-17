@@ -1,16 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { Link, Outlet, RouterProvider, createMemoryRouter, useNavigate } from 'react-router-dom'
+import { Link, RouterProvider, createMemoryRouter, useNavigate } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys } from '../api/queryKeys'
 import type { SessionUser } from '../auth/session'
 import type { Project } from '../projects/types'
-import { AppShell } from './AppShell'
-import { MobileNavigationProvider } from './MobileNavigationProvider'
-import { useMobileNavigation } from './mobileNavigation'
 import { ShellLayout } from './ShellLayout'
-import { useShellPanel } from './shellStore'
+import { useShellPage, useShellPanel } from './shellStore'
 
 const user: SessionUser = {
   id: 'user-a',
@@ -24,7 +21,13 @@ const user: SessionUser = {
 vi.mock('../auth/session', () => ({ useAuthenticatedSession: () => ({ user }) }))
 
 vi.mock('./ProjectRail', () => ({
-  ProjectRail: ({ mobileOpen }: { mobileOpen: boolean }) => <nav data-mobile-open={mobileOpen} id="project-rail" />,
+  ProjectRail: ({ homeActive, mobileOpen, onSpaceSelected }: { homeActive: boolean; mobileOpen: boolean; onSpaceSelected: () => void }) => (
+    <nav data-home-active={homeActive} data-mobile-open={mobileOpen} id="project-rail">
+      <button onClick={onSpaceSelected} type="button">
+        Pick a space
+      </button>
+    </nav>
+  ),
 }))
 
 vi.mock('./ProjectSidebar', () => ({
@@ -43,56 +46,40 @@ const project = {
 } as unknown as Project
 
 function Nav() {
-  const navigation = useMobileNavigation()
   const navigate = useNavigate()
   return (
     <>
       <Link to="/projects/project-a/channels/c1">Channel</Link>
       <Link to="/projects/project-a/threads/t1">Thread</Link>
       <Link to="/projects/project-a/pages">Pages</Link>
-      <button onClick={() => navigation.setOpen(true)} type="button">
-        Open navigation
-      </button>
-      <button
-        onClick={() => {
-          navigation.keepOpenOnNextNavigation()
-          navigate('/search')
-        }}
-        type="button"
-      >
-        Switch space
+      <Link to="/inbox">Inbox</Link>
+      <button onClick={() => navigate('/search')} type="button">
+        Go to search
       </button>
     </>
   )
 }
 
 function ChannelPage() {
+  useShellPage({ project })
   const panel = useShellPanel(<p>Channel details</p>, 'details')
   return panel ? <Nav /> : null
 }
 
 function ThreadPage() {
-  return (
-    <AppShell project={project} thread={{ id: 't1', name: 'Walking skeleton' }} user={user}>
-      <Nav />
-    </AppShell>
-  )
+  useShellPage({ project, thread: { id: 't1', name: 'Walking skeleton' } })
+  return <Nav />
 }
 
-function ProjectPage() {
-  return (
-    <AppShell project={project} user={user}>
-      <Nav />
-    </AppShell>
-  )
+/** A page that hasn't loaded its project yet: the route still names it. */
+function LoadingProjectPage() {
+  useShellPage({})
+  return <Nav />
 }
 
-function SearchPage() {
-  return (
-    <AppShell user={user}>
-      <Nav />
-    </AppShell>
-  )
+function PlainPage() {
+  useShellPage({ mainClassName: 'aw-main--page' })
+  return <Nav />
 }
 
 function renderShell(path: string) {
@@ -101,28 +88,14 @@ function renderShell(path: string) {
   const router = createMemoryRouter(
     [
       {
-        element: (
-          <MobileNavigationProvider>
-            <Outlet />
-          </MobileNavigationProvider>
-        ),
+        element: <ShellLayout />,
         children: [
-          {
-            element: <ShellLayout />,
-            children: [
-              {
-                path: '/projects/:projectId/channels/:channelId',
-                element: (
-                  <AppShell project={project} user={user}>
-                    <ChannelPage />
-                  </AppShell>
-                ),
-              },
-              { path: '/projects/:projectId/threads/:threadId', element: <ThreadPage /> },
-              { path: '/projects/:projectId/pages', element: <ProjectPage /> },
-              { path: '/search', element: <SearchPage /> },
-            ],
-          },
+          { path: '/projects/:projectId/channels/:channelId', element: <ChannelPage />, handle: { space: 'project', layout: 'shell' } },
+          { path: '/projects/:projectId/threads/:threadId', element: <ThreadPage />, handle: { space: 'project', layout: 'shell' } },
+          { path: '/projects/:projectId/pages', element: <LoadingProjectPage />, handle: { space: 'project', layout: 'shell' } },
+          { path: '/inbox', element: <PlainPage />, handle: { space: 'home', layout: 'shell' } },
+          { path: '/whiteboards/:id', element: <PlainPage />, handle: { space: 'home', layout: 'canvas' } },
+          { path: '/search', element: <PlainPage />, handle: { space: 'workspace', layout: 'shell' } },
         ],
       },
     ],
@@ -176,11 +149,23 @@ describe('the persistent shell', () => {
     }))
     renderShell('/projects/project-a/pages')
     const rail = document.getElementById('project-rail')
-    act(() => fireEvent.click(screen.getByRole('button', { name: 'Open navigation' })))
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Agent Workspace: open navigation' })))
     expect(rail).toHaveAttribute('data-mobile-open', 'true')
 
-    act(() => fireEvent.click(screen.getByRole('button', { name: 'Switch space' })))
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Pick a space' })))
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Go to search' })))
     expect(document.getElementById('project-rail')).toBe(rail)
     expect(rail).toHaveAttribute('data-mobile-open', 'true')
+  })
+
+  it('shows the space the route names until the page names its own', () => {
+    renderShell('/projects/project-a/pages')
+    expect(document.getElementById('project-sidebar')).toHaveTextContent('Agent Workspace')
+    expect(document.getElementById('project-rail')).toHaveAttribute('data-home-active', 'false')
+
+    fireEvent.click(screen.getByRole('link', { name: 'Inbox' }))
+    expect(document.getElementById('project-sidebar')?.textContent ?? '').not.toContain('Agent Workspace')
+    expect(document.querySelector('.aw-shell')).toHaveAttribute('data-has-sidebar', 'true')
+    expect(document.getElementById('project-rail')).toHaveAttribute('data-home-active', 'true')
   })
 })
