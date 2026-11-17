@@ -1069,9 +1069,10 @@ impl Operation for PackageList {
             (None, _) => None,
         };
         let workspace = call.ctx.workspace_id;
+        let reader = call.account_id();
         let tx = call.tx().await?;
         Ok(PackageListOutput {
-            installs: install::list(tx, workspace, space).await?,
+            installs: install::list(tx, workspace, space, reader).await?,
         })
     }
 }
