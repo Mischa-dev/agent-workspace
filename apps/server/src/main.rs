@@ -225,6 +225,45 @@ async fn main() -> anyhow::Result<()> {
             );
             return Ok(());
         }
+        Some("files-move") => {
+            // K5.13: copy every file (or one workspace's) to another store.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["to", "workspace-id"])?;
+            let workspace = options
+                .get("workspace-id")
+                .map(|value| uuid::Uuid::parse_str(value))
+                .transpose()
+                .context("--workspace-id is a workspace's id")?;
+            let queued = agent_workspace_server::files::migrate::start(
+                &pool,
+                &config,
+                required_option(&options, "to")?,
+                workspace,
+            )
+            .await
+            .context("start moving files")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "queued": matches!(queued, agent_workspace_server::jobs::Enqueued::Created(_)),
+                    "note": "the move runs as background jobs on a running server, 100 files at a time"
+                }))?
+            );
+            return Ok(());
+        }
+        Some("files-prune-source") => {
+            // K5.13: delete the old copies of files a move copied.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &[])?;
+            let pruned = agent_workspace_server::files::migrate::prune_sources(&pool, &config)
+                .await
+                .context("delete moved files' old copies")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "pruned": pruned }))?
+            );
+            return Ok(());
+        }
         Some("secret-key-init") => {
             // Creates a new keyring file; refuses to replace one.
             let options = parse_options(arguments)?;

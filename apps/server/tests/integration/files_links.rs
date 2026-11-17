@@ -605,3 +605,176 @@ fn find(value: &Value, key: &str) -> Option<String> {
         _ => None,
     }
 }
+
+/// K5.13: files on disk move to the object store a batch at a time; a move
+/// stopped after one batch resumes where it was; every moved file has the
+/// same bytes and is served from its new store; a file uploaded meanwhile
+/// goes to the new store; the old copies stay until pruned.
+#[tokio::test]
+async fn files_move_between_stores_and_resume() {
+    let Some(setup) = setup("files_move").await else {
+        return;
+    };
+    let (fake, endpoint) = start_fake().await;
+    let root = tempfile::tempdir().expect("data root");
+    let keys = tempfile::tempdir().expect("keys");
+    let common = vec![
+        (
+            "AGENT_WORKSPACE_DATA_ROOT",
+            root.path().to_string_lossy().into_owned(),
+        ),
+        ("AGENT_WORKSPACE_S3_ENDPOINT", endpoint),
+        ("AGENT_WORKSPACE_S3_BUCKET", BUCKET.to_owned()),
+        ("AGENT_WORKSPACE_S3_PATH_STYLE", "true".to_owned()),
+        (
+            "AGENT_WORKSPACE_S3_ACCESS_KEY_ID_PATH",
+            secret_file(keys.path(), "access", ACCESS_KEY),
+        ),
+        (
+            "AGENT_WORKSPACE_S3_SECRET_ACCESS_KEY_PATH",
+            secret_file(keys.path(), "secret", "test-secret-key"),
+        ),
+    ];
+    // First on disk...
+    let (on_disk, _) = app_with(&setup, &common);
+    let mut moving = common.clone();
+    moving.push(("AGENT_WORKSPACE_FILE_STORE", "object".to_owned()));
+    // ...then the operator makes the object store the primary and moves.
+    let (on_object, state) = app_with(&setup, &moving);
+    let setup = Setup {
+        app: on_disk,
+        ..setup
+    };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let channel = create_channel(&setup, &work, "general").await;
+    let owner = &setup.browser;
+    // One upload, then 249 more like it written straight to disk and the
+    // database (uploading them would hit the rate limit).
+    let (status, file) = upload(
+        &setup.app,
+        owner,
+        &format!("/api/v1/conversations/{channel}/files?name=f0.txt"),
+        Body::from("file number 0"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{file}");
+    let template = file["id"].as_str().expect("file").to_owned();
+    let mut ids = vec![template.clone()];
+    for index in 1..250 {
+        let id = Uuid::now_v7();
+        let bytes = format!("file number {index}");
+        let key = format!("{}/{}", setup.organization_id.simple(), id.simple());
+        std::fs::write(root.path().join("files").join(&key), &bytes).expect("bytes");
+        sqlx::query(
+            r#"
+            INSERT INTO files (
+                id, organization_id, project_id, conversation_id, uploaded_by_actor_id,
+                name, content_type, byte_size, sha256, storage_key, store_id
+            )
+            SELECT $2, organization_id, project_id, conversation_id, uploaded_by_actor_id,
+                   $3, content_type, $4, $5, $6, store_id
+            FROM files WHERE id = $1::uuid
+            "#,
+        )
+        .bind(&template)
+        .bind(id)
+        .bind(format!("f{index}.txt"))
+        .bind(i64::try_from(bytes.len()).expect("size"))
+        .bind(hex::encode(Sha256::digest(bytes.as_bytes())))
+        .bind(&key)
+        .execute(&setup.pool)
+        .await
+        .expect("file row");
+        ids.push(id.to_string());
+    }
+    let folder = root
+        .path()
+        .join("files")
+        .join(setup.organization_id.simple().to_string());
+    let on_disk_count = || std::fs::read_dir(&folder).expect("folder").count();
+    assert_eq!(on_disk_count(), 250);
+
+    let mut payload = files::migrate::MovePayload {
+        to: "object".to_owned(),
+        workspace: None,
+        after: None,
+    };
+    let first = files::migrate::move_batch(&state, &payload)
+        .await
+        .expect("first batch");
+    assert_eq!((first.moved, first.failed), (100, 0));
+    // Stopped here; a file uploaded now goes to the new store.
+    let (status, during) = upload(
+        &on_object,
+        owner,
+        &format!("/api/v1/conversations/{channel}/files?name=during.txt"),
+        Body::from("uploaded during the move"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{during}");
+    let during = during["id"].as_str().expect("file").to_owned();
+    // Resumed, it finishes in two more batches.
+    payload.after = first.next;
+    let mut batches = 1;
+    loop {
+        let moved = files::migrate::move_batch(&state, &payload)
+            .await
+            .expect("batch");
+        assert_eq!(moved.failed, 0);
+        batches += 1;
+        match moved.next {
+            Some(next) => payload.after = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(batches, 3);
+    let stores: Vec<(String, String, Option<String>)> =
+        sqlx::query_as("SELECT storage_key, store_id, moved_from_store_id FROM files ORDER BY id")
+            .fetch_all(&setup.pool)
+            .await
+            .expect("rows");
+    assert_eq!(stores.len(), 251);
+    assert!(stores.iter().all(|(_, store, _)| store == "object"));
+    assert_eq!(
+        stores
+            .iter()
+            .filter(|(_, _, from)| from.as_deref() == Some("local"))
+            .count(),
+        250
+    );
+    let digests: Vec<(String, String)> = sqlx::query_as("SELECT storage_key, sha256 FROM files")
+        .fetch_all(&setup.pool)
+        .await
+        .expect("digests");
+    {
+        let objects = fake.objects.lock().expect("lock");
+        for (key, sha256) in &digests {
+            let bytes = objects.get(key).expect("in the bucket");
+            assert_eq!(&hex::encode(Sha256::digest(bytes)), sha256, "{key}");
+        }
+    }
+    // Served from the new store, by either app.
+    for (app, id, text) in [
+        (&on_object, &ids[7], "file number 7"),
+        (&setup.app, &ids[249], "file number 249"),
+        (&on_object, &during, "uploaded during the move"),
+    ] {
+        let response = get(app, Some(owner), &format!("/api/v1/files/{id}/content")).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(bytes_of(response).await, text.as_bytes());
+    }
+    // The old copies stay until pruned.
+    assert_eq!(on_disk_count(), 250);
+    let pruned = files::migrate::prune_sources(&setup.pool, &state.config)
+        .await
+        .expect("prune");
+    assert_eq!(pruned, 250);
+    assert_eq!(on_disk_count(), 0);
+    let response = get(
+        &on_object,
+        Some(owner),
+        &format!("/api/v1/files/{}/content", ids[0]),
+    )
+    .await;
+    assert_eq!(bytes_of(response).await, b"file number 0");
+}

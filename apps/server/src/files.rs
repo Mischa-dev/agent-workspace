@@ -20,6 +20,7 @@
 pub mod http;
 pub mod image;
 pub mod links;
+pub mod migrate;
 pub mod object;
 pub mod store;
 
@@ -1134,6 +1135,7 @@ pub(crate) async fn remove_file(
 // Cleanup
 
 pub fn register_jobs(registry: &mut JobRegistry) {
+    migrate::register_jobs(registry);
     registry.register(CLEANUP_KIND, |context| async move {
         cleanup(&context.state).await?;
         Ok(())
