@@ -1596,9 +1596,10 @@ async fn resolve_invitation(
     require_allowed_origin(&state.config, &headers)?;
     let (prefix, digest) = consume_token(&mut token, &state).await?;
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    let row = state
+    let found = find_invitation(&mut connection, &prefix, &digest, false).await;
+    let (row, _connection) = state
         .rate_limits
-        .charge_link_miss(find_invitation(&mut connection, &prefix, &digest, false).await)
+        .release_on_link_miss(connection, found)
         .await?;
     Ok(Json(ResolvedInvitation {
         organization_name: row.organization_name,
@@ -1788,9 +1789,10 @@ async fn accept_new_user(
     let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = state
+    let found = find_invitation(&mut transaction, &prefix, &digest, true).await;
+    let (invitation, mut transaction) = state
         .rate_limits
-        .charge_link_miss(find_invitation(&mut transaction, &prefix, &digest, true).await)
+        .release_on_link_miss(transaction, found)
         .await?;
     let actor_id = Uuid::now_v7();
     let user_id = Uuid::now_v7();
@@ -1868,9 +1870,10 @@ async fn accept_existing_user(
     let (prefix, digest) = consume_token(&mut token, &state).await?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let invitation = state
+    let found = find_invitation(&mut transaction, &prefix, &digest, true).await;
+    let (invitation, mut transaction) = state
         .rate_limits
-        .charge_link_miss(find_invitation(&mut transaction, &prefix, &digest, true).await)
+        .release_on_link_miss(transaction, found)
         .await?;
     let epoch = sqlx::query_scalar::<_, i64>(
         r#"

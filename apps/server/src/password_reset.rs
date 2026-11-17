@@ -427,9 +427,12 @@ async fn verify_http(
     .bind(digest(&request.token).to_vec())
     .fetch_optional(&mut *transaction)
     .await?;
-    let row = state
+    let (row, mut transaction) = state
         .rate_limits
-        .charge_link_miss(row.ok_or(AppError::NotFound("confirmation link")))
+        .release_on_link_miss(
+            transaction,
+            row.ok_or(AppError::NotFound("confirmation link")),
+        )
         .await?;
     let (user_id, actor_id, address) = row;
     let taken = sqlx::query_scalar::<_, bool>(
@@ -745,9 +748,10 @@ async fn inspect_reset_http(
     require_allowed_origin(&state.config, &headers)?;
     state.rate_limits.check_invitation(&request.token).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let reset = state
+    let found = live_reset(&mut transaction, &request.token).await;
+    let (reset, mut transaction) = state
         .rate_limits
-        .charge_link_miss(live_reset(&mut transaction, &request.token).await)
+        .release_on_link_miss(transaction, found)
         .await?;
     let two_factor_required =
         crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await?;
@@ -795,9 +799,10 @@ async fn complete_reset_http(
     // Check the link before spending a password hash on it.
     {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        state
+        let found = live_reset(&mut transaction, &request.token).await;
+        let (_, transaction) = state
             .rate_limits
-            .charge_link_miss(live_reset(&mut transaction, &request.token).await)
+            .release_on_link_miss(transaction, found)
             .await?;
         transaction.rollback().await?;
     }
@@ -806,9 +811,10 @@ async fn complete_reset_http(
         password::hash_password(std::mem::take(&mut request.new_password)).await?
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let reset = state
+    let found = live_reset(&mut transaction, &request.token).await;
+    let (reset, mut transaction) = state
         .rate_limits
-        .charge_link_miss(live_reset(&mut transaction, &request.token).await)
+        .release_on_link_miss(transaction, found)
         .await?;
     if crate::account_security::two_factor_enabled(&mut transaction, reset.user_id).await? {
         let code = request.code.as_deref().map(str::trim).unwrap_or_default();

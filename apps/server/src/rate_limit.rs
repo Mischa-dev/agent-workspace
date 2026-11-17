@@ -292,6 +292,24 @@ impl RateLimiters {
         result
     }
 
+    /// [`Self::charge_link_miss`] for a lookup made on `held` (the caller's
+    /// transaction or connection): on a miss `held` goes back to the pool
+    /// before the shared counter takes a connection of its own, so a
+    /// one-connection pool never waits on itself. On a hit both come back.
+    pub async fn release_on_link_miss<T, H>(
+        &self,
+        held: H,
+        result: Result<T, AppError>,
+    ) -> Result<(T, H), AppError> {
+        match result {
+            Ok(value) => Ok((value, held)),
+            Err(error) => {
+                drop(held);
+                self.charge_link_miss(Err(error)).await
+            }
+        }
+    }
+
     pub async fn check_mcp_request(&self, credential_id: Uuid) -> Result<(), AppError> {
         self.limits
             .check(&MCP_REQUESTS, LimitKey::Credential(credential_id))
@@ -304,6 +322,18 @@ impl RateLimiters {
     pub async fn check_workspace_call(&self, workspace: Uuid) -> Result<(), AppError> {
         self.limits
             .check(&WORKSPACE_CALLS, LimitKey::Workspace(workspace))
+            .await
+    }
+
+    /// [`Self::check_workspace_call`] inside the caller's transaction, so a
+    /// caller holding a pooled connection never waits for a second one.
+    pub async fn check_workspace_call_on(
+        &self,
+        connection: &mut PgConnection,
+        workspace: Uuid,
+    ) -> Result<(), AppError> {
+        self.limits
+            .check_on(connection, &WORKSPACE_CALLS, LimitKey::Workspace(workspace))
             .await
     }
 
