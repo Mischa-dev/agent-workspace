@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 
+import { queryKeys } from '../api/queryKeys'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { humanize } from '../projects/format'
 import { listRepositories } from '../repositories/api'
@@ -113,7 +114,7 @@ export function TaskLinks({
 }) {
   const conversations = useProjectConversationSidebar(item.projectId)
   const repositories = useQuery({
-    queryKey: ['projects', item.projectId, 'repositories', 'work-item-picker'],
+    queryKey: queryKeys.repositoryPicker(item.projectId),
     queryFn: () => listRepositories(item.projectId),
     enabled: Boolean(item.projectId) && adding && !disabled && code,
   })

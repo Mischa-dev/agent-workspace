@@ -27,7 +27,7 @@ import { useFirstUnread } from '../conversations/useFirstUnread'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { useMessageSender } from '../conversations/useMessageSender'
 import { PinnedBar } from '../memory/ConversationMemory'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import {
   ActorTag,
   Avatar,
@@ -209,6 +209,45 @@ export function DirectConversationPage() {
       .finally(() => setContinuing(false))
   }
 
+  useShellPage({
+    context: openThreadId && projectId ? (
+          <ThreadPanel
+            key={openThreadId}
+            members={members}
+            onClose={() => openThread(null)}
+            parentId={conversationId}
+            projectId={projectId}
+            threadId={openThreadId}
+            viewer={viewer}
+          />
+        ) : panel === 'threads' ? (
+          <ThreadBoard
+            conversationId={conversationId}
+            projectId={projectId}
+            onClose={() => setSide(null)}
+            onOpen={(thread) => {
+              setSide(null)
+              openThread(thread.id)
+            }}
+          />
+        ) : isGroup && panel === 'members' ? (
+          <GroupMembers
+            conversationId={conversationId}
+            members={members}
+            onClose={() => setSide(null)}
+            onLeave={() => setLeaving(conversationId)}
+            people={overview.data?.people ?? []}
+            viewerId={viewerId}
+          />
+        ) : undefined,
+    contextKey: openThreadId ?? panel ?? undefined,
+    direct: true,
+    mainClassName: 'aw-main--conversation',
+    onContextDismiss: () => {
+        if (openThreadId) openThread(null)
+        setSide(null)
+      },
+  })
   if (isApiError(timeline.error) && timeline.error.status === 404) {
     return <Navigate replace to="/messages" />
   }
@@ -299,48 +338,7 @@ export function DirectConversationPage() {
   const dialog = threadDialog?.conversationId === conversationId ? threadDialog : null
 
   return (
-    <AppShell
-      context={
-        openThreadId && projectId ? (
-          <ThreadPanel
-            key={openThreadId}
-            members={members}
-            onClose={() => openThread(null)}
-            parentId={conversationId}
-            projectId={projectId}
-            threadId={openThreadId}
-            viewer={viewer}
-          />
-        ) : panel === 'threads' ? (
-          <ThreadBoard
-            conversationId={conversationId}
-            projectId={projectId}
-            onClose={() => setSide(null)}
-            onOpen={(thread) => {
-              setSide(null)
-              openThread(thread.id)
-            }}
-          />
-        ) : isGroup && panel === 'members' ? (
-          <GroupMembers
-            conversationId={conversationId}
-            members={members}
-            onClose={() => setSide(null)}
-            onLeave={() => setLeaving(conversationId)}
-            people={overview.data?.people ?? []}
-            viewerId={viewerId}
-          />
-        ) : undefined
-      }
-      contextKey={openThreadId ?? panel ?? undefined}
-      direct
-      mainClassName="aw-main--conversation"
-      onContextDismiss={() => {
-        if (openThreadId) openThread(null)
-        setSide(null)
-      }}
-      user={session.user}
-    >
+    <>
       {header}
       {tools.banner}
       {valid && projectId ? <PinnedBar canEdit={canPost} conversationId={conversationId} direct projectId={projectId} /> : null}
@@ -458,7 +456,7 @@ export function DirectConversationPage() {
         title={title}
         viewerId={viewerId}
       />
-    </AppShell>
+    </>
   )
 }
 

@@ -16,6 +16,7 @@ import {
   type SettingsTarget,
 } from '../api'
 import './runs.css'
+import { launchKeys } from '../../launch/hooks'
 
 const KEY = 'launch.template'
 
@@ -41,7 +42,7 @@ export function LaunchPrompt({ target, workspaceHref }: { target: SettingsTarget
         current ? { ...current, settings: current.settings.map((candidate) => (candidate.key === KEY ? setting : candidate)) } : current,
       )
       // The launch dialog reads the same settings under its own key.
-      if (target.scope === 'project') void queryClient.invalidateQueries({ queryKey: ['project', target.projectId, 'settings'] })
+      if (target.scope === 'project') void queryClient.invalidateQueries({ queryKey: launchKeys.projectSettings(target.projectId) })
       setDraft(null)
       if (value !== null) showToast({ tone: 'success', title: 'Launch prompt saved. The next launch uses it.' })
     },

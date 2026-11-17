@@ -25,7 +25,7 @@ import {
   ProjectPageLoading,
 } from '../projects/ProjectPageStates'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { ConversationHeader } from '../conversations/ConversationHeader'
 import { ThreadStatusButton, ThreadStatusDialog } from '../conversations/threadBoard'
@@ -240,6 +240,45 @@ export function ThreadPage() {
     projectId,
   })
 
+  const threadName = verifiedTimeline?.conversation.name ?? 'Thread'
+  const parentId = verifiedTimeline?.conversation.parentChannelId ?? null
+
+  const details =
+    verifiedTimeline && detailsOpen && project.data ? (
+      <ThreadDetails
+        onClose={() => setDetailsOpen(false)}
+        onUnlink={
+          verifiedTimeline.capabilities.sendMessage
+            ? (workItemId) => {
+                workItemLink.mutate(
+                  { projectId, workItemId, threadId, linked: false, idempotencyKey: crypto.randomUUID() },
+                  { onSuccess: () => void thread.timeline.refetch() },
+                )
+              }
+            : undefined
+        }
+        projectName={project.data.name}
+        run={activeRun ?? latestTerminalRun}
+        unlinking={workItemLink.isPending}
+        workItems={verifiedTimeline.linkedWorkItems}
+      />
+    ) : undefined
+
+  // Until the page can draw, the shell keeps the space the address names.
+  useShellPage(
+    project.data
+      ? {
+          context: details,
+          contextKey: details ? 'details' : undefined,
+          mainClassName: 'aw-main--conversation',
+          onContextDismiss: () => setDetailsOpen(false),
+          project: project.data,
+          selectedChannelId: parentId ?? undefined,
+          thread: verifiedTimeline ? { id: threadId, name: threadName } : null,
+        }
+      : {},
+  )
+
   if (isApiError(thread.timeline.error) && thread.timeline.error.status === 404) {
     const parent = verifiedTimeline?.conversation.parentChannelId ?? null
     return (
@@ -265,21 +304,15 @@ export function ThreadPage() {
 
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading />
-      </AppShell>
+      <ProjectPageLoading />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
-  const threadName = verifiedTimeline?.conversation.name ?? 'Thread'
-  const parentId = verifiedTimeline?.conversation.parentChannelId ?? null
   const parentChannel = parentSidebar.data?.channels.find((channel) => channel.id === parentId)
   const archived = Boolean(verifiedTimeline?.conversation.archivedAt)
   const canMessage = Boolean(verifiedTimeline?.capabilities.sendMessage && !archived)
@@ -293,27 +326,6 @@ export function ThreadPage() {
   const channelRoute = parentId
     ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(parentId)}`
     : `/projects/${encodeURIComponent(projectId)}`
-
-  const details =
-    verifiedTimeline && detailsOpen ? (
-      <ThreadDetails
-        onClose={() => setDetailsOpen(false)}
-        onUnlink={
-          verifiedTimeline.capabilities.sendMessage
-            ? (workItemId) => {
-                workItemLink.mutate(
-                  { projectId, workItemId, threadId, linked: false, idempotencyKey: crypto.randomUUID() },
-                  { onSuccess: () => void thread.timeline.refetch() },
-                )
-              }
-            : undefined
-        }
-        projectName={project.data.name}
-        run={activeRun ?? latestTerminalRun}
-        unlinking={workItemLink.isPending}
-        workItems={verifiedTimeline.linkedWorkItems}
-      />
-    ) : undefined
 
   // An active run without a stop button has no actions, so its card has no footer.
   const cardActions =
@@ -346,16 +358,7 @@ export function ThreadPage() {
   const originId = verifiedTimeline?.conversation.originMessageId ?? null
 
   return (
-    <AppShell
-      context={details}
-      contextKey={details ? 'details' : undefined}
-      mainClassName="aw-main--conversation"
-      onContextDismiss={() => setDetailsOpen(false)}
-      project={project.data}
-      selectedChannelId={parentId ?? undefined}
-      thread={verifiedTimeline ? { id: threadId, name: threadName } : null}
-      user={session.user}
-    >
+    <>
       <NavigationSyncAlert {...navigationSync} />
       <ConversationHeader
         actions={
@@ -545,6 +548,6 @@ export function ThreadPage() {
       {statusFor === threadId && verifiedTimeline ? (
         <ThreadStatusDialog onClose={() => setStatusFor(null)} onSaved={() => void thread.timeline.refetch()} thread={statusThread} />
       ) : null}
-    </AppShell>
+    </>
   )
 }

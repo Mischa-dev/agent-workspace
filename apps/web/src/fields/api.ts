@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { normalizeField, type FieldDefinition, type StatusCategory } from './fieldModel'
 
 /**
@@ -66,7 +67,7 @@ export function useFields(scope: FieldScope, includeArchived = false) {
 /** Adding or changing a field refreshes every list of the scope's fields and the records that show them. */
 export function useFieldMutations(scope: FieldScope) {
   const client = useQueryClient()
-  const refresh = () => client.invalidateQueries({ queryKey: ['project', scope.projectId] })
+  const refresh = () => client.invalidateQueries({ queryKey: queryKeys.project(scope.projectId) })
   return {
     create: useMutation({ mutationFn: (input: Parameters<typeof createField>[1]) => createField(scope, input), onSuccess: refresh }),
     update: useMutation({ mutationFn: (input: Parameters<typeof updateField>[1]) => updateField(scope, input), onSuccess: refresh }),

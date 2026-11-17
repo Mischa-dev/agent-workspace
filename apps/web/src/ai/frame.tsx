@@ -1,12 +1,11 @@
 import type { ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
-import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { RememberPlace } from '../projects/RememberPlace'
 import { useProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Icon, PageHeader, type IconName } from '../ui'
 import { useProjectAi } from './hooks'
@@ -36,27 +35,23 @@ export function PlanningFrame({
   label: string
   tab: PlanningTab
 }) {
-  const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
   const status = useProjectAi(projectId)
+  useShellPage({ project: project.data })
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label={label} />
-      </AppShell>
+      <ProjectPageLoading label={label} />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
   const pending = status.data?.pendingSuggestions ?? 0
   return (
-    <AppShell project={project.data} user={session.user}>
+    <>
       <div className="aw-page aw-page--full aw-ai-page">
         <PageHeader icon="branch" title="Planning" />
         <WorkTabs current="planning" projectId={projectId} />
@@ -72,7 +67,7 @@ export function PlanningFrame({
         </nav>
         {children(project.data)}
       </div>
-    </AppShell>
+    </>
   )
 }
 

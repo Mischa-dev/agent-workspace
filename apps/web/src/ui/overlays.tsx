@@ -16,6 +16,7 @@ import {
 import { createPortal } from 'react-dom'
 
 import { Icon, type IconGlyph } from './icons'
+import { Badge } from './identity'
 
 export type Placement = 'top' | 'bottom' | 'right' | 'bottom-start' | 'bottom-end' | 'top-start' | 'right-start'
 
@@ -150,6 +151,8 @@ export type MenuEntry =
       label: string
       icon?: IconGlyph
       shortcut?: string
+      /** An unread count shown after the label, such as another workspace's. */
+      badge?: number
       danger?: boolean
       /** Makes it a checkbox item: ✓ when true. */
       checked?: boolean
@@ -274,6 +277,7 @@ export function Menu({
                 return (
                   <button
                     aria-checked={checkable ? item.checked : undefined}
+                    aria-label={item.badge ? `${item.label}, ${item.badge} unread` : undefined}
                     className={item.danger ? 'aw-menu__item is-danger' : 'aw-menu__item'}
                     disabled={item.disabled}
                     key={index}
@@ -295,6 +299,7 @@ export function Menu({
                   >
                     {item.icon ? <Icon name={item.icon} /> : null}
                     <span className="aw-menu__label">{item.label}</span>
+                    {item.badge ? <Badge count={item.badge} max={99} /> : null}
                     {item.shortcut ? <kbd>{item.shortcut}</kbd> : null}
                     {item.checked ? <Icon className="aw-menu__check" name="check" /> : null}
                   </button>

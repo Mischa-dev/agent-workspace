@@ -74,7 +74,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   const detail = useQuery({ queryKey: whiteboardKeys.detail(whiteboardId), queryFn: () => getWhiteboard(whiteboardId) })
   // The scene loads once; after that the canvas keeps itself current.
   const scene = useQuery({
-    queryKey: ['whiteboard-scene', whiteboardId],
+    queryKey: whiteboardKeys.scene(whiteboardId),
     queryFn: () => getScene(whiteboardId),
     staleTime: Infinity,
     gcTime: 0,

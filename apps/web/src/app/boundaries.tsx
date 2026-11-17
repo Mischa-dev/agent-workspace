@@ -11,6 +11,7 @@ import { MobileNavigationProvider } from '../shell/MobileNavigationProvider'
 import { reportError } from '../telemetry/reportErrors'
 import { Button, PageSkeleton, ToastViewport } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
+import { legacyPathOf } from './href'
 
 /** Around every route: the crash screen, the phone drawer and the toasts. */
 export function RootLayout() {
@@ -84,7 +85,7 @@ function PublicRouteFallback() {
 function AuthenticatedRouteFallback() {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
-  const { pathname } = useLocation()
+  const pathname = legacyPathOf(useLocation().pathname)
   const projects = useProjects()
   const project =
     projects.data?.projects.find((candidate) => candidate.id === projectId) ??

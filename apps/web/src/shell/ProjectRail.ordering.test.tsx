@@ -15,6 +15,7 @@ import { ProjectRail } from './ProjectRail'
 vi.mock('../auth/session', () => ({
   clearAuthenticatedQueryCache: vi.fn(),
   logout: vi.fn(),
+  useAuthenticatedSession: () => ({ organizations: [{ id: 'org-1', name: 'Mischa', slug: 'mischa', role: 'owner' }] }),
 }))
 
 vi.mock('../projects/hooks', () => ({

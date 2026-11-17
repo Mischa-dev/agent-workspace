@@ -573,7 +573,7 @@ function SaveProjectTemplateDialog({ defaultName, onClose, projectId }: { defaul
     setError(null)
     try {
       const template = await saveAsProjectTemplate(projectId, { name: name.trim(), description }, idempotencyKey.current)
-      void queryClient.invalidateQueries({ queryKey: ['organization', template.organizationId, 'project-templates'] })
+      void queryClient.invalidateQueries({ queryKey: viewKeys.projectTemplateLists(template.organizationId) })
       showToast({ tone: 'success', title: `${template.name} saved`, description: 'Pick it when you create a project.' })
       onClose()
     } catch (reason) {

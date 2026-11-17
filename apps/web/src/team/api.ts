@@ -101,6 +101,10 @@ export function replaceInvitation(
 }
 
 export type MemberCandidate = { actorId: string; actorKind: string; displayName: string; handle: string }
+export const teamKeys = {
+  memberCandidates: (projectId: string) => ['member-candidates', projectId] as const,
+}
+
 export function listMemberCandidates(projectId: string) {
   return requestJson<MemberCandidate[]>(`/api/v1/projects/${projectId}/member-candidates`)
 }

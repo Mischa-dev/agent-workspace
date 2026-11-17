@@ -11,7 +11,19 @@
 
 import { origins } from '../api/client'
 
-type Answer = { apiOrigin?: unknown; liveOrigin?: unknown } | null
+type Answer = { apiOrigin?: unknown; liveOrigin?: unknown; signIn?: { methods?: unknown } } | null
+
+/**
+ * What the server said about itself at start (W1.38), beyond where it
+ * answers: the ways in it offers. Unknown (null) with no answer, so a reader
+ * falls back to asking the server as it always did.
+ */
+export const started: { signInMethods: readonly string[] | null } = { signInMethods: null }
+
+/** Whether the server offers this way in; true while it isn't known. */
+export function offersSignIn(method: string) {
+  return started.signInMethods?.includes(method) ?? true
+}
 
 // A static host may serve the file with any type, and a missing one as the
 // app's index.html: whatever doesn't parse is no answer.
@@ -40,6 +52,8 @@ export async function load(): Promise<{ apiOrigin: string | null; liveOrigin: st
   origins.api = api ?? undefined
   origins.live = live ?? api ?? undefined
   origins.csrf = api ? csrfFrom(api) : undefined
+  const methods = answer?.signIn?.methods
+  started.signInMethods = Array.isArray(methods) ? methods.filter((method): method is string => typeof method === 'string') : null
   return { apiOrigin: api, liveOrigin: live }
 }
 
