@@ -709,6 +709,21 @@ async fn delete_in_scope(
             return Ok(None);
         }
     }
+    // Repository mirrors and worktrees live on disk by repository id, which
+    // the rows below are the only record of: remove them first, so a retry
+    // after a failure here still finds the ids. Nobody can use them now;
+    // the workspace is past its date and its row is locked.
+    let repositories = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository.id FROM repositories repository \
+         JOIN projects project ON project.id = repository.project_id \
+         WHERE project.organization_id = $1",
+    )
+    .bind(workspace)
+    .fetch_all(&mut *connection)
+    .await?;
+    for repository in repositories {
+        crate::git_runtime::remove_repository_data(&state.config.data_root, repository).await?;
+    }
     sqlx::query("SELECT set_config('aw.workspace_delete', $1, true)")
         .bind(workspace.to_string())
         .execute(&mut *connection)
