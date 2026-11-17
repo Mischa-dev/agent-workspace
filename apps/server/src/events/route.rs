@@ -50,6 +50,12 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
     ("message.created", "A message was posted"),
     ("record.created", "A record was added to a collection"),
     ("record.updated", "A record in a collection changed"),
+    ("page.updated", "A page was saved as a new version"),
+    ("sheet.updated", "A sheet's cells, tabs or name changed"),
+    (
+        "whiteboard.updated",
+        "A whiteboard was saved as a new version",
+    ),
 ];
 
 pub fn is_event_type(value: &str) -> bool {
@@ -89,6 +95,13 @@ pub struct Subject {
     pub record_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection_id: Option<Uuid>,
+    /// A page, sheet or whiteboard (K3.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whiteboard_id: Option<Uuid>,
     /// For task.updated and record.updated: what changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed_fields: Vec<String>,
@@ -136,6 +149,9 @@ fn thing_of(event_type: &str, subject: &Subject) -> Option<ThingRef> {
         Some("pull_request") => thing("pull_request", subject.pull_request_id),
         Some("record") => thing("record", subject.record_id),
         Some("task") => thing("task", subject.work_item_id),
+        Some("page") => thing("page", subject.page_id),
+        Some("sheet") => thing("sheet", subject.sheet_id),
+        Some("whiteboard") => thing("whiteboard", subject.whiteboard_id),
         _ => None,
     }
 }
@@ -201,6 +217,23 @@ async fn heard(
                 ..Subject::default()
             },
         )],
+        // A page, sheet or board kept as a new version (K3.5): one per
+        // version, so a redelivered event never fires twice.
+        "page.updated" | "sheet.updated" | "whiteboard.updated" => {
+            let version = logged.thing_version.unwrap_or_default();
+            let mut subject = Subject::default();
+            match event_type {
+                "page.updated" => subject.page_id = Some(thing),
+                "sheet.updated" => subject.sheet_id = Some(thing),
+                _ => subject.whiteboard_id = Some(thing),
+            }
+            vec![event(
+                event_type,
+                format!("{event_type}:{thing}:{version}"),
+                logged.actor_account_id,
+                subject,
+            )]
+        }
         "task.created" => vec![event(
             event_type,
             format!("task.created:{thing}"),

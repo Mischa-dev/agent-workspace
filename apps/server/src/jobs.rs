@@ -397,8 +397,6 @@ pub fn default_registry() -> JobRegistry {
     crate::files::register_jobs(&mut registry);
     crate::packages::directory::register_jobs(&mut registry);
     crate::link_previews::register_jobs(&mut registry);
-    crate::things::backfill::register_jobs(&mut registry);
-    crate::links::register_jobs(&mut registry);
     crate::repositories::register_jobs(&mut registry);
     crate::workspace::lifecycle::register_jobs(&mut registry);
     crate::tenancy::backfill::register_jobs(&mut registry);

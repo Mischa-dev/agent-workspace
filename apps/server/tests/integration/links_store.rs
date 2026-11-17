@@ -249,18 +249,16 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
         .execute(pool)
         .await
         .expect("clear");
-    let added = agent_workspace_server::links::copy_all(pool)
-        .await
-        .expect("copy");
+    let copy_all = || async {
+        sqlx::query_scalar::<_, i64>("SELECT links_copy_all()")
+            .fetch_one(pool)
+            .await
+            .expect("copy")
+    };
+    let added = copy_all().await;
     assert_eq!(links(pool).await, stored);
     assert_eq!(usize::try_from(added).expect("count"), stored.len());
-    assert_eq!(
-        agent_workspace_server::links::copy_all(pool)
-            .await
-            .expect("again"),
-        0,
-        "a second copy adds nothing"
-    );
+    assert_eq!(copy_all().await, 0, "a second copy adds nothing");
 
     // Taking each away takes its link.
     call(

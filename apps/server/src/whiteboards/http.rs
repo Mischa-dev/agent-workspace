@@ -393,7 +393,7 @@ async fn write_scene_http(
     let scene_seq = store::lock(&mut transaction, id).await?;
     // A big removal (clearing the canvas) is saved first, so it can be undone.
     let removing = parsed.iter().filter(|element| element.is_deleted).count();
-    store::save_revision(
+    let saved_revision = store::save_revision(
         &mut transaction,
         &caller,
         id,
@@ -402,6 +402,9 @@ async fn write_scene_http(
     )
     .await?;
     let outcome = store::write_elements(&mut transaction, &caller, id, scene_seq, parsed).await?;
+    if let Some(revision) = saved_revision {
+        store::updated(&mut transaction, &caller, id, revision).await?;
+    }
     transaction.commit().await?;
     Ok(Json(SceneWriteResponse {
         outcome,

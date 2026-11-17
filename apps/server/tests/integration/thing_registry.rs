@@ -1,13 +1,11 @@
 //! K3.10: the thing registry. The silent, costly failures: a `things` row
 //! that drifts from its kind's row (an old title, a missed archive, a
-//! deleted thing still live), a backfill that stops halfway and never ends
+//! deleted thing still live), a conversion that leaves rows or parents out
 //! or copies a row twice, and a task's record showing as a `record`.
 
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
-
-use agent_workspace_server::things::backfill;
 
 use super::{
     agent_interface::{connect_app, initialize, send, tool},
@@ -122,7 +120,7 @@ async fn counts_match(pool: &PgPool) {
 }
 
 #[tokio::test]
-async fn every_kind_keeps_its_row_in_step_and_the_backfill_resumes() {
+async fn every_kind_keeps_its_row_in_step_and_converts_once() {
     let Some(setup) = setup("k3_10_things").await else {
         return;
     };
@@ -372,8 +370,8 @@ async fn every_kind_keeps_its_row_in_step_and_the_backfill_resumes() {
             .expect("revision");
     assert_eq!(row(pool, &subtask).await.version, revision);
 
-    // The backfill: forget everything, as before the registry, then copy it
-    // back a little at a time, stopping halfway.
+    // The conversion the deploy runs once: forget everything, as before the
+    // registry, then convert it all back from the sources, parents too.
     let before = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM things")
         .fetch_one(pool)
         .await
@@ -382,48 +380,18 @@ async fn every_kind_keeps_its_row_in_step_and_the_backfill_resumes() {
         .execute(pool)
         .await
         .expect("forget");
-    let first = backfill::run(pool, 2, 3).await.expect("first part");
-    assert!(!first.done);
-    assert!(first.copied > 0 && first.copied <= 6, "{first:?}");
-    assert!(!backfill::is_done(pool).await.expect("done?"));
-    let rest = backfill::run(pool, 2, usize::MAX).await.expect("the rest");
-    assert!(rest.done);
-    assert!(backfill::is_done(pool).await.expect("done?"));
-    // Stopped after the last copy but before the steps after it: the
-    // copy's markers are all set, yet the next run still sets parents and
-    // queues the links copy.
-    sqlx::query("DELETE FROM things_backfill WHERE source = 'thing_source_finished'")
-        .execute(pool)
+    let converted = sqlx::query_scalar::<_, i64>("SELECT things_convert_all()")
+        .fetch_one(pool)
         .await
-        .expect("forget the finish");
-    sqlx::query("DELETE FROM background_jobs WHERE kind = 'links.backfill'")
-        .execute(pool)
-        .await
-        .expect("forget the links job");
-    sqlx::query("UPDATE things SET access_parent_id = NULL WHERE kind = 'message'")
-        .execute(pool)
-        .await
-        .expect("forget parents");
-    assert!(!backfill::is_done(pool).await.expect("done?"));
-    assert!(
-        backfill::run(pool, 2, usize::MAX)
-            .await
-            .expect("finish")
-            .done
-    );
-    assert!(backfill::is_done(pool).await.expect("done?"));
-    let (orphans, queued) = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT (SELECT count(*) FROM things WHERE kind = 'message' AND access_parent_id IS NULL), \
-                (SELECT count(*) FROM background_jobs WHERE kind = 'links.backfill')",
+        .expect("convert");
+    assert!(converted > 0);
+    let orphans = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM things WHERE kind = 'message' AND access_parent_id IS NULL",
     )
     .fetch_one(pool)
     .await
-    .expect("finished");
-    assert_eq!(
-        (orphans, queued),
-        (0, 1),
-        "parents set and the links copy queued"
-    );
+    .expect("orphans");
+    assert_eq!(orphans, 0, "parents set");
     let after = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM things")
         .fetch_one(pool)
         .await
@@ -440,15 +408,19 @@ async fn every_kind_keeps_its_row_in_step_and_the_backfill_resumes() {
         Some(task.parse().expect("id"))
     );
     assert_eq!(row(pool, &subtask).await.kind, "task");
-    // Done is done: another run copies nothing.
-    let again = backfill::run(pool, 2, usize::MAX).await.expect("again");
+    // Converting again changes nothing.
+    sqlx::query_scalar::<_, i64>("SELECT things_convert_all()")
+        .fetch_one(pool)
+        .await
+        .expect("again");
     assert_eq!(
-        again,
-        backfill::Progress {
-            copied: 0,
-            done: true
-        }
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM things")
+            .fetch_one(pool)
+            .await
+            .expect("count"),
+        after
     );
+    counts_match(pool).await;
 }
 
 /// K3.11: messages, milestones and the rest. A removed message leaves a
@@ -521,8 +493,10 @@ async fn messages_and_milestones_are_things_and_a_removed_message_is_a_tombstone
         .execute(pool)
         .await
         .expect("forget");
-    let done = backfill::run(pool, 3, usize::MAX).await.expect("backfill");
-    assert!(done.done);
+    sqlx::query_scalar::<_, i64>("SELECT things_convert_all()")
+        .fetch_one(pool)
+        .await
+        .expect("convert");
     counts_match(pool).await;
     let tombstone = row(pool, &message).await;
     assert!(tombstone.deleted && tombstone.title.is_none());

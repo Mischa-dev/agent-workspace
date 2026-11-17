@@ -311,6 +311,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the server's own key history, not any workspace's",
     ),
     (
+        "mcp_ended_sessions",
+        "digests of MCP session ids their clients ended; a session belongs to a connection, not a workspace (K5.7)",
+    ),
+    (
         "server_instances",
         "the server processes sharing this database and their heartbeats (K5.2)",
     ),
@@ -321,10 +325,6 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "thing_kinds",
         "the kinds of thing the server knows: a kind is the server's, not a workspace's (K3.10)",
-    ),
-    (
-        "things_backfill",
-        "how far the server's registry backfill got per source table",
     ),
     (
         "user_email_addresses",

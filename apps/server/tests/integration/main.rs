@@ -40,6 +40,7 @@ mod built_modules;
 mod cluster;
 mod cluster_support;
 mod compat_clients;
+mod content_events;
 mod direct_conversations;
 mod domain_events;
 mod event_log;
