@@ -5,6 +5,7 @@
 
 pub mod documents;
 pub mod ephemeral;
+pub mod follow;
 mod hub;
 pub mod presence;
 mod subscriptions;

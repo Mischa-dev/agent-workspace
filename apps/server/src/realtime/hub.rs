@@ -61,7 +61,7 @@ pub struct RealtimeEvent {
 }
 
 #[derive(Clone, Debug)]
-enum RealtimeDelivery {
+pub(super) enum RealtimeDelivery {
     Durable {
         envelope: OutboxEnvelope,
         /// Who hears it, from the log's audience (K5.8).
@@ -244,7 +244,7 @@ impl RealtimeHub {
         let _ = self.session_revocations.send(session_id);
     }
 
-    fn subscribe(&self) -> broadcast::Receiver<RealtimeDelivery> {
+    pub(super) fn subscribe(&self) -> broadcast::Receiver<RealtimeDelivery> {
         self.sender.subscribe()
     }
 
@@ -789,7 +789,7 @@ async fn serve_socket(
 
 /// What a protocol 2 connection keeps for presence, typing and watching.
 #[derive(Default)]
-struct LiveState {
+pub(super) struct LiveState {
     watched: std::collections::BTreeSet<super::documents::DocumentRef>,
     last_typing: Option<tokio::time::Instant>,
 }
@@ -901,7 +901,7 @@ async fn client_frame(
 
 /// The protocol 2 frames a live signal becomes for this connection, routed
 /// by its set and the documents it watches, with no query.
-fn live_frames(
+pub(super) fn live_frames(
     frame: &super::ephemeral::EphemeralFrame,
     subscription: &SubscriptionSet,
     live: &LiveState,
@@ -1004,8 +1004,16 @@ async fn subscribe(
     state: &AppState,
     principal: &AuthenticatedActor,
 ) -> Result<SubscriptionSet, AppError> {
-    let account = principal.actor_id;
-    let kind = principal.actor_kind.clone();
+    subscription_for(state, principal.actor_id, &principal.actor_kind).await
+}
+
+/// What `account` may hear now, by the realtime policy.
+pub(super) async fn subscription_for(
+    state: &AppState,
+    account: Uuid,
+    kind: &str,
+) -> Result<SubscriptionSet, AppError> {
+    let kind = kind.to_owned();
     subscriptions::compute(&state.pool, account, |role, space| {
         realtime_policy_allows(account, &kind, role, true, space, None).unwrap_or(false)
     })
@@ -1019,7 +1027,7 @@ const RECONNECT_AFTER_MS: u64 = 1_000;
 const REPLAY_BATCH: i64 = 500;
 
 /// The account an `account.access_changed` signal is about.
-fn access_changed(event: &crate::events::LoggedEvent) -> Option<Uuid> {
+pub(super) fn access_changed(event: &crate::events::LoggedEvent) -> Option<Uuid> {
     (event.event_type == crate::events::catalog::ACCOUNT_ACCESS_CHANGED.name)
         .then_some(event.audience_account_id)
         .flatten()

@@ -1857,3 +1857,120 @@ async fn document_update_reaches_watchers_only() {
     }
     cluster.finish().await;
 }
+
+/// K5.9 `follow`: an account's stream catches up from a position and goes
+/// on live with no gap and no repeat while writers keep writing on both
+/// instances; it carries only what the account may hear; a start too far
+/// back asks for a resync.
+#[tokio::test]
+async fn follow_catches_up_then_goes_live_without_gaps() {
+    use agent_workspace_server::realtime::follow::{FollowItem, FollowSpec, follow};
+    use futures_util::StreamExt;
+
+    let Some(cluster) = cluster("k5_9_follow", 2).await else {
+        return;
+    };
+    let project = log_project(&cluster).await;
+    let owner = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM project_memberships WHERE project_id = $1",
+    )
+    .bind(project)
+    .fetch_one(&cluster.pool)
+    .await
+    .expect("owner");
+    // A project the owner has left: its events never reach the stream.
+    let a = cluster.instance(0);
+    let browser = a.login("owner").await;
+    let (status, other) = a
+        .send(browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("cluster-else"),
+            json!({"organizationId": cluster.organization_id, "key": "ELSE", "name": "Elsewhere"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    let elsewhere: Uuid = other["id"].as_str().expect("project").parse().expect("id");
+    sqlx::query("UPDATE project_memberships SET enabled = false WHERE project_id = $1")
+        .bind(elsewhere)
+        .execute(&cluster.pool)
+        .await
+        .expect("leave");
+    let write = |instance: usize, project: Uuid, count: usize| {
+        let pool = cluster.instance(instance).state().pool.clone();
+        async move {
+            let mut ids = Vec::new();
+            for _ in 0..count {
+                let mut transaction = pool.begin().await.expect("begin");
+                ids.push(stage(&mut transaction, project).await);
+                transaction.commit().await.expect("commit");
+            }
+            ids
+        }
+    };
+    // Some before the stream starts, after the position it starts from.
+    let start = {
+        let mut connection = cluster.pool.acquire().await.expect("connection");
+        events::head(&mut connection).await.expect("head")
+    };
+    let mut written = write(0, project, 50).await;
+    let task_updates = std::sync::Arc::new(|event: &events::LoggedEvent| {
+        event.event_type == catalog::TASK_UPDATED.name
+    });
+    let mut stream = Box::pin(follow(
+        cluster.instance(1).state().clone(),
+        FollowSpec {
+            account_id: owner,
+            actor_kind: "human".to_owned(),
+            filter: task_updates.clone(),
+        },
+        start,
+    ));
+    // The rest while it catches up, on both instances, with others' events
+    // mixed in.
+    let writers = join_all([
+        write(0, project, 100),
+        write(1, project, 100),
+        write(0, elsewhere, 50),
+    ]);
+    let reader = async {
+        let mut seen = Vec::new();
+        while seen.len() < 250 {
+            match tokio::time::timeout(Duration::from_secs(30), stream.next()).await {
+                Ok(Some(Ok(FollowItem::Event(event)))) => {
+                    assert_eq!(event.space_id, Some(project), "only its own project");
+                    seen.push((event.position, event.id));
+                }
+                Ok(Some(Ok(FollowItem::Heartbeat | FollowItem::Live(_)))) => {}
+                other => panic!("the stream stopped: {other:?} after {}", seen.len()),
+            }
+        }
+        seen
+    };
+    let (more, seen) = tokio::join!(writers, reader);
+    written.extend(more.into_iter().take(2).flatten());
+    let ids = seen.iter().map(|(_, id)| *id).collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 250, "no repeats");
+    assert_eq!(ids, written.into_iter().collect::<HashSet<_>>(), "no gaps");
+    assert!(
+        seen.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "in log order"
+    );
+
+    // Too far back: refetch, then follow from the head.
+    let mut stale = Box::pin(follow(
+        cluster.instance(0).state().clone(),
+        FollowSpec {
+            account_id: owner,
+            actor_kind: "human".to_owned(),
+            filter: task_updates,
+        },
+        -1,
+    ));
+    match stale.next().await {
+        Some(Ok(FollowItem::Resync { position })) => assert!(position > start),
+        other => panic!("expected a resync: {other:?}"),
+    }
+    assert!(stale.next().await.is_none(), "the stream ends after it");
+    cluster.finish().await;
+}
