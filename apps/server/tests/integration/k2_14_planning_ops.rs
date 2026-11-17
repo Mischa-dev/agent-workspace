@@ -199,7 +199,8 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
         .collect::<Vec<_>>();
     let created = call(
         "task_create_many",
-        json!({"projectId": "PLN", "tasks": tasks, "createMissingLabels": true}),
+        json!({"projectId": "PLN", "tasks": tasks, "createMissingLabels": true,
+               "clientRequestId": "k2-14-plan"}),
     )
     .await;
     let created = ok(&created);
@@ -226,6 +227,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
         json!({
             "projectId": "PLN",
             "tasks": (0..31).map(|index| json!({"title": format!("Loose {index}")})).collect::<Vec<_>>(),
+            "clientRequestId": "k2-14-loose",
         }),
     )
     .await;
@@ -345,7 +347,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
             {"ref": "parent", "title": "Parent"},
             {"ref": "a", "parentRef": "parent", "title": "Child a"},
             {"ref": "b", "parentRef": "parent", "title": "Child b", "blockedByRefs": ["a"]},
-        ]}),
+        ], "clientRequestId": "k2-14-family"}),
     )
     .await;
     let parent = ok(&family)["tasks"][0]["key"]
