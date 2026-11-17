@@ -241,7 +241,10 @@ async fn group_members_change_who_can_see_everything() {
 
     // Only Rook hears that he was removed, with no conversation scope.
     let events = sqlx::query_as::<_, (Option<Uuid>, Uuid, Value)>(
-        "SELECT conversation_id, resource_id, payload FROM outbox_events WHERE event_type = 'conversation.member.removed'",
+        &format!(
+"SELECT conversation_id, resource_id, payload FROM {n} outbox WHERE event_type = 'conversation.member.removed'",
+ n = crate::support::NOTICES
+),
     )
     .fetch_all(&setup.pool)
     .await

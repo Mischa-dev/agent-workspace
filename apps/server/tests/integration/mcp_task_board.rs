@@ -897,7 +897,10 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
     // Each live event names the neighbours of the finished order, so a board
     // applying them in turn ends up the same.
     let placement = sqlx::query_scalar::<_, Value>(
-        "SELECT payload -> 'placement' FROM outbox_events WHERE event_type = 'work_item.updated' AND resource_id = $1 ORDER BY created_at DESC, event_id DESC LIMIT 1",
+        &format!(
+"SELECT payload -> 'placement' FROM {n} outbox WHERE event_type = 'work_item.updated' AND resource_id = $1 ORDER BY created_at DESC, event_id DESC LIMIT 1",
+ n = crate::support::NOTICES
+),
     )
     .bind(tasks[0])
     .fetch_one(&setup.pool)

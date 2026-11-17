@@ -45,7 +45,10 @@ async fn write(
 
 async fn collection_events(setup: &Setup, collection: &str) -> Vec<Value> {
     sqlx::query_scalar::<_, Value>(
-        "SELECT payload FROM outbox_events WHERE event_type = 'collection.updated' AND payload->>'collectionId' = $1 ORDER BY event_cursor",
+        &format!(
+"SELECT payload FROM {n} outbox WHERE event_type = 'collection.updated' AND payload->>'collectionId' = $1 ORDER BY event_cursor",
+ n = crate::support::NOTICES
+),
     )
     .bind(collection)
     .fetch_all(&setup.pool)

@@ -1,4 +1,4 @@
-use std::{process, time::Duration};
+use std::time::Duration;
 
 use axum::{
     extract::{
@@ -9,9 +9,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
-use sqlx::{FromRow, PgPool};
+use sqlx::FromRow;
 use tokio::{
-    sync::{broadcast, watch},
+    sync::broadcast,
     time::{MissedTickBehavior, interval},
 };
 use uuid::Uuid;
@@ -20,7 +20,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, load_authenticated_actor, origin_is_allowed},
     error::AppError,
-    outbox::{self, OUTBOX_SCHEMA_VERSION, OutboxEnvelope, OutboxFailureKind, OutboxPublisher},
+    outbox::{OUTBOX_SCHEMA_VERSION, OutboxEnvelope, OutboxPublisher},
     policy::{
         Action, Decision, Membership, MembershipRole, ProjectScope, Resource, RoleGrant, Subject,
         authorize,
@@ -32,9 +32,6 @@ const REALTIME_RESYNC_CLOSE_REASON: &str = "realtime lag; reconnect and refetch"
 const MAX_REALTIME_FRAME_BYTES: usize = 70_000;
 const MAX_REALTIME_CLIENT_FRAME_BYTES: usize = 4_096;
 const MAX_EPHEMERAL_PAYLOAD_BYTES: usize = 65_536;
-const OUTBOX_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const OUTBOX_BATCH_SIZE: i64 = 32;
-const OUTBOX_LEASE_SECONDS: i32 = 30;
 
 /// Compatibility event for the M0/M1 provider stream.
 ///
@@ -180,12 +177,6 @@ impl RealtimeHub {
     /// The tail skipped ahead: every socket here closes to refetch.
     pub fn resync(&self) {
         let _ = self.sender.send(RealtimeDelivery::Resync);
-    }
-
-    /// Checks an outbox event's frame without sending it: the outbox
-    /// publisher keeps side effects only, and sockets hear the log (K5.5).
-    pub fn validate(&self, envelope: &OutboxEnvelope) -> Result<(), RealtimePublishError> {
-        checked_delivery(envelope)?.to_wire_json().map(drop)
     }
 
     /// A `message.delta` to this instance's sockets only; use
@@ -666,245 +657,6 @@ fn parse_membership_role(value: &str) -> Result<MembershipRole, AppError> {
         "viewer" => Ok(MembershipRole::Viewer),
         "worker" => Ok(MembershipRole::Worker),
         _ => Err(AppError::Internal("unknown Project membership role")),
-    }
-}
-
-pub fn outbox_worker_id() -> String {
-    format!("outbox:{}:{}", process::id(), Uuid::now_v7().simple())
-}
-
-/// Publishes committed outbox rows until shutdown is requested.
-///
-/// Since K5.5 publishing means side effects only (notifications, routing):
-/// sockets hear the same event, with the same id, from every instance's
-/// tail of the log. Claim transactions only hold a short lease, and
-/// `published_at` is recorded in a later transaction, so a crash between
-/// them repeats the side effects, which dedupe on the event id.
-pub async fn run_outbox_publisher(
-    pool: PgPool,
-    realtime: RealtimeHub,
-    worker_id: String,
-    mut shutdown: watch::Receiver<bool>,
-) -> Result<(), AppError> {
-    if !valid_worker_id(&worker_id) {
-        return Err(AppError::Internal("invalid outbox worker identity"));
-    }
-
-    let mut poll = interval(OUTBOX_POLL_INTERVAL);
-    poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    loop {
-        if *shutdown.borrow() {
-            break;
-        }
-        tokio::select! {
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    break;
-                }
-            }
-            _ = poll.tick() => {
-                if let Err(error) = publish_ready_outbox_batch(&pool, &realtime, &worker_id).await {
-                    tracing::error!(
-                        error_category = error.log_category(),
-                        "outbox publisher could not claim a batch"
-                    );
-                }
-            }
-        }
-    }
-    tracing::info!("outbox publisher stopped");
-    Ok(())
-}
-
-fn valid_worker_id(worker_id: &str) -> bool {
-    !worker_id.is_empty()
-        && worker_id.chars().count() <= outbox::MAX_OUTBOX_WORKER_ID_CHARACTERS
-        && worker_id.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
-        })
-}
-
-/// Checks one batch of ready outbox events and writes the notifications
-/// and routing they cause (sockets hear them from the tail, K5.5). Public
-/// so tests can drain the outbox without the poll loop.
-pub async fn publish_ready_outbox_batch(
-    pool: &PgPool,
-    realtime: &RealtimeHub,
-    worker_id: &str,
-) -> Result<usize, AppError> {
-    let mut transaction = crate::db::scoped_tx(pool).await?;
-    let claims = outbox::claim_ready(
-        &mut transaction,
-        worker_id,
-        OUTBOX_BATCH_SIZE,
-        OUTBOX_LEASE_SECONDS,
-    )
-    .await?;
-    transaction.commit().await?;
-    let claim_count = claims.len();
-
-    for claim in claims {
-        let envelope = match claim.envelope() {
-            Ok(envelope) => envelope,
-            Err(_) => {
-                record_outbox_failure(pool, &claim, worker_id, OutboxFailureKind::MalformedEvent)
-                    .await;
-                continue;
-            }
-        };
-
-        if let Err(error) = realtime.validate(&envelope) {
-            tracing::warn!(
-                event_id = %claim.event_id(),
-                event_cursor = claim.event_cursor(),
-                error_category = %error,
-                "outbox event could not be published"
-            );
-            record_outbox_failure(pool, &claim, worker_id, OutboxFailureKind::Serialization).await;
-            continue;
-        }
-
-        let mut transaction = match crate::db::scoped_tx(pool).await {
-            Ok(transaction) => transaction,
-            Err(error) => {
-                tracing::error!(
-                    event_id = %claim.event_id(),
-                    event_cursor = claim.event_cursor(),
-                    error_category = AppError::from(error).log_category(),
-                    "outbox publication acknowledgement could not start"
-                );
-                continue;
-            }
-        };
-        let side_effects = match notify_people(&mut transaction, &claim).await {
-            Ok(()) => queue_event_route(&mut transaction, &claim).await,
-            Err(error) => Err(error),
-        };
-        if let Err(error) = side_effects {
-            tracing::error!(
-                event_id = %claim.event_id(),
-                event_cursor = claim.event_cursor(),
-                error_category = error.log_category(),
-                "outbox event side effects failed; it will be retried"
-            );
-            let _ = transaction.rollback().await;
-            record_outbox_failure(
-                pool,
-                &claim,
-                worker_id,
-                OutboxFailureKind::SideEffectsUnavailable,
-            )
-            .await;
-            continue;
-        }
-        match outbox::mark_published(&mut transaction, claim.event_id(), worker_id).await {
-            Ok(()) => {
-                if let Err(error) = transaction.commit().await {
-                    tracing::error!(
-                        event_id = %claim.event_id(),
-                        event_cursor = claim.event_cursor(),
-                        error_category = AppError::from(error).log_category(),
-                        "outbox publication acknowledgement could not commit"
-                    );
-                    record_outbox_failure(
-                        pool,
-                        &claim,
-                        worker_id,
-                        OutboxFailureKind::PublicationUnavailable,
-                    )
-                    .await;
-                }
-            }
-            Err(error) => {
-                tracing::error!(
-                    event_id = %claim.event_id(),
-                    event_cursor = claim.event_cursor(),
-                    error_category = error.log_category(),
-                    "outbox publication acknowledgement failed"
-                );
-                let _ = transaction.rollback().await;
-                record_outbox_failure(
-                    pool,
-                    &claim,
-                    worker_id,
-                    OutboxFailureKind::PublicationUnavailable,
-                )
-                .await;
-            }
-        }
-    }
-
-    Ok(claim_count)
-}
-
-/// Writes the notifications an event causes, in the transaction that marks
-/// it published. A failure here fails the acknowledgement too, so the event
-/// is retried with the outbox's backoff instead of losing its inbox rows,
-/// pushes and emails for good. Retrying is safe: notifications dedupe on
-/// their key, and browsers on the event id.
-async fn notify_people(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    claim: &outbox::ClaimedOutboxEvent,
-) -> Result<(), AppError> {
-    let Ok(payload) = claim.decode() else {
-        return Ok(());
-    };
-    crate::notifications::fan_out(transaction, claim.event_id(), claim.project_id(), &payload)
-        .await
-        .map(|_| ())
-}
-
-/// Queues the job that hands an event to outgoing webhooks and automation
-/// rules, in the acknowledging transaction. Like notifications, a failure
-/// keeps the event unpublished so it is retried; the route job dedupes on
-/// its unique key.
-async fn queue_event_route(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    claim: &outbox::ClaimedOutboxEvent,
-) -> Result<(), AppError> {
-    crate::events::queue_route(transaction, claim)
-        .await
-        .map(|_| ())
-}
-
-async fn record_outbox_failure(
-    pool: &PgPool,
-    claim: &outbox::ClaimedOutboxEvent,
-    worker_id: &str,
-    failure: OutboxFailureKind,
-) {
-    let mut transaction = match crate::db::scoped_tx(pool).await {
-        Ok(transaction) => transaction,
-        Err(error) => {
-            tracing::error!(
-                event_id = %claim.event_id(),
-                event_cursor = claim.event_cursor(),
-                error_category = AppError::from(error).log_category(),
-                "outbox failure record could not start"
-            );
-            return;
-        }
-    };
-    match outbox::record_failure(&mut transaction, claim, worker_id, failure).await {
-        Ok(()) => {
-            if let Err(error) = transaction.commit().await {
-                tracing::error!(
-                    event_id = %claim.event_id(),
-                    event_cursor = claim.event_cursor(),
-                    error_category = AppError::from(error).log_category(),
-                    "outbox failure record could not commit"
-                );
-            }
-        }
-        Err(error) => {
-            tracing::error!(
-                event_id = %claim.event_id(),
-                event_cursor = claim.event_cursor(),
-                error_category = error.log_category(),
-                "outbox failure record failed"
-            );
-            let _ = transaction.rollback().await;
-        }
     }
 }
 
