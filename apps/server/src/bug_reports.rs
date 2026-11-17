@@ -1348,9 +1348,7 @@ async fn pause_for_the_day(
         pull_request_id: None,
         detail: json!({
             "title": "A form you made paused itself",
-            "preview": format!(
-                "It took {limit} answers today, its daily limit. Turn it on again to take more."
-            ),
+            "dailyLimit": limit,
             "href": format!("/projects/{}/collections/{collection_id}", link.project_id),
             "linkId": link.id,
         }),

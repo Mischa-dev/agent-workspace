@@ -2217,6 +2217,18 @@ fn view(row: NotificationRow) -> NotificationView {
                 (format!("Suggested edits to {page}"), None)
             }
         }
+        // Its words come from the limit it hit, not stored text (rule 10).
+        kind::FORM_PAUSED => (
+            "A form you made paused itself".to_owned(),
+            row.detail
+                .get("dailyLimit")
+                .and_then(serde_json::Value::as_i64)
+                .map(|limit| {
+                    format!(
+                        "It took {limit} answers today, its daily limit. Turn it on again to take more."
+                    )
+                }),
+        ),
         other => (
             row.detail
                 .get("title")

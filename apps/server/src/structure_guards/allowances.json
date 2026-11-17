@@ -232,7 +232,7 @@
     "modules/things.rs": 1,
     "notifications.rs": 1,
     "onboarding.rs": 1,
-    "projects.rs": 6,
+    "projects.rs": 5,
     "reactions.rs": 2,
     "recovery.rs": 1,
     "replies.rs": 2,
