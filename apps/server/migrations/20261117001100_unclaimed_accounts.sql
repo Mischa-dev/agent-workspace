@@ -23,10 +23,16 @@ CREATE TABLE account_claims (
     expires_at TIMESTAMPTZ NOT NULL,
     used_at TIMESTAMPTZ,
     revoked_at TIMESTAMPTZ,
+    -- The clientRequestId of the call that made it: a retry finds the
+    -- account again without the token, which is never stored.
+    request_id TEXT CHECK (char_length(request_id) BETWEEN 1 AND 200),
     CHECK (expires_at > created_at)
 );
 
 CREATE INDEX account_claims_account ON account_claims (account_id);
+CREATE UNIQUE INDEX account_claims_request
+    ON account_claims (workspace_id, created_by_actor_id, request_id)
+    WHERE request_id IS NOT NULL;
 CREATE INDEX account_claims_workspace ON account_claims (workspace_id, created_at DESC);
 
 -- Row security (the tenancy decision of 2026-11-16).

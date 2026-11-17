@@ -1535,11 +1535,17 @@
                               "type": "string"
                             },
                             "credential": {
-                              "description": "The bearer credential, shown only now.",
-                              "type": "string"
+                              "description": "The bearer credential, shown only in the answer that made the agent;\nabsent when a retry found the agent already made. A lost credential\ncan't be shown again: rotate it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "credentialExpiresAt": {
-                              "type": "string"
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "spaceId": {
                               "description": "The workspace's own space.",
@@ -1549,9 +1555,7 @@
                           "required": [
                             "accountId",
                             "connectionId",
-                            "spaceId",
-                            "credential",
-                            "credentialExpiresAt"
+                            "spaceId"
                           ],
                           "title": "AgentCreateView",
                           "type": "object"
@@ -1643,11 +1647,17 @@
                               "type": "string"
                             },
                             "credential": {
-                              "description": "The bearer credential, shown only now.",
-                              "type": "string"
+                              "description": "The bearer credential, shown only in the answer that made the agent;\nabsent when a retry found the agent already made. A lost credential\ncan't be shown again: rotate it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "credentialExpiresAt": {
-                              "type": "string"
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "spaceId": {
                               "description": "The workspace's own space.",
@@ -1657,9 +1667,7 @@
                           "required": [
                             "accountId",
                             "connectionId",
-                            "spaceId",
-                            "credential",
-                            "credentialExpiresAt"
+                            "spaceId"
                           ],
                           "title": "AgentCreateView",
                           "type": "object"
@@ -6737,13 +6745,15 @@
                               "type": "string"
                             },
                             "claimToken": {
-                              "description": "The claim token, shown only now. The person opens `/claim#<token>`.",
-                              "type": "string"
+                              "description": "The claim token, shown only in the answer that added them; absent\nwhen a retry found them already added. The person opens\n`/claim#<token>`.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             }
                           },
                           "required": [
                             "accountId",
-                            "claimToken",
                             "claimExpiresAt"
                           ],
                           "title": "PersonCreateView",
@@ -6837,13 +6847,15 @@
                               "type": "string"
                             },
                             "claimToken": {
-                              "description": "The claim token, shown only now. The person opens `/claim#<token>`.",
-                              "type": "string"
+                              "description": "The claim token, shown only in the answer that added them; absent\nwhen a retry found them already added. The person opens\n`/claim#<token>`.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             }
                           },
                           "required": [
                             "accountId",
-                            "claimToken",
                             "claimExpiresAt"
                           ],
                           "title": "PersonCreateView",

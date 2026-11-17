@@ -52,6 +52,12 @@ BEGIN
 END
 $$;
 
+-- A custom role in the way of a new starting role's key moves aside,
+-- before the checks below would refuse it.
+UPDATE workspace_roles
+SET key = left(key, 32) || '-custom'
+WHERE NOT built_in AND key IN ('guest', 'worker');
+
 ALTER TABLE workspace_roles
     ADD CONSTRAINT workspace_roles_base_role_check
         CHECK (base_role IN ('owner', 'admin', 'member', 'viewer', 'worker')),
@@ -130,11 +136,6 @@ CREATE TRIGGER workspace_roles_effective
 BEFORE INSERT OR UPDATE ON workspace_roles
 FOR EACH ROW
 EXECUTE FUNCTION workspace_roles_effective();
-
--- A custom role in the way of a new starting role's key moves aside.
-UPDATE workspace_roles
-SET key = left(key, 32) || '-custom'
-WHERE NOT built_in AND key IN ('guest', 'worker');
 
 CREATE OR REPLACE FUNCTION create_built_in_workspace_roles(target UUID)
 RETURNS void

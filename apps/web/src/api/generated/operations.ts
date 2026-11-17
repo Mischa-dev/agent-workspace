@@ -80,7 +80,7 @@ export type UnattributedUsageLine = { accountId: string; cost?: number | null; c
 
 export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
 
-export type AgentCreateOutput = { accountId: string; connectionId: string; credential: string; credentialExpiresAt: string; spaceId: string }
+export type AgentCreateOutput = { accountId: string; connectionId: string; credential?: string | null; credentialExpiresAt?: string | null; spaceId: string }
 
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
@@ -148,7 +148,7 @@ export type PackageExportOutput = { digest: string; package: Package }
 
 export type PersonCreateInput = { displayName: string; handle: string; roleId?: string | null }
 
-export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken: string }
+export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken?: string | null }
 
 export type RequestCancelInput = { requestId: string }
 

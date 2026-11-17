@@ -62,9 +62,13 @@ pub struct AgentCreateView {
     /// The workspace's own space.
     #[schemars(with = "String")]
     pub space_id: Uuid,
-    /// The bearer credential, shown only now.
-    pub credential: String,
-    pub credential_expires_at: String,
+    /// The bearer credential, shown only in the answer that made the agent;
+    /// absent when a retry found the agent already made. A lost credential
+    /// can't be shown again: rotate it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_expires_at: Option<String>,
 }
 
 impl Operation for AgentCreate {
@@ -72,7 +76,9 @@ impl Operation for AgentCreate {
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = Some(Perm::AgentsCreate);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // The answer carries the credential, which must not be stored for a
+    // replay: the connection keeps the request id itself.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const EMITS: &'static [&'static str] = &["project.membership.updated"];
     const TITLE: &'static str = "Make an agent in this workspace";
     const DESCRIPTION: &'static str = "Make an agent in this workspace with a role within \
@@ -136,7 +142,31 @@ impl Operation for AgentCreate {
         })?;
         let workspace_id = call.ctx.workspace_id;
         let caller = call.ctx.caller.clone();
+        let request_id = call.ctx.request_id.clone();
         let tx = call.tx().await?;
+        if let Some(request_id) = request_id.as_deref() {
+            let made = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+                "SELECT id, actor_id, project_id FROM external_agent_connections \
+                 WHERE workspace_id = $1 AND created_by_actor_id = $2 AND request_id = $3",
+            )
+            .bind(workspace_id)
+            .bind(caller.account_id)
+            .bind(request_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(AppError::from)?;
+            if let Some((connection_id, account_id, space_id)) = made {
+                call.mark_replayed(true);
+                call.audit_target("account", account_id, json!({ "replayed": true }));
+                return Ok(AgentCreateView {
+                    account_id,
+                    connection_id,
+                    space_id,
+                    credential: None,
+                    credential_expires_at: None,
+                });
+            }
+        }
         let (role, role_id) = engine::agent_role(tx, workspace_id, input.role_id.map(IdRef::id))
             .await?
             .ok_or_else(|| OpError::not_found("That role"))?;
@@ -230,6 +260,14 @@ impl Operation for AgentCreate {
             &scopes,
         )
         .await?;
+        if let Some(request_id) = request_id.as_deref() {
+            sqlx::query("UPDATE external_agent_connections SET request_id = $2 WHERE id = $1")
+                .bind(connection_id)
+                .bind(request_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(AppError::from)?;
+        }
         call.audit_target(
             "account",
             account_id,
@@ -244,8 +282,8 @@ impl Operation for AgentCreate {
             account_id,
             connection_id,
             space_id,
-            credential: credential.token,
-            credential_expires_at: credential.expires_at,
+            credential: Some(credential.token),
+            credential_expires_at: Some(credential.expires_at),
         })
     }
 }

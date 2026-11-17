@@ -187,6 +187,21 @@ async fn an_unclaimed_account_is_claimed_once_by_its_link() {
         .expect("claim token")
         .to_owned();
     let pool = world.pool();
+    // A retry finds the same account, without the token, which is stored
+    // nowhere (not even for the retry).
+    let (_, again) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route,
+            Some("add-nia"),
+            json!({ "displayName": "Nia Okafor", "handle": "nia" }),
+        ),
+    )
+    .await;
+    assert_eq!(again["value"]["accountId"], account.to_string(), "{again}");
+    assert!(again["value"].get("claimToken").is_none(), "{again}");
+    assert_secret_unstored(pool, &token).await;
     let (role, enabled, claimed) = sqlx::query_as::<_, (String, bool, bool)>(
         "SELECT membership.role, membership.enabled, users.claimed_at IS NOT NULL \
          FROM organization_memberships membership JOIN users ON users.actor_id = membership.actor_id \
@@ -444,6 +459,19 @@ async fn an_agent_made_at_workspace_level_starts_with_workspace_things_only() {
         .expect("credential")
         .to_owned();
     let pool = world.pool();
+    let (_, again) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route,
+            Some("make-ivy"),
+            json!({ "displayName": "Ivy", "handle": "ivy" }),
+        ),
+    )
+    .await;
+    assert_eq!(again["value"]["accountId"], account.to_string(), "{again}");
+    assert!(again["value"].get("credential").is_none(), "{again}");
+    assert_secret_unstored(pool, &token).await;
     let (kind, owner, role) = sqlx::query_as::<_, (String, Option<Uuid>, String)>(
         "SELECT account.account_kind, account.owner_workspace_id, membership.role \
          FROM actors account JOIN organization_memberships membership \
@@ -499,4 +527,85 @@ async fn an_agent_made_at_workspace_level_starts_with_workspace_things_only() {
     .await;
     assert_ne!(refused["outcome"], "ok", "{refused}");
     world.finish().await;
+}
+
+/// "Within what you hold" compares the role as it is now: with code.publish
+/// taken from both Admin and Member, an admin still makes a Member agent and
+/// adds a Member person.
+#[tokio::test]
+async fn an_edited_starting_role_is_given_as_it_is_now() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("ada", "admin")
+        .build("k129_edited_roles")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool();
+    sqlx::query(
+        "UPDATE workspace_roles SET permissions = array_remove(effective_permissions, 'code.publish'), \
+         customized = true WHERE organization_id = $1 AND key IN ('admin', 'member')",
+    )
+    .bind(world.organization)
+    .execute(pool)
+    .await
+    .expect("edit the starting roles");
+    let ada = &world.people["ada"];
+    sqlx::query(
+        "UPDATE organization_memberships SET role = 'admin' WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(ada.actor)
+    .execute(pool)
+    .await
+    .expect("ada runs the workspace");
+    let member = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM workspace_roles WHERE organization_id = $1 AND key = 'member'",
+    )
+    .bind(world.organization)
+    .fetch_one(pool)
+    .await
+    .expect("member role");
+    for (op, body) in [
+        (
+            "agent_create",
+            json!({ "displayName": "Ivy", "handle": "ivy", "roleId": member }),
+        ),
+        (
+            "person_create",
+            json!({ "displayName": "Nia", "handle": "nia", "roleId": member }),
+        ),
+    ] {
+        let route = format!("/api/v2/w/{}/ops/{op}", world.organization);
+        let (status, made) = send(
+            &world.app,
+            ada.browser.request("POST", &route, Some(op), body),
+        )
+        .await;
+        assert_eq!(made["outcome"], "ok", "{op}: {status} {made}");
+    }
+    world.finish().await;
+}
+
+/// No row of any table holds `secret`: a one-time token is kept as a
+/// digest, and the answer that showed it isn't stored for a retry.
+async fn assert_secret_unstored(pool: &sqlx::PgPool, secret: &str) {
+    let tables = sqlx::query_scalar::<_, String>(
+        "SELECT table_name::text FROM information_schema.tables \
+         WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("tables");
+    for table in tables {
+        let found = sqlx::query_scalar::<_, i64>(&format!(
+            r#"SELECT count(*) FROM "{table}" row_value WHERE strpos(to_jsonb(row_value)::text, $1) > 0"#
+        ))
+        .bind(secret)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_else(|error| panic!("{table}: {error}"));
+        assert_eq!(found, 0, "{table} holds a one-time secret");
+    }
 }

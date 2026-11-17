@@ -20,11 +20,22 @@
 --   kind. What an agent is given is checked when it is given (the role is
 --   within the giver's). The `runtime_kind = 'hermes'` CHECK the plan names
 --   was already a format check (migration 0037).
+-- * `request_id`: the clientRequestId of the `agent_create` call that made
+--   the connection, so a retry finds it without storing the credential.
 -- * `external_agent_connections_name_manager` (K1.4's stopgap) is dropped:
 --   `accounts::create_agent` names the creator as a manager itself.
 
 CREATE INDEX external_agent_connections_workspace_listing
     ON external_agent_connections (workspace_id, status, created_at, id);
+
+-- The clientRequestId of the agent_create call that made a connection: a
+-- retry finds the agent again without its credential, which is never
+-- stored.
+ALTER TABLE external_agent_connections
+    ADD COLUMN request_id TEXT CHECK (char_length(request_id) BETWEEN 1 AND 200);
+CREATE UNIQUE INDEX external_agent_connections_request
+    ON external_agent_connections (workspace_id, created_by_actor_id, request_id)
+    WHERE request_id IS NOT NULL;
 
 DO $$
 DECLARE

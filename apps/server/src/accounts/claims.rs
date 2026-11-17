@@ -71,8 +71,11 @@ impl Targeted for PersonCreateInput {
 pub struct PersonCreateView {
     #[schemars(with = "String")]
     pub account_id: Uuid,
-    /// The claim token, shown only now. The person opens `/claim#<token>`.
-    pub claim_token: String,
+    /// The claim token, shown only in the answer that added them; absent
+    /// when a retry found them already added. The person opens
+    /// `/claim#<token>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_token: Option<String>,
     pub claim_expires_at: DateTime<Utc>,
 }
 
@@ -81,7 +84,9 @@ impl Operation for PersonCreate {
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "workspace";
     const PERMISSION: Option<Perm> = Some(Perm::MembersInvite);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // The answer carries the claim token, which must not be stored for a
+    // replay: the claim keeps the request id itself.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const EMITS: &'static [&'static str] = &["project.membership.updated"];
     const TITLE: &'static str = "Add a person who hasn't signed in yet";
     const DESCRIPTION: &'static str = "Add someone before they sign in, with a role within \
@@ -113,7 +118,29 @@ impl Operation for PersonCreate {
         })?;
         let workspace_id = call.ctx.workspace_id;
         let caller = call.ctx.caller.clone();
+        let request_id = call.ctx.request_id.clone();
         let tx = call.tx().await?;
+        if let Some(request_id) = request_id.as_deref() {
+            let made = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
+                "SELECT account_id, expires_at FROM account_claims \
+                 WHERE workspace_id = $1 AND created_by_actor_id = $2 AND request_id = $3",
+            )
+            .bind(workspace_id)
+            .bind(caller.account_id)
+            .bind(request_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(AppError::from)?;
+            if let Some((account_id, claim_expires_at)) = made {
+                call.mark_replayed(true);
+                call.audit_target("account", account_id, json!({ "replayed": true }));
+                return Ok(PersonCreateView {
+                    account_id,
+                    claim_token: None,
+                    claim_expires_at,
+                });
+            }
+        }
         let (role, role_id) =
             engine::workspace_role(tx, workspace_id, input.role_id.map(IdRef::id))
                 .await?
@@ -181,8 +208,8 @@ impl Operation for PersonCreate {
             r#"
             INSERT INTO account_claims
                 (id, workspace_id, account_id, token_prefix, token_digest,
-                 created_by_actor_id, expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 created_by_actor_id, expires_at, request_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             "#,
         )
         .bind(Uuid::now_v7())
@@ -192,6 +219,7 @@ impl Operation for PersonCreate {
         .bind(issued.digest.as_slice())
         .bind(caller.account_id)
         .bind(expires_at)
+        .bind(request_id.as_deref())
         .execute(&mut **tx)
         .await
         .map_err(AppError::from)?;
@@ -202,7 +230,7 @@ impl Operation for PersonCreate {
         );
         Ok(PersonCreateView {
             account_id: person.account_id,
-            claim_token: issued.token,
+            claim_token: Some(issued.token),
             claim_expires_at: expires_at,
         })
     }

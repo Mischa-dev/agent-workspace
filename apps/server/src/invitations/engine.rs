@@ -214,6 +214,23 @@ pub async fn issuer_may_grant(
     role: &str,
     role_id: Option<Uuid>,
 ) -> Result<bool, AppError> {
+    // A starting role is stored by its key alone, but an admin may have
+    // edited it: compare what its row holds now, not the catalogue's
+    // defaults for the key.
+    let role_id = match (role_id, scope) {
+        (Some(role_id), _) => Some(role_id),
+        (None, Scope::Workspace(workspace_id)) => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM workspace_roles \
+                 WHERE organization_id = $1 AND built_in AND key = $2",
+            )
+            .bind(workspace_id)
+            .bind(role)
+            .fetch_optional(&mut *connection)
+            .await?
+        }
+        (None, Scope::Space(_)) => None,
+    };
     let grants = role_permissions(connection, role, role_id).await?;
     access::may_grant(connection, issuer, scope, grants).await
 }
