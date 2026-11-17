@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, future::IntoFuture, sync::Arc};
 
 use agent_workspace_server::{
     bootstrap, config::AppConfig, mcp, migration_preflight, retention, seed, server::Server,
     shutdown_signal, telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::watch};
 use uuid::Uuid;
 
 #[tokio::main]
@@ -21,6 +21,11 @@ async fn main() -> anyhow::Result<()> {
     // own (empty) target database and data root.
     if std::env::args().nth(1).as_deref() == Some("restore") {
         return restore_command().await;
+    }
+    // The container's health check: is the server here ready? Reads only
+    // its address, so it works with nothing else configured.
+    if std::env::args().nth(1).as_deref() == Some("health") {
+        return health_command().await;
     }
     let config = Arc::new(AppConfig::load().context("load application configuration")?);
     init_tracing(&config.log_filter)?;
@@ -45,39 +50,89 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let migration_preflight = migration_preflight::prepare_m3_upgrade(&pool, &config)
-        .await
-        .context("prepare legacy data for M3 migration")?;
-    if migration_preflight.required {
-        tracing::warn!(
-            profile_paths_repaired = migration_preflight.profile_paths_repaired,
-            repository_paths_repaired = migration_preflight.repository_paths_repaired,
-            workers_disabled = migration_preflight.workers_disabled,
-            "prepared legacy execution data for the M3 migration"
+    // Serving (no subcommand): take the address now, so a probe sees the
+    // server starting (`/health/ready` 503 with the step) instead of nothing
+    // while it migrates (H1.13).
+    // An instance without `api` or `live` serves health checks only, on
+    // their own address when one is set (K5.7).
+    let address = if config.roles.api || config.roles.live {
+        config.server_addr
+    } else {
+        config.health_addr.unwrap_or(config.server_addr)
+    };
+    let mut starting = if std::env::args().nth(1).is_none() {
+        let listener = std::net::TcpListener::bind(address)
+            .with_context(|| format!("bind application server to {address}"))?;
+        listener
+            .set_nonblocking(true)
+            .context("make the application listener non-blocking")?;
+        let (step, step_receiver) = watch::channel("migrating");
+        let (done, done_receiver) = watch::channel(false);
+        let answering = TcpListener::from_std(
+            listener
+                .try_clone()
+                .context("share the application listener")?,
+        )
+        .context("listen while starting")?;
+        let answerer: Answerer = Box::pin(
+            axum::serve(
+                answering,
+                agent_workspace_server::health::startup_router(step_receiver).into_make_service(),
+            )
+            .with_graceful_shutdown(wait_for_shutdown(done_receiver))
+            .into_future(),
         );
-    }
-    let repository_preflight = migration_preflight::prepare_m3_repository_upgrade(&pool, &config)
-        .await
-        .context("prepare canonical M3 repository mirrors")?;
-    if repository_preflight.required {
-        tracing::warn!(
-            mirrors_adopted = repository_preflight.mirrors_adopted,
-            "prepared retained repository mirrors for the canonical M3 layout"
-        );
-    }
+        Some(Starting {
+            listener,
+            step,
+            done,
+            answerer: Some(answerer),
+        })
+    } else {
+        None
+    };
 
-    sqlx::migrate!()
-        .run(&pool)
-        .await
-        .context("apply database migrations")?;
-    let provisioned_workflows = work_items::provision_missing_default_workflows(&pool)
-        .await
-        .context("provision default Work Item workflows")?;
-    if provisioned_workflows > 0 {
-        tracing::info!(
-            provisioned_workflows,
-            "provisioned default Work Item workflows"
-        );
+    let migrate = async {
+        let migration_preflight = migration_preflight::prepare_m3_upgrade(&pool, &config)
+            .await
+            .context("prepare legacy data for M3 migration")?;
+        if migration_preflight.required {
+            tracing::warn!(
+                profile_paths_repaired = migration_preflight.profile_paths_repaired,
+                repository_paths_repaired = migration_preflight.repository_paths_repaired,
+                workers_disabled = migration_preflight.workers_disabled,
+                "prepared legacy execution data for the M3 migration"
+            );
+        }
+        let repository_preflight =
+            migration_preflight::prepare_m3_repository_upgrade(&pool, &config)
+                .await
+                .context("prepare canonical M3 repository mirrors")?;
+        if repository_preflight.required {
+            tracing::warn!(
+                mirrors_adopted = repository_preflight.mirrors_adopted,
+                "prepared retained repository mirrors for the canonical M3 layout"
+            );
+        }
+
+        sqlx::migrate!()
+            .run(&pool)
+            .await
+            .context("apply database migrations")?;
+        let provisioned_workflows = work_items::provision_missing_default_workflows(&pool)
+            .await
+            .context("provision default Work Item workflows")?;
+        if provisioned_workflows > 0 {
+            tracing::info!(
+                provisioned_workflows,
+                "provisioned default Work Item workflows"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+    while_starting(&mut starting, migrate).await?;
+    if let Some(starting) = &starting {
+        let _ = starting.step.send("starting");
     }
 
     let mut arguments = std::env::args().skip(1);
@@ -130,6 +185,35 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("rotate User password and sessions")?;
             println!("{}", serde_json::to_string_pretty(&rotated)?);
+            return Ok(());
+        }
+        Some(command @ ("workspace-suspend" | "workspace-resume")) => {
+            // H1.24: an operator stops or restarts a workspace by address.
+            let options = parse_options(arguments)?;
+            let action = if command == "workspace-suspend" {
+                reject_unknown_options(&options, &["slug", "reason"])?;
+                let reason = options.get("reason").map_or("operator", String::as_str);
+                let reason =
+                    agent_workspace_server::workspace::lifecycle::SuspendReason::parse(reason)
+                        .context("--reason is operator, abuse or billing")?;
+                agent_workspace_server::workspace::lifecycle::OperatorAction::Suspend(reason)
+            } else {
+                reject_unknown_options(&options, &["slug"])?;
+                agent_workspace_server::workspace::lifecycle::OperatorAction::Resume
+            };
+            let workspace = agent_workspace_server::workspace::lifecycle::operator_command(
+                &pool,
+                required_option(&options, "slug")?,
+                action,
+            )
+            .await
+            .context("change the workspace's lifecycle")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "workspaceId": workspace, "done": command })
+                )?
+            );
             return Ok(());
         }
         Some("secret-key-init") => {
@@ -337,18 +421,28 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let server = Server::build(Arc::clone(&config), pool).await?;
+    let server = while_starting(&mut starting, Server::build(Arc::clone(&config), pool)).await?;
     let roles = config.roles;
-    // An instance without `api` or `live` serves health checks only, on
-    // their own address when one is set.
-    let address = if roles.api || roles.live {
-        config.server_addr
-    } else {
-        config.health_addr.unwrap_or(config.server_addr)
+
+    let listener = match starting {
+        Some(Starting {
+            listener,
+            done,
+            answerer,
+            ..
+        }) => {
+            let _ = done.send(true);
+            if let Some(answerer) = answerer
+                && let Err(error) = answerer.await
+            {
+                tracing::warn!(%error, "the startup answerer stopped with an error");
+            }
+            TcpListener::from_std(listener).context("listen on the application address")?
+        }
+        None => TcpListener::bind(address)
+            .await
+            .with_context(|| format!("bind application server to {address}"))?,
     };
-    let listener = TcpListener::bind(address)
-        .await
-        .with_context(|| format!("bind application server to {address}"))?;
     let webhook_listener = if roles.api {
         Some(
             TcpListener::bind(config.webhook_addr)
@@ -613,6 +707,96 @@ fn parse_scopes(value: &str) -> anyhow::Result<Vec<String>> {
         bail!("--scopes must be a comma-separated list");
     }
     Ok(scopes)
+}
+
+/// What answers on the server's address while it starts (H1.13).
+type Answerer = std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send>>;
+
+struct Starting {
+    listener: std::net::TcpListener,
+    step: watch::Sender<&'static str>,
+    done: watch::Sender<bool>,
+    answerer: Option<Answerer>,
+}
+
+/// Runs `work` while the startup answerer keeps answering on the same task
+/// (no task of its own: rule 5).
+async fn while_starting<T>(
+    starting: &mut Option<Starting>,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    let Some(answerer) = starting
+        .as_mut()
+        .and_then(|starting| starting.answerer.as_mut())
+    else {
+        return work.await;
+    };
+    tokio::pin!(work);
+    tokio::select! {
+        value = &mut work => value,
+        result = answerer => {
+            if let Err(error) = result {
+                tracing::warn!(%error, "the startup answerer stopped with an error");
+            }
+            if let Some(starting) = starting.as_mut() {
+                starting.answerer = None;
+            }
+            work.await
+        }
+    }
+}
+
+/// `agent-workspace-server health`: exits 0 when the server on
+/// `AGENT_WORKSPACE_SERVER_ADDR` (on this machine) answers `/health/ready`
+/// with 200. A plain request on loopback, for container health checks.
+async fn health_command() -> anyhow::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let configured = std::env::var("AGENT_WORKSPACE_SERVER_ADDR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "127.0.0.1:3100".to_owned());
+    let mut address: std::net::SocketAddr = configured
+        .trim()
+        .parse()
+        .context("AGENT_WORKSPACE_SERVER_ADDR is not an address")?;
+    if address.ip().is_unspecified() {
+        address.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+    }
+    let check = async {
+        let mut stream = tokio::net::TcpStream::connect(address).await?;
+        stream
+            .write_all(
+                b"GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await?;
+        let mut head = [0_u8; 12];
+        stream.read_exact(&mut head).await?;
+        Ok::<_, std::io::Error>(head)
+    };
+    let head = tokio::time::timeout(std::time::Duration::from_secs(5), check)
+        .await
+        .context("the server didn't answer in time")?
+        .context("couldn't reach the server")?;
+    if head.starts_with(b"HTTP/1.1 200") {
+        Ok(())
+    } else {
+        bail!(
+            "the server isn't ready: {}",
+            String::from_utf8_lossy(&head).trim()
+        )
+    }
+}
+
+async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            return;
+        }
+    }
 }
 
 /// Write a secret to a new owner-only file; refuses to overwrite.

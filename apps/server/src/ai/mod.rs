@@ -47,7 +47,7 @@ pub(crate) async fn notify(
     title: String,
     href: String,
 ) -> Result<(), crate::error::AppError> {
-    let mut transaction = pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
     let notification = crate::notifications::NewNotification {
         project_id,
         recipient_actor_id: recipient,
