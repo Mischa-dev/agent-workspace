@@ -311,7 +311,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         "/task_create",
         "/task_list",
         "/webhook_write",
-        "/automation_write",
+        "/automation_create",
     ] {
         assert!(
             document.2["paths"][operation]["post"].is_object(),

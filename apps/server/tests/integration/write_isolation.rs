@@ -464,7 +464,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "ai_suggestion_decide",
     "ai_summarize",
     "approval_respond",
-    "automation_write",
+    "automation_create",
+    "automation_delete",
+    "automation_run_start",
+    "automation_update",
     "channel_create",
     "conversation_continue",
     "conversation_mark_read",
@@ -1943,6 +1946,8 @@ struct Spares {
     scheduled: [Uuid; 2],
     harness: Uuid,
     bug_link: Uuid,
+    /// A rule A's own automation_delete removes.
+    rule: Uuid,
     project_invitation: Uuid,
     /// An agent in the project to change, rotate and remove.
     agent_connection: Uuid,
@@ -2174,6 +2179,22 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         "Net spare",
     )
     .await;
+    let spare_rule = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/automations"),
+        json!({
+            "name": "Net spare rule",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
+        }),
+    )
+    .await;
+    let spare_rule = spare_rule["id"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .expect("spare rule");
     ok(
         app,
         browser,
@@ -2613,6 +2634,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         scheduled: [scheduled[0], scheduled[1]],
         harness,
         bug_link,
+        rule: spare_rule,
         project_invitation,
         agent_connection,
         approvals: [approvals[0], approvals[1]],
@@ -7262,8 +7284,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "linkId": bx.bug_link, "delete": true}),
         ]),
         mcp_case(
-            "automation_write",
-            with(&with(&rule, "projectId", json!(a.project)), "operation", json!("create"))
+            "automation_create",
+            with(&rule, "projectId", json!(a.project))
                 .as_object()
                 .map(|fields| {
                     let mut fields = fields.clone();
@@ -7271,30 +7293,42 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                     Value::Object(fields)
                 })
                 .expect("rule"),
-            vec![
-                json!({"projectId": b.project, "operation": "run", "ruleId": b.rule}),
-                json!({
-                    "projectId": b.project,
-                    "operation": "create",
-                    "name": "Net mcp rule",
-                    "trigger": {"kind": "task_created"},
-                    "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
-                }),
-            ],
+            vec![json!({
+                "projectId": b.project,
+                "name": "Net mcp rule",
+                "trigger": {"kind": "task_created"},
+                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
+            })],
+        )
+        .rejecting(vec![json!({
+            "projectId": a.project,
+            "name": "Net mcp rule b",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
+        })]),
+        mcp_case(
+            "automation_update",
+            json!({"projectId": a.project, "ruleId": a.rule, "name": "Net mcp rule renamed", "expectedVersion": version("automation_rules", a.rule)}),
+            vec![json!({"projectId": b.project, "ruleId": b.rule, "name": "Net", "expectedVersion": version("automation_rules", b.rule)})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "operation": "update", "ruleId": b.rule, "name": "Net", "expectedVersion": version("automation_rules", b.rule)}),
-            json!({"projectId": a.project, "operation": "delete", "ruleId": b.rule}),
-            json!({"projectId": a.project, "operation": "run", "ruleId": b.rule}),
-            json!({"projectId": a.project, "operation": "run", "ruleId": a.rule, "taskId": b.task}),
-            json!({
-                "projectId": a.project,
-                "operation": "create",
-                "name": "Net mcp rule b",
-                "trigger": {"kind": "task_created"},
-                "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
-            }),
+            json!({"projectId": a.project, "ruleId": b.rule, "name": "Net", "expectedVersion": version("automation_rules", b.rule)}),
         ]),
+        mcp_case(
+            "automation_run_start",
+            json!({"projectId": a.project, "ruleId": a.rule}),
+            vec![json!({"projectId": b.project, "ruleId": b.rule})],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "ruleId": b.rule}),
+            json!({"projectId": a.project, "ruleId": a.rule, "taskId": b.task}),
+        ]),
+        mcp_case(
+            "automation_delete",
+            json!({"projectId": a.project, "ruleId": sp.rule}),
+            vec![json!({"projectId": b.project, "ruleId": b.rule})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "ruleId": b.rule})]),
         mcp_case(
             "milestone_create",
             json!({"projectId": a.project, "name": "Net mcp milestone", "addTasks": [a.subtask]}),

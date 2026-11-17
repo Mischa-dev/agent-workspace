@@ -60,6 +60,98 @@
     "title": "List usage by agent"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "automation.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "automations",
+    "name": "automation_create",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Create automation"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "automation.removed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "automations",
+    "name": "automation_delete",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove automation"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "automations",
+    "name": "automation_history",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Automation history"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "automations",
+    "name": "automation_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List automations"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "automation.ran"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "automations",
+    "name": "automation_run_start",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Try automation"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "automation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "automations",
+    "name": "automation_update",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Update automation"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],

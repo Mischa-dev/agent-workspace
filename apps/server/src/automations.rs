@@ -26,6 +26,8 @@
 //! once. A rule that fires more than 30 times in an hour is turned off: it's
 //! almost certainly triggering itself.
 
+pub mod ops;
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -50,7 +52,7 @@ use crate::{
     idempotency::IdempotencyKey,
     jobs::{self, JobContext, JobError, JobRegistry, NewJob},
     launch::{self, LaunchCaller, LaunchRequest},
-    mcp::{self, McpPrincipal},
+    mcp::McpPrincipal,
     notifications::{self, NewNotification},
     policy::{Action as PolicyAction, ActorKind, AgentLimits, with_agent_limits},
     work_items::{

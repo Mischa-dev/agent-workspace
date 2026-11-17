@@ -1968,8 +1968,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "ai_suggestions_list",
     "approval_get",
     "approval_list",
+    "automation_history",
     "automation_list",
-    "automation_runs",
     "briefing_get",
     "bug_report_link_list",
     "conversation_list",
@@ -2239,7 +2239,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("automation_list"),
         by_project("bug_report_link_list"),
         case(
-            "automation_runs",
+            "automation_history",
             vec![json!({"projectId": a.project, "ruleId": a.rule.to_string()})],
             vec![
                 json!({"projectId": b.project, "ruleId": b.rule.to_string()}),

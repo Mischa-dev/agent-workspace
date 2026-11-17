@@ -155,6 +155,45 @@ fn link_pull_request_out(_canonical: &str, value: Value, replayed: bool) -> Valu
     })
 }
 
+/// `automation_write`'s `operation` names the automation operation it runs.
+fn automation_write_runs(arguments: &JsonObject) -> &'static str {
+    match arguments.get("operation").and_then(Value::as_str) {
+        Some("update") => "automation_update",
+        Some("delete") => "automation_delete",
+        Some("run") => "automation_run_start",
+        _ => "automation_create",
+    }
+}
+
+/// `automation_write` took every field for every operation; each operation
+/// takes only its own.
+fn automation_write_in(mut arguments: JsonObject) -> JsonObject {
+    let keep: &[&str] = match automation_write_runs(&arguments) {
+        "automation_update" => &[
+            "projectId",
+            "ruleId",
+            "expectedVersion",
+            "name",
+            "trigger",
+            "conditions",
+            "actions",
+            "enabled",
+        ],
+        "automation_delete" => &["projectId", "ruleId"],
+        "automation_run_start" => &["projectId", "ruleId", "taskId"],
+        _ => &[
+            "projectId",
+            "name",
+            "trigger",
+            "conditions",
+            "actions",
+            "enabled",
+        ],
+    };
+    arguments.retain(|key, value| keep.contains(&key.as_str()) && !value.is_null());
+    arguments
+}
+
 /// The rename plan of K2 section 3.6. Adapters beyond the identity land
 /// with each row's canonical operation, in its module's slice.
 pub const ALIASES: &[Alias] = &[
@@ -178,7 +217,22 @@ pub const ALIASES: &[Alias] = &[
     written!("template_write", "template" => "template_create", "template_update"),
     // K2.14: recurring_write names the schedule as `recurring`.
     written!("recurring_write", "recurring" => "recurring_create", "recurring_update"),
-    written!("automation_write", "ruleId" => "automation_create", "automation_update"),
+    // K2.18: automation_write chose by `operation`; automation_runs is
+    // automation_history. Both answered in the envelope already.
+    Alias {
+        name: "automation_write",
+        canonical: automation_write_runs,
+        runs: &[
+            "automation_create",
+            "automation_update",
+            "automation_delete",
+            "automation_run_start",
+        ],
+        adapt_in: automation_write_in,
+        adapt_out: enveloped,
+        sunset: None,
+    },
+    run_renamed!("automation_runs" => "automation_history"),
     written!("webhook_write", "webhookId" => "webhook_create", "webhook_update"),
     written!("environment_write", "environmentId" => "environment_create", "environment_update"),
     written!("bug_report_link_write", "linkId" => "bug_report_link_create", "bug_report_link_update"),

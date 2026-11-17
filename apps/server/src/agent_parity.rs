@@ -1131,22 +1131,22 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/automations",
-            Tool("automation_write"),
+            Tool("automation_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/automations/{rule_id}",
-            Tool("automation_write"),
+            Tool("automation_update"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/automations/{rule_id}",
-            Tool("automation_write"),
+            Tool("automation_delete"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/automations/{rule_id}/run",
-            Tool("automation_write"),
+            Tool("automation_run_start"),
         ),
         (
             Post,

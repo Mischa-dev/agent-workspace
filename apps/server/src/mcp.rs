@@ -1549,59 +1549,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "A project's automation rules: each one's trigger, conditions (a saved view's filters), actions, who it acts as, whether it's on and why the server turned it off.",
-        annotations(
-            title = "List automations",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn automation_list(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::AutomationListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::automation_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Make, change, remove or try an automation rule in a project. Triggers: task_created, task_matches (a task enters the conditions), run_finished, pull_request_checks_failed, message_posted, schedule, capacity_window. Conditions: a saved view (viewId) and/or task list filters. Actions: launch (with the project's run defaults), set_field, notify, post_message; text can use {{task.key}}, {{task.title}}, {{task.url}}, {{pr.url}} and similar. The rule acts as you and stops if you lose access. run fires it now.",
-        annotations(
-            title = "Change automation",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn automation_write(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::AutomationWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::automation_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "What an automation rule did each time it fired, newest first: the cause, each action's result, and why a firing was skipped.",
-        annotations(
-            title = "Automation history",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn automation_runs(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::AutomationRunsArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::automation_runs(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "The AI's suggestions for a project's tasks, most confident first: dependencies, related tasks and duplicates, a parent, a blocked reason, labels, priority, type, and acceptance criteria, each with a one-line reason and its sources. Only suggestions whose every source you can see are listed. Accept or dismiss them with ai_suggestion_decide.",
         annotations(
             title = "List AI suggestions",

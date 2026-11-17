@@ -20,6 +20,8 @@ export type Envelope<T> =
 
 export type AcceptanceCriterionProjection = { completed: boolean; id: string; position: number; text: string }
 
+export type Action = ({ agentProfileId?: string | null; environmentId?: string | null; kind: "launch"; prompt?: string | null }) | { field: string; kind: "set_field"; value: string } | { kind: "notify"; message: string; recipients: Recipients } | { conversationId: string; kind: "post_message"; text: string } | { input: unknown; kind: "run_operation"; operation: string }
+
 export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
 
 export type AgentTemplateView = { definition: unknown; id: string; installId?: string | null; key: string; name: string; purpose: string; spaceId?: string | null }
@@ -49,6 +51,8 @@ export type ClaimValue = { claimedAt: string; claimedBy: string; expiresAt: stri
 export type ColumnWrite = { field: string; hidden?: boolean; width?: number | null }
 
 export type CommentItem = { at: string; author: string; files?: FileSummary[]; id: string; replyToCommentId?: string | null; text: string; via?: string | null }
+
+export type Conditions = { filters?: Record<string, string>; viewId?: string | null }
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
@@ -232,6 +236,8 @@ export type RaisedRequestOutput = { activityId: string; clientRequestId?: string
 
 export type ReactionSummary = { byYou: boolean; count: number; emoji: string; name: string; people: string[] }
 
+export type Recipients = "owner" | "assignee" | "project_admins"
+
 export type RelationRef = { kind: string; task: TaskRef }
 
 export type RelationsValue = { changed: boolean; relations: RelationRef[]; task: ChangedTask; version: number }
@@ -306,6 +312,8 @@ export type ThreadRef = { id: string; name: string; status: string }
 
 export type ThreadUpdate = { changedAt: string; changedBy?: string | null; name: string; outcome?: string | null; status: string; threadId: string; under: string }
 
+export type Trigger = { kind: "task_created" } | { kind: "task_matches" } | { kind: "run_finished"; outcomes?: string[] } | { kind: "pull_request_checks_failed" } | ({ contains?: string | null; conversationId?: string | null; kind: "message_posted" }) | ({ every?: number; frequency: string; kind: "schedule"; monthDay?: number | null; time: string; timezone: string; weekdays?: number[] }) | ({ collectionId?: string | null; kind: "record_created" }) | ({ collectionId?: string | null; kind: "record_changed" }) | ({ kind: "page_changed"; pageId?: string | null }) | ({ kind: "sheet_changed"; sheetId?: string | null }) | ({ kind: "whiteboard_changed"; whiteboardId?: string | null }) | ({ kind: "capacity_window"; maxTasks?: number | null; providerAccountId?: string | null })
+
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
 export type UpdatedTask = { archived: boolean; changedFields?: string[]; id: string; index: number; key: string; status: string; url: string; version: number }
@@ -337,6 +345,30 @@ export type AgentTemplateListOutput = { templates: AgentTemplateView[] }
 export type AgentUsageListInput = { days?: number | null }
 
 export type AgentUsageListOutput = { accounts: AgentUsageLine[]; days: number; notTiedToARun: UnattributedUsageLine[] }
+
+export type AutomationCreateInput = { actions: Action[]; conditions?: Conditions | null; enabled?: boolean | null; name: string; projectId: string; trigger: Trigger }
+
+export type AutomationCreateOutput = unknown
+
+export type AutomationDeleteInput = { projectId: string; ruleId: string }
+
+export type AutomationDeleteOutput = unknown
+
+export type AutomationHistoryInput = { projectId: string; ruleId: string }
+
+export type AutomationHistoryOutput = unknown
+
+export type AutomationListInput = { projectId: string }
+
+export type AutomationListOutput = unknown
+
+export type AutomationRunStartInput = { projectId: string; ruleId: string; taskId?: string | null }
+
+export type AutomationRunStartOutput = unknown
+
+export type AutomationUpdateInput = { actions?: Action[] | null; conditions?: Conditions | null; enabled?: boolean | null; expectedVersion: number; name?: string | null; projectId: string; ruleId: string; trigger?: Trigger | null }
+
+export type AutomationUpdateOutput = unknown
 
 export type BriefingGetInput = { projectId?: string | null }
 
@@ -839,6 +871,12 @@ export type Operations = {
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
+  automation_create: { input: AutomationCreateInput; output: AutomationCreateOutput }
+  automation_delete: { input: AutomationDeleteInput; output: AutomationDeleteOutput }
+  automation_history: { input: AutomationHistoryInput; output: AutomationHistoryOutput }
+  automation_list: { input: AutomationListInput; output: AutomationListOutput }
+  automation_run_start: { input: AutomationRunStartInput; output: AutomationRunStartOutput }
+  automation_update: { input: AutomationUpdateInput; output: AutomationUpdateOutput }
   briefing_get: { input: BriefingGetInput; output: BriefingGetOutput }
   bug_report_link_create: { input: BugReportLinkCreateInput; output: BugReportLinkCreateOutput }
   bug_report_link_list: { input: BugReportLinkListInput; output: BugReportLinkListOutput }
