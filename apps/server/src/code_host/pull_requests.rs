@@ -184,6 +184,7 @@ async fn tie(
             SELECT $1, $2, $3, 'run_artifact', $4
             WHERE EXISTS (SELECT 1 FROM project_memberships
                           WHERE project_id = $1 AND actor_id = $4)
+              -- visibility: the run's own thread, checked for its kind only.
               AND EXISTS (SELECT 1 FROM conversations
                           WHERE project_id = $1 AND id = $3 AND kind = 'thread')
             ON CONFLICT DO NOTHING

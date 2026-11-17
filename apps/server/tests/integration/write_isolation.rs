@@ -379,6 +379,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ),
     ("POST /api/v1/auth/login", SIGN_IN),
     (
+        "POST /api/v1/host/commands/{command_id}/ack",
+        "a host answering one of its own commands with its own token; another host's \
+         command is not found (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
         "POST /api/v1/host/describe",
         "a host's own call with its own token, about itself; no session and no workspace ID \
          (tests/integration/a1_host_protocol.rs)",
