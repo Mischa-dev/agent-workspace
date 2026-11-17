@@ -1121,7 +1121,15 @@ pub async fn apply(
                     ),
                 ));
             };
-            match views::remove(connection, project_id, collection.id, views::Scope::Shared, view.id).await? {
+            match views::remove(
+                connection,
+                project_id,
+                collection.id,
+                views::Scope::Shared,
+                view.id,
+            )
+            .await?
+            {
                 RemoveViewOutcome::Removed(view) => {
                     changes.push(format!("view \"{}\" removed", view.name));
                 }

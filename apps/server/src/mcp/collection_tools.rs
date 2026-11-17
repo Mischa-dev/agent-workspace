@@ -108,6 +108,24 @@ async fn read_access(state: &AppState, principal: &McpPrincipal) -> Result<Readi
     Ok(Reading::Ok { project_key })
 }
 
+/// Whether the caller may read tasks here: a collection whose records are
+/// tasks reads only with that, as the task tools do.
+async fn tasks_readable(state: &AppState, principal: &McpPrincipal) -> Result<bool, AppError> {
+    match memory::project_access(
+        &state.pool,
+        principal.actor_id,
+        principal.actor_kind,
+        principal.project_id,
+        Action::WorkItemView,
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(AppError::NotFound(_) | AppError::Forbidden) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn refused<T>(what: &'static str) -> ToolResult<T> {
     if what == MESSAGES_SPACE_MESSAGE {
         ToolResult::invalid("projectId", MESSAGES_SPACE_MESSAGE)
@@ -1005,9 +1023,15 @@ pub(super) async fn record_query(
                 Ok(collection) => collection,
                 Err(refusal) => return Ok(refusal),
             };
+        if collection.acts_like_task && !tasks_readable(state, principal).await? {
+            return Ok(ToolResult::not_found("That collection"));
+        }
         let definitions =
             collections::field_definitions(&mut connection, project_id, collection.id, true)
                 .await?;
+        // What a view reads by: the fields, and a task's other built-ins.
+        let view_fields =
+            collections::view_fields(&mut connection, project_id, collection.id, true).await?;
         let writer = Writer {
             actor_id: principal.actor_id,
             project_key: &project_key,
@@ -1015,11 +1039,15 @@ pub(super) async fn record_query(
         // The view to start from, then what this call says instead.
         let mut config = match arguments.view.as_deref() {
             Some(reference) => {
-                let saved =
-                    views::visible(&mut connection, project_id, collection.id, principal.actor_id)
-                        .await?;
+                let saved = views::visible(
+                    &mut connection,
+                    project_id,
+                    collection.id,
+                    principal.actor_id,
+                )
+                .await?;
                 match views::find(&saved, reference) {
-                    Some(view) => view.config.active(&definitions),
+                    Some(view) => view.config.active(&view_fields),
                     None => {
                         return Ok(ToolResult::NotFound {
                             message: format!(
@@ -1064,7 +1092,7 @@ pub(super) async fn record_query(
         if arguments.group_bucket.is_some() {
             config.group_bucket = arguments.group_bucket;
         }
-        if let Err(message) = views::check(&config, &definitions) {
+        if let Err(message) = views::check(&config, &view_fields) {
             return Ok(ToolResult::invalid("filters", message));
         }
         let only_fields = match &arguments.fields {
@@ -1092,8 +1120,8 @@ pub(super) async fn record_query(
                 Some(ids)
             }
         };
-        let mut spec = Spec::from_config(&config, &definitions, principal.actor_id)
-            .searching(words.clone(), &definitions);
+        let mut spec = Spec::from_config(&config, &view_fields, principal.actor_id)
+            .searching(words.clone(), &view_fields);
         spec.archived = archived;
         let source = crate::collections::source(&collection);
         if let Some(named) = &named {

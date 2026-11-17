@@ -1913,9 +1913,10 @@ pub fn push_condition(
             let moment = matches!(
                 clause.op,
                 FieldOp::Gt | FieldOp::Gte | FieldOp::Lt | FieldOp::Lte
-            ) && clause.values.first().is_some_and(|value| {
-                chrono::DateTime::parse_from_rfc3339(value.trim()).is_ok()
-            });
+            ) && clause
+                .values
+                .first()
+                .is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value.trim()).is_ok());
             if moment {
                 push_column_condition(builder, expr, sql_type, None, clause, today);
             } else {

@@ -1558,6 +1558,109 @@ async fn chat_writes_keep_to_what_the_writer_may_see() {
     world.finish().await;
 }
 
+/// Views (T1.6) keep to their owner: someone else's personal view is not
+/// listed to you and can't be renamed, deleted or pinned by you, and a
+/// role that can't build collections can neither share a view nor set a
+/// role's default one.
+#[tokio::test]
+async fn personal_views_stay_their_owners() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("nate", "member")
+        .custom_role("Tasks only", &["projects.view", "tasks.view", "tasks.edit"])
+        .build("privacy_personal_views")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Tasks only"]).expect("role id"))
+    .bind(work)
+    .bind(world.people["nate"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow nate");
+    let tasks = sqlx::query_scalar::<_, Uuid>("SELECT ensure_tasks_collection($1, $2)")
+        .bind(work)
+        .bind(world.owner.actor)
+        .fetch_one(pool)
+        .await
+        .expect("Tasks collection");
+
+    let (status, made) = op(
+        &world.people["lena"].browser,
+        "view_create",
+        json!({"collection": tasks, "name": "Lena's own", "type": "table"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "lena makes a view: {status} {made}");
+    let mine = made["value"]["id"].as_str().expect("view id").to_owned();
+
+    let (_, listed) = op(
+        &world.people["mara"].browser,
+        "view_list",
+        json!({"collection": tasks}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(
+        !listed.to_string().contains(&mine),
+        "mara sees lena's view: {listed}"
+    );
+    for (name, input) in [
+        ("view_update", json!({"view": mine, "name": "Mara's now"})),
+        ("view_pin", json!({"view": mine, "pinned": true})),
+        ("view_delete", json!({"view": mine})),
+    ] {
+        let (status, body) = op(&world.people["mara"].browser, name, input).await;
+        assert_ne!(body["outcome"], "ok", "mara {name}: {status} {body}");
+    }
+    let name = sqlx::query_scalar::<_, String>("SELECT name FROM collection_views WHERE id = $1")
+        .bind(Uuid::parse_str(&mine).expect("id"))
+        .fetch_one(pool)
+        .await
+        .expect("lena's view");
+    assert_eq!(name, "Lena's own");
+
+    let nate = &world.people["nate"].browser;
+    let (status, body) = op(
+        nate,
+        "view_create",
+        json!({"collection": tasks, "name": "Nate's shared", "type": "table", "shared": true}),
+    )
+    .await;
+    assert_ne!(body["outcome"], "ok", "nate shares a view: {status} {body}");
+    let all_tasks = listed["value"]["views"][0]["id"].clone();
+    let (status, body) = op(
+        nate,
+        "view_default_set",
+        json!({"collection": tasks, "view": all_tasks, "role": world.roles["Tasks only"]}),
+    )
+    .await;
+    assert_ne!(
+        body["outcome"], "ok",
+        "nate sets a role default: {status} {body}"
+    );
+    world.finish().await;
+}
+
 /// `history_restore` picks its edit permission from the thing it resolves,
 /// so a caller who can read a page but not edit it must be refused and the
 /// page left as it was: an agent and a person, each on a viewer role. A

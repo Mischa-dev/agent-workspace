@@ -99,8 +99,13 @@ async fn need(
     space: Uuid,
     what: &'static str,
 ) -> Result<(), OpError> {
-    match access::check(tx, caller, Need::permission(permission), AccessTarget::Space(space))
-        .await?
+    match access::check(
+        tx,
+        caller,
+        Need::permission(permission),
+        AccessTarget::Space(space),
+    )
+    .await?
     {
         Ok(_) => Ok(()),
         Err(access::Denied::NotFound) => Err(OpError::not_found(what)),
@@ -254,6 +259,10 @@ pub struct ViewEntry {
     /// 1 is first, among the shared views or among your own.
     pub position: i32,
     pub version: i64,
+    /// For a view of tasks: the same view as the task list's address
+    /// parameters (`statusId`, `sort` and so on), when they can say it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_params: Option<std::collections::BTreeMap<String, String>>,
 }
 
 fn entry(
@@ -262,12 +271,16 @@ fn entry(
     pins: &views::Pins,
 ) -> Result<ViewEntry, OpError> {
     let (pinned, pin_position) = pins.of(view);
+    let config = view.config.active(definitions);
+    let tasks = definitions
+        .iter()
+        .any(|field| field.id == crate::collections::tasks::STATUS);
     Ok(ViewEntry {
         id: view.id,
         collection_id: view.collection_id,
         name: view.name.clone(),
         view_type: view.view_type.as_str().to_owned(),
-        config: serde_json::to_value(view.config.active(definitions))
+        config: serde_json::to_value(&config)
             .map_err(|_| AppError::Internal("encode view config"))?,
         shared: view.owner_actor_id.is_none(),
         builtin: view.builtin.clone(),
@@ -275,6 +288,9 @@ fn entry(
         pin_position,
         position: view.position + 1,
         version: view.version,
+        list_params: tasks
+            .then(|| crate::collections::task_query::to_params(&config))
+            .flatten(),
     })
 }
 
@@ -283,7 +299,7 @@ async fn entry_for(call: &mut OpCall<'_>, view: &View) -> Result<ViewEntry, OpEr
     let project_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
     let tx = call.tx().await?;
     let definitions =
-        crate::collections::field_definitions(tx, project_id, view.collection_id, true).await?;
+        crate::collections::view_fields(tx, project_id, view.collection_id, true).await?;
     let pins = views::pins(tx, project_id, view.collection_id, reader).await?;
     entry(view, &definitions, &pins)
 }
@@ -339,8 +355,7 @@ impl Operation for ViewList {
         let tx = call.tx().await?;
         let found = views::visible(tx, held.project_id, held.collection_id, reader).await?;
         let definitions =
-            crate::collections::field_definitions(tx, held.project_id, held.collection_id, true)
-                .await?;
+            crate::collections::view_fields(tx, held.project_id, held.collection_id, true).await?;
         let pins = views::pins(tx, held.project_id, held.collection_id, reader).await?;
         let default_view_id =
             views::default_view(tx, held.project_id, held.collection_id, reader).await?;
@@ -420,8 +435,7 @@ impl Operation for ViewCreate {
         };
         let tx = call.tx().await?;
         let definitions =
-            crate::collections::field_definitions(tx, held.project_id, held.collection_id, true)
-                .await?;
+            crate::collections::view_fields(tx, held.project_id, held.collection_id, true).await?;
         let config = config
             .for_type(view_type, &definitions)
             .map_err(|message| invalid("config", message))?;
@@ -527,13 +541,9 @@ impl Operation for ViewUpdate {
         }
         let tx = call.tx().await?;
         if let Some(config) = &config {
-            let definitions = crate::collections::field_definitions(
-                tx,
-                held.project_id,
-                held.collection_id,
-                true,
-            )
-            .await?;
+            let definitions =
+                crate::collections::view_fields(tx, held.project_id, held.collection_id, true)
+                    .await?;
             checked(tx, held.project_id, config, &definitions).await?;
         }
         let view = match views::change(
@@ -628,20 +638,25 @@ impl Operation for ViewDelete {
         if held.archived {
             return Err(archived(&held));
         }
+        if current.builtin.is_some() {
+            return Err(conflict(
+                "The views every Tasks collection starts with stay. Unpin it, or make a view \
+                 of your own.",
+            ));
+        }
         let tx = call.tx().await?;
-        let view =
-            match views::remove(tx, held.project_id, held.collection_id, scope, current.id)
-                .await?
-            {
-                RemoveViewOutcome::Removed(view) => view,
-                RemoveViewOutcome::NotFound => return Err(OpError::not_found("That view")),
-                RemoveViewOutcome::LastView => {
-                    return Err(conflict(
-                        "A collection keeps at least one shared view. Add another before \
+        let view = match views::remove(tx, held.project_id, held.collection_id, scope, current.id)
+            .await?
+        {
+            RemoveViewOutcome::Removed(view) => view,
+            RemoveViewOutcome::NotFound => return Err(OpError::not_found("That view")),
+            RemoveViewOutcome::LastView => {
+                return Err(conflict(
+                    "A collection keeps at least one shared view. Add another before \
                          removing this one.",
-                    ));
-                }
-            };
+                ));
+            }
+        };
         announce(call, &held, scope == Scope::Shared, "removed", &view).await?;
         Ok(ViewDeleted { removed: view.id })
     }

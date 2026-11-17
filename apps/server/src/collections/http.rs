@@ -36,8 +36,8 @@ use crate::{
     conversations::parse_actor_kind,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     fields::{
-        self, ChangeFieldOutcome, CreateFieldOutcome, FieldChange, FieldType,
-        FieldView, NewField, OptionInput,
+        self, ChangeFieldOutcome, CreateFieldOutcome, FieldChange, FieldType, FieldView, NewField,
+        OptionInput,
     },
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, IdempotencyReservation, RequestHash, complete, reserve,
@@ -135,6 +135,9 @@ struct Reader {
     can_build: bool,
     /// Tasks' fields follow the task field settings' rule (T1.11).
     can_manage_task_fields: bool,
+    /// Reads tasks: a collection whose records are tasks opens only with
+    /// this.
+    can_view_tasks: bool,
     project_archived: bool,
 }
 
@@ -158,6 +161,7 @@ async fn reader(
         can_edit: allows(&actor, &membership, Action::CollectionRecordEdit)?,
         can_build: allows(&actor, &membership, Action::CollectionBuild)?,
         can_manage_task_fields: allows(&actor, &membership, Action::WorkflowManage)?,
+        can_view_tasks: allows(&actor, &membership, Action::WorkItemView)?,
         project_archived: membership.project_archived_at.is_some(),
     })
 }
@@ -364,10 +368,13 @@ async fn collection_body(
     can_edit: bool,
     can_build: bool,
     can_manage_task_fields: bool,
+    reader: Uuid,
 ) -> Result<CollectionBody, AppError> {
     let definitions =
         super::field_definitions(&mut *connection, project_id, collection.id, true).await?;
-    let views = views::list(&mut *connection, project_id, collection.id).await?;
+    let view_fields = super::view_fields(&mut *connection, project_id, collection.id, true).await?;
+    // The shared views, then the reader's own.
+    let views = views::visible(&mut *connection, project_id, collection.id, reader).await?;
     // Each query binds exactly the parameters it names: an extra bind fails
     // on a reused prepared statement.
     let (records, archived_records) = sqlx::query_as::<_, (i64, i64)>(
@@ -382,7 +389,7 @@ async fn collection_body(
         fields: definitions.iter().map(FieldView::from).collect(),
         views: views
             .iter()
-            .map(|view| ViewSummary::of(view, &definitions))
+            .map(|view| ViewSummary::of(view, &view_fields))
             .collect(),
         archived_records,
         // Records of a collection that acts like a task change as tasks.
@@ -412,6 +419,7 @@ async fn get_collection(
             reader.can_edit && writable,
             reader.can_build && writable,
             reader.can_manage_task_fields,
+            principal.actor_id,
         )
         .await?,
     ))
@@ -583,6 +591,7 @@ async fn create_collection(
         true,
         true,
         true,
+        principal.actor_id,
     )
     .await?;
     write.finish(StatusCode::CREATED, &body).await
@@ -762,6 +771,7 @@ async fn update_collection(
         true,
         true,
         true,
+        principal.actor_id,
     )
     .await?;
     write.finish(StatusCode::OK, &body).await
@@ -1162,20 +1172,28 @@ async fn list_records(
     ApiQuery(query): ApiQuery<RecordsQuery>,
 ) -> Result<Response, AppError> {
     let mut connection = state.pool.acquire().await?;
-    reader(&mut connection, &headers, &principal, project_id).await?;
+    let reader = reader(&mut connection, &headers, &principal, project_id).await?;
     let collection = super::get(&mut *connection, project_id, collection_id)
         .await?
+        .filter(|collection| reader.can_view_tasks || !collection.acts_like_task)
         .ok_or(AppError::NotFound("collection"))?;
     let definitions =
         super::field_definitions(&mut connection, project_id, collection_id, true).await?;
+    // What a view reads by: the fields, and a task's other built-ins.
+    let view_fields = super::view_fields(&mut connection, project_id, collection_id, true).await?;
     let mut config = match query.view {
-        Some(view_id) => views::visible(&mut connection, project_id, collection_id, principal.actor_id)
-            .await?
-            .into_iter()
-            .find(|view| view.id == view_id)
-            .ok_or(AppError::NotFound("view"))?
-            .config
-            .active(&definitions),
+        Some(view_id) => views::visible(
+            &mut connection,
+            project_id,
+            collection_id,
+            principal.actor_id,
+        )
+        .await?
+        .into_iter()
+        .find(|view| view.id == view_id)
+        .ok_or(AppError::NotFound("view"))?
+        .config
+        .active(&view_fields),
         None => ViewConfig::default(),
     };
     if let Some(filters) = query.filters.as_deref() {
@@ -1213,7 +1231,7 @@ async fn list_records(
     if query.group_bucket.is_some() {
         config.group_bucket = query.group_bucket;
     }
-    if let Err(message) = views::check(&config, &definitions) {
+    if let Err(message) = views::check(&config, &view_fields) {
         return Ok(invalid("filters", message));
     }
     let Some(archived) = Archived::parse(query.archived.as_deref().unwrap_or("")) else {
@@ -1230,7 +1248,7 @@ async fn list_records(
         ));
     };
     let mut spec =
-        Spec::from_config(&config, &definitions, principal.actor_id).searching(words, &definitions);
+        Spec::from_config(&config, &view_fields, principal.actor_id).searching(words, &view_fields);
     spec.archived = archived;
     let source = super::source(&collection);
     if let Some(group) = query.group {
@@ -1248,7 +1266,7 @@ async fn list_records(
     match (query.date_field, query.from.as_deref(), query.to.as_deref()) {
         (None, None, None) => {}
         (Some(field), Some(from), Some(to)) => {
-            match query::date_range(&definitions, field, from, to) {
+            match query::date_range(&view_fields, field, from, to) {
                 Ok(clauses) => spec.narrow(clauses),
                 Err(message) => return Ok(invalid("dateField", message)),
             }
@@ -1325,9 +1343,10 @@ async fn get_record(
     ApiPath((project_id, collection_id, record_id)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<RecordBody>, AppError> {
     let mut connection = state.pool.acquire().await?;
-    reader(&mut connection, &headers, &principal, project_id).await?;
+    let reader = reader(&mut connection, &headers, &principal, project_id).await?;
     let tasks = super::get(&mut *connection, project_id, collection_id)
         .await?
+        .filter(|collection| reader.can_view_tasks || !collection.acts_like_task)
         .ok_or(AppError::NotFound("collection"))?
         .acts_like_task;
     let record = records::find(

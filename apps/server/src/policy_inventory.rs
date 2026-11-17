@@ -1615,24 +1615,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "collections/http",
         Post,
-        "/api/v1/projects/{project_id}/collections/{collection_id}/views",
-        CollectionBuild
-    ),
-    policy_route!(
-        "collections/http",
-        Patch,
-        "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-        CollectionBuild
-    ),
-    policy_route!(
-        "collections/http",
-        Delete,
-        "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-        CollectionBuild
-    ),
-    policy_route!(
-        "collections/http",
-        Post,
         "/api/v1/projects/{project_id}/collections/{collection_id}/records",
         CollectionRecordEdit
     ),
@@ -1748,30 +1730,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "ai/http",
         Post,
         "/api/v1/conversations/{id}/ai/summary",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/views",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/views/{view_id}",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/views/{view_id}",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/views/{view_id}/pin",
         WorkItemView
     ),
     policy_route!(

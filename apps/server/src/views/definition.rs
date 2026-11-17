@@ -524,9 +524,11 @@ pub struct ViewSummary {
     pub view_type: &'static str,
     #[serde(flatten)]
     pub config: ViewConfig,
-    /// 1 is first.
+    /// 1 is first, among the shared views or among the reader's own.
     pub position: i32,
     pub version: i64,
+    /// Everyone's; false for one of the reader's own.
+    pub shared: bool,
 }
 
 impl ViewSummary {
@@ -539,6 +541,7 @@ impl ViewSummary {
             config: view.config.active(definitions),
             position: view.position + 1,
             version: view.version,
+            shared: view.owner_actor_id.is_none(),
         }
     }
 }
@@ -719,7 +722,15 @@ pub async fn create(
     .execute(&mut *connection)
     .await?;
     if let Some(position) = new.position {
-        move_to(connection, project_id, collection_id, new.scope, id, position).await?;
+        move_to(
+            connection,
+            project_id,
+            collection_id,
+            new.scope,
+            id,
+            position,
+        )
+        .await?;
     }
     let view = one(connection, project_id, collection_id, id)
         .await?
@@ -871,7 +882,15 @@ pub async fn change(
     .await?;
     let scope = if share { Scope::Shared } else { scope };
     if moves && let Some(position) = change.position {
-        move_to(connection, project_id, collection_id, scope, view_id, position).await?;
+        move_to(
+            connection,
+            project_id,
+            collection_id,
+            scope,
+            view_id,
+            position,
+        )
+        .await?;
     }
     let view = one(connection, project_id, collection_id, view_id)
         .await?
@@ -994,7 +1013,12 @@ impl Pins {
 }
 
 /// The views every Tasks collection starts with (`collection_views.builtin`).
-pub const BUILTIN_VIEW_KEYS: [&str; 4] = ["my_tasks", "ready_for_agents", "blocked", "recently_changed"];
+pub const BUILTIN_VIEW_KEYS: [&str; 4] = [
+    "my_tasks",
+    "ready_for_agents",
+    "blocked",
+    "recently_changed",
+];
 
 /// `reader`'s pins in a collection.
 pub async fn pins(
@@ -1013,13 +1037,12 @@ pub async fn pins(
     .bind(reader)
     .fetch_all(&mut *connection)
     .await?;
-    let role_defaults = sqlx::query_scalar::<_, Option<Vec<String>>>(
-        "SELECT role_default_pinned_views($1, $2)",
-    )
-    .bind(project_id)
-    .bind(reader)
-    .fetch_one(&mut *connection)
-    .await?;
+    let role_defaults =
+        sqlx::query_scalar::<_, Option<Vec<String>>>("SELECT role_default_pinned_views($1, $2)")
+            .bind(project_id)
+            .bind(reader)
+            .fetch_one(&mut *connection)
+            .await?;
     Ok(Pins {
         own: rows
             .into_iter()

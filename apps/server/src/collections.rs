@@ -122,6 +122,35 @@ pub async fn field_definitions(
     .await
 }
 
+/// The fields a view of the collection can filter, sort and group by: its
+/// fields, and for a collection whose records are tasks every other
+/// built-in a task has too (type, milestone, parent, blocked, ready, who
+/// claimed it and so on; `tasks::system_fields`). A view that names one of
+/// those must be read with them, or its clause would be left out.
+pub async fn view_fields(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection_id: Uuid,
+    include_archived: bool,
+) -> Result<Vec<FieldDefinition>, AppError> {
+    let mut found = field_definitions(
+        &mut *connection,
+        project_id,
+        collection_id,
+        include_archived,
+    )
+    .await?;
+    if found.iter().any(|field| field.id == tasks::STATUS) {
+        let extra = tasks::system_fields(&mut *connection, project_id)
+            .await?
+            .into_iter()
+            .filter(|field| !found.iter().any(|known| known.id == field.id))
+            .collect::<Vec<_>>();
+        found.extend(extra);
+    }
+    Ok(found)
+}
+
 // ---------------------------------------------------------------------------
 // Names
 

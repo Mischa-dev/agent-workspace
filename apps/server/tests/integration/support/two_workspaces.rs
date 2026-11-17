@@ -898,12 +898,20 @@ async fn build_workspace(
             value
         }
     };
-    post(
-        format!("/api/v1/projects/{project}/views"),
+    let tasks_collection = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM collections WHERE project_id = $1::uuid AND builtin = 'tasks'",
+    )
+    .bind(&project)
+    .fetch_one(pool)
+    .await
+    .expect("Tasks collection");
+    let view = post(
+        format!("/api/v2/w/{organization}/ops/view_create"),
         "view-1",
-        json!({"name": format!("Launch view{m}"), "query": {"q": format!("Launch{m}")}}),
+        json!({"collection": tasks_collection, "name": format!("Launch view{m}"), "type": "table"}),
     )
     .await;
+    assert_eq!(view["outcome"], "ok", "{label} view: {view}");
     let task_template = post(
         format!("/api/v1/projects/{project}/task-templates"),
         "template-1",

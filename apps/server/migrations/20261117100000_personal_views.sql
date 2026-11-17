@@ -239,7 +239,7 @@ CREATE FUNCTION add_builtin_task_views(target_collection UUID) RETURNS VOID
 LANGUAGE sql AS $$
     INSERT INTO collection_views
         (id, project_id, collection_id, name, view_type, config, position, created_by_actor_id, builtin)
-    SELECT gen_random_uuid(), collection.project_id, collection.id, builtin.name, 'list',
+    SELECT gen_random_uuid(), collection.project_id, collection.id, builtin.name, 'table',
            builtin.config,
            (SELECT COALESCE(max(view.position) + 1, 0) FROM collection_views view
             WHERE view.collection_id = collection.id AND view.owner_actor_id IS NULL) + builtin.place,
@@ -291,7 +291,7 @@ BEGIN
     END IF;
     INSERT INTO collection_views
         (id, project_id, collection_id, name, view_type, created_by_actor_id)
-    VALUES (gen_random_uuid(), target_project, found_id, 'All tasks', 'list', actor);
+    VALUES (gen_random_uuid(), target_project, found_id, 'All tasks', 'table', actor);
     PERFORM add_builtin_task_views(found_id);
     RETURN found_id;
 END
@@ -304,7 +304,7 @@ INSERT INTO collection_views
     (id, project_id, collection_id, name, view_type, config, position, created_by_actor_id,
      owner_actor_id, created_at, updated_at)
 SELECT saved.id, saved.project_id, collection.id, saved.name,
-       CASE saved.layout WHEN 'board' THEN 'board' ELSE 'list' END,
+       CASE saved.layout WHEN 'board' THEN 'board' ELSE 'table' END,
        task_view_config(saved.query, saved.layout),
        1000 + saved.position, COALESCE(member.actor_id, collection.created_by_actor_id),
        saved.owner_actor_id, saved.created_at, saved.updated_at

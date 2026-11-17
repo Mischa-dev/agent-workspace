@@ -174,9 +174,13 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   // A link to such a record (an embed, an old link) opens its task.
   if (taskLike && recordId) return <Navigate replace to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(recordId)}`} />
   const body = { ...collection.data, canBuild: collection.data.canChangeFields }
-  const canSaveViews = collection.data.canBuild && !(Boolean(project.archivedAt) || body.collection.archived)
-  const views = [...body.views].sort((left, right) => left.position - right.position)
+  // Shared views first, then the person's own.
+  const views = [...body.views].sort((left, right) => Number(right.shared) - Number(left.shared) || left.position - right.position)
   const view = views.find((entry) => entry.id === params.get('view')) ?? views[0] ?? null
+  const writable = !(Boolean(project.archivedAt) || body.collection.archived)
+  // Anyone keeps views of their own; shared ones are the builders'.
+  const canAddViews = writable
+  const canSaveViews = writable && (collection.data.canBuild || view?.shared === false)
   // What the view and its unsaved changes say, without what names an archived field.
   const viewConfig = view ? activeConfig(view.config, body.fields) : NO_CONFIG
   const unsaved = view ? drafts[view.id] : undefined
@@ -222,12 +226,12 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
     if (!view || !draft) return
     setSaving(true)
     try {
-      keepView(await updateView(projectId, collectionId, view, { config: draft }))
+      keepView(await updateView(view, { config: draft }))
       dropDraft(view.id, unsaved)
       void client.invalidateQueries({ queryKey: collectionKeys.one(projectId, collectionId) })
       showToast({ tone: 'success', title: `${view.name} saved` })
     } catch (error) {
-      const conflict = isApiError(error) && error.code === 'version_conflict'
+      const conflict = isApiError(error) && (error.code === 'conflict' || error.code === 'version_conflict')
       showToast({
         tone: 'danger',
         title: `${view.name} wasn’t saved`,
@@ -305,7 +309,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
         ] satisfies MenuEntry[])
       : []),
   ]
-  const viewMenu: MenuEntry[] = view
+  const viewMenu: MenuEntry[] = view && canSaveViews
     ? [
         { label: 'Rename view…', icon: 'pencil', onSelect: () => setDialog({ kind: 'rename-view', view }) },
         ...(views.length > 1 ? [{ label: 'Delete view…', icon: 'trash' as const, danger: true, onSelect: () => setDialog({ kind: 'delete-view', view }) }] : []),
@@ -357,8 +361,8 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           </Banner>
         ) : null}
         <div className="aw-collection__views">
-          <PageTabs current={view?.id ?? ''} label="Views" tabs={views.map((entry) => ({ id: entry.id, label: entry.name, to: `?view=${encodeURIComponent(entry.id)}` }))} />
-          {canSaveViews ? (
+          <PageTabs current={view?.id ?? ''} label="Views" tabs={views.map((entry) => ({ id: entry.id, label: entry.shared ? entry.name : `${entry.name} (only you)`, to: `?view=${encodeURIComponent(entry.id)}` }))} />
+          {canAddViews ? (
             <>
               <IconButton icon="plus" label="New view" onClick={() => setDialog({ kind: 'new-view' })} size="sm" />
               {viewMenu.length ? <Menu items={viewMenu} label="View options" trigger={<IconButton icon="more" label="View options" size="sm" />} /> : null}
@@ -457,7 +461,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           layout="table"
           onClose={() => setDialog(null)}
           onSubmit={async (name, type) => {
-            const created = await createView(projectId, collectionId, { name, type, config })
+            const created = await createView(collectionId, { name, type, config, shared: collection.data.canBuild })
             keepView(created)
             if (view) dropDraft(view.id)
             void navigate(`?view=${encodeURIComponent(created.id)}`)
@@ -470,7 +474,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
         <ViewNameDialog
           initial={dialog.view.name}
           onClose={() => setDialog(null)}
-          onSubmit={async (name) => keepView(await updateView(projectId, collectionId, dialog.view, { name }))}
+          onSubmit={async (name) => keepView(await updateView(dialog.view, { name }))}
           submitLabel="Rename"
           title="Rename view"
         />
@@ -486,7 +490,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           onConfirm={() => {
             const removed = dialog.view
             setDeleteProblem(null)
-            deleteView(projectId, collectionId, removed.id).then(
+            deleteView(removed.id).then(
               () => {
                 client.setQueryData<CollectionBody>(collectionKeys.one(projectId, collectionId), (current) =>
                   current ? { ...current, views: current.views.filter((entry) => entry.id !== removed.id) } : current,

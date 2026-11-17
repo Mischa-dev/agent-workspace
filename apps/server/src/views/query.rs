@@ -452,14 +452,29 @@ impl Spec {
                 builder.push_bind(options);
                 builder.push("::text[])");
             }
-            if let Some(number) = word
-                .trim_start_matches('#')
+            // "42", "#42" or a key such as "AW-42" (the project's own key).
+            let digits = word.trim_start_matches('#');
+            let (key, digits) = match digits.rsplit_once('-') {
+                Some((key, number)) if !key.is_empty() => (Some(key), number),
+                _ => (None, digits),
+            };
+            if let Some(number) = digits
                 .parse::<i64>()
                 .ok()
-                .filter(|number| *number > 0)
+                .filter(|number| *number > 0 && digits.chars().all(|c| c.is_ascii_digit()))
             {
-                builder.push(" OR record.number = ");
+                builder.push(" OR (record.number = ");
                 builder.push_bind(number);
+                if let Some(key) = key {
+                    builder.push(
+                        " AND EXISTS (SELECT 1 FROM projects search_project \
+                         WHERE search_project.id = record.project_id \
+                           AND lower(search_project.project_key) = ",
+                    );
+                    builder.push_bind(key.to_lowercase());
+                    builder.push(")");
+                }
+                builder.push(")");
             }
             builder.push(")");
         }

@@ -287,87 +287,101 @@ async fn saved_views_stay_private_unless_shared() {
         return;
     };
     let base = format!("/api/v1/projects/{}", fixture.project_id);
-    let (status, list) = fixture.owner.get(&format!("{base}/views")).await;
-    assert_eq!(status, StatusCode::OK, "{list}");
-    let ready = views_named(&list, "Ready for agents");
+    let ops = |name: &str| format!("/api/v2/w/{}/ops/{name}", fixture.organization_id);
+    let tasks = sqlx::query_scalar::<_, Uuid>(
+        "SELECT ensure_tasks_collection($1, (SELECT actor_id FROM project_memberships \
+         WHERE project_id = $1 ORDER BY created_at LIMIT 1))",
+    )
+    .bind(fixture.project_id)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("Tasks collection");
+    let (status, list) = fixture
+        .owner
+        .post(&ops("view_list"), json!({"collection": tasks}))
+        .await;
+    assert_eq!(list["outcome"], "ok", "{status} {list}");
+    let list = &list["value"];
+    let ready = views_named(list, "Ready for agents");
     assert_eq!(ready.len(), 1, "{list}");
     assert_eq!(ready[0]["pinned"], true);
-    assert!(
-        ready[0]["href"]
-            .as_str()
-            .expect("present")
-            .contains("ready=true")
-    );
-    assert_eq!(ready[0]["canDelete"], false);
+    assert_eq!(ready[0]["builtin"], "ready_for_agents");
 
+    // The built-in fields: assignee and priority (high).
     let (status, mine) = fixture
         .member
         .post(
-            &format!("{base}/views"),
-            json!({"name": "My bugs", "query": {"assigneeActorId": "me", "priority": "high"}, "fields": ["key", "status"]}),
+            &ops("view_create"),
+            json!({"collection": tasks, "name": "My bugs", "type": "table", "config": {"filters": [
+                {"field": "0192f5c0-0000-7000-8000-000000000002", "op": "is", "values": ["me"]},
+                {"field": "0192f5c0-0000-7000-8000-000000000003", "op": "is", "values": ["0192f5c0-0000-7000-8000-0000000000a2"]},
+            ]}}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{mine}");
+    assert_eq!(mine["outcome"], "ok", "{status} {mine}");
+    let mine = &mine["value"];
     assert_eq!(mine["shared"], false);
     // "me" is kept as written and read as whoever looks at the view.
-    assert_eq!(mine["query"]["assigneeActorId"], "me");
-    assert!(
-        mine["resolvedQuery"]["assigneeActorId"]
-            .as_str()
-            .and_then(|id| id.parse::<Uuid>().ok())
-            .is_some(),
-        "{mine}"
-    );
+    assert_eq!(mine["config"]["filters"][0]["values"][0], "me", "{mine}");
     let view_id = mine["id"].as_str().expect("view id").to_owned();
 
     // Someone else's personal view is invisible and can't be changed.
-    let (_, owners) = fixture.owner.get(&format!("{base}/views")).await;
-    assert!(views_named(&owners, "My bugs").is_empty(), "{owners}");
-    let (status, _) = fixture
+    let (_, owners) = fixture
         .owner
-        .patch(
-            &format!("{base}/views/{view_id}"),
-            json!({"expectedVersion": 1, "name": "Taken"}),
+        .post(&ops("view_list"), json!({"collection": tasks}))
+        .await;
+    let owners = &owners["value"];
+    assert!(views_named(owners, "My bugs").is_empty(), "{owners}");
+    let (status, taken) = fixture
+        .owner
+        .post(
+            &ops("view_update"),
+            json!({"view": view_id, "name": "Taken"}),
         )
         .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_ne!(taken["outcome"], "ok", "{status} {taken}");
 
-    // A query the list would refuse is refused when saved.
+    // A config the engine doesn't read is refused when saved.
     let (status, refused) = fixture
         .member
         .post(
-            &format!("{base}/views"),
-            json!({"name": "Broken", "query": {"cursor": "abc"}}),
+            &ops("view_create"),
+            json!({"collection": tasks, "name": "Broken", "type": "table", "config": {"cursor": "abc"}}),
         )
         .await;
-    assert!(status.is_client_error(), "{refused}");
+    assert_ne!(refused["outcome"], "ok", "{status} {refused}");
 
     // Built-ins can be pinned and unpinned per person but not deleted.
-    let blocked = views_named(&owners, "Blocked")[0]["id"]
+    let blocked = views_named(owners, "Blocked")[0]["id"]
         .as_str()
         .expect("blocked id")
         .to_owned();
     let (status, pinned) = fixture
         .member
-        .post(
-            &format!("{base}/views/{blocked}/pin"),
-            json!({"pinned": true}),
-        )
+        .post(&ops("view_pin"), json!({"view": blocked, "pinned": true}))
         .await;
-    assert_eq!(status, StatusCode::OK, "{pinned}");
-    let (_, member_list) = fixture.member.get(&format!("{base}/views")).await;
-    assert_eq!(views_named(&member_list, "Blocked")[0]["pinned"], true);
-    let (_, owner_list) = fixture.owner.get(&format!("{base}/views")).await;
-    assert_eq!(views_named(&owner_list, "Blocked")[0]["pinned"], false);
-    let (status, _) = fixture
+    assert_eq!(pinned["outcome"], "ok", "{status} {pinned}");
+    let (_, member_list) = fixture
+        .member
+        .post(&ops("view_list"), json!({"collection": tasks}))
+        .await;
+    assert_eq!(
+        views_named(&member_list["value"], "Blocked")[0]["pinned"],
+        true
+    );
+    let (_, owner_list) = fixture
         .owner
-        .send(
-            "DELETE",
-            &format!("{base}/views/{blocked}"),
-            Some(json!({})),
-        )
+        .post(&ops("view_list"), json!({"collection": tasks}))
         .await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        views_named(&owner_list["value"], "Blocked")[0]["pinned"],
+        false
+    );
+    let (status, kept) = fixture
+        .owner
+        .post(&ops("view_delete"), json!({"view": blocked}))
+        .await;
+    assert_ne!(kept["outcome"], "ok", "{status} {kept}");
 
     let (status, work) = fixture.owner.get("/api/v1/my-work").await;
     assert_eq!(status, StatusCode::OK, "{work}");

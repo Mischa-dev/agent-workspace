@@ -1086,31 +1086,6 @@ async fn filters_take_several_values_and_leave_tasks_out() {
     assert_eq!(keys, [frontend], "{columns:?}");
     assert_eq!(titles(&columns[0]["items"]), ["Theirs"]);
 
-    // A saved view keeps several values, "me" among them for whoever opens it.
-    let (status, view) = owner
-        .post(
-            &format!("{base}/views"),
-            json!({
-                "name": "Not mine, in flight",
-                "query": { "statusId": format!("{ready},{started}"), "notAssigneeActorId": "me,none" },
-            }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::CREATED, "{view}");
-    assert_eq!(
-        view["resolvedQuery"]["notAssigneeActorId"],
-        format!("{me},none"),
-        "{view}"
-    );
-    let resolved = view["resolvedQuery"]
-        .as_object()
-        .expect("resolved query")
-        .iter()
-        .map(|(key, value)| format!("{key}={}", value.as_str().expect("value")))
-        .collect::<Vec<_>>()
-        .join("&");
-    assert_eq!(list(resolved).await, ["Theirs"]);
-
     // A filter chip names whoever it picks, however far down a search they'd be.
     let stranger = Uuid::now_v7();
     let (status, named) = owner

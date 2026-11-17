@@ -1265,21 +1265,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views",
-            Tool("collection_write"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            Tool("collection_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            Tool("collection_write"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/collections/{collection_id}/records",
             Tool("record_write"),
         ),

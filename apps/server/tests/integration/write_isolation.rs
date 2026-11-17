@@ -231,9 +231,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/fields",
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
-    "POST /api/v1/projects/{project_id}/collections/{collection_id}/views",
-    "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-    "DELETE /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/records",
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
     "POST /api/v1/projects/{project_id}/sheets",
@@ -271,10 +268,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/task-templates",
     "PATCH /api/v1/projects/{project_id}/task-templates/{template_id}",
     "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
-    "POST /api/v1/projects/{project_id}/views",
-    "DELETE /api/v1/projects/{project_id}/views/{view_id}",
-    "PATCH /api/v1/projects/{project_id}/views/{view_id}",
-    "POST /api/v1/projects/{project_id}/views/{view_id}/pin",
     "PUT /api/v1/projects/{project_id}/work-item-workflow",
     "POST /api/v1/projects/{project_id}/work-items",
     "POST /api/v1/projects/{project_id}/work-items/bulk",
@@ -577,7 +570,11 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "thread_start",
     "thread_update",
     "usage_batch_launch",
-    "view_write",
+    "view_create",
+    "view_default_set",
+    "view_delete",
+    "view_pin",
+    "view_update",
     "webhook_write",
     "whiteboard_create",
     "whiteboard_duplicate",
@@ -1791,16 +1788,18 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         wren,
         label: in_project("SELECT id FROM project_labels WHERE project_id = $1").await,
         field: in_project(
-            "SELECT id FROM field_definitions WHERE project_id = $1 AND collection_id IS NULL AND field_type = 'single_choice'",
+            "SELECT id FROM field_definitions WHERE project_id = $1 AND field_type = 'single_choice' AND archived_at IS NULL ORDER BY position LIMIT 1",
         )
         .await,
         person_field: in_project(
-            "SELECT id FROM field_definitions WHERE project_id = $1 AND collection_id IS NULL AND field_type = 'person'",
+            "SELECT id FROM field_definitions WHERE project_id = $1 AND field_type = 'person' AND archived_at IS NULL ORDER BY position LIMIT 1",
         )
         .await,
         milestone: in_project("SELECT id FROM project_milestones WHERE project_id = $1").await,
-        view: in_project("SELECT id FROM saved_views WHERE project_id = $1 AND builtin IS NULL")
-            .await,
+        view: in_project(
+            "SELECT id FROM collection_views WHERE project_id = $1 AND owner_actor_id IS NOT NULL",
+        )
+        .await,
         task_template: in_project("SELECT id FROM task_templates WHERE project_id = $1").await,
         recurring: in_project("SELECT id FROM recurring_tasks WHERE project_id = $1").await,
         project_template: in_organization(
@@ -2002,7 +2001,7 @@ struct Spares {
     provider_account: Uuid,
     /// A custom role nobody holds, removed.
     role: Uuid,
-    /// A second view in A's collection, removed (a collection keeps one).
+    /// A second view in A's collection, removed by view_delete.
     collection_view: Uuid,
 }
 
@@ -2597,14 +2596,12 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         app,
         browser,
         "POST",
-        &format!(
-            "/api/v1/projects/{project}/collections/{}/views",
-            a.collection
-        ),
-        json!({"name": "Net spare view"}),
+        &format!("/api/v2/w/{}/ops/view_create", a.organization),
+        json!({"collection": a.collection, "name": "Net spare view", "type": "table", "shared": true}),
     )
     .await;
-    let collection_view = Uuid::parse_str(&string_at(&view, "/id")).expect("spare collection view");
+    let collection_view =
+        Uuid::parse_str(&string_at(&view, "/value/id")).expect("spare collection view");
 
     // Last, so it's the newest of A's sessions: revoked by A's own request.
     login_as(app, "owner").await;
@@ -4964,42 +4961,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             Expect::Rejected,
         )]),
         path_case(
-            "POST /api/v1/projects/{project_id}/collections/{collection_id}/views",
-            &[project(), id(a.collection, b.collection)],
-            json_body(json!({"name": "Net view", "config": {"sort": [{"field": "title"}]}})),
-        )
-        .rejecting(vec![
-            json!({"name": "Net view", "config": {"filters": [{"field": b.collection_field, "op": "notEmpty"}]}}),
-            json!({"name": "Net view", "config": {"groupBy": b.collection_field}}),
-            json!({"name": "Net view", "config": {"sort": [{"field": b.collection_field.to_string()}]}}),
-            json!({"name": "Net view", "config": {"columns": [{"field": b.collection_field}]}}),
-            json!({"name": "Net view", "config": {"filters": [{"field": ax.record_fields[0], "op": "is", "values": [b.rook]}]}}),
-            json!({"name": "Net view", "config": {"filters": [{"field": ax.record_fields[1], "op": "is", "values": [b.task]}]}}),
-            json!({"name": "Net view", "config": {"filters": [{"field": ax.record_fields[2], "op": "is", "values": [b.page]}]}}),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            &[
-                project(),
-                id(a.collection, b.collection),
-                id(a.collection_view, b.collection_view),
-            ],
-            versioned("collection_views", 2, json!({"name": "Net renamed view"})),
-        )
-        .rejecting(vec![json!({
-            "config": {"groupBy": b.collection_field},
-            "expectedVersion": version("collection_views", a.collection_view),
-        })]),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            &[
-                project(),
-                id(a.collection, b.collection),
-                id(sp.collection_view, b.collection_view),
-            ],
-            empty(),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/collections/{collection_id}/records",
             &[project(), id(a.collection, b.collection)],
             json_body(json!({"title": "Net record", "values": keyed(ax.record_fields[0], json!("me"))})),
@@ -5302,28 +5263,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[project(), secret()],
             empty(),
         ),
-        // Views
-        path_case(
-            "POST /api/v1/projects/{project_id}/views",
-            &[project()],
-            json_body(json!({"name": "Net view"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/views/{view_id}",
-            &[project(), id(ax.view, bx.view)],
-            versioned("saved_views", 1, json!({"name": "Launch view"})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/views/{view_id}/pin",
-            &[project(), id(ax.view, bx.view)],
-            json_body(json!({"pinned": true})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/views/{view_id}",
-            &[project(), id(ax.view, bx.view)],
-            empty(),
-        )
-        .last(),
         // The workflow
         path_case(
             "PUT /api/v1/projects/{project_id}/work-item-workflow",
@@ -6863,21 +6802,56 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"projectId": b.project, "name": "Net mcp sheet"}),
             ],
         ),
+        // Views (T1.6): a view goes in the collection named; B's views and
+        // collections can't be changed, pinned or made a default from A,
+        // and a filter can't name B's things.
         mcp_case(
-            "view_write",
-            json!({"projectId": a.project, "name": "Net mcp view", "query": {"assigneeActorId": "me"}, "pinned": true}),
+            "view_create",
+            json!({"collection": a.collection, "name": "Net mcp view", "type": "table"}),
             vec![
-                json!({"projectId": b.project, "name": "Net mcp view"}),
-                json!({"projectId": b.project, "view": bx.view, "name": "Net"}),
-                json!({"projectId": a.project, "view": bx.view, "name": "Net"}),
-                json!({"projectId": a.project, "view": bx.view, "pinned": true}),
-                json!({"projectId": a.project, "view": bx.view, "delete": true}),
+                json!({"collection": b.collection, "name": "Net mcp view", "type": "table"}),
+                json!({"collection": b.collection, "name": "Net shared", "type": "table", "shared": true}),
             ],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "name": "Net", "query": {"milestoneId": bx.milestone}}),
-            json!({"projectId": a.project, "name": "Net", "query": {"labelIds": bx.label}}),
+            json!({"collection": a.collection, "name": "Net", "type": "table", "config": {"filters": [{"field": b.collection_field, "op": "notEmpty"}]}}),
+            json!({"collection": a.collection, "name": "Net", "type": "table", "config": {"groupBy": b.collection_field}}),
+            json!({"collection": a.collection, "name": "Net", "type": "table", "config": {"filters": [{"field": ax.record_fields[0], "op": "is", "values": [b.rook]}]}}),
+            json!({"collection": a.collection, "name": "Net", "type": "table", "config": {"filters": [{"field": ax.record_fields[1], "op": "is", "values": [b.task]}]}}),
         ]),
+        mcp_case(
+            "view_update",
+            json!({"view": a.collection_view, "name": "Net renamed view"}),
+            vec![
+                json!({"view": b.collection_view, "name": "Net"}),
+                json!({"view": bx.view, "name": "Net"}),
+            ],
+        )
+        .rejecting(vec![json!({"view": a.collection_view, "config": {"groupBy": b.collection_field}})]),
+        mcp_case(
+            "view_pin",
+            json!({"view": a.collection_view, "pinned": true}),
+            vec![
+                json!({"view": b.collection_view, "pinned": true}),
+                json!({"view": bx.view, "pinned": true}),
+            ],
+        ),
+        mcp_case(
+            "view_default_set",
+            json!({"collection": a.collection, "view": a.collection_view}),
+            vec![
+                json!({"collection": b.collection, "view": b.collection_view}),
+                json!({"collection": a.collection, "view": b.collection_view}),
+            ],
+        ),
+        mcp_case(
+            "view_delete",
+            json!({"view": sp.collection_view}),
+            vec![
+                json!({"view": b.collection_view}),
+                json!({"view": bx.view}),
+            ],
+        ),
         mcp_case(
             "label_write",
             json!({"projectId": a.project, "name": "Net mcp label"}),

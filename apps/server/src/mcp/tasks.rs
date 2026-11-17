@@ -29,12 +29,12 @@ use crate::{
     collections::{task_query, tasks},
     error::AppError,
     fields::{FieldClause, FieldOp},
+    policy::Action,
     views::{
         definition::{Direction, SortRule, ViewConfig},
         filter::Filter,
         query::{Archived, Spec},
     },
-    policy::Action,
     work_item_commands::{
         ChangeFinalization, ChangePayload, CommandActor, LinkChange, LinkWording, LockedWorkItem,
         PullRequestLinkChange, RepositoryLinkOutcome, ThreadLinkOutcome, advance_version,
@@ -817,7 +817,6 @@ async fn list_tasks(
         }
     };
 
-
     let mut all = Vec::<Filter>::new();
     // Fields the call filters on itself: a view's filter on the same
     // field gives way to the call's.
@@ -844,7 +843,12 @@ async fn list_tasks(
     if !assignee.is_empty() || !not_assignee.is_empty() {
         passed.push(tasks::ASSIGNEE);
     }
-    all.extend(any_of(tasks::ASSIGNEE, &assignees.0, assignees.1, !assignee.is_empty()));
+    all.extend(any_of(
+        tasks::ASSIGNEE,
+        &assignees.0,
+        assignees.1,
+        !assignee.is_empty(),
+    ));
     all.extend(none_of(tasks::ASSIGNEE, &not_assignees.0, not_assignees.1));
     match parent {
         Some(Parent::Of(id)) => all.push(clause(tasks::PARENT, FieldOp::Is, vec![id.to_string()])),
@@ -875,7 +879,12 @@ async fn list_tasks(
     };
     let (any_priorities, no_priority) = priority_ids(&priorities);
     let (not_priority_ids, not_no_priority) = priority_ids(&not_priorities);
-    all.extend(any_of(tasks::PRIORITY, &any_priorities, no_priority, !priorities.is_empty()));
+    all.extend(any_of(
+        tasks::PRIORITY,
+        &any_priorities,
+        no_priority,
+        !priorities.is_empty(),
+    ));
     all.extend(none_of(tasks::PRIORITY, &not_priority_ids, not_no_priority));
     if !priorities.is_empty() || !not_priorities.is_empty() {
         passed.push(tasks::PRIORITY);
@@ -955,8 +964,17 @@ async fn list_tasks(
         all.push(flag(tasks::BLOCKED, blocked));
         passed.push(tasks::BLOCKED);
     }
-    all.extend(any_of(tasks::MILESTONE, &milestones.0, milestones.1, !milestone.is_empty()));
-    all.extend(none_of(tasks::MILESTONE, &not_milestones.0, not_milestones.1));
+    all.extend(any_of(
+        tasks::MILESTONE,
+        &milestones.0,
+        milestones.1,
+        !milestone.is_empty(),
+    ));
+    all.extend(none_of(
+        tasks::MILESTONE,
+        &not_milestones.0,
+        not_milestones.1,
+    ));
     if !milestone.is_empty() || !not_milestone.is_empty() {
         passed.push(tasks::MILESTONE);
     }
@@ -965,15 +983,27 @@ async fn list_tasks(
         passed.push(tasks::READY);
     }
     if let Some(date) = due_before {
-        all.push(clause(tasks::DUE_DATE, FieldOp::Lte, vec![date.to_string()]));
+        all.push(clause(
+            tasks::DUE_DATE,
+            FieldOp::Lte,
+            vec![date.to_string()],
+        ));
     }
     if let Some(date) = due_after {
-        all.push(clause(tasks::DUE_DATE, FieldOp::Gte, vec![date.to_string()]));
+        all.push(clause(
+            tasks::DUE_DATE,
+            FieldOp::Gte,
+            vec![date.to_string()],
+        ));
     }
     let finished = vec!["completed".to_owned(), "canceled".to_owned()];
     match arguments.overdue {
         Some(true) => {
-            all.push(clause(tasks::DUE_DATE, FieldOp::Within, vec!["overdue".to_owned()]));
+            all.push(clause(
+                tasks::DUE_DATE,
+                FieldOp::Within,
+                vec!["overdue".to_owned()],
+            ));
             all.push(clause(tasks::STATUS, FieldOp::CategoryIsNot, finished));
         }
         Some(false) => all.push(Filter::Or(vec![
@@ -993,11 +1023,20 @@ async fn list_tasks(
     passed.extend(field_clauses.iter().map(|clause| clause.field));
     all.extend(field_clauses.into_iter().map(Filter::Clause));
     if let Some(view) = &view {
-        all.push(view.config.filters.retain(&|clause| !passed.contains(&clause.field)));
+        all.push(
+            view.config
+                .filters
+                .retain(&|clause| !passed.contains(&clause.field)),
+        );
     }
 
     // The words, or one task by its key (AW-12).
-    let query = arguments.query.as_deref().unwrap_or_default().trim().to_owned();
+    let query = arguments
+        .query
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
     let mut only = None;
     let mut words = Vec::new();
     if let Some((key, number)) = task_key(&query) {
@@ -1049,9 +1088,13 @@ async fn list_tasks(
             None => task_query::tasks_collection(&mut transaction, *project).await?,
         };
         if let Some(collection_id) = collection_id {
-            for field in
-                crate::collections::field_definitions(&mut transaction, *project, collection_id, false)
-                    .await?
+            for field in crate::collections::field_definitions(
+                &mut transaction,
+                *project,
+                collection_id,
+                false,
+            )
+            .await?
             {
                 if !definitions.iter().any(|known| known.id == field.id) {
                     definitions.push(field);
@@ -1059,8 +1102,8 @@ async fn list_tasks(
             }
         }
     }
-    let mut spec = Spec::from_config(&config, &definitions, principal.actor_id)
-        .searching(words, &definitions);
+    let mut spec =
+        Spec::from_config(&config, &definitions, principal.actor_id).searching(words, &definitions);
     spec.archived = if arguments.include_archived.unwrap_or(false) {
         Archived::Include
     } else {
@@ -1072,7 +1115,8 @@ async fn list_tasks(
         .as_deref()
         .map(str::trim)
         .filter(|cursor| !cursor.is_empty());
-    let Ok(page) = crate::views::query::page(&mut transaction, &source, &spec, cursor, limit).await?
+    let Ok(page) =
+        crate::views::query::page(&mut transaction, &source, &spec, cursor, limit).await?
     else {
         return Ok(Err(ToolResult::invalid(
             "cursor",

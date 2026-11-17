@@ -1,6 +1,7 @@
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { callOp, type OpInput, type OpOutput } from '../api/ops'
 import { normalizeField, normalizeReferences, normalizeValues, type DateBucket, type FieldClause, type FieldDefinition, type FieldReference, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import type { ViewKind } from '../views/kinds'
 import { collectionKeys } from './keys'
@@ -60,7 +61,7 @@ export type ViewType = Extract<ViewKind, 'table' | 'board' | 'gallery' | 'calend
 export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'gallery', 'calendar']
 const asViewType = (value: unknown): ViewType => (VIEW_TYPES as readonly unknown[]).includes(value) ? (value as ViewType) : 'table'
 
-export type CollectionView = { id: string; name: string; type: ViewType; config: ViewConfig; position: number; version: number }
+export type CollectionView = { id: string; name: string; type: ViewType; config: ViewConfig; position: number; version: number; /** Everyone's; false for the person's own. */ shared: boolean }
 
 export type CollectionBody = {
   collection: CollectionSummary
@@ -208,6 +209,7 @@ function normalizeView(value: unknown): CollectionView {
     config: normalizeConfig(raw),
     position: asNumber(raw.position),
     version: asNumber(raw.version, 1),
+    shared: raw.shared !== false,
   }
 }
 
@@ -330,31 +332,47 @@ export function configJson(config: ViewConfig) {
   }
 }
 
-export async function createView(projectId: string, collectionId: string, input: { name: string; type?: ViewType; config: ViewConfig }) {
-  return normalizeView(
-    await requestJson<unknown>(`${collectionPath(projectId, collectionId)}/views`, {
-      method: 'POST',
-      idempotencyKey: crypto.randomUUID(),
-      json: { name: input.name, type: input.type ?? 'table', config: configJson(input.config) },
+function viewFromEntry(entry: OpOutput<'view_create'>): CollectionView {
+  return {
+    id: entry.id,
+    name: entry.name,
+    type: asViewType(entry.type),
+    config: normalizeConfig(entry.config),
+    position: entry.position,
+    version: entry.version,
+    shared: entry.shared,
+  }
+}
+
+/** Adds a view: shared with everyone who sees the collection, or the person's own. */
+export async function createView(collectionId: string, input: { name: string; type?: ViewType; config: ViewConfig; shared: boolean }) {
+  return viewFromEntry(
+    await callOp('view_create', {
+      collection: collectionId,
+      name: input.name,
+      type: input.type ?? 'table',
+      config: configJson(input.config) as OpInput<'view_create'>['config'],
+      shared: input.shared,
     }),
   )
 }
 
-export async function updateView(projectId: string, collectionId: string, view: CollectionView, change: { name?: string; config?: ViewConfig }) {
-  return normalizeView(
-    await requestJson<unknown>(`${collectionPath(projectId, collectionId)}/views/${encodeURIComponent(view.id)}`, {
-      method: 'PATCH',
-      idempotencyKey: crypto.randomUUID(),
-      json: { expectedVersion: view.version, ...(change.name ? { name: change.name } : {}), ...(change.config ? { config: configJson(change.config) } : {}) },
-    }),
+export async function updateView(view: CollectionView, change: { name?: string; config?: ViewConfig }) {
+  return viewFromEntry(
+    await callOp(
+      'view_update',
+      {
+        view: view.id,
+        ...(change.name ? { name: change.name } : {}),
+        ...(change.config ? { config: configJson(change.config) as OpInput<'view_update'>['config'] } : {}),
+      },
+      { expectedVersion: view.version },
+    ),
   )
 }
 
-export async function deleteView(projectId: string, collectionId: string, viewId: string) {
-  await requestJson<unknown>(`${collectionPath(projectId, collectionId)}/views/${encodeURIComponent(viewId)}`, {
-    method: 'DELETE',
-    idempotencyKey: crypto.randomUUID(),
-  })
+export async function deleteView(viewId: string) {
+  await callOp('view_delete', { view: viewId })
 }
 
 /** What a list of records asks for: a saved view, and whatever the person changed on top of it. */

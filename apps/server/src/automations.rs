@@ -45,6 +45,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
+    collections::task_query::{self, TaskQuery},
     error::{ApiJson, ApiPath, AppError},
     events::{self, Caller, Event, Subject},
     idempotency::IdempotencyKey,
@@ -53,7 +54,6 @@ use crate::{
     mcp::{self, McpPrincipal},
     notifications::{self, NewNotification},
     policy::{Action as PolicyAction, ActorKind, AgentLimits, with_agent_limits},
-    collections::task_query::{self, TaskQuery},
     views::filter::Filter,
     work_items::templates::{Frequency, Schedule},
 };
@@ -1495,7 +1495,9 @@ fn params_of(value: &Value) -> BTreeMap<String, String> {
         .map(|object| {
             object
                 .iter()
-                .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_owned())))
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_owned()))
+                })
                 .collect()
         })
         .unwrap_or_default()

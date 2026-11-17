@@ -20,3 +20,13 @@ WHERE field.record_kind = 'task'
 ALTER TABLE field_definitions
     DROP COLUMN record_kind,
     ALTER COLUMN collection_id SET NOT NULL;
+
+-- A record's link fields are its collection's own now (the Tasks
+-- collection's included), so the links that follow them read only those.
+CREATE OR REPLACE FUNCTION links_record_field_ids(r collection_records) RETURNS UUID[]
+LANGUAGE sql STABLE AS $$
+    SELECT ARRAY(
+        SELECT definition.id FROM field_definitions definition
+        WHERE definition.project_id = r.project_id AND definition.field_type = 'link'
+          AND definition.collection_id = r.collection_id)
+$$;

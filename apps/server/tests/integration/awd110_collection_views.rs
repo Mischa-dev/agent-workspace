@@ -374,45 +374,19 @@ async fn board_columns_and_calendar_months_read_only_their_own_records() {
     }
 
     // The app makes a board from the page, on the field that fits.
-    let (status, made) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &format!("{uri}/views"),
-        json!({"name": "Stages", "type": "board"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
-    assert_eq!(made["type"], "board");
-    assert_eq!(made["groupBy"], stage["id"]);
-    let (status, made) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &format!("{uri}/views"),
-        json!({"name": "Months", "type": "calendar", "config": {"dateField": ships}}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
-    assert_eq!(made["dateField"], json!(ships));
-    let (status, refused) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &format!("{uri}/views"),
-        json!({"name": "Wrong", "type": "calendar", "config": {"dateField": notes}}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
-    let (status, refused) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &format!("{uri}/views"),
-        json!({"name": "Odd", "type": "timeline"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let ops = format!("/api/v2/w/{}/ops/view_create", setup.organization_id);
+    let make = |body: Value| write(&setup, &setup.browser, "POST", &ops, body);
+    let (status, made) =
+        make(json!({"collection": collection, "name": "Stages", "type": "board", "shared": true}))
+            .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    assert_eq!(made["value"]["type"], "board");
+    assert_eq!(made["value"]["config"]["groupBy"], stage["id"]);
+    let (status, made) = make(json!({"collection": collection, "name": "Months", "type": "calendar", "config": {"dateField": ships}})).await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    assert_eq!(made["value"]["config"]["dateField"], json!(ships));
+    let (status, refused) = make(json!({"collection": collection, "name": "Wrong", "type": "calendar", "config": {"dateField": notes}})).await;
+    assert_ne!(refused["outcome"], "ok", "{status} {refused}");
 }
 
 fn urlencode(value: &str) -> String {

@@ -102,6 +102,8 @@ export type ThingInput = { id: string; kind: SubjectKind }
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
+export type ViewEntry = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
+
 export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName?: string | null; title: string }
 
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
@@ -288,6 +290,30 @@ export type ThreadFollowedListInput = { limit?: number | null; openOnly?: boolea
 
 export type ThreadFollowedListOutput = { threads: FollowedThreadView[] }
 
+export type ViewCreateInput = { collection: string; config?: unknown; name: string; position?: number | null; shared?: boolean; type: string }
+
+export type ViewCreateOutput = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
+
+export type ViewDefaultSetInput = { collection: string; role?: string | null; view?: string | null }
+
+export type ViewDefaultSetOutput = { defaultViewId?: string | null }
+
+export type ViewDeleteInput = { view: string }
+
+export type ViewDeleteOutput = { removed: string }
+
+export type ViewListInput = { collection: string }
+
+export type ViewListOutput = { defaultViewId?: string | null; views: ViewEntry[] }
+
+export type ViewPinInput = { pinned: boolean; position?: number | null; view: string }
+
+export type ViewPinOutput = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
+
+export type ViewUpdateInput = { config?: unknown; expectedVersion?: number | null; name?: string | null; position?: number | null; share?: boolean; view: string }
+
+export type ViewUpdateOutput = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
+
 export type WhiteboardTemplateListInput = { spaceId?: string | null }
 
 export type WhiteboardTemplateListOutput = { templates: WhiteboardTemplateView[] }
@@ -339,6 +365,12 @@ export type Operations = {
   status_list: { input: StatusListInput; output: StatusListOutput }
   status_set: { input: StatusSetInput; output: StatusSetOutput }
   thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
+  view_create: { input: ViewCreateInput; output: ViewCreateOutput }
+  view_default_set: { input: ViewDefaultSetInput; output: ViewDefaultSetOutput }
+  view_delete: { input: ViewDeleteInput; output: ViewDeleteOutput }
+  view_list: { input: ViewListInput; output: ViewListOutput }
+  view_pin: { input: ViewPinInput; output: ViewPinOutput }
+  view_update: { input: ViewUpdateInput; output: ViewUpdateOutput }
   whiteboard_template_list: { input: WhiteboardTemplateListInput; output: WhiteboardTemplateListOutput }
 }
 

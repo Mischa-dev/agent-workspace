@@ -319,13 +319,6 @@ impl ProjectMembershipRow {
     }
 }
 
-#[derive(Clone, Debug, FromRow)]
-struct WorkflowStatusRow {
-    id: Uuid,
-    name: String,
-    semantic_category: String,
-}
-
 #[derive(Debug, FromRow)]
 struct WorkItemRow {
     id: Uuid,
@@ -2370,8 +2363,8 @@ async fn move_work_item(
     if current.archived_at.is_some() {
         return Err(AppError::NotFound("work_item"));
     }
-    let target_status = sqlx::query_as::<_, WorkflowStatusRow>(
-        "SELECT id, name, semantic_category, position, is_default, enabled FROM work_item_statuses WHERE project_id = $1 AND id = $2 AND enabled",
+    let target_status = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM work_item_statuses WHERE project_id = $1 AND id = $2 AND enabled",
     )
     .bind(project_id)
     .bind(request.target_status_id)
@@ -2394,7 +2387,7 @@ async fn move_work_item(
             title: None,
             description: None,
             type_id: None,
-            status_id: Some(target_status.id),
+            status_id: Some(target_status),
             priority: None,
             assignee_actor_id: None,
             parent_work_item_id: None,

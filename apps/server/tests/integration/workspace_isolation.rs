@@ -187,7 +187,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/secrets",
     "/api/v1/projects/{project_id}/task-templates",
     "/api/v1/projects/{project_id}/timeline",
-    "/api/v1/projects/{project_id}/views",
     "/api/v1/projects/{project_id}/automations",
     "/api/v1/projects/{project_id}/bug-report-links",
     "/api/v1/projects/{project_id}/automations/{rule_id}/runs",
@@ -1361,7 +1360,6 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![format!("{}/ai/graph", p(b))],
             vec![],
         ),
-        project_route("/api/v1/projects/{project_id}/views", "/views"),
         project_route("/api/v1/projects/{project_id}/automations", "/automations"),
         project_route(
             "/api/v1/projects/{project_id}/bug-report-links",
@@ -2333,7 +2331,12 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"projectId": b.project})],
             vec![json!({"projectId": a.project, "taskId": b.task.to_string()})],
         ),
-        by_project("view_list"),
+        case(
+            "view_list",
+            vec![json!({"collection": a.collection})],
+            vec![json!({"collection": b.collection})],
+            vec![],
+        ),
         by_project("automation_list"),
         by_project("bug_report_link_list"),
         case(
@@ -2858,16 +2861,6 @@ async fn check_mcp(
 
     // P0.23: a read-only tool changes nothing. A's rows are digested before
     // and after each tool's calls; only the columns reads may touch differ.
-    // The first read of a project's views makes its built-in ones (until
-    // T1.40 drops saved_views); read them once first, as the web does on
-    // opening a project, so that isn't counted against the first view tool.
-    let (status, body) = get_text(
-        app,
-        &a.browser,
-        &format!("/api/v1/projects/{}/views", a.project),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
     let a_ids = sweep_ids(pool, a.organization).await;
     let a_pattern = a_ids.iter().cloned().collect::<Vec<_>>().join("|");
     // Fingerprints first, so a write landing during the digest is caught
