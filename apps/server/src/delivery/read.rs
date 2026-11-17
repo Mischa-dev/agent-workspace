@@ -1,7 +1,11 @@
 //! The one read path (A2 3.5): every transport reads a connection's events
 //! with [`read_batch`], which re-checks access per event
 //! (`delivery_visible`) and drops what is no longer true (a reply request
-//! already answered), so poll, stream and webhook agree.
+//! already answered), so poll, stream and webhook agree. An event of a
+//! module that is off where it happened is not delivered (AWD-75, as rules
+//! hear nothing of it either).
+
+use std::collections::HashMap;
 
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
@@ -143,6 +147,8 @@ pub async fn read_batch(
         next: after,
         ..Batch::default()
     };
+    // The modules on where each event happened, read once per place.
+    let mut modules = HashMap::new();
     for (index, row) in rows.into_iter().enumerate() {
         batch.next = row.event.position;
         if let Some(reason) = accept(&row, subscriptions)
@@ -150,6 +156,7 @@ pub async fn read_batch(
                 .limits
                 .as_ref()
                 .is_none_or(|limits| within_limits(limits, &row.event))
+            && module_on(&mut *connection, &mut modules, &row).await?
         {
             batch.delivered.push(Delivered {
                 event: row.event,
@@ -171,11 +178,45 @@ pub async fn read_batch(
     Ok(batch)
 }
 
+/// Whether the module an event belongs to is on where it happened: in its
+/// space, or in its workspace for an event outside any space. A
+/// conversation's event follows Messages in a DM or group and Channels
+/// elsewhere, as rules do.
+async fn module_on(
+    connection: &mut PgConnection,
+    known: &mut HashMap<(Uuid, Option<Uuid>), crate::modules::ModuleSet>,
+    row: &Row,
+) -> Result<bool, AppError> {
+    let Some(module) = crate::automations::in_project_kind(
+        crate::modules::manifest::of_event(&row.event.event_type),
+        row.direct,
+    ) else {
+        return Ok(true);
+    };
+    let place = (row.event.workspace_id, row.event.space_id);
+    let set = match known.get(&place) {
+        Some(set) => *set,
+        None => {
+            let set = match place {
+                (workspace, Some(space)) => {
+                    crate::modules::state::in_space(&mut *connection, workspace, space).await?
+                }
+                (workspace, None) => {
+                    crate::modules::state::workspace(&mut *connection, workspace).await?
+                }
+            };
+            known.insert(place, set);
+            set
+        }
+    };
+    Ok(set.contains(&module.id))
+}
+
 /// Whether an app held to `limits` may read what `event` is about: the
 /// permission to see its space (and, for a task or a pull request, to see
 /// those), in the space where the app's person holds it or else their
 /// workspace, as a policy check under the same limit would find it.
-fn within_limits(limits: &AgentLimits, event: &LoggedEvent) -> bool {
+pub(crate) fn within_limits(limits: &AgentLimits, event: &LoggedEvent) -> bool {
     let allowed = event
         .space_id
         .and_then(|space| limits.projects.get(&space))
@@ -191,6 +232,22 @@ fn within_limits(limits: &AgentLimits, event: &LoggedEvent) -> bool {
     needed
         .iter()
         .all(|permission| allowed.contains(*permission))
+}
+
+/// Whether an app held to `limits` may see the event at `position`; false
+/// when there is no such event.
+pub(crate) async fn within_limits_at(
+    connection: &mut PgConnection,
+    limits: &AgentLimits,
+    position: i64,
+) -> Result<bool, AppError> {
+    let event = sqlx::query_as::<_, LoggedEvent>(&format!(
+        "SELECT {LOGGED_EVENT_COLUMNS} FROM events WHERE position = $1"
+    ))
+    .bind(position)
+    .fetch_optional(&mut *connection)
+    .await?;
+    Ok(event.is_some_and(|event| within_limits(limits, &event)))
 }
 
 /// Whether any subscription wants the row, and why.

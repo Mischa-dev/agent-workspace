@@ -129,11 +129,41 @@
     "kind": "query",
     "long": false,
     "module": "agents",
+    "name": "connection_delivery_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List webhook deliveries"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
     "name": "connection_list",
     "permission": null,
     "preview": false,
     "proposable": false,
     "title": "List connections"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_redeliver",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Redeliver webhook event"
   },
   {
     "automation": true,
@@ -166,6 +196,22 @@
     "preview": false,
     "proposable": false,
     "title": "Rotate connection secret"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "connection_test",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Test webhook"
   },
   {
     "automation": true,

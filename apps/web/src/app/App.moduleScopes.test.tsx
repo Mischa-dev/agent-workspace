@@ -337,7 +337,7 @@ describe('entry points follow the modules where they lead', () => {
 
   it('a settings page of a module that’s off never shows while the settings load', async () => {
     const cases: Array<[path: string, title: string, module: string, home: string[], projects: Record<string, string[]>]> = [
-      ['/settings/account/webhooks', 'Webhooks', 'Automations', ['automations'], {}],
+      ['/settings/account/webhooks', 'Webhooks', 'Agents', ['agents'], {}],
       ['/settings/workspace/runs', 'Runs and models', 'Runs', ['runs'], {}],
       [`/settings/projects/${projectAId}/runs`, 'Runs and models', 'Runs', [], { [projectAId]: ['runs'] }],
     ]
@@ -356,7 +356,7 @@ describe('entry points follow the modules where they lead', () => {
   })
 
   it('where the settings can’t load, a settings page shows, as before', async () => {
-    withScopes({ home: ['automations'], layoutsFail: true })
+    withScopes({ home: ['agents'], layoutsFail: true })
     window.history.replaceState({}, '', '/settings/account/webhooks')
     render(<App />)
     expect(await screen.findByRole('heading', { level: 1, name: 'Webhooks' }, { timeout: 5000 })).toBeVisible()

@@ -211,14 +211,16 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
             "rule",
         );
     }
-    let event_types = json!(["page.updated", "sheet.updated", "whiteboard.updated"]);
+    // A person's webhook is a connection with an address (A2.6) that hears
+    // what they can see, their own changes included.
+    let webhook = |who: &str| {
+        json!({"name": "Docs", "webhookUrl": format!("{origin}/{who}"), "reachesAll": false,
+               "subscriptions": [{"kinds": ["page.updated", "sheet.updated", "whiteboard.updated"],
+                                  "echoes": true, "minReason": "visible"}],
+               "clientRequestId": format!("k35-hook-{who}")})
+    };
     ok(
-        call(
-            "webhook_write",
-            json!({"operation": "create", "name": "Docs",
-                   "url": format!("{origin}/owner"), "eventTypes": event_types}),
-        )
-        .await,
+        call("connection_create", webhook("owner")).await,
         "owner webhook",
     );
     ok(
@@ -226,9 +228,8 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
             app,
             &outsider_app,
             &outsider_session,
-            "webhook_write",
-            json!({"operation": "create", "name": "Docs",
-                   "url": format!("{origin}/outsider"), "eventTypes": event_types}),
+            "connection_create",
+            webhook("outsider"),
         )
         .await,
         "outsider webhook",
@@ -311,8 +312,8 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
         "{texts:#?}"
     );
 
-    // The owner's webhook heard each, with title and address and never the
-    // text; the outsider's heard nothing.
+    // The owner's webhook heard each, by id and never with the text; the
+    // outsider's heard nothing.
     let bodies = received.lock().expect("receiver lock").clone();
     assert!(
         bodies.iter().all(|body| body["receivedBy"] == "owner"),
@@ -321,11 +322,9 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     let mut heard = bodies
         .iter()
         .map(|body| {
-            let kind = body["type"].as_str().unwrap_or_default().to_owned();
-            let key = kind.split('.').next().unwrap_or_default().to_owned();
             (
-                kind,
-                body["data"][key]["title"]
+                body["type"].as_str().unwrap_or_default().to_owned(),
+                body["data"]["thing"]["id"]
                     .as_str()
                     .unwrap_or_default()
                     .to_owned(),
@@ -333,31 +332,20 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
         })
         .collect::<Vec<_>>();
     heard.sort();
-    assert_eq!(
-        heard,
-        vec![
-            ("page.updated".to_owned(), "Notes".to_owned()),
-            ("page.updated".to_owned(), "Roadmap".to_owned()),
-            ("sheet.updated".to_owned(), "Budget".to_owned()),
-            ("whiteboard.updated".to_owned(), "Flow".to_owned()),
-        ],
-        "{bodies:#?}"
-    );
+    let mut expected = vec![
+        ("page.updated".to_owned(), other_id.clone()),
+        ("page.updated".to_owned(), page_id.clone()),
+        ("sheet.updated".to_owned(), sheet_id.clone()),
+        ("whiteboard.updated".to_owned(), board_id.clone()),
+    ];
+    expected.sort();
+    assert_eq!(heard, expected, "{bodies:#?}");
     for body in &bodies {
         let text = body.to_string();
         assert!(!text.contains("Secret plans"), "{text}");
         assert!(!text.contains("Rent"), "{text}");
+        assert!(!text.contains("Roadmap"), "{text}");
     }
-    let roadmap = bodies
-        .iter()
-        .find(|body| body["data"]["page"]["title"] == "Roadmap")
-        .expect("roadmap");
-    assert!(
-        roadmap["data"]["page"]["url"]
-            .as_str()
-            .is_some_and(|url| url.starts_with("http") && url.contains(page_id.as_str())),
-        "{roadmap}"
-    );
 
     // With Pages off for the workspace, a page edit fires nothing.
     let (status, body) = switch(

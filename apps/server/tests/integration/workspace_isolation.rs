@@ -225,8 +225,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/usage/accounts/{account_id}/ready-tasks",
     "/api/v1/usage/accounts/{account_id}/batch",
     "/api/v1/usage/accounts/{account_id}/history",
-    "/api/v1/webhooks",
-    "/api/v1/webhooks/{webhook_id}/deliveries",
     "/api/v1/whiteboard-links",
     "/api/v1/whiteboards",
     "/api/v1/whiteboards/{id}",
@@ -1402,18 +1400,6 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
                 vec![],
             )
         },
-        case(
-            "/api/v1/webhooks",
-            vec!["/api/v1/webhooks".to_owned()],
-            vec![],
-            vec![],
-        ),
-        case(
-            "/api/v1/webhooks/{webhook_id}/deliveries",
-            vec![format!("/api/v1/webhooks/{}/deliveries", a.webhook)],
-            vec![format!("/api/v1/webhooks/{}/deliveries", b.webhook)],
-            vec![],
-        ),
         project_route("/api/v1/projects/{project_id}/timeline", "/timeline"),
         project_route(
             "/api/v1/projects/{project_id}/task-templates",
@@ -2032,6 +2018,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "briefing",
     "bug_report_link_list",
     "connection_list",
+    "connection_delivery_list",
     "schedule_list",
     "conversation_list",
     "conversation_open",
@@ -2115,8 +2102,6 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "usage_batch",
     "usage_windows",
     "view_list",
-    "webhook_deliveries",
-    "webhook_list",
     "whiteboard_list",
     "whiteboard_read",
     "whiteboard_render",
@@ -2362,7 +2347,6 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![],
         ),
-        case("webhook_list", vec![json!({})], vec![], vec![]),
         // K4.26: another workspace's invitation links are out of reach.
         case(
             "invite_link_list",
@@ -2424,12 +2408,6 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"whiteboardId": b.whiteboard, "format": "svg"}),
                 json!({"whiteboardId": b.project_whiteboard}),
             ],
-            vec![],
-        ),
-        case(
-            "webhook_deliveries",
-            vec![json!({"webhookId": a.webhook.to_string()})],
-            vec![json!({"webhookId": b.webhook.to_string()})],
             vec![],
         ),
         by_project("template_list"),
@@ -2813,6 +2791,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "connection_list",
             vec![json!({})],
             vec![json!({"account": b.agent})],
+            vec![],
+        ),
+        // A2.6: a webhook's delivery log is its account's; B's isn't A's.
+        case(
+            "connection_delivery_list",
+            vec![json!({"connectionId": a.webhook})],
+            vec![json!({"connectionId": b.webhook})],
             vec![],
         ),
         case(

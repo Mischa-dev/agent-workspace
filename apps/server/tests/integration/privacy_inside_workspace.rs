@@ -2083,8 +2083,9 @@ async fn follow_ups_are_their_accounts_own() {
 }
 
 /// A2: an account's delivery connections are its own and its managers'.
-/// Another member can't add one for an agent, change, re-key or remove its
-/// connection, or list them; the owner, who manages every agent, can.
+/// Another member can't add one for an agent, change, re-key, test or remove
+/// its connection, list them or read and resend its deliveries; the owner,
+/// who manages every agent, can.
 #[tokio::test]
 async fn only_an_account_and_its_managers_touch_its_connections() {
     let Some(world) = super::support::world::WorldBuilder::default()
@@ -2138,6 +2139,22 @@ async fn only_an_account_and_its_managers_touch_its_connections() {
             json!({ "connectionId": connection }),
         ),
         ("connection_list", "l-5", json!({ "account": rook })),
+        // A2.6: its delivery log, a test ping and a redelivery too.
+        (
+            "connection_delivery_list",
+            "l-6",
+            json!({ "connectionId": connection }),
+        ),
+        (
+            "connection_test",
+            "l-7",
+            json!({ "connectionId": connection }),
+        ),
+        (
+            "connection_redeliver",
+            "l-8",
+            json!({ "connectionId": connection, "eventPosition": 1 }),
+        ),
     ] {
         let (status, body) =
             send(&world.app, lena.request("POST", &op(name), Some(key), body)).await;

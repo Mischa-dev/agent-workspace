@@ -566,6 +566,195 @@ async fn pushes_are_signed_the_standard_way_and_carry_no_text() {
     world.finish().await;
 }
 
+/// A2.6: a person's webhook is a connection with an address. One their app
+/// set up is pushed to while the app is connected and stops, saying why,
+/// once it is disconnected; a test ping's answer is kept on it.
+#[tokio::test]
+async fn a_webhook_an_app_set_up_stops_when_the_app_is_disconnected() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("laptop")
+        .build("delivery_app_webhook")
+        .await
+    else {
+        return;
+    };
+    let laptop = &world.apps["laptop"];
+    let received = Arc::new(Mutex::new(Vec::<String>::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let origin = format!("http://{}", listener.local_addr().expect("address"));
+    let sink = Arc::clone(&received);
+    tokio::spawn(async move {
+        let receiver = axum::Router::new().route(
+            "/hook",
+            axum::routing::post(move |body: String| {
+                let sink = Arc::clone(&sink);
+                async move {
+                    sink.lock().expect("lock").push(body);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+        axum::serve(listener, receiver).await.expect("serve");
+    });
+    let mut config = (*world.state.config).clone();
+    config.webhook_trusted_origins = vec![origin.clone()];
+    let state = agent_workspace_server::AppState {
+        config: Arc::new(config),
+        ..world.state.clone()
+    };
+
+    let (_, made) = laptop
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "connection_create",
+                arguments: json!({
+                    "name": "Laptop hook",
+                    "webhookUrl": "https://hooks.example.test/laptop",
+                    "reachesAll": false,
+                    "subscriptions": [{"kinds": ["task.created"], "echoes": true}],
+                    "clientRequestId": "laptop-hook",
+                }),
+            },
+        )
+        .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    assert_eq!(
+        made["value"]["connection"]["madeThroughApp"], true,
+        "{made}"
+    );
+    let connection = made["value"]["connection"]["id"]
+        .as_str()
+        .expect("connection")
+        .parse::<Uuid>()
+        .expect("UUID");
+    sqlx::query("UPDATE agent_connections SET webhook_url = $2 WHERE id = $1")
+        .bind(connection)
+        .bind(format!("{origin}/hook"))
+        .execute(world.pool())
+        .await
+        .expect("local hook");
+    let new_task = |title: &'static str| {
+        let app = world.app.clone();
+        let project = world.project("WORK").to_owned();
+        async move {
+            let (_, made) = laptop
+                .call(
+                    &app,
+                    Call::Tool {
+                        name: "task_create",
+                        arguments: json!({"projectId": project, "title": title,
+                                          "clientRequestId": title.replace(' ', "-")}),
+                    },
+                )
+                .await;
+            assert!(
+                matches!(made["outcome"].as_str(), Some("ok" | "applied")),
+                "{made}"
+            );
+        }
+    };
+    let push = || async {
+        agent_workspace_server::events::catch_up(world.pool())
+            .await
+            .expect("sequence events");
+        agent_workspace_server::tenancy::system(
+            "events.log",
+            agent_workspace_server::delivery::push::push(&state, connection),
+        )
+        .await
+        .expect("push");
+    };
+
+    // Connected: the new task is pushed.
+    new_task("Pushed while connected").await;
+    push().await;
+    let posts = received.lock().expect("lock").clone();
+    assert_eq!(posts.len(), 1, "{posts:?}");
+    assert!(posts[0].contains("\"task.created\""), "{posts:?}");
+    assert!(!posts[0].contains("Pushed while connected"), "ids only");
+
+    // A test ping goes out on the job queue; its answer is kept.
+    let (_, queued) = laptop
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "connection_test",
+                arguments: json!({"connectionId": connection}),
+            },
+        )
+        .await;
+    assert_eq!(queued["outcome"], "ok", "{queued}");
+    let registry = agent_workspace_server::jobs::default_registry();
+    let options = agent_workspace_server::jobs::WorkerOptions {
+        concurrency: 1,
+        poll_interval: std::time::Duration::from_millis(20),
+        lease: std::time::Duration::from_secs(30),
+        worker_id: "ping-test".to_owned(),
+    };
+    agent_workspace_server::jobs::run_due(&state, &registry, &options)
+        .await
+        .expect("run jobs");
+    let (_, listed) = laptop
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "connection_list",
+                arguments: json!({}),
+            },
+        )
+        .await;
+    let hook = listed["value"]["connections"]
+        .as_array()
+        .expect("connections")
+        .iter()
+        .find(|item| item["id"] == connection.to_string())
+        .expect("the hook")
+        .clone();
+    assert_eq!(hook["lastTest"]["ok"], true, "{hook}");
+    assert_eq!(hook["lastTest"]["status"], 204, "{hook}");
+    let before = received.lock().expect("lock").len();
+
+    // Disconnected: nothing more is pushed, and the webhook says why.
+    sqlx::query(
+        "UPDATE mcp_oauth_grants SET revoked_at = now() \
+         WHERE id = (SELECT via_grant_id FROM agent_connections WHERE id = $1)",
+    )
+    .bind(connection)
+    .execute(world.pool())
+    .await
+    .expect("disconnect the app");
+    let owner_task = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{}/work-items", world.project("WORK")),
+            Some("after-disconnect"),
+            json!({"title": "After the app left"}),
+        ),
+    )
+    .await;
+    assert!(owner_task.0.is_success(), "{owner_task:?}");
+    push().await;
+    assert_eq!(received.lock().expect("lock").len(), before);
+    let (state_now, reason) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT state, disabled_reason FROM agent_connections WHERE id = $1",
+    )
+    .bind(connection)
+    .fetch_one(world.pool())
+    .await
+    .expect("connection");
+    assert_eq!(state_now, "push_disabled");
+    assert!(
+        reason.unwrap_or_default().contains("disconnected"),
+        "it says why"
+    );
+    world.finish().await;
+}
+
 /// A2.11: a follow-up an agent sets for itself comes due once per time, as
 /// an addressed `schedule.due` carrying ids; its note stays in its row.
 #[tokio::test]

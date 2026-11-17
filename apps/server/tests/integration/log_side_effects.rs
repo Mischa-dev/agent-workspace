@@ -80,12 +80,12 @@ async fn a_batch_whose_side_effects_fail_is_retried_not_passed() {
     .expect("notifications");
     assert_eq!(delivered, 1);
 
-    // The same for routing to webhooks and automations.
+    // The same for routing to automations.
     let message = say(&setup, &setup.browser, &general, "m2", mention("Again ")).await;
-    sqlx::query("ALTER TABLE webhook_subscriptions RENAME TO webhook_subscriptions_away")
+    sqlx::query("ALTER TABLE automation_rules RENAME TO automation_rules_away")
         .execute(&setup.pool)
         .await
-        .expect("rename webhook subscriptions");
+        .expect("rename automation rules");
     agent_workspace_server::events::catch_up(&setup.pool)
         .await
         .expect("catch up");
@@ -93,10 +93,10 @@ async fn a_batch_whose_side_effects_fail_is_retried_not_passed() {
         behind(&setup.pool, "router", &message).await,
         "the router passed the event without routing it"
     );
-    sqlx::query("ALTER TABLE webhook_subscriptions_away RENAME TO webhook_subscriptions")
+    sqlx::query("ALTER TABLE automation_rules_away RENAME TO automation_rules")
         .execute(&setup.pool)
         .await
-        .expect("restore webhook subscriptions");
+        .expect("restore automation rules");
     drain(&setup).await;
     assert!(!behind(&setup.pool, "router", &message).await);
 }

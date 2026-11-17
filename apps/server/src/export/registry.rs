@@ -1265,19 +1265,8 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 text_references: &[],
                 exclude: &[],
             },
-            KindDecl {
-                kind: "webhook_subscriptions",
-                table: "webhook_subscriptions",
-                references: &[
-                    ("project_id", "projects"),
-                    ("owner_actor_id", "actors"),
-                    ("via_oauth_grant_id", "mcp_oauth_grants"),
-                ],
-                text_references: &[],
-                exclude: &["secret_id"],
-            },
         ],
-        not_exported: &[("webhook_deliveries", "a delivery log")],
+        not_exported: &[],
     },
     ExportDecl {
         module: "suggestions",

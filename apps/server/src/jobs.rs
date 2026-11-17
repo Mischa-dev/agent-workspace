@@ -396,7 +396,6 @@ pub fn default_registry() -> JobRegistry {
     crate::events::register_jobs(&mut registry);
     crate::delivery::push::register_jobs(&mut registry);
     crate::schedules::register_jobs(&mut registry);
-    crate::webhooks::register_jobs(&mut registry);
     crate::automations::register_jobs(&mut registry);
     crate::files::register_jobs(&mut registry);
     crate::link_previews::register_jobs(&mut registry);

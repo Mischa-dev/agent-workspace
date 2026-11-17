@@ -322,12 +322,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/usage/accounts/{account_id}/rules/{rule}",
     "POST /api/v1/usage/accounts/{account_id}/schedules",
     "DELETE /api/v1/usage/accounts/{account_id}/schedules/{schedule_id}",
-    "POST /api/v1/webhooks",
-    "DELETE /api/v1/webhooks/{webhook_id}",
-    "PATCH /api/v1/webhooks/{webhook_id}",
-    "POST /api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-    "POST /api/v1/webhooks/{webhook_id}/rotate-secret",
-    "POST /api/v1/webhooks/{webhook_id}/test",
     "POST /api/v1/whiteboard-trash/empty",
     "POST /api/v1/whiteboards",
     "DELETE /api/v1/whiteboards/{id}",
@@ -463,8 +457,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "bug_report_link_write",
     "channel_create",
     "connection_create",
+    "connection_redeliver",
     "connection_remove",
     "connection_secret_rotate",
+    "connection_test",
     "connection_update",
     "conversation_continue",
     "conversation_mark_read",
@@ -595,7 +591,6 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "thread_update",
     "usage_batch_launch",
     "view_write",
-    "webhook_write",
     "whiteboard_create",
     "whiteboard_duplicate",
     "whiteboard_update_elements",
@@ -1278,8 +1273,8 @@ struct Targets {
     session: Uuid,
     api_token: Uuid,
     notification: Uuid,
-    /// A failed delivery of the webhook.
-    delivery: Uuid,
+    /// The event position of a failed delivery to the webhook.
+    delivery: i64,
     /// A reply request waiting for the agent, and one it holds.
     reply: Uuid,
     claimed_reply: Uuid,
@@ -1517,17 +1512,30 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         .await
         .expect("request");
     }
-    let delivery = Uuid::now_v7();
+    // Of a real event in the workspace's project, so the app may see it.
+    agent_workspace_server::events::catch_up(pool)
+        .await
+        .expect("sequence events");
+    let (delivery, event_id, event_type) = sqlx::query_as::<_, (i64, Uuid, String)>(
+        "SELECT position, id, type FROM events WHERE workspace_id = $1 AND space_id = $2 \
+         AND class = 'fact' ORDER BY position DESC LIMIT 1",
+    )
+    .bind(organization)
+    .bind(project)
+    .fetch_one(pool)
+    .await
+    .expect("an event in the project");
     sqlx::query(
         r#"
-        INSERT INTO webhook_deliveries (id, subscription_id, organization_id, event_type, event_key, state, attempts)
-        VALUES ($1, $2, $3, 'run.finished', $4, 'failed', 3)
+        INSERT INTO deliveries (connection_id, event_position, event_id, workspace_id, event_type, reason, state, attempts)
+        VALUES ($1, $2, $3, $4, $5, 'visible', 'failed', 3)
         "#,
     )
-    .bind(delivery)
     .bind(world.webhook)
+    .bind(delivery)
+    .bind(event_id)
     .bind(organization)
-    .bind(format!("net:{delivery}"))
+    .bind(&event_type)
     .execute(pool)
     .await
     .expect("webhook delivery");
@@ -3010,7 +3018,7 @@ async fn one_workspace_never_writes_to_another() {
         "work_items",
         "messages",
         "project_labels",
-        "webhook_subscriptions",
+        "agent_connections",
     ] {
         assert!(before.contains_key(table), "B's digest has no {table} rows");
     }
@@ -5768,57 +5776,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         )
         .last(),
-        // Webhooks
-        body_case(
-            "POST /api/v1/webhooks",
-            &[],
-            json!({
-                "name": "Net hook",
-                "url": "https://hooks.example.com/net",
-                "eventTypes": ["run.finished"],
-                "organizationId": a.organization,
-            }),
-            vec![
-                json!({
-                    "name": "Net hook",
-                    "url": "https://hooks.example.com/net",
-                    "eventTypes": ["run.finished"],
-                    "organizationId": b.organization,
-                }),
-                json!({
-                    "name": "Net hook",
-                    "url": "https://hooks.example.com/net",
-                    "eventTypes": ["run.finished"],
-                    "projectId": b.project,
-                }),
-            ],
-        ),
-        path_case(
-            "PATCH /api/v1/webhooks/{webhook_id}",
-            &[id(a.webhook, b.webhook)],
-            versioned("webhook_subscriptions", 0, json!({"name": "Hook"})),
-        ),
-        path_case(
-            "POST /api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-            &[id(a.webhook, b.webhook), id(ax.delivery, bx.delivery)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/webhooks/{webhook_id}/rotate-secret",
-            &[id(a.webhook, b.webhook)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/webhooks/{webhook_id}/test",
-            &[id(a.webhook, b.webhook)],
-            empty(),
-        ),
-        path_case(
-            "DELETE /api/v1/webhooks/{webhook_id}",
-            &[id(a.webhook, b.webhook)],
-            empty(),
-        )
-        .last(),
         // Whiteboards
         body_case(
             "POST /api/v1/whiteboards",
@@ -6216,6 +6173,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "connection_secret_rotate",
             json!({"connectionId": ax.connection}),
             vec![json!({"connectionId": bx.connection})],
+        ),
+        // A2.6: a webhook's test and redelivery are its account's too.
+        mcp_case(
+            "connection_test",
+            json!({"connectionId": a.webhook}),
+            vec![json!({"connectionId": b.webhook})],
+        ),
+        mcp_case(
+            "connection_redeliver",
+            json!({"connectionId": a.webhook, "eventPosition": ax.delivery}),
+            vec![json!({"connectionId": b.webhook, "eventPosition": bx.delivery})],
         ),
         mcp_case(
             "connection_remove",
@@ -7275,30 +7243,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"hostId": bx.hosts[3]})],
         )
         .last(),
-        mcp_case(
-            "webhook_write",
-            json!({
-                "operation": "create",
-                "name": "Net mcp hook",
-                "url": "https://hooks.example.com/net-mcp",
-                "eventTypes": ["run.finished"],
-            }),
-            vec![
-                json!({"operation": "update", "webhookId": b.webhook, "name": "Net", "expectedVersion": version("webhook_subscriptions", b.webhook)}),
-                json!({"operation": "delete", "webhookId": b.webhook}),
-                json!({"operation": "rotate_secret", "webhookId": b.webhook}),
-                json!({"operation": "test", "webhookId": b.webhook}),
-                json!({"operation": "redeliver", "webhookId": b.webhook, "deliveryId": bx.delivery}),
-                json!({
-                    "operation": "create",
-                    "name": "Net mcp hook",
-                    "url": "https://hooks.example.com/net-mcp",
-                    "eventTypes": ["run.finished"],
-                    "projectId": b.project,
-                }),
-            ],
-        )
-        .rejecting(vec![json!({"operation": "redeliver", "webhookId": a.webhook, "deliveryId": bx.delivery})]),
         mcp_case(
             "bug_report_link_write",
             json!({"projectId": a.project, "name": "Net mcp link"}),

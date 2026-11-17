@@ -315,31 +315,6 @@ async fn automations(
         }
         parts.push((keys.take(ContentKind::Automation, &name), body));
     }
-    let hooks = sqlx::query_as::<_, (String, String, Vec<String>)>(
-        r#"
-        SELECT name, url, event_types FROM webhook_subscriptions
-        WHERE project_id = $1 AND state <> 'disabled'
-        ORDER BY created_at, id
-        "#,
-    )
-    .bind(space_id)
-    .fetch_all(&mut *connection)
-    .await?;
-    for (name, url, events) in hooks {
-        let host = url
-            .split_once("://")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split(['/', '?', '#']).next())
-            .map(|authority| authority.rsplit('@').next().unwrap_or(authority).to_owned())
-            .unwrap_or_default();
-        let body = json!({
-            "name": name,
-            "outbound": true,
-            "webhook": { "host": host, "events": events },
-            "needsSetup": ["webhook.url"],
-        });
-        parts.push((keys.take(ContentKind::Automation, &name), body));
-    }
     Ok(parts)
 }
 

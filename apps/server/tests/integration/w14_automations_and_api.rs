@@ -1,9 +1,10 @@
 //! W14: a script with a personal token does what the app does through the
-//! public API; an outgoing webhook hears finished runs and messages, signed,
-//! with one id across redeliveries, and never a message its owner can't
-//! see; "when a PR's checks fail, launch an agent on it" runs unattended;
-//! and a rule or webhook whose maker lost access turns itself off instead of
-//! acting for them.
+//! public API; a person's outgoing webhook (a connection with an address,
+//! A2.6) hears finished runs and messages by id, signed, with one id across
+//! redeliveries, and never a message its owner can't see; "when a PR's
+//! checks fail, launch an agent on it" runs unattended; a rule whose maker
+//! lost access turns itself off instead of acting for them, and their
+//! webhook hears nothing more.
 
 use std::{
     collections::BTreeMap,
@@ -42,7 +43,7 @@ use crate::{
     m3_scheduler_http::{
         create_test_mirror, integration_pool, response_json, schema_pool, uuid_field,
     },
-    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_get},
+    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send},
 };
 
 const OWNER_LOGIN: &str = "w14-owner";
@@ -310,7 +311,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     for operation in [
         "/task_create",
         "/task_list",
-        "/webhook_write",
+        "/connection_create",
         "/automation_write",
     ] {
         assert!(
@@ -359,29 +360,44 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
 
     // ---------------------------------------------------------------------
     // Webhooks: the member hears messages and finished runs they can see.
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", seed.organization_id);
     let hook = send(
         &application,
         member,
         "POST",
-        "/api/v1/webhooks",
+        &op("connection_create"),
         "hook",
         json!({
             "name": "Member's hook",
-            "url": format!("{receiver_origin}/hook"),
-            "eventTypes": ["message.created", "run.finished"],
+            "webhookUrl": format!("{receiver_origin}/hook"),
+            "reachesAll": false,
+            "subscriptions": [{"kinds": ["message.created", "run.finished"],
+                               "minReason": "visible"}],
         }),
     )
     .await;
-    assert_eq!(hook.0, StatusCode::CREATED, "{}", hook.1);
-    let secret = hook.2["secret"].as_str().expect("secret").to_owned();
+    assert_eq!(hook.2["outcome"], "ok", "{}", hook.1);
+    let secret = hook.2["value"]["webhookSecret"]
+        .as_str()
+        .expect("secret")
+        .to_owned();
     assert!(secret.starts_with("whsec_"));
-    let webhook_id = uuid_field(&hook.2["webhook"], "id");
-    let listing = send_get(&application, member, "/api/v1/webhooks").await;
+    let webhook_id = uuid_field(&hook.2["value"]["connection"], "id");
+    let listing = send(
+        &application,
+        member,
+        "POST",
+        &op("connection_list"),
+        "hook-list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(listing.2["outcome"], "ok", "{}", listing.1);
     assert!(!listing.1.contains(&secret), "the secret is shown once");
     // Nothing stores the secret in the clear.
     let stored_in_clear = sqlx::query_scalar::<_, bool>(
         r#"
-        SELECT EXISTS (SELECT 1 FROM webhook_subscriptions WHERE row_to_json(webhook_subscriptions)::text LIKE '%' || $1 || '%')
+        SELECT EXISTS (SELECT 1 FROM agent_connections WHERE row_to_json(agent_connections)::text LIKE '%' || $1 || '%')
             OR EXISTS (SELECT 1 FROM secrets WHERE row_to_json(secrets)::text LIKE '%' || $1 || '%')
         "#,
     )
@@ -390,6 +406,9 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     .await
     .expect("look for the secret");
     assert!(!stored_in_clear);
+    // The log's consumers start where the log is now (as a running server's
+    // already have).
+    pump(&state).await;
 
     let say = |conversation: Uuid, key: &'static str, words: &'static str| {
         let application = application.clone();
@@ -504,7 +523,8 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         .iter()
         .find(|(headers, _)| headers["x-workspace-event"] == "message.created")
         .expect("the public message was delivered");
-    assert!(message_body.contains("Public hello"), "{message_body}");
+    // Ids only: the receiver reads the text with its own access.
+    assert!(!message_body.contains("Public hello"), "{message_body}");
     assert!(signature_ok(&secret, message_headers, message_body));
     let finished = deliveries
         .iter()
@@ -517,25 +537,36 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         .to_str()
         .expect("delivery id")
         .to_owned();
-    let log = send_get(
+    let log = send(
         &application,
         member,
-        &format!("/api/v1/webhooks/{webhook_id}/deliveries"),
+        "POST",
+        &op("connection_delivery_list"),
+        "hook-log",
+        json!({"connectionId": webhook_id}),
     )
     .await;
-    assert_eq!(log.0, StatusCode::OK, "{}", log.1);
-    assert!(log.1.contains(&delivery_id), "{}", log.1);
+    assert_eq!(log.2["outcome"], "ok", "{}", log.1);
     assert!(!log.1.contains("Secret plan"));
+    let logged = log.2["value"]["deliveries"]
+        .as_array()
+        .expect("deliveries")
+        .iter()
+        .find(|delivery| {
+            format!("evt_{}", delivery["eventId"].as_str().unwrap_or_default()) == delivery_id
+        })
+        .unwrap_or_else(|| panic!("{delivery_id} isn't in the log: {}", log.1))
+        .clone();
     let again = send(
         &application,
         member,
         "POST",
-        &format!("/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver"),
+        &op("connection_redeliver"),
         "redeliver",
-        json!({}),
+        json!({"connectionId": webhook_id, "eventPosition": logged["eventPosition"]}),
     )
     .await;
-    assert!(again.0.is_success(), "{}", again.1);
+    assert_eq!(again.2["outcome"], "ok", "{}", again.1);
     pump(&state).await;
     let same_id = received
         .lock()
@@ -708,31 +739,24 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/webhook_write",
+        "/api/public/v1/connection_create",
         json!({
-            "operation": "create",
             "name": "Script's task hook",
-            "url": format!("{receiver_origin}/script-hook"),
-            "eventTypes": ["task.created"],
-            "projectId": seed.project_id,
+            "webhookUrl": format!("{receiver_origin}/script-hook"),
+            "reachesAll": false,
+            "subscriptions": [{"kinds": ["task.created"], "spaceIds": [seed.project_id],
+                               "echoes": true, "minReason": "visible"}],
         }),
     )
     .await;
     assert_eq!(limited_hook.2["outcome"], "ok", "{}", limited_hook.1);
-    let limited_hook_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM webhook_subscriptions WHERE name = 'Script''s task hook'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("script's hook");
+    let limited_hook_id = uuid_field(&limited_hook.2["value"]["connection"], "id");
     let hook_deliveries = move |pool: PgPool| async move {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM webhook_deliveries WHERE subscription_id = $1",
-        )
-        .bind(limited_hook_id)
-        .fetch_one(&pool)
-        .await
-        .expect("count deliveries")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM deliveries WHERE connection_id = $1")
+            .bind(limited_hook_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count deliveries")
     };
     let seen = send(
         &application,
@@ -1328,7 +1352,7 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
     .expect("count notices");
     assert_eq!(told, 1);
 
-    // Their webhook stops hearing the project, and turns off when they
+    // Their webhook stops hearing the project, and hears nothing once they
     // leave the workspace.
     let before = received.lock().expect("received").len();
     say(seed.channel_id, "after-leaving", "After leaving").await;
@@ -1342,19 +1366,6 @@ async fn api_webhooks_and_automations_act_for_their_maker_only() {
         .expect("remove member from the workspace");
     say(seed.channel_id, "after-workspace", "After the workspace").await;
     pump(&state).await;
-    let (hook_state, hook_reason) = sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT state, disabled_reason FROM webhook_subscriptions WHERE id = $1",
-    )
-    .bind(webhook_id)
-    .fetch_one(&pool)
-    .await
-    .expect("member's webhook");
-    assert_eq!(hook_state, "disabled");
-    assert!(
-        hook_reason
-            .unwrap_or_default()
-            .contains("no longer in this workspace")
-    );
     assert_eq!(received.lock().expect("received").len(), before);
 
     // Every connection of the test's pool is returned and closed first: one

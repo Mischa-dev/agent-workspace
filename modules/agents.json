@@ -1,7 +1,7 @@
 {
   "id": "agents",
   "name": "Agents",
-  "description": "The workspace's agents: who they are, how they connect, their profiles, and @-mentioning them in conversations.",
+  "description": "The workspace's agents: who they are, how they connect and hear about things (webhooks too), their profiles, and @-mentioning them in conversations.",
   "version": 1,
   "order": 120,
   "kind": "core",
@@ -29,6 +29,9 @@
     "connection_update": "change",
     "connection_secret_rotate": "change",
     "connection_remove": "change",
+    "connection_test": "change",
+    "connection_delivery_list": "query",
+    "connection_redeliver": "change",
     "schedule_list": "query",
     "schedule_create": "create",
     "schedule_update": "change"
@@ -57,7 +60,7 @@
     "parts": ["area.agents", "talk.agent_mentions", "workspace.hosts"],
     "sidebar": [],
     "home": [],
-    "settings": ["project/agents", "workspace/hosts", "account/hosts"],
+    "settings": ["project/agents", "workspace/hosts", "account/hosts", "account/webhooks"],
     "palette": ["g:agents"],
     "shortcuts": [],
     "slash": ["tag"],

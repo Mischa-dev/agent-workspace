@@ -181,8 +181,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("usage_window_cycles", ORGANIZATION_ID),
     ("usage_window_samples", ORGANIZATION_ID),
     ("usage_windows", ORGANIZATION_ID),
-    ("webhook_deliveries", ORGANIZATION_ID),
-    ("webhook_subscriptions", ORGANIZATION_ID),
     ("whiteboard_elements", WORKSPACE_ID),
     ("whiteboard_files", WORKSPACE_ID),
     ("whiteboard_links", WORKSPACE_ID),

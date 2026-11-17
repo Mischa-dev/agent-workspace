@@ -81,6 +81,7 @@ pub(crate) struct World {
     pub(crate) approval: Uuid,
     pub(crate) plan: Uuid,
     pub(crate) import: String,
+    /// The owner's webhook: a connection with an address (A2.6).
     pub(crate) webhook: Uuid,
     pub(crate) rule: Uuid,
     pub(crate) whiteboard: Uuid,
@@ -1327,24 +1328,30 @@ async fn build_workspace(
         );
     }
 
-    // Webhooks and automations (W14): a subscription on the whole
-    // workspace and a rule that notifies its maker.
+    // Webhooks and automations (W14, A2.6): the owner's webhook (a
+    // connection with an address) on the whole workspace, and a rule that
+    // notifies its maker.
     let (status, created) = send(
         app,
         browser.request(
             "POST",
-            "/api/v1/webhooks",
-            None,
+            &format!("/api/v2/w/{organization}/ops/connection_create"),
+            Some(&Uuid::now_v7().to_string()),
             json!({
                 "name": format!("Hook{m}"),
-                "url": format!("https://hooks.example.com/{tag}"),
-                "eventTypes": ["run.finished", "message.created"],
+                "webhookUrl": format!("https://hooks.example.com/{tag}"),
+                "reachesAll": false,
+                "subscriptions": [{
+                    "kinds": ["run.finished", "message.created"],
+                    "workspaceIds": [organization],
+                }],
             }),
         ),
     )
     .await;
     assert!(status.is_success(), "{label} webhook: {status} {created}");
-    let webhook = Uuid::parse_str(&string_at(&created, "/webhook/id")).expect("webhook id");
+    let webhook =
+        Uuid::parse_str(&string_at(&created, "/value/connection/id")).expect("webhook id");
     let (status, created) = send(
         app,
         browser.request(

@@ -32,7 +32,7 @@ export type ColumnWrite = { field: string; hidden?: boolean; width?: number | nu
 
 export type CommentThreadView = { anchor?: unknown; createdAt: string; id: string; messageCount: number; name: string; outcome?: string | null; status: string; unread: boolean }
 
-export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
+export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
@@ -51,6 +51,8 @@ export type CustomEmojiView = { createdAt: string; createdByAccountId: string; i
 export type DateBucket = "day" | "week" | "month"
 
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
+
+export type DeliveryView = { attempts: number; createdAt: string; deliveredAt?: string | null; elapsedMs?: number | null; eventId: string; eventPosition: number; eventType: string; lastError?: string | null; lastStatus?: number | null; nextAttemptAt?: string | null; reason: string; state: string }
 
 export type Direction = "asc" | "desc"
 
@@ -93,6 +95,8 @@ export type InstallView = { id: string; installedAt: string; name: string; objec
 export type InstalledObject = { action: string; id: string; key: string; kind: string }
 
 export type InviteLinkView = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
+
+export type LastTest = { at: string; error?: string | null; ok: boolean; status?: number | null }
 
 export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
 
@@ -222,17 +226,29 @@ export type ConnectionCreateInput = { account?: string | null; name?: string | n
 
 export type ConnectionCreateOutput = { connection: ConnectionView; webhookSecret?: string | null }
 
+export type ConnectionDeliveryListInput = { before?: number | null; connectionId: string; limit?: number | null }
+
+export type ConnectionDeliveryListOutput = { deliveries: DeliveryView[]; nextBefore?: number | null }
+
 export type ConnectionListInput = { account?: string | null }
 
 export type ConnectionListOutput = { connections: ConnectionView[] }
 
+export type ConnectionRedeliverInput = { connectionId: string; eventPosition: number }
+
+export type ConnectionRedeliverOutput = { attempts: number; createdAt: string; deliveredAt?: string | null; elapsedMs?: number | null; eventId: string; eventPosition: number; eventType: string; lastError?: string | null; lastStatus?: number | null; nextAttemptAt?: string | null; reason: string; state: string }
+
 export type ConnectionRemoveInput = { connectionId: string }
 
-export type ConnectionRemoveOutput = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
+export type ConnectionRemoveOutput = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
 export type ConnectionSecretRotateInput = { connectionId: string }
 
 export type ConnectionSecretRotateOutput = { connection: ConnectionView; webhookSecret?: string | null }
+
+export type ConnectionTestInput = { connectionId: string }
+
+export type ConnectionTestOutput = { queued: boolean }
 
 export type ConnectionUpdateInput = { connectionId: string; expectedVersion?: number | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookFormat?: string | null; webhookUrl?: string | null }
 
@@ -587,9 +603,12 @@ export type Operations = {
   comment_list: { input: CommentListInput; output: CommentListOutput }
   comment_thread_update: { input: CommentThreadUpdateInput; output: CommentThreadUpdateOutput }
   connection_create: { input: ConnectionCreateInput; output: ConnectionCreateOutput }
+  connection_delivery_list: { input: ConnectionDeliveryListInput; output: ConnectionDeliveryListOutput }
   connection_list: { input: ConnectionListInput; output: ConnectionListOutput }
+  connection_redeliver: { input: ConnectionRedeliverInput; output: ConnectionRedeliverOutput }
   connection_remove: { input: ConnectionRemoveInput; output: ConnectionRemoveOutput }
   connection_secret_rotate: { input: ConnectionSecretRotateInput; output: ConnectionSecretRotateOutput }
+  connection_test: { input: ConnectionTestInput; output: ConnectionTestOutput }
   connection_update: { input: ConnectionUpdateInput; output: ConnectionUpdateOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }

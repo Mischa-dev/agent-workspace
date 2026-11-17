@@ -1,7 +1,7 @@
 {
   "id": "automations",
   "name": "Automations",
-  "description": "Rules that act on their own when something happens or on a schedule, and webhooks that tell other apps.",
+  "description": "Rules that act on their own when something happens or on a schedule.",
   "version": 1,
   "order": 140,
   "kind": "core",
@@ -12,12 +12,9 @@
   "tools": {
     "automation_list": "query",
     "automation_write": "change",
-    "automation_runs": "query",
-    "webhook_list": "query",
-    "webhook_write": "change",
-    "webhook_deliveries": "query"
+    "automation_runs": "query"
   },
-  "routes": ["/api/v1/projects/{project_id}/automations*", "/api/v1/webhooks*"],
+  "routes": ["/api/v1/projects/{project_id}/automations*"],
   "events": {
     "emits": [],
     "listens": [
@@ -53,7 +50,7 @@
     "parts": ["area.automations"],
     "sidebar": [],
     "home": [],
-    "settings": ["account/webhooks", "project/automations"],
+    "settings": ["project/automations"],
     "palette": [],
     "shortcuts": [],
     "slash": [],

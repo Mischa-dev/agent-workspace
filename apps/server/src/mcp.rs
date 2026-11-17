@@ -2247,59 +2247,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Your outgoing webhooks: each one's URL, the events it hears, whether it's on, and its last delivery; plus every event type and how receivers check a delivery's signature. Secrets are never shown again after they're made.",
-        annotations(
-            title = "List webhooks",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn webhook_list(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::WebhookListArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::webhook_list(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Make, change or remove an outgoing webhook that POSTs signed JSON to a URL when tasks, runs, pull requests or messages change. It hears what you can see, in one project or the whole workspace, and stops if you lose access. create and rotate_secret return the signing secret once; test sends a ping; redeliver sends one delivery again with the same id.",
-        annotations(
-            title = "Change webhook",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn webhook_write(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::WebhookWriteArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::webhook_write(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "A webhook's delivery log, newest first: each delivery's id (the same on every retry), event, state, attempts, last status code and error.",
-        annotations(
-            title = "Webhook deliveries",
-            read_only_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn webhook_deliveries(
-        &self,
-        Parameters(arguments): Parameters<automation_tools::WebhookDeliveriesArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<serde_json::Value>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(automation_tools::webhook_deliveries(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "A project's automation rules: each one's trigger, conditions (a saved view's filters), actions, who it acts as, whether it's on and why the server turned it off.",
         annotations(
             title = "List automations",

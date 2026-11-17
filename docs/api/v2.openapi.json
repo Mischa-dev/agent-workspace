@@ -294,6 +294,21 @@
               "null"
             ]
           },
+          "lastTest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastTest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the webhook answered to the last test ping (connection_test)."
+          },
+          "madeThroughApp": {
+            "description": "A person's app set it up: it is pushed to within that app's limit.",
+            "type": "boolean"
+          },
           "name": {
             "type": "string"
           },
@@ -338,6 +353,7 @@
           "state",
           "consecutiveFailures",
           "subscriptions",
+          "madeThroughApp",
           "version"
         ],
         "type": "object"
@@ -668,6 +684,80 @@
         ],
         "type": "object"
       },
+      "DeliveryView": {
+        "description": "One push of one event.",
+        "properties": {
+          "attempts": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "deliveredAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "elapsedMs": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "eventPosition": {
+            "description": "The event's place in the log; redeliver names it.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastStatus": {
+            "description": "The HTTP status of the last attempt, if the receiver answered.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "nextAttemptAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why the connection heard it.",
+            "type": "string"
+          },
+          "state": {
+            "description": "pending, delivered, failed or skipped (no longer visible or true).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventPosition",
+          "eventId",
+          "eventType",
+          "reason",
+          "state",
+          "attempts",
+          "createdAt"
+        ],
+        "type": "object"
+      },
       "Direction": {
         "enum": [
           "asc",
@@ -759,7 +849,7 @@
             "type": "boolean"
           },
           "family": {
-            "description": "What it is about: `reply`, `message`, `task`, `request`, `run`,\n`page`, `record`, `pull_request`, `schedule` or `connection`.",
+            "description": "What it is about: `reply`, `message`, `task`, `request`, `run`,\n`page`, `sheet`, `whiteboard`, `record`, `pull_request`, `schedule` or\n`connection`.",
             "type": "string"
           },
           "kind": {
@@ -1475,6 +1565,36 @@
           "createdAt",
           "expiresAt",
           "active"
+        ],
+        "type": "object"
+      },
+      "LastTest": {
+        "description": "The last test ping's answer.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "status": {
+            "description": "The HTTP status it answered with, if it answered.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "ok"
         ],
         "type": "object"
       },
@@ -5922,6 +6042,272 @@
         "x-operation-kind": "create"
       }
     },
+    "/api/v2/w/{workspace}/ops/connection_delivery_list": {
+      "post": {
+        "description": "What was pushed to a connection's webhook, newest first: each event's type, why it was heard, whether it was delivered, the receiver's last status and error, and when it is tried again. Kept for 30 days. Yours, or a connection of an agent or app you manage.",
+        "operationId": "connection_delivery_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "before": {
+                    "description": "Only pushes of events before this position (the last page's\nnextBefore), newest first.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "connectionId": {
+                    "description": "an id, or a link to it",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "limit": {
+                    "description": "How many at most (default 50, limit 100).",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "connectionId"
+                ],
+                "title": "ConnectionDeliveryListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "deliveries": {
+                              "items": {
+                                "$ref": "#/components/schemas/DeliveryView"
+                              },
+                              "type": "array"
+                            },
+                            "nextBefore": {
+                              "description": "Pass as before for older pushes; absent when there are none.",
+                              "format": "int64",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "deliveries"
+                          ],
+                          "title": "DeliveryPage",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "deliveries": {
+                              "items": {
+                                "$ref": "#/components/schemas/DeliveryView"
+                              },
+                              "type": "array"
+                            },
+                            "nextBefore": {
+                              "description": "Pass as before for older pushes; absent when there are none.",
+                              "format": "int64",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "deliveries"
+                          ],
+                          "title": "DeliveryPage",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List webhook deliveries",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
     "/api/v2/w/{workspace}/ops/connection_list": {
       "post": {
         "description": "The connections an account is told through: each one's webhook, format, whether pushes are working, and what it subscribes to. Yours, or an agent's you manage (account).",
@@ -6154,6 +6540,374 @@
         "x-operation-kind": "query"
       }
     },
+    "/api/v2/w/{workspace}/ops/connection_redeliver": {
+      "post": {
+        "description": "Push one event to a connection's webhook again, with the same id so the receiver can tell a repeat. It is checked again first: an event the account can no longer see, or that is no longer true, is skipped; through an app, only what the app may see is sent. The webhook must be on (save it to turn stopped pushes back on).",
+        "operationId": "connection_redeliver",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "connectionId": {
+                    "description": "an id, or a link to it",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "eventPosition": {
+                    "description": "The delivery's eventPosition (connection_delivery_list).",
+                    "format": "int64",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "connectionId",
+                  "eventPosition"
+                ],
+                "title": "ConnectionRedeliverInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One push of one event.",
+                          "properties": {
+                            "attempts": {
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "deliveredAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "elapsedMs": {
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "eventId": {
+                              "type": "string"
+                            },
+                            "eventPosition": {
+                              "description": "The event's place in the log; redeliver names it.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "eventType": {
+                              "type": "string"
+                            },
+                            "lastError": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lastStatus": {
+                              "description": "The HTTP status of the last attempt, if the receiver answered.",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "nextAttemptAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reason": {
+                              "description": "Why the connection heard it.",
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "pending, delivered, failed or skipped (no longer visible or true).",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "eventPosition",
+                            "eventId",
+                            "eventType",
+                            "reason",
+                            "state",
+                            "attempts",
+                            "createdAt"
+                          ],
+                          "title": "DeliveryView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "One push of one event.",
+                          "properties": {
+                            "attempts": {
+                              "format": "int32",
+                              "type": "integer"
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "deliveredAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "elapsedMs": {
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "eventId": {
+                              "type": "string"
+                            },
+                            "eventPosition": {
+                              "description": "The event's place in the log; redeliver names it.",
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "eventType": {
+                              "type": "string"
+                            },
+                            "lastError": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "lastStatus": {
+                              "description": "The HTTP status of the last attempt, if the receiver answered.",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "nextAttemptAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "reason": {
+                              "description": "Why the connection heard it.",
+                              "type": "string"
+                            },
+                            "state": {
+                              "description": "pending, delivered, failed or skipped (no longer visible or true).",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "eventPosition",
+                            "eventId",
+                            "eventType",
+                            "reason",
+                            "state",
+                            "attempts",
+                            "createdAt"
+                          ],
+                          "title": "DeliveryView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Redeliver webhook event",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
     "/api/v2/w/{workspace}/ops/connection_remove": {
       "post": {
         "description": "Remove a connection: nothing more is pushed to it and its cursor stops working. A default connection is made again the next time the account reads without naming one.",
@@ -6272,6 +7026,21 @@
                                 "null"
                               ]
                             },
+                            "lastTest": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/LastTest"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "What the webhook answered to the last test ping (connection_test)."
+                            },
+                            "madeThroughApp": {
+                              "description": "A person's app set it up: it is pushed to within that app's limit.",
+                              "type": "boolean"
+                            },
                             "name": {
                               "type": "string"
                             },
@@ -6316,6 +7085,7 @@
                             "state",
                             "consecutiveFailures",
                             "subscriptions",
+                            "madeThroughApp",
                             "version"
                           ],
                           "title": "ConnectionView",
@@ -6447,6 +7217,21 @@
                                 "null"
                               ]
                             },
+                            "lastTest": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/LastTest"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "What the webhook answered to the last test ping (connection_test)."
+                            },
+                            "madeThroughApp": {
+                              "description": "A person's app set it up: it is pushed to within that app's limit.",
+                              "type": "boolean"
+                            },
                             "name": {
                               "type": "string"
                             },
@@ -6491,6 +7276,7 @@
                             "state",
                             "consecutiveFailures",
                             "subscriptions",
+                            "madeThroughApp",
                             "version"
                           ],
                           "title": "ConnectionView",
@@ -6804,6 +7590,244 @@
           }
         },
         "summary": "Rotate connection secret",
+        "tags": [
+          "agents"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/connection_test": {
+      "post": {
+        "description": "Send a connection's webhook a signed test ping (type ping, nothing to act on), the way a real push is signed and sent. It goes out in a few seconds; connection_list then shows what the receiver answered as lastTest.",
+        "operationId": "connection_test",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "connectionId": {
+                    "description": "an id, or a link to it",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "connectionId"
+                ],
+                "title": "ConnectionRef",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "queued": {
+                              "description": "The ping is on its way; connection_list shows its answer as lastTest.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "queued"
+                          ],
+                          "title": "TestQueued",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "queued": {
+                              "description": "The ping is on its way; connection_list shows its answer as lastTest.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "queued"
+                          ],
+                          "title": "TestQueued",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Test webhook",
         "tags": [
           "agents"
         ],

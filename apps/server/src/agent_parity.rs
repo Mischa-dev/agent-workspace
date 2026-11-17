@@ -387,32 +387,6 @@ mod tests {
             "/api/v1/account/api-tokens/{credential_id}/revoke",
             Person("credentials are made and revoked by people"),
         ),
-        (Post, "/api/v1/webhooks", Tool("webhook_write")),
-        (
-            Patch,
-            "/api/v1/webhooks/{webhook_id}",
-            Tool("webhook_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/webhooks/{webhook_id}",
-            Tool("webhook_write"),
-        ),
-        (
-            Post,
-            "/api/v1/webhooks/{webhook_id}/rotate-secret",
-            Tool("webhook_write"),
-        ),
-        (
-            Post,
-            "/api/v1/webhooks/{webhook_id}/test",
-            Tool("webhook_write"),
-        ),
-        (
-            Post,
-            "/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-            Tool("webhook_write"),
-        ),
         (
             Post,
             "/api/v1/projects/{project_id}/bug-report-links",
