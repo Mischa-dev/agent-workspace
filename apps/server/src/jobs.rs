@@ -471,7 +471,7 @@ pub async fn run_workers(
                         let registry = Arc::clone(&registry);
                         let lease = options.lease;
                         running.spawn(async move {
-                            execute(&state, &registry, job, lease).await;
+                            execute(&state, &registry, job, lease, None).await;
                         });
                     }
                 }
@@ -511,7 +511,7 @@ pub async fn run_due(
         let Some(job) = jobs.into_iter().next() else {
             return Ok(count);
         };
-        execute(state, registry, job, options.lease).await;
+        execute(state, registry, job, options.lease, None).await;
         count += 1;
     }
 }
@@ -538,7 +538,7 @@ pub async fn run_due_host(
         let Some(job) = jobs.into_iter().next() else {
             break;
         };
-        execute(state, registry, job, options.lease).await;
+        execute(state, registry, job, options.lease, Some(&lease.lost)).await;
         count += 1;
     }
     Ok(count)
@@ -644,7 +644,16 @@ async fn claim(
     .await
 }
 
-async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Duration) {
+/// `stop`, when given, ends the handler as if it lost its own lease: a host
+/// job stops when this instance loses the built-in host's lease, so the old
+/// holder never records a result after a successor took over.
+async fn execute(
+    state: &AppState,
+    registry: &JobRegistry,
+    job: Job,
+    lease: Duration,
+    stop: Option<&tokio_util::sync::CancellationToken>,
+) {
     let Some(registration) = registry.handlers.get(job.kind.as_str()) else {
         return;
     };
@@ -693,6 +702,12 @@ async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Dura
             result.unwrap_or_else(|_| Err(JobError::retry("The job ran out of time.")))
         }
         () = renewals => Err(JobError::retry("The job lost its lease.")),
+        () = async {
+            match stop {
+                Some(stop) => stop.cancelled().await,
+                None => std::future::pending().await,
+            }
+        } => Err(JobError::retry("This server lost the built-in host.")),
     };
     metrics::observe_job(&kind, started.elapsed(), result.is_ok());
     if let Err(error) = finish(&state.pool, &job, result).await {

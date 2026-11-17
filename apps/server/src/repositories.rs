@@ -383,7 +383,14 @@ async fn prepare_registered_repository(
     )
     .await?;
     transaction.commit().await?;
-    let row = run_preparation(&state, project_id, repository_id, row).await?;
+    let row = if state.supervisors.cluster().is_some() {
+        // The built-in host's holder prepares it on its own disk; the
+        // repository list shows how it went.
+        queue_prepare(&state, project_id, repository_id).await?;
+        row
+    } else {
+        run_preparation(&state, project_id, repository_id, row).await?
+    };
     Ok(Json(repository_view(row, role_allows_manage(role))?))
 }
 
@@ -468,35 +475,7 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
 /// a state without a server (a test's) prepares it here, as before.
 pub(crate) fn prepare_in_background(state: AppState, project_id: Uuid, repository_id: Uuid) {
     tokio::spawn(async move {
-        if state.supervisors.cluster().is_some() {
-            let job = crate::jobs::NewJob::new(PREPARE_KIND)
-                .payload(PreparePayload {
-                    project_id,
-                    repository_id,
-                })
-                .unique(format!("{PREPARE_KIND}:{repository_id}"));
-            let queued = async {
-                crate::jobs::enqueue(&state.pool, job).await?;
-                crate::db::scoped_one(&state.pool, async |connection| {
-                    sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
-                        .execute(&mut *connection)
-                        .await
-                })
-                .await?;
-                Ok::<_, AppError>(())
-            }
-            .await;
-            if let Err(error) = queued {
-                tracing::warn!(
-                    %project_id,
-                    %repository_id,
-                    error_category = error.log_category(),
-                    "repository preparation not queued"
-                );
-            }
-            return;
-        }
-        if let Err(error) = prepare(state, project_id, repository_id).await {
+        if let Err(error) = prepare_in(&state, project_id, repository_id).await {
             tracing::warn!(
                 %project_id,
                 %repository_id,
@@ -505,6 +484,29 @@ pub(crate) fn prepare_in_background(state: AppState, project_id: Uuid, repositor
             );
         }
     });
+}
+
+/// Queue the host job that prepares a repository on the built-in host's
+/// disk, and wake the host. Only the lease holder runs it.
+async fn queue_prepare(
+    state: &AppState,
+    project_id: Uuid,
+    repository_id: Uuid,
+) -> Result<(), AppError> {
+    let job = crate::jobs::NewJob::new(PREPARE_KIND)
+        .payload(PreparePayload {
+            project_id,
+            repository_id,
+        })
+        .unique(format!("{PREPARE_KIND}:{repository_id}"));
+    crate::jobs::enqueue(&state.pool, job).await?;
+    crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
+            .execute(&mut *connection)
+            .await
+    })
+    .await?;
+    Ok(())
 }
 
 async fn prepare(state: AppState, project_id: Uuid, repository_id: Uuid) -> Result<(), AppError> {
@@ -657,11 +659,18 @@ pub(crate) async fn archive_in(
 
 /// Prepare (clone or refresh) an enabled repository of the project on this
 /// server, for someone the caller checked may manage repositories there.
+/// Prepare a repository where its mirror lives: on a server, the built-in
+/// host's holder does it as a host job (this instance may be a standby
+/// with another disk), and this returns once it is queued; a state without
+/// a server (a test's) prepares it here.
 pub(crate) async fn prepare_in(
     state: &AppState,
     project_id: Uuid,
     repository_id: Uuid,
 ) -> Result<(), AppError> {
+    if state.supervisors.cluster().is_some() {
+        return queue_prepare(state, project_id, repository_id).await;
+    }
     let admission_root = state.config.data_root.clone();
     let admission_quota = state.config.data_quota_bytes;
     let admission_free = state.config.minimum_free_bytes;
