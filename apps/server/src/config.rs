@@ -162,6 +162,18 @@ pub struct AppConfig {
     /// `AGENT_WORKSPACE_ACCESS_<AREA>=old|compare|new`, each area's default
     /// from `access::compare::AREAS`.
     pub access_modes: BTreeMap<&'static str, crate::access::compare::Mode>,
+    /// A folder of packages (`*.json` inline packages, `*.zip` packages, or
+    /// folders holding a `package.json`) every workspace's directory lists
+    /// (`AGENT_WORKSPACE_DIRECTORY_DIR`, M1.11). Read at start-up and hourly.
+    pub directory_dir: Option<PathBuf>,
+    /// URL lists (a JSON index of packages) every workspace's directory
+    /// lists (`AGENT_WORKSPACE_DIRECTORY_URLS`, separated by spaces or
+    /// commas).
+    pub directory_urls: Vec<String>,
+    /// Whether a workspace may add its own URL lists to its directory
+    /// (`AGENT_WORKSPACE_DIRECTORY_WORKSPACE_SOURCES`; on, except on a
+    /// hosted server).
+    pub directory_workspace_sources: bool,
 }
 
 impl AppConfig {
@@ -583,6 +595,43 @@ impl AppConfig {
         }
         let client_address_header = client_address_header(values)?;
         let access_modes = access_modes(values)?;
+        let directory_dir = values
+            .get(&format!("{PREFIX}DIRECTORY_DIR"))
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        if directory_dir
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DIRECTORY_DIR"),
+                reason: "name an absolute directory".into(),
+            });
+        }
+        let directory_urls = optional(values, "DIRECTORY_URLS", "")
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|url| !url.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if directory_urls
+            .iter()
+            .any(|url| !(url.starts_with("https://") || url.starts_with("http://")))
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DIRECTORY_URLS"),
+                reason: "list http or https URLs separated by spaces or commas".into(),
+            });
+        }
+        let directory_workspace_sources = parse(
+            values,
+            "DIRECTORY_WORKSPACE_SOURCES",
+            if profile == Profile::Hosted {
+                "false"
+            } else {
+                "true"
+            },
+        )?;
         Ok(Self {
             environment,
             server_addr,
@@ -624,6 +673,9 @@ impl AppConfig {
             secrets_key_missing,
             client_address_header,
             access_modes,
+            directory_dir,
+            directory_urls,
+            directory_workspace_sources,
         })
     }
 }

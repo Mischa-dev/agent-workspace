@@ -503,6 +503,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "notification_update",
     "package_install",
     "package_remove",
+    "directory_source_create",
+    "directory_source_remove",
+    "workspace_shape_set",
     "page_comment",
     "page_comment_update",
     "page_edit",
@@ -6835,6 +6838,25 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "package_remove",
             json!({"installId": a.package_install, "parts": "keep", "clientRequestId": "net-package-remove-own"}),
             vec![json!({"installId": b.package_install, "parts": "archive", "clientRequestId": "net-package-remove-b"})],
+        ),
+        // The directory (M1.11) and shapes (M1.17): a workspace's own list
+        // is the only one it can remove; adding one and setting a shape
+        // name no workspace but the caller's. A shape is previewed, so the
+        // cases after this keep every module on.
+        mcp_case(
+            "directory_source_create",
+            json!({"url": "https://lists.example/own-net.json", "clientRequestId": "net-directory-own"}),
+            vec![],
+        ),
+        mcp_case(
+            "directory_source_remove",
+            json!({"sourceId": a.directory_source}),
+            vec![json!({"sourceId": b.directory_source})],
+        ),
+        mcp_case(
+            "workspace_shape_set",
+            json!({"shape": "friends", "preview": true}),
+            vec![],
         ),
         // Built modules (M1.6). Linked, then unlinked, so A's collection
         // stays visible to the cases after these.

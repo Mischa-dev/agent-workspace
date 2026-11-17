@@ -1,0 +1,42 @@
+{
+  "format": "agent-workspace-package/1",
+  "id": "shapes.friends",
+  "version": "1.0.0",
+  "name": "Friends",
+  "description": "Just chat: direct messages, group conversations and the inbox. No tasks, projects, agents or runs.",
+  "publisher": {
+    "name": "Agent Workspace"
+  },
+  "target": "workspace",
+  "contents": [
+    {
+      "kind": "switches",
+      "key": "switches",
+      "body": {
+        "off": [
+          "projects",
+          "channels",
+          "tasks",
+          "pages",
+          "whiteboards",
+          "collections",
+          "sheets",
+          "code",
+          "runs",
+          "agents",
+          "automations",
+          "suggestions"
+        ]
+      }
+    },
+    {
+      "kind": "layout",
+      "key": "layout",
+      "body": {
+        "preset": "minimal",
+        "changes": {},
+        "words": {}
+      }
+    }
+  ]
+}

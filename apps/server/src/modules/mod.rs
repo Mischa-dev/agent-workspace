@@ -319,19 +319,12 @@ mod tests {
         each_named("settings", &keys, |module| &module.settings);
     }
 
-    /// The `modules.<id>` settings stay defined until M1.11's contract step
-    /// (an older server may still write them; a trigger mirrors those
-    /// writes into `module_installs`), but nothing here reads them.
+    /// M1.11's contract step: module switches are no longer settings.
     #[test]
-    fn every_module_switch_is_a_setting() {
+    fn no_module_switch_is_a_setting() {
         for module in core() {
-            let key = super::state::setting_key(&module.id);
-            let definition = crate::settings::definition(&key);
-            assert_eq!(definition.is_some(), module.switchable, "{key}");
-            if let Some(definition) = definition {
-                assert_eq!(definition.scopes, &[crate::settings::Scope::Workspace]);
-                assert_eq!(definition.default_value(), serde_json::json!(true));
-            }
+            let key = format!("modules.{}", module.id);
+            assert!(crate::settings::definition(&key).is_none(), "{key}");
         }
     }
 

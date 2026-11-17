@@ -1960,6 +1960,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "my_permissions",
     "my_work",
     "notification_list",
+    "directory_list",
     "package_export",
     "package_list",
     "package_preview",
@@ -2270,6 +2271,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("module_list"),
         by_project("package_list"),
         by_project("agent_template_list"),
+        // A's directory lists its own URL list and never B's.
+        case(
+            "directory_list",
+            vec![json!({})],
+            vec![],
+            vec![json!({}), json!({"query": "lists"})],
+        ),
         case(
             "package_preview",
             vec![json!({"package": {

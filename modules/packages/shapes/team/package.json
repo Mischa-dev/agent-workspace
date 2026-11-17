@@ -1,0 +1,56 @@
+{
+  "format": "agent-workspace-package/1",
+  "id": "shapes.team",
+  "version": "1.0.0",
+  "name": "Team",
+  "description": "A team working together: chat, projects, tasks, pages and everything else on, with people and agents side by side.",
+  "publisher": {
+    "name": "Agent Workspace"
+  },
+  "target": "workspace",
+  "contents": [
+    {
+      "kind": "switches",
+      "key": "switches",
+      "body": {
+        "off": []
+      }
+    },
+    {
+      "kind": "layout",
+      "key": "layout",
+      "body": {
+        "preset": "everything",
+        "changes": {},
+        "words": {}
+      }
+    },
+    {
+      "kind": "space",
+      "key": "team",
+      "body": {
+        "name": "Team",
+        "key": "TEAM"
+      }
+    },
+    {
+      "kind": "channels",
+      "key": "channels",
+      "body": {
+        "channels": [
+          {
+            "name": "general"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "page",
+      "key": "start_here",
+      "body": {
+        "title": "Start here",
+        "markdown": "Welcome. This is your team's first project: talk in #general, add tasks, and keep notes in pages. Turn modules on or off in Settings › Modules.\n"
+      }
+    }
+  ]
+}

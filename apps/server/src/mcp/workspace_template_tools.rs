@@ -141,15 +141,24 @@ pub(super) async fn workspace_template_apply(
             return Ok(ToolResult::not_found("That template"));
         };
         let auditor = Auditor::App(principal);
-        match templates::apply(
-            &mut transaction,
-            &auditor,
-            caller,
-            organization_id,
-            &template,
-        )
-        .await
-        {
+        let maker = crate::events::Caller::mcp(principal);
+        let installer = crate::packages::apply::Installer {
+            workspace: organization_id,
+            actor: principal.actor_id,
+            standing: caller,
+            auditor: &auditor,
+            writer: crate::memory::Writer {
+                actor_id: principal.actor_id,
+                actor_kind: principal.actor_kind,
+                via_grant_id: principal.via_grant_id(),
+            },
+            maker,
+            template: None,
+            source: "builtin",
+            source_ref: None,
+        };
+        // M1.11: a template is used by installing it as a package.
+        match crate::packages::apply::use_template(&mut transaction, installer, &template).await {
             Ok(applied) => {
                 transaction.commit().await?;
                 Ok(ToolResult::ok(applied))

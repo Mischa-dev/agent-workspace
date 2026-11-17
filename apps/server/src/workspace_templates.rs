@@ -7,8 +7,8 @@
 //! definition `collection_describe` returns (AWD-90), made when the template
 //! is used.
 //!
-//! The built-in templates are files in the repository
-//! (`modules/templates/*.json`), Everything first. A workspace can save
+//! The built-in templates are built-in packages
+//! (`modules/packages/<id>/package.json`, M1.11), Everything first. A workspace can save
 //! itself as a template too; those are rows in `workspace_templates`, in the
 //! same shape. Using one changes the workspace in one go and keeps a record
 //! in `workspace_template_uses`, which the setup path's first step reads.
@@ -142,33 +142,28 @@ pub struct TemplateProject {
     pub collections: Vec<CollectionDefinition>,
 }
 
-/// A built-in template's file.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// A built-in template: a built-in package that a template can read
+/// (M1.11 moved them to `modules/packages/<id>/package.json`).
+#[derive(Debug)]
 struct BuiltinFile {
     id: String,
     name: String,
     description: String,
-    #[serde(flatten)]
     definition: TemplateDefinition,
 }
-
-/// The built-in templates, Everything first.
-const BUILTIN_SOURCES: &[&str] = &[
-    include_str!("../../../modules/templates/everything.json"),
-    include_str!("../../../modules/templates/chat-with-agents.json"),
-    include_str!("../../../modules/templates/personal.json"),
-    include_str!("../../../modules/templates/small-team.json"),
-    include_str!("../../../modules/templates/software-team.json"),
-    include_str!("../../../modules/templates/company.json"),
-];
 
 fn builtins() -> &'static [BuiltinFile] {
     static FILES: OnceLock<Vec<BuiltinFile>> = OnceLock::new();
     FILES.get_or_init(|| {
-        BUILTIN_SOURCES
-            .iter()
-            .filter_map(|source| serde_json::from_str::<BuiltinFile>(source).ok())
+        crate::packages::builtin::templates()
+            .filter_map(|builtin| {
+                Some(BuiltinFile {
+                    id: builtin.package.id.clone(),
+                    name: builtin.package.name.clone(),
+                    description: builtin.package.description.clone(),
+                    definition: builtin.template()?,
+                })
+            })
             .collect()
     })
 }
@@ -1668,15 +1663,24 @@ async fn apply_route(
         headers: &headers,
         principal: &principal,
     };
-    match apply(
-        &mut transaction,
-        &auditor,
-        caller,
-        organization_id,
-        &template,
-    )
-    .await
-    {
+    let maker = crate::events::Caller::browser(&principal)?;
+    let installer = crate::packages::apply::Installer {
+        workspace: organization_id,
+        actor: principal.actor_id,
+        standing: caller,
+        auditor: &auditor,
+        writer: crate::memory::Writer {
+            actor_id: principal.actor_id,
+            actor_kind: maker.actor_kind,
+            via_grant_id: None,
+        },
+        maker,
+        template: None,
+        source: "builtin",
+        source_ref: None,
+    };
+    // M1.11: a template is used by installing it as a package.
+    match crate::packages::apply::use_template(&mut transaction, installer, &template).await {
         Ok(applied) => {
             transaction.commit().await?;
             Ok(Json(applied).into_response())
@@ -1778,25 +1782,10 @@ mod tests {
     fn every_builtin_template_parses_and_checks() {
         assert_eq!(
             builtins().len(),
-            BUILTIN_SOURCES.len(),
-            "a file in modules/templates doesn't parse"
+            crate::packages::builtin::templates().count(),
+            "a built-in template package doesn't read as a template"
         );
         assert_eq!(builtins()[0].id, "everything", "Everything comes first");
-        let folder =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/templates");
-        let files = std::fs::read_dir(&folder)
-            .expect("templates folder")
-            .filter(|entry| {
-                entry
-                    .as_ref()
-                    .is_ok_and(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
-            })
-            .count();
-        assert_eq!(
-            files,
-            BUILTIN_SOURCES.len(),
-            "every file is in BUILTIN_SOURCES"
-        );
         let mut ids = std::collections::BTreeSet::new();
         for file in builtins() {
             assert!(ids.insert(file.id.clone()), "{} twice", file.id);

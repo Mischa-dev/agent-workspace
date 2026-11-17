@@ -19,13 +19,6 @@ use super::{
 };
 use crate::error::AppError;
 
-/// The setting that switched a module before M1.2. It stays defined until
-/// M1.11's contract step, so an older server can still write it (a trigger
-/// mirrors that into `module_installs`); nothing reads it.
-pub fn setting_key(module: &str) -> String {
-    format!("modules.{module}")
-}
-
 /// Where a module switch is kept: the workspace's own, or a narrowing in
 /// one of its spaces.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -202,6 +195,12 @@ impl ModuleSet {
 
     pub fn allows_part(self, part: &str) -> bool {
         manifest::of_part(part).is_none_or(|module| self.contains(&module.id))
+    }
+
+    /// Whether a setting shows: one that belongs to a module that's off
+    /// doesn't (a Friends workspace names no run settings).
+    pub fn allows_setting(self, key: &str) -> bool {
+        manifest::of_setting(key).is_none_or(|module| self.contains(&module.id))
     }
 
     pub fn allows_setup_step(self, step: &str) -> bool {
