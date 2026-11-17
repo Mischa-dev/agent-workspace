@@ -9,6 +9,7 @@
 //! - `holding`: what a caller holds in one scope.
 //! - `compare`: old and new checks side by side while areas move (K1 §4.3).
 //! - `http`: the operators' view of recorded disagreements.
+//! - `tokens`: short-lived narrow tokens for one account (K1.24).
 //! - `manage`: the one rule for managing an agent or app account, and
 //!   `may_grant` (nobody grants more than they hold).
 //!
@@ -23,6 +24,7 @@ pub mod catalogue;
 pub mod decide;
 pub mod holding;
 pub mod manage;
+pub mod tokens;
 
 use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;

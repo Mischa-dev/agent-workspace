@@ -129,6 +129,8 @@ pub const MCP_WORKSPACE_PATH: &str = "/api/v1/w/{workspace}/mcp";
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const TOKEN_BYTES: usize = 32;
 const TOKEN_PREFIX_LENGTH: usize = 16;
+/// What a short-lived narrow token (K1.24) authenticates as.
+pub(crate) const ACCESS_TOKEN_CLASS: &str = "access_token";
 const MAX_TOKEN_BYTES: usize = 16 * 1024;
 /// The largest JSON-RPC body a call may send; anything larger is refused
 /// with HTTP 413 before a tool runs. 6 MiB fits file_upload's 4 MiB file as
@@ -3800,15 +3802,26 @@ pub(crate) async fn caller_reach(
     principal: &McpPrincipal,
 ) -> Result<(PermissionSet, Option<AgentLimits>), AppError> {
     let mut connection = crate::db::scoped_tx(&state.pool).await?;
-    if principal.actor_kind == ActorKind::Human {
+    let (reach, limits) = if principal.actor_kind == ActorKind::Human {
         let access = crate::roles::app_access(&mut connection, principal.actor_id).await?;
-        Ok((access.union, Some(access.limits)))
+        (access.union, Some(access.limits))
     } else {
-        Ok((
+        (
             crate::roles::agent_union(&mut connection, principal.actor_id).await?,
             None,
-        ))
+        )
+    };
+    // K1.24: a narrow token holds no more than its scope, whoever holds it.
+    if principal.authentication_class == ACCESS_TOKEN_CLASS {
+        let Some(scope) =
+            crate::access::tokens::scope_of(&mut connection, principal.credential_id).await?
+        else {
+            return Ok((PermissionSet::EMPTY, Some(AgentLimits::default())));
+        };
+        let (reach, limits) = scope.narrow(principal.actor_id, reach, limits.as_ref());
+        return Ok((reach, Some(limits)));
     }
+    Ok((reach, limits))
 }
 
 /// The modules on for the caller in at least one workspace or project they
@@ -4967,26 +4980,29 @@ pub(crate) async fn resolve_bearer_principal(
     if token.starts_with("aw_oauth_") {
         return oauth::resolve_access_token(state, token).await;
     }
-    // A1.12: a host's short-lived credential for one run's agent, in the
-    // run's space (interim until K1.24).
-    if token.starts_with(crate::runs::credentials::TOKEN_PREFIX) {
-        let Some(holder) = crate::runs::credentials::resolve(&state.pool, token).await? else {
+    // K1.24: a short-lived token narrowed to some of an account's spaces
+    // and permissions (a run's token is one). `caller_reach` applies its
+    // scope on every call.
+    if token.starts_with(crate::access::tokens::TOKEN_PREFIX) {
+        let Some(holder) = crate::access::tokens::resolve(&state.pool, token).await? else {
             return Ok(None);
         };
         let Ok(actor_kind) = parse_mcp_actor_kind(&holder.account_kind) else {
             return Ok(None);
         };
         return Ok(Some(McpPrincipal {
-            credential_id: holder.credential_id,
+            credential_id: holder.token_id,
             mcp_credential_id: None,
             oauth_grant_id: None,
             actor_id: holder.account_id,
             actor_kind,
             project_id: holder.space_id,
             external_agent_connection_id: holder.connection_id,
-            client_name: holder.host_name,
+            client_name: holder
+                .host_name
+                .unwrap_or_else(|| "access token".to_owned()),
             scopes: vec!["read".to_owned(), "write".to_owned()],
-            authentication_class: "run_credential",
+            authentication_class: ACCESS_TOKEN_CLASS,
             account_wide: false,
             project_explicit: false,
         }));
@@ -5501,7 +5517,7 @@ fn mcp_policy_allows(
     )
 }
 
-fn parse_mcp_actor_kind(value: &str) -> Result<ActorKind, AppError> {
+pub(crate) fn parse_mcp_actor_kind(value: &str) -> Result<ActorKind, AppError> {
     match value {
         "human" => Ok(ActorKind::Human),
         "external_agent" => Ok(ActorKind::ExternalAgent),

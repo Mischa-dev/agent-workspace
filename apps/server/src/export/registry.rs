@@ -190,10 +190,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "daily counts of calls to old operation names, kept to retire them (K2); this server's own measure",
             ),
             (
-                "account_credentials",
-                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
-            ),
-            (
                 "mcp_oauth_access_tokens",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
@@ -1725,8 +1721,8 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a machine or session on this server; set up again after import",
             ),
             (
-                "run_credentials",
-                "short-lived credentials, kept as digests, that end with their run",
+                "access_tokens",
+                "short-lived tokens, kept as digests, that lapse within a day",
             ),
             (
                 "repository_workspaces",
