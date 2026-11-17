@@ -181,7 +181,14 @@ impl Spec {
             definitions: definitions.to_vec(),
             ..Self::default()
         }
-        .searching(Vec::new(), definitions)
+        .searching(
+            config
+                .search
+                .as_deref()
+                .and_then(search_words)
+                .unwrap_or_default(),
+            definitions,
+        )
         .measuring(config.chart.map(|chart| chart.measure).unwrap_or_default())
     }
 
@@ -220,7 +227,8 @@ impl Spec {
         self.definitions.iter().find(|field| field.id == id)
     }
 
-    /// Sets the words to search for, read against `definitions`.
+    /// Adds words to search for (to the view's own), read against
+    /// `definitions`. A record holds every word.
     pub fn searching(mut self, words: Vec<String>, definitions: &[FieldDefinition]) -> Self {
         let active = definitions.iter().filter(|field| !field.archived);
         let mut search = SearchFields::default();
@@ -248,7 +256,15 @@ impl Spec {
                 _ => {}
             }
         }
-        self.words = words;
+        for word in words {
+            if !self
+                .words
+                .iter()
+                .any(|kept| kept.to_lowercase() == word.to_lowercase())
+            {
+                self.words.push(word);
+            }
+        }
         self.search_fields = search;
         if self.definitions.is_empty() {
             self.definitions = definitions.to_vec();

@@ -10693,7 +10693,7 @@
     },
     "/api/v2/w/{workspace}/ops/dashboard_update": {
       "post": {
-        "description": "Rename a dashboard, change its tiles, or share one of your own. Changing a shared dashboard needs a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
+        "description": "Rename a dashboard, change its tiles, share one of your own, or make a shared one yours alone. Changing a shared dashboard needs a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
         "operationId": "dashboard_update",
         "parameters": [
           {
@@ -10748,8 +10748,11 @@
                     ]
                   },
                   "share": {
-                    "description": "Share one of your own with everyone in the project.",
-                    "type": "boolean"
+                    "description": "true shares one of your own with everyone in the project; false\nmakes a shared one yours alone.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
                   },
                   "tiles": {
                     "description": "Every tile, in order: replaces the ones there (pass a tile's id to\nkeep it).",

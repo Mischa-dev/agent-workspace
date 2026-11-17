@@ -316,7 +316,7 @@ export type DashboardListInput = { spaceId: string }
 
 export type DashboardListOutput = { canShare: boolean; dashboards: DashboardEntry[] }
 
-export type DashboardUpdateInput = { dashboard: string; description?: string | null; expectedVersion?: number | null; name?: string | null; share?: boolean; tiles?: TileInput[] | null }
+export type DashboardUpdateInput = { dashboard: string; description?: string | null; expectedVersion?: number | null; name?: string | null; share?: boolean | null; tiles?: TileInput[] | null }
 
 export type DashboardUpdateOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 

@@ -229,8 +229,9 @@ pub struct Change<'a> {
     pub name: Option<&'a str>,
     pub description: Option<&'a str>,
     pub tiles: Option<&'a [Tile]>,
-    /// Share a personal dashboard with the project.
-    pub share: bool,
+    /// A new owner: `Some(None)` shares it with the project,
+    /// `Some(Some(account))` makes it that account's alone.
+    pub owner: Option<Option<Uuid>>,
 }
 
 /// Changes a dashboard already read under lock; bumps its version.
@@ -243,7 +244,7 @@ pub async fn change(
     let updated = sqlx::query_as::<_, Row>(&format!(
         "UPDATE dashboards SET name = COALESCE($3, name), \
          description = COALESCE($4, description), tiles = COALESCE($5, tiles), \
-         owner_actor_id = CASE WHEN $6 THEN NULL ELSE owner_actor_id END, \
+         owner_actor_id = CASE WHEN $6 THEN $7 ELSE owner_actor_id END, \
          version = version + 1, updated_at = now() \
          WHERE space_id = $1 AND id = $2 RETURNING {COLUMNS}"
     ))
@@ -252,7 +253,8 @@ pub async fn change(
     .bind(change.name)
     .bind(change.description)
     .bind(tiles)
-    .bind(change.share)
+    .bind(change.owner.is_some())
+    .bind(change.owner.flatten())
     .fetch_one(&mut *connection)
     .await;
     match updated {
@@ -294,10 +296,8 @@ pub struct Figures {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub measure: Option<String>,
     /// A chart's groups, in order, with their counts (and values).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<FigureGroup>,
     /// Any other view: its first few records' titles.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub records: Vec<String>,
 }
 

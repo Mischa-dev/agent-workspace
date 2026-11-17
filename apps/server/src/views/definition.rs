@@ -246,6 +246,9 @@ pub struct ViewConfig {
     /// A chart's style and measure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart: Option<ChartConfig>,
+    /// Words every record the view shows contains: a search kept with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
 }
 
 impl ViewConfig {
@@ -288,6 +291,7 @@ impl ViewConfig {
                 },
                 _ => chart,
             }),
+            search: self.search.clone(),
         }
     }
 
@@ -372,6 +376,15 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
     };
     if let Some(problem) = config.filters.size_problem() {
         return Err(problem);
+    }
+    if let Some(search) = &config.search
+        && super::query::search_words(search).is_none()
+    {
+        return Err(format!(
+            "A view searches for at most {} words in {} characters.",
+            super::query::MAX_SEARCH_WORDS,
+            super::query::MAX_SEARCH_CHARACTERS
+        ));
     }
     for clause in config.filters.clauses() {
         let Some(field) = active(clause.field) else {
@@ -1418,8 +1431,18 @@ mod tests {
             date_field: None,
             end_field: None,
             chart: None,
+            search: Some("login crash".to_owned()),
         };
         assert_eq!(check(&mine, &fields), Ok(()));
+        // A kept search is read like a typed one: every word, a few at most.
+        let spec = crate::views::query::Spec::from_config(&mine, &fields, Uuid::now_v7())
+            .searching(vec!["Crash".to_owned(), "parser".to_owned()], &fields);
+        assert_eq!(spec.words, ["login", "crash", "parser"]);
+        let wordy = ViewConfig {
+            search: Some("one two three four five six seven eight nine".to_owned()),
+            ..ViewConfig::default()
+        };
+        assert!(check(&wordy, &fields).is_err());
         let elsewhere = ViewConfig {
             filters: vec![FieldClause {
                 field: Uuid::now_v7(),

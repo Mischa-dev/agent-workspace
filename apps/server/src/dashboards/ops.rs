@@ -581,9 +581,10 @@ pub struct DashboardUpdateInput {
     /// keep it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiles: Option<Vec<TileInput>>,
-    /// Share one of your own with everyone in the project.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub share: bool,
+    /// true shares one of your own with everyone in the project; false
+    /// makes a shared one yours alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share: Option<bool>,
 }
 
 impl Targeted for DashboardUpdateInput {
@@ -600,8 +601,9 @@ impl Operation for DashboardUpdate {
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const EMITS: &'static [&'static str] = &["dashboard.updated"];
     const TITLE: &'static str = "Change a dashboard";
-    const DESCRIPTION: &'static str = "Rename a dashboard, change its tiles, or share one of your \
-        own. Changing a shared dashboard needs a role that can edit dashboards.";
+    const DESCRIPTION: &'static str = "Rename a dashboard, change its tiles, share one of your own, \
+        or make a shared one yours alone. Changing a shared dashboard needs a role that can edit \
+        dashboards.";
 
     type Input = DashboardUpdateInput;
     type Output = DashboardEntry;
@@ -621,10 +623,16 @@ impl Operation for DashboardUpdate {
             .map(description_of)
             .transpose()?;
         let current = read(call, input.dashboard.id(), true).await?;
-        let shared = current.owner_actor_id.is_none() || input.share;
-        if shared {
+        let was_shared = current.owner_actor_id.is_none();
+        let shared = input.share.unwrap_or(was_shared);
+        if shared || was_shared {
             need_share(call).await?;
         }
+        let owner = match (was_shared, shared) {
+            (false, true) => Some(None),
+            (true, false) => Some(Some(call.ctx.caller.account_id)),
+            _ => None,
+        };
         if let Some(expected) = input.expected_version
             && expected != current.version
         {
@@ -638,7 +646,7 @@ impl Operation for DashboardUpdate {
         // shared views only.
         let tiles = match &input.tiles {
             Some(tiles) => Some(tiles_of(call, tiles, shared, &current.tiles).await?),
-            None if input.share && current.owner_actor_id.is_some() => {
+            None if shared && !was_shared => {
                 let kept = current
                     .tiles
                     .iter()
@@ -665,7 +673,7 @@ impl Operation for DashboardUpdate {
                     name: name.as_deref(),
                     description: description.as_deref(),
                     tiles: tiles.as_deref(),
-                    share: input.share,
+                    owner,
                 },
             )
             .await?,

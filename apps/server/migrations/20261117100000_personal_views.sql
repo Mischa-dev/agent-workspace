@@ -190,6 +190,9 @@ BEGIN
             filters := filters || jsonb_build_array(jsonb_build_object('field', field, 'op', 'within', 'values', jsonb_build_array('overdue')));
         ELSIF key = 'fieldFilters' AND jsonb_typeof(raw::jsonb) = 'array' THEN
             filters := filters || raw::jsonb;
+        ELSIF key = 'q' AND btrim(raw) <> '' THEN
+            -- The search the old view ran stays its own.
+            config := config || jsonb_build_object('search', btrim(raw));
         ELSIF key = 'sort' THEN
             config := config || jsonb_build_object('sort', CASE
                 WHEN raw = 'newest' THEN jsonb_build_array(jsonb_build_object('field', 'number', 'direction', 'desc'))

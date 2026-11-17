@@ -2077,6 +2077,29 @@ async fn dashboards_stay_their_owners_and_read_as_the_viewer() {
         unseen["value"]["tiles"][1]["text"], "Weekly numbers",
         "{unseen}"
     );
+
+    // Making a shared dashboard someone's own takes the role that shares
+    // them; done, the others lose it.
+    let (_, kept) = op(
+        &world.people["nate"].browser,
+        "dashboard_update",
+        json!({"dashboard": team, "share": false}),
+    )
+    .await;
+    assert_ne!(
+        kept["outcome"], "ok",
+        "nate took the team's dashboard: {kept}"
+    );
+    let (_, taken) = op(
+        lena,
+        "dashboard_update",
+        json!({"dashboard": team, "share": false}),
+    )
+    .await;
+    assert_eq!(taken["outcome"], "ok", "{taken}");
+    assert_eq!(taken["value"]["shared"], false, "{taken}");
+    let (_, gone) = op(mara, "dashboard_get", json!({"dashboard": team})).await;
+    assert_ne!(gone["outcome"], "ok", "mara still reads it: {gone}");
     world.finish().await;
 }
 

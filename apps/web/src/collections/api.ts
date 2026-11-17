@@ -57,6 +57,8 @@ export type ViewConfig = {
   endField?: string | null
   /** A chart's style and what it adds up for each group (T1.31). */
   chart?: ChartConfig | null
+  /** Words every record the view shows contains: a search kept with it. */
+  search?: string | null
 }
 
 export type MeasureOp = 'count' | 'sum' | 'average' | 'min' | 'max'
@@ -212,6 +214,7 @@ export function normalizeConfig(value: unknown): ViewConfig {
     dateField: typeof raw.dateField === 'string' && raw.dateField ? raw.dateField : null,
     endField: typeof raw.endField === 'string' && raw.endField ? raw.endField : null,
     chart: normalizeChart(raw.chart),
+    search: typeof raw.search === 'string' && raw.search.trim() ? raw.search : null,
   }
 }
 
@@ -372,6 +375,7 @@ export function configJson(config: ViewConfig) {
           },
         }
       : {}),
+    ...(config.search ? { search: config.search } : {}),
   }
 }
 
