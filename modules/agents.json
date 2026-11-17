@@ -32,7 +32,7 @@
     "/api/v1/hosts*",
     "/api/v1/host/*"
   ],
-  "events": { "emits": [], "listens": ["message.created", "task.updated", "run.finished"] },
+  "events": { "emits": ["account.managers_changed"], "listens": ["message.created", "task.updated", "run.finished"] },
   "notifications": [],
   "search": [],
   "automations": { "triggers": [], "actions": [] },

@@ -21,6 +21,9 @@
     "file_list": "query",
     "file_read": "describe",
     "file_delete": "change",
+    "history_list": "query",
+    "history_show": "describe",
+    "history_restore": "change",
     "module_list": "describe",
     "workspace_update": "change",
     "role_list": "query",
@@ -69,7 +72,7 @@
     "/api/v1/workspace-invitations/*",
     "/api/v1/workspaces/by-slug/*"
   ],
-  "events": { "emits": [], "listens": [] },
+  "events": { "emits": ["file.attached", "file.removed"], "listens": [] },
   "notifications": [],
   "search": ["files"],
   "automations": { "triggers": [], "actions": [] },

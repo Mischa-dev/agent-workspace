@@ -60,6 +60,10 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("conversation_read_states", WORKSPACE_ID),
     ("conversations", WORKSPACE_ID),
     ("custom_harnesses", ORGANIZATION_ID),
+    ("event_staging", WORKSPACE_ID),
+    ("events", WORKSPACE_ID),
+    ("events_default", WORKSPACE_ID),
+    ("events_p0", WORKSPACE_ID),
     ("execution_profiles", WORKSPACE_ID),
     ("execution_workers", WORKSPACE_ID),
     ("external_agent_connections", WORKSPACE_ID),
@@ -89,6 +93,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("launches", ORGANIZATION_ID),
     ("layout_presets", ORGANIZATION_ID),
     ("link_previews", ORGANIZATION_ID),
+    ("links", WORKSPACE_ID),
     ("mcp_client_credentials", WORKSPACE_ID),
     ("mcp_oauth_access_tokens", WORKSPACE_ID),
     ("mcp_oauth_authorization_codes", WORKSPACE_ID),
@@ -161,6 +166,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("task_imports", WORKSPACE_ID),
     ("task_templates", WORKSPACE_ID),
     ("thing_references", WORKSPACE_ID),
+    ("things", WORKSPACE_ID),
     ("usage_accounts", ORGANIZATION_ID),
     ("usage_reports", WORKSPACE_ID),
     ("usage_schedules", ORGANIZATION_ID),
@@ -223,6 +229,18 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "every account, of any kind: accounts are server-wide (R19), each with its owner",
     ),
     (
+        "event_consumer_failures",
+        "events a consumer of the server's log could not handle yet, by log position",
+    ),
+    (
+        "event_consumers",
+        "how far each of the server's log consumers has read (K3.3)",
+    ),
+    (
+        "event_position_counter",
+        "the one row that numbers the server's event log (K3.3)",
+    ),
+    (
         "host_agents",
         "which accounts a host runs: hosts are server-wide (A1 3.9)",
     ),
@@ -241,6 +259,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "idempotency_keys",
         "an account's retry keys: keyed by the account (accounts are server-wide, R19), short-lived, and looked up before the request's workspace is known",
+    ),
+    (
+        "leases",
+        "which server instance holds each single-holder piece of server work (K5.2)",
     ),
     (
         "login_challenges",
@@ -264,12 +286,28 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the permissions the server knows, the same for every workspace (K1.3)",
     ),
     (
+        "rate_limit_counters",
+        "short-lived request budgets keyed by digests; sign-in budgets count before any workspace is known, and a per-workspace bucket carries workspace_id (K5.6)",
+    ),
+    (
         "secret_master_keys_retired",
         "the server's own key history, not any workspace's",
     ),
     (
+        "server_instances",
+        "the server processes sharing this database and their heartbeats (K5.2)",
+    ),
+    (
         "sessions",
         "browser sign-in sessions, before any workspace is chosen",
+    ),
+    (
+        "thing_kinds",
+        "the kinds of thing the server knows: a kind is the server's, not a workspace's (K3.10)",
+    ),
+    (
+        "things_backfill",
+        "how far the server's registry backfill got per source table",
     ),
     (
         "user_email_addresses",

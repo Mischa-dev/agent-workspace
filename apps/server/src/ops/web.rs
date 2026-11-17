@@ -160,6 +160,7 @@ async fn caller(
         state
             .rate_limits
             .check_mcp_auth(key)
+            .await
             .map_err(IntoResponse::into_response)?;
         let principal = match mcp::resolve_bearer_principal(state, headers).await {
             Ok(Some(principal)) => principal,
@@ -169,6 +170,7 @@ async fn caller(
         state
             .rate_limits
             .check_mcp_request(principal.credential_id)
+            .await
             .map_err(IntoResponse::into_response)?;
         let caller = super::mcp::caller_of(state, &principal)
             .await
@@ -181,7 +183,7 @@ async fn caller(
         Err(error) => return Err(error.into_response()),
     };
     if writes {
-        auth::require_authenticated_write(state, headers, &principal)
+        auth::require_authenticated_write(state, headers, &principal).await
     } else {
         auth::require_csrf(&state.config, headers, &principal)
     }

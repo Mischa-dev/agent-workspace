@@ -164,7 +164,7 @@ async fn update_member(
     ApiPath((project_id, actor_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<UpdateMemberRequest>,
 ) -> Result<Json<MemberView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     validate_update(&request)?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
@@ -978,7 +978,7 @@ async fn add_existing_member(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<AddExistingMemberRequest>,
 ) -> Result<Json<MemberView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut tx = state.pool.begin().await?;
     let added = add_member(
         &mut tx,

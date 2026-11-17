@@ -192,7 +192,7 @@ async fn update(
     ApiPath(grant_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<UpdateRequest>,
 ) -> Result<Json<ConnectedApp>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     owned_grant(&mut transaction, principal.actor_id, grant_id).await?;
     sqlx::query("UPDATE mcp_oauth_grants SET show_via = $2 WHERE id = $1")
@@ -221,7 +221,7 @@ async fn revoke(
     principal: AuthenticatedActor,
     ApiPath(grant_id): ApiPath<Uuid>,
 ) -> Result<Json<RevokeResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
+    require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     owned_grant(&mut transaction, principal.actor_id, grant_id).await?;
     // Same effect as the client revoking its own token: the grant and every
