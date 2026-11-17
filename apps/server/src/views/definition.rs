@@ -36,14 +36,101 @@ pub use crate::views::ViewKind as ViewType;
 /// record), a gallery (a card for each record), a calendar (a month, each
 /// record on its date) or a timeline (each record a bar from its date to its
 /// end date).
-pub const COLLECTION_VIEW_TYPES: [ViewType; 6] = [
+pub const COLLECTION_VIEW_TYPES: [ViewType; 7] = [
     ViewType::Table,
     ViewType::Board,
     ViewType::List,
     ViewType::Gallery,
     ViewType::Calendar,
     ViewType::Timeline,
+    ViewType::Chart,
 ];
+
+/// What a chart counts for each group (T1.31): how many records, or the
+/// sum, average, least or most of a number field.
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum MeasureOp {
+    #[default]
+    Count,
+    Sum,
+    Average,
+    Min,
+    Max,
+}
+
+impl MeasureOp {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "count" => Some(Self::Count),
+            "sum" | "total" => Some(Self::Sum),
+            "average" | "avg" | "mean" => Some(Self::Average),
+            "min" | "least" => Some(Self::Min),
+            "max" | "most" => Some(Self::Max),
+            _ => None,
+        }
+    }
+
+    /// Its name, as written.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Sum => "sum",
+            Self::Average => "average",
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+
+    /// The SQL aggregate it is, over a number.
+    pub fn sql(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Sum => "sum",
+            Self::Average => "avg",
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+}
+
+/// A chart's measure: an operation, and the number field it reads (none
+/// for a count).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Measure {
+    #[serde(default)]
+    pub op: MeasureOp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<Uuid>,
+}
+
+/// How a chart draws its groups.
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ChartStyle {
+    #[default]
+    Bar,
+    Line,
+    Donut,
+    /// One number: the measure over every record.
+    Number,
+}
+
+/// A chart view's settings beside the view's filters and grouping (its
+/// groups are the chart's bars, points or slices).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChartConfig {
+    #[serde(default)]
+    pub style: ChartStyle,
+    #[serde(default)]
+    pub measure: Measure,
+}
 
 /// A view kind a collection's view can be, by name.
 pub fn parse_view_type(value: &str) -> Option<ViewType> {
@@ -156,6 +243,9 @@ pub struct ViewConfig {
     /// Where a timeline's bars end; none, and each record is one day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_field: Option<Uuid>,
+    /// A chart's style and measure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<ChartConfig>,
 }
 
 impl ViewConfig {
@@ -190,6 +280,14 @@ impl ViewConfig {
             title_width: self.title_width,
             date_field: self.date_field.filter(active),
             end_field: self.end_field.filter(active),
+            // A measure on a field that's gone counts until it's back.
+            chart: self.chart.map(|chart| match chart.measure.field {
+                Some(field) if !active(&field) => ChartConfig {
+                    measure: Measure::default(),
+                    ..chart
+                },
+                _ => chart,
+            }),
         }
     }
 
@@ -234,6 +332,23 @@ impl ViewConfig {
                 self.date_field = Some(start.id);
                 if self.end_field.is_none() {
                     self.end_field = dates.get(1).map(|field| field.id);
+                }
+            }
+            // A chart's bars are its groups: the first field that can group,
+            // or, with none, one number over every record.
+            ViewType::Chart => {
+                if self.group_by.is_none() {
+                    self.group_by = first(&|field| field.field_type.can_group());
+                }
+                if self.chart.is_none() {
+                    self.chart = Some(ChartConfig {
+                        style: if self.group_by.is_some() {
+                            ChartStyle::Bar
+                        } else {
+                            ChartStyle::Number
+                        },
+                        measure: Measure::default(),
+                    });
                 }
             }
             _ => {}
@@ -367,6 +482,33 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
             None => {
                 return Err("The end date names a field this collection doesn't have.".to_owned());
             }
+        }
+    }
+    if let Some(chart) = &config.chart {
+        match (chart.measure.op, chart.measure.field) {
+            (MeasureOp::Count, None) => {}
+            (MeasureOp::Count, Some(_)) => {
+                return Err("A count counts records; it reads no field.".to_owned());
+            }
+            (_, None) => {
+                return Err(
+                    "A sum, average, least or most reads a number field: name one.".to_owned(),
+                );
+            }
+            (_, Some(id)) => match active(id) {
+                Some(field) if field.behaves_as() == FieldType::Number => {}
+                Some(field) => {
+                    return Err(format!(
+                        "\"{}\" isn't a number field. A chart adds up number fields.",
+                        field.name
+                    ));
+                }
+                None => {
+                    return Err(
+                        "The measure names a field this collection doesn't have.".to_owned()
+                    );
+                }
+            },
         }
     }
     let mut columns = HashSet::new();
@@ -1275,6 +1417,7 @@ mod tests {
             title_width: None,
             date_field: None,
             end_field: None,
+            chart: None,
         };
         assert_eq!(check(&mine, &fields), Ok(()));
         let elsewhere = ViewConfig {
@@ -1419,6 +1562,7 @@ mod tests {
         };
         assert_eq!(stored.active(&fields).date_field, None);
         assert_eq!(parse_view_type(" Calendar "), Some(ViewType::Calendar));
-        assert_eq!(parse_view_type("chart"), None);
+        assert_eq!(parse_view_type("chart"), Some(ViewType::Chart));
+        assert_eq!(parse_view_type("kanban"), None);
     }
 }

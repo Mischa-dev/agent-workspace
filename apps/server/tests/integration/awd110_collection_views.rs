@@ -544,3 +544,157 @@ async fn timeline_ranges_read_only_bars_that_touch_them() {
         );
     }
 }
+
+/// T1.31: a chart's groups add up a number field (sum, average, least,
+/// most) beside their counts, and the whole adds up each record once even
+/// when a record is in several groups; a count reads no field, and a sum
+/// of a field that isn't a number is refused.
+#[tokio::test]
+async fn charts_add_up_a_number_field_by_group() {
+    let Some(setup) = setup("awd110_charts").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let created = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "name": "Deals",
+            "fields": [
+                {"name": "Stage", "type": "single_choice", "options": [{"name": "Open"}, {"name": "Won"}]},
+                {"name": "Tags", "type": "multiple_choice", "options": [{"name": "Big"}, {"name": "New"}]},
+                {"name": "Amount", "type": "number"},
+                {"name": "Note", "type": "text"},
+            ],
+            "views": [
+                {"name": "By stage", "type": "chart", "chart": {"measure": "sum", "field": "Amount"}},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let records = [
+        ("A", "Open", vec!["Big", "New"], Some(100)),
+        ("B", "Open", vec!["Big"], Some(50)),
+        ("C", "Won", vec!["New"], Some(30)),
+        ("D", "Won", vec![], None),
+    ]
+    .iter()
+    .map(|(title, stage, tags, amount)| {
+        let mut fields = json!({"Stage": stage, "Tags": tags});
+        if let Some(amount) = amount {
+            fields["Amount"] = json!(amount);
+        }
+        json!({"title": title, "fields": fields})
+    })
+    .collect::<Vec<_>>();
+    let written = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Deals", "records": records, "clientRequestId": "deals"}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+
+    // The view groups by its first choice field and sums Amount.
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Deals"}),
+    )
+    .await;
+    let view = described["value"]["definition"]["views"][0].clone();
+    assert_eq!(view["groupBy"], "Stage", "{view}");
+    assert_eq!(view["chart"]["measure"], "sum", "{view}");
+    assert_eq!(view["chart"]["field"], "Amount", "{view}");
+    let by_stage = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Deals", "view": "By stage", "limit": 1}),
+    )
+    .await;
+    let groups = by_stage["value"]["groups"].clone();
+    assert_eq!(
+        groups,
+        json!([
+            {"name": "Open", "count": 2, "value": 150.0},
+            {"name": "Won", "count": 2, "value": 30.0},
+        ]),
+        "{by_stage}"
+    );
+    assert_eq!(by_stage["value"]["value"], 180.0, "{by_stage}");
+
+    // By a many-valued field each record adds to each of its groups, but
+    // to the whole once.
+    let base = format!("/api/v1/projects/{work}/collections");
+    let (_, list) = get(&setup, &setup.browser, &base).await;
+    let collection = list["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .find(|entry| entry["name"] == "Deals")
+        .expect("Deals")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let uri = format!("{base}/{collection}");
+    let (_, body) = get(&setup, &setup.browser, &uri).await;
+    let field = |name: &str| {
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .find(|field| field["name"] == name)
+            .unwrap_or_else(|| panic!("{name}"))["id"]
+            .as_str()
+            .expect("id")
+            .to_owned()
+    };
+    let (tags, amount, note) = (field("Tags"), field("Amount"), field("Note"));
+    let (status, by_tag) = get(
+        &setup,
+        &setup.browser,
+        &format!("{uri}/records?groupBy={tags}&measure=average&measureField={amount}&limit=1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{by_tag}");
+    let values = by_tag["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .map(|group| (group["label"].as_str().unwrap_or("").to_owned(), group["count"].clone(), group["value"].clone()))
+        .collect::<Vec<_>>();
+    assert!(values.contains(&("Big".into(), json!(2), json!(75.0))), "{by_tag}");
+    assert!(values.contains(&("New".into(), json!(2), json!(65.0))), "{by_tag}");
+    assert_eq!(by_tag["value"], json!(60.0), "{by_tag}");
+    let (status, most) = get(
+        &setup,
+        &setup.browser,
+        &format!("{uri}/records?groupBy=&measure=max&measureField={amount}&limit=1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{most}");
+    assert_eq!(most["value"], json!(100.0), "{most}");
+    assert_eq!(most["total"], json!(4), "{most}");
+
+    for query in [
+        format!("measure=sum&measureField={note}"),
+        format!("measure=count&measureField={amount}"),
+        "measure=sum".to_owned(),
+        "measure=median".to_owned(),
+        format!("measureField={amount}"),
+    ] {
+        let (status, refused) =
+            get(&setup, &setup.browser, &format!("{uri}/records?{query}")).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{query}: {refused}"
+        );
+    }
+}

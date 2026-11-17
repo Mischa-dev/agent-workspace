@@ -55,12 +55,21 @@ export type ViewConfig = {
   dateField: string | null
   /** Where a timeline's bars end; none, and each record is one day. */
   endField?: string | null
+  /** A chart's style and what it adds up for each group (T1.31). */
+  chart?: ChartConfig | null
 }
+
+export type MeasureOp = 'count' | 'sum' | 'average' | 'min' | 'max'
+export const MEASURE_OPS: readonly MeasureOp[] = ['count', 'sum', 'average', 'min', 'max']
+export type ChartStyle = 'bar' | 'line' | 'donut' | 'number'
+export const CHART_STYLES: readonly ChartStyle[] = ['bar', 'line', 'donut', 'number']
+/** A count reads no field; the others read a number field. */
+export type ChartConfig = { style: ChartStyle; measure: { op: MeasureOp; field?: string | null } }
 
 /** How a view lays out its records. */
 /** The kinds of view a collection draws today, of the one list (views/kinds.ts). */
-export type ViewType = Extract<ViewKind, 'table' | 'board' | 'list' | 'gallery' | 'calendar' | 'timeline'>
-export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline']
+export type ViewType = Extract<ViewKind, 'table' | 'board' | 'list' | 'gallery' | 'calendar' | 'timeline' | 'chart'>
+export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline', 'chart']
 const asViewType = (value: unknown): ViewType => (VIEW_TYPES as readonly unknown[]).includes(value) ? (value as ViewType) : 'table'
 
 export type CollectionView = { id: string; name: string; type: ViewType; config: ViewConfig; position: number; version: number; /** Everyone's; false for the person's own. */ shared: boolean }
@@ -97,12 +106,15 @@ export type CollectionRecord = {
   group: { key: string; label: string } | null
 }
 
-export type GroupCount = { key: string; label: string; count: number; color: string | null }
+/** A group of the records, how many, and with a measure what they add up to. */
+export type GroupCount = { key: string; label: string; count: number; color: string | null; value?: number | null }
 
 export type RecordPage = {
   records: CollectionRecord[]
   references: FieldReference[]
   total: number
+  /** With a measure other than a count: what every record adds up to. */
+  value?: number | null
   groups: GroupCount[]
   nextCursor: string | null
 }
@@ -199,6 +211,18 @@ export function normalizeConfig(value: unknown): ViewConfig {
     titleWidth: typeof raw.titleWidth === 'number' ? raw.titleWidth : null,
     dateField: typeof raw.dateField === 'string' && raw.dateField ? raw.dateField : null,
     endField: typeof raw.endField === 'string' && raw.endField ? raw.endField : null,
+    chart: normalizeChart(raw.chart),
+  }
+}
+
+function normalizeChart(value: unknown): ChartConfig | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = asRecord(value)
+  const measure = asRecord(raw.measure)
+  const op = (MEASURE_OPS as readonly unknown[]).includes(measure.op) ? (measure.op as MeasureOp) : 'count'
+  return {
+    style: (CHART_STYLES as readonly unknown[]).includes(raw.style) ? (raw.style as ChartStyle) : 'bar',
+    measure: { op, field: op !== 'count' && typeof measure.field === 'string' && measure.field ? measure.field : null },
   }
 }
 
@@ -258,9 +282,16 @@ function normalizePage(value: unknown): RecordPage {
     records: asArray(raw.records).map(normalizeRecord),
     references: normalizeReferences(raw.references),
     total: asNumber(raw.total),
+    value: typeof raw.value === 'number' ? raw.value : null,
     groups: asArray(raw.groups).map((entry) => {
       const group = asRecord(entry)
-      return { key: asString(group.key), label: asString(group.label), count: asNumber(group.count), color: typeof group.color === 'string' ? group.color : null }
+      return {
+        key: asString(group.key),
+        label: asString(group.label),
+        count: asNumber(group.count),
+        color: typeof group.color === 'string' ? group.color : null,
+        value: typeof group.value === 'number' ? group.value : null,
+      }
     }),
     nextCursor: typeof raw.nextCursor === 'string' && raw.nextCursor ? raw.nextCursor : null,
   }
@@ -333,6 +364,14 @@ export function configJson(config: ViewConfig) {
     ...(config.titleWidth ? { titleWidth: config.titleWidth } : {}),
     ...(config.dateField ? { dateField: config.dateField } : {}),
     ...(config.dateField && config.endField ? { endField: config.endField } : {}),
+    ...(config.chart
+      ? {
+          chart: {
+            style: config.chart.style,
+            measure: config.chart.measure.op === 'count' || !config.chart.measure.field ? { op: 'count' } : { op: config.chart.measure.op, field: config.chart.measure.field },
+          },
+        }
+      : {}),
   }
 }
 
@@ -396,6 +435,8 @@ export type RecordsQuery = {
    * the other touches those days: a timeline's.
    */
   dates?: { field: string; endField?: string | null; from: string; to: string }
+  /** What each group adds up beside its count: a chart's measure. */
+  measure?: { op: MeasureOp; field?: string | null }
 }
 
 /** The records list's parameters, in a fixed order, so one query has one cache entry. */
@@ -414,6 +455,12 @@ export function recordsParams(query: RecordsQuery) {
     if (query.dates.endField) params.set('endField', query.dates.endField)
     params.set('from', query.dates.from)
     params.set('to', query.dates.to)
+  }
+  // A count is said out loud, so a saved chart's own measure doesn't apply.
+  if (query.measure) {
+    const counts = query.measure.op === 'count' || !query.measure.field
+    params.set('measure', counts ? 'count' : query.measure.op)
+    if (!counts && query.measure.field) params.set('measureField', query.measure.field)
   }
   return params.toString()
 }

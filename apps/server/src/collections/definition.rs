@@ -126,6 +126,23 @@ pub struct ColumnWrite {
     pub width: Option<u16>,
 }
 
+/// A chart view's style and what it adds up.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChartWrite {
+    /// "bar" (the default), "line", "donut", or "number" (one figure over
+    /// every record).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<crate::views::definition::ChartStyle>,
+    /// "count" (the default), "sum", "average", "min" or "max" for each
+    /// group (the view's groupBy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measure: Option<crate::views::definition::MeasureOp>,
+    /// The number field a sum, average, min or max reads, by name or ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+}
+
 /// A view as a definition holds it, or a change to one. Each part given
 /// replaces that part; the rest stays.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
@@ -138,9 +155,9 @@ pub struct ViewWrite {
     /// Its name, or a new name when `view` names it: 1 to 80 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// "table" (the default), "board", "gallery" or "calendar". A board's
-    /// columns are its groupBy field's values; a calendar puts records on
-    /// its dateField. A new one without them takes the first field that
+    /// "table" (the default), "board", "list", "gallery", "calendar",
+    /// "timeline" or "chart". A board's columns and a chart's bars are its
+    /// groupBy field's values; a calendar puts records on its dateField. A new one without them takes the first field that
     /// fits. The type doesn't change once made.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub view_type: Option<String>,
@@ -172,6 +189,9 @@ pub struct ViewWrite {
     /// one-day bars.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_field: Option<String>,
+    /// A chart's style and measure; its groups are the view's groupBy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<ChartWrite>,
     /// Its place among the views, 1 being first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<i32>,
@@ -318,6 +338,15 @@ fn view_written(
             .end_field
             .and_then(field)
             .map(|field| field.name.clone()),
+        chart: config.chart.map(|chart| ChartWrite {
+            style: Some(chart.style),
+            measure: Some(chart.measure.op),
+            field: chart
+                .measure
+                .field
+                .and_then(field)
+                .map(|field| field.name.clone()),
+        }),
         ..ViewWrite::default()
     }
 }
@@ -671,6 +700,27 @@ async fn config_from_written(
                 Err(message) => return Ok(Err(message)),
             }
         }
+    }
+    if let Some(chart) = &write.chart {
+        let mut next = config.chart.unwrap_or_default();
+        if let Some(style) = chart.style {
+            next.style = style;
+        }
+        if let Some(op) = chart.measure {
+            next.measure.op = op;
+            if op == crate::views::definition::MeasureOp::Count {
+                next.measure.field = None;
+            }
+        }
+        match chart.field.as_deref().map(str::trim) {
+            None => {}
+            Some("") => next.measure.field = None,
+            Some(name) => match active_field(collection, definitions, name) {
+                Ok(field) => next.measure.field = Some(field.id),
+                Err(message) => return Ok(Err(message)),
+            },
+        }
+        config.chart = Some(next);
     }
     Ok(Ok(config))
 }

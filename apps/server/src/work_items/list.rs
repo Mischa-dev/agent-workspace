@@ -524,6 +524,7 @@ pub(super) async fn get_work_item_board(
                 label: value.label.clone(),
                 count: 0,
                 color: value.color.clone(),
+                value: None,
             })
         })
         .collect::<Vec<_>>();
@@ -543,6 +544,7 @@ pub(super) async fn get_work_item_board(
             label: none_label(field.id).into(),
             count: 0,
             color: None,
+            value: None,
         });
     }
     let many = matches!(

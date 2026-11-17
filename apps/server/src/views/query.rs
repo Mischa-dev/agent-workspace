@@ -18,7 +18,7 @@ use sqlx::{Acquire, FromRow, PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use super::{
-    definition::{Direction, SortBy, ViewConfig},
+    definition::{Direction, Measure, MeasureOp, SortBy, ViewConfig},
     filter::Filter,
     source::RecordSource,
 };
@@ -100,6 +100,9 @@ pub struct Spec {
     pub reader: Uuid,
     /// The day `within` filters read from.
     pub today: NaiveDate,
+    /// What each group adds up beside its count (a chart's measure): an
+    /// aggregate and the number it reads. None counts records only.
+    pub measure: Option<(MeasureOp, String)>,
     /// The fields filters, sorts and groups name, for where each value is
     /// read (`FieldDefinition::accessor`).
     definitions: Vec<FieldDefinition>,
@@ -120,6 +123,7 @@ impl Default for Spec {
             in_group: None,
             reader: Uuid::nil(),
             today: fields::today(),
+            measure: None,
             definitions: Vec::new(),
             search_fields: SearchFields::default(),
         }
@@ -178,6 +182,22 @@ impl Spec {
             ..Self::default()
         }
         .searching(Vec::new(), definitions)
+        .measuring(config.chart.map(|chart| chart.measure).unwrap_or_default())
+    }
+
+    /// Sets what each group adds up (T1.31): a count reads nothing; a sum,
+    /// average, least or most reads a number field (checked by
+    /// `views::check`; a field that isn't one counts instead).
+    pub fn measuring(mut self, measure: Measure) -> Self {
+        self.measure = match (measure.op, measure.field) {
+            (MeasureOp::Count, _) | (_, None) => None,
+            (op, Some(id)) => self
+                .definition(id)
+                .filter(|field| !field.archived)
+                .and_then(|field| fields::number_sql(field, "record.field_values"))
+                .map(|number| (op, number)),
+        };
+        self
     }
 
     /// Narrows what it finds by more clauses, such as a calendar's range.
@@ -866,6 +886,35 @@ pub async fn total(
     Ok(total)
 }
 
+/// The spec's measure over every record it finds, each once (a chart's
+/// single number); none when it only counts or no record has a value.
+pub async fn measure_total(
+    connection: &mut PgConnection,
+    source: &dyn RecordSource,
+    spec: &Spec,
+) -> Result<Option<f64>, AppError> {
+    let Some((op, number)) = &spec.measure else {
+        return Ok(None);
+    };
+    // Grouped by a many-valued field, a record is a row in each of its
+    // groups: it is read once.
+    let mut builder = QueryBuilder::<Postgres>::new(format!(
+        "SELECT ({op}(measured.value))::double precision FROM \
+         (SELECT DISTINCT ON (record.id) {number} AS value FROM {from}",
+        op = op.sql(),
+        from = spec.tables(source),
+    ));
+    spec.push_where(&mut builder, source);
+    builder.push(") measured");
+    let mut transaction = without_jit(connection).await?;
+    let value = builder
+        .build_query_scalar::<Option<f64>>()
+        .fetch_one(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(value)
+}
+
 /// A group with records under the filters, and how many.
 #[derive(Clone, Debug, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -875,6 +924,10 @@ pub struct GroupCount {
     pub count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// The spec's measure over the group's records (none when it only
+    /// counts, or no record has a value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
 }
 
 /// Every group with records under `spec`'s filters, in the list's order.
@@ -893,9 +946,13 @@ pub async fn group_counts(
         .map(|key| format!("min({})", key.expr))
         .collect::<Vec<_>>()
         .join(", ");
+    let value = match &spec.measure {
+        Some((op, number)) => format!("({}({number}))::double precision", op.sql()),
+        None => "NULL::double precision".to_owned(),
+    };
     let mut builder = QueryBuilder::<Postgres>::new(format!(
-        "SELECT {key} AS key, min({label}) AS label, count(*) AS count, min({color}) AS color \
-         FROM {from}",
+        "SELECT {key} AS key, min({label}) AS label, count(*) AS count, min({color}) AS color, \
+         {value} AS value FROM {from}",
         from = spec.tables(source),
         key = group.key,
         label = group.label,

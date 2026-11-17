@@ -2292,6 +2292,12 @@ fn uuid_array(ids: impl Iterator<Item = Uuid>) -> String {
     }
 }
 
+/// A number field's value as `double precision` (NULL when it's empty), for
+/// a chart's sums and averages; none for a field that isn't a number.
+pub fn number_sql(field: &FieldDefinition, column: &str) -> Option<String> {
+    (field.behaves_as() == FieldType::Number).then(|| Reading::of(field, column).number)
+}
+
 /// How records sort by `field`: records without a value last, then by value
 /// (choices in option order, people by name, linked tasks by number, linked
 /// pages by title; text, names and titles by their first

@@ -33,7 +33,7 @@ import {
   type CollectionView,
   type ViewConfig,
 } from './api'
-import { activeConfig, boardFields, dateFields, groupClauses, sameConfig, withColumnHidden } from './collectionModel'
+import { activeConfig, boardFields, dateFields, groupClauses, groupableFields, sameConfig, withColumnHidden } from './collectionModel'
 import { CollectionDetailsDialog, ViewNameDialog } from './CollectionDialogs'
 import { CollectionToolbar } from './CollectionToolbar'
 import type { ColumnActions } from './ColumnMenus'
@@ -44,11 +44,12 @@ import { FilterGroupDialog } from './FilterGroupDialog'
 import { useRecordEdits } from './useRecordEdits'
 
 // Forms are managed now and then, so their dialog loads when it opens.
-// The board, list, gallery, calendar and timeline pieces load when a view first uses them.
+// The board, list, gallery, calendar, timeline and chart pieces load when a view first uses them.
 const CollectionBoardView = lazy(() => import('./CollectionBoardView').then((module) => ({ default: module.CollectionBoardView })))
 const CollectionCalendarView = lazy(() => import('./CollectionCalendarView').then((module) => ({ default: module.CollectionCalendarView })))
 const CollectionGalleryView = lazy(() => import('./CollectionGalleryView').then((module) => ({ default: module.CollectionGalleryView })))
 const CollectionListView = lazy(() => import('./CollectionListView').then((module) => ({ default: module.CollectionListView })))
+const CollectionChartView = lazy(() => import('./CollectionChartView').then((module) => ({ default: module.CollectionChartView })))
 const CollectionTimelineView = lazy(() => import('./CollectionTimelineView').then((module) => ({ default: module.CollectionTimelineView })))
 const FormsDialog = lazy(() => import('./FormsDialog').then((module) => ({ default: module.FormsDialog })))
 
@@ -424,6 +425,17 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
                 onDateField={(fieldId) => setConfig({ ...config, dateField: fieldId })}
                 query={recordsQuery}
                 recordHref={recordHref}
+              />
+            ) : layout === 'chart' ? (
+              <CollectionChartView
+                body={body}
+                config={config}
+                filtered={filtered}
+                groupable={groupableFields(body.fields)}
+                onClearFilters={clearFilters}
+                onGroupBy={(fieldId) => setConfig({ ...config, groupBy: fieldId })}
+                projectId={projectId}
+                query={recordsQuery}
               />
             ) : layout === 'calendar' ? (
               <CollectionCalendarView

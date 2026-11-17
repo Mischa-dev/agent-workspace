@@ -30,6 +30,7 @@ use super::{
     records::{self, ProblemKind, RecordInput, RecordRef, RecordView, Written},
     views::{self, SortRule, ViewConfig, ViewSummary},
 };
+use crate::views::definition::{ChartConfig, Measure, MeasureOp};
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
@@ -1142,6 +1143,11 @@ struct RecordsQuery {
     archived: Option<String>,
     cursor: Option<String>,
     limit: Option<i64>,
+    /// What each group adds up beside its count: "count", "sum",
+    /// "average", "min" or "max". Left out, the view's chart measure.
+    measure: Option<String>,
+    /// The number field a sum, average, min or max reads.
+    measure_field: Option<Uuid>,
 }
 
 /// One record in a page, with its group when grouped.
@@ -1161,6 +1167,9 @@ struct RecordPage {
     /// The people, tasks and pages the values name.
     references: Vec<ValueReference>,
     total: i64,
+    /// The measure over every record, when it isn't a count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<f64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     groups: Vec<GroupCount>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1234,8 +1243,29 @@ async fn list_records(
     if query.group_bucket.is_some() {
         config.group_bucket = query.group_bucket;
     }
+    if let Some(op) = query.measure.as_deref() {
+        let Some(op) = MeasureOp::parse(op) else {
+            return Ok(invalid(
+                "measure",
+                "measure is count, sum, average, min or max.",
+            ));
+        };
+        config.chart = Some(ChartConfig {
+            measure: Measure {
+                op,
+                field: query.measure_field,
+            },
+            ..config.chart.unwrap_or_default()
+        });
+    } else if query.measure_field.is_some() {
+        return Ok(invalid(
+            "measureField",
+            "measureField goes with a measure.",
+        ));
+    }
     if let Err(message) = views::check(&config, &view_fields) {
-        return Ok(invalid("filters", message));
+        let at = if query.measure.is_some() { "measure" } else { "filters" };
+        return Ok(invalid(at, message));
     }
     let Some(archived) = Archived::parse(query.archived.as_deref().unwrap_or("")) else {
         return Ok(invalid("archived", "archived is exclude, include or only."));
@@ -1302,6 +1332,7 @@ async fn list_records(
     };
     let total = query::total(&mut connection, source.as_ref(), &spec).await?;
     let groups = query::group_counts(&mut connection, source.as_ref(), &spec).await?;
+    let value = query::measure_total(&mut connection, source.as_ref(), &spec).await?;
     let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
     let found = records::by_ids(
         &mut *connection,
@@ -1331,6 +1362,7 @@ async fn list_records(
             .collect(),
         references,
         total,
+        value,
         groups,
         next_cursor: page.next_cursor,
     })

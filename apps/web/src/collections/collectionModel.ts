@@ -1,8 +1,8 @@
-import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isReadOnlyType, likeOf, type FieldClause, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { STATUS_CATEGORIES, behavesAs, canGroup, canGroupRecords, isEmpty, isReadOnlyType, likeOf, type FieldClause, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import { typeInfo } from '../fields/fieldTypes'
 import { formatDateLabel } from '../ui/dateModel'
 import { dayFromNumber, dayNumber } from '../views/dates'
-import type { CollectionRecord, FilterItem, GroupCount, SortRule, ViewConfig } from './api'
+import type { ChartConfig, CollectionRecord, FilterItem, GroupCount, MeasureOp, SortRule, ViewConfig } from './api'
 
 /** How a record is named where its title is empty. */
 export const recordName = (record: Pick<CollectionRecord, 'title' | 'number'>) => record.title || `#${record.number}`
@@ -62,6 +62,8 @@ export function sameConfig(left: ViewConfig, right: ViewConfig) {
       config.columns,
       config.titleWidth,
       config.dateField,
+      config.endField ?? null,
+      config.chart ?? null,
     ])
   return comparable(left) === comparable(right)
 }
@@ -80,8 +82,11 @@ export function activeConfig(config: ViewConfig, fields: readonly FieldDefinitio
   const sort = config.sort.filter((rule) => BUILT_IN_SORTS.has(rule.field) || active.has(rule.field))
   const groupBy = config.groupBy !== null && active.has(config.groupBy) ? config.groupBy : null
   const dateField = config.dateField !== null && active.has(config.dateField) ? config.dateField : null
-  if (filters.length === config.filters.length && sort.length === config.sort.length && groupBy === config.groupBy && dateField === config.dateField) return config
-  return { ...config, filters, sort, groupBy, dateField }
+  // A chart adding up a field that's archived counts until it's back.
+  const measured = config.chart?.measure.field
+  const chart = config.chart && measured && !active.has(measured) ? { ...config.chart, measure: { op: 'count' as const } } : config.chart
+  if (filters.length === config.filters.length && sort.length === config.sort.length && groupBy === config.groupBy && dateField === config.dateField && chart === config.chart) return config
+  return { ...config, filters, sort, groupBy, dateField, chart }
 }
 
 /** What a sort key sorts by, in words: the title column, the record's number or a field. */
@@ -300,4 +305,47 @@ export const isClause = (item: FilterItem): item is FieldClause => !('and' in it
 export function groupClauses(item: FilterItem): FieldClause[] {
   if (isClause(item)) return [item]
   return ('and' in item ? item.and : item.or).flatMap(groupClauses)
+}
+
+/** Fields a chart can add up: numbers, and formulas and lookups that give one. */
+export function numberFields(fields: readonly FieldDefinition[]) {
+  return fields.filter((field) => !field.archived && behavesAs(field) === 'number').sort((left, right) => left.position - right.position)
+}
+
+const MEASURE_WORDS: Record<MeasureOp, string> = { count: 'Records', sum: 'Total', average: 'Average', min: 'Least', max: 'Most' }
+
+/** What a chart shows, in words: "Records", or "Total Amount". */
+export function measureLabel(chart: ChartConfig | null | undefined, fields: readonly FieldDefinition[]) {
+  const op = chart?.measure.op ?? 'count'
+  const field = fields.find((entry) => entry.id === chart?.measure.field)
+  return op === 'count' || !field ? MEASURE_WORDS.count : `${MEASURE_WORDS[op]} ${field.name}`
+}
+
+/** The word for each measure in a menu. */
+export const MEASURE_NAMES: Record<MeasureOp, string> = { count: 'How many records', sum: 'Total', average: 'Average', min: 'Least', max: 'Most' }
+
+/**
+ * A chart's groups as bars, slices or points: each group's count, or with a
+ * measure its value (null where no record in it has one).
+ */
+export function chartPoints(groups: readonly GroupCount[], op: MeasureOp) {
+  return groups.map((group) => ({ key: group.key, label: group.label || 'None', color: group.color, count: group.count, value: op === 'count' ? group.count : (group.value ?? null) }))
+}
+
+/** A number as a chart shows it: whole numbers in full, others to two places; `compact` for an axis (12K). */
+export function chartNumber(value: number, compact = false) {
+  return new Intl.NumberFormat(undefined, compact && Math.abs(value) >= 10_000 ? { notation: 'compact', maximumFractionDigits: 1 } : { maximumFractionDigits: 2 }).format(value)
+}
+
+/** Round tick values from 0 (or the least value, when below 0) to past the most, about `count` of them. */
+export function chartTicks(least: number, most: number, count = 4) {
+  const low = Math.min(0, least)
+  const high = Math.max(0, most)
+  if (high === low) return [low]
+  const raw = (high - low) / count
+  const power = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map((factor) => factor * power).find((candidate) => candidate >= raw) ?? raw
+  const ticks: number[] = []
+  for (let tick = Math.floor(low / step) * step; tick < high + step; tick += step) ticks.push(Number(tick.toPrecision(12)))
+  return ticks
 }

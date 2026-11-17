@@ -896,6 +896,12 @@ pub(super) struct RecordQueryArguments {
     /// Grouped by a date: "day", "week" (from Monday) or "month" (the
     /// default).
     pub group_bucket: Option<crate::fields::DateBucket>,
+    /// What to add up beside each group's count, and over every record:
+    /// "sum", "average", "min" or "max" of measureField. Left out, a
+    /// chart view's own measure.
+    pub measure: Option<crate::views::definition::MeasureOp>,
+    /// The number field measure reads, by name or ID.
+    pub measure_field: Option<String>,
     /// The fields to return, by name. Left out, every field with a value;
     /// [] returns numbers and titles only.
     pub fields: Option<Vec<String>>,
@@ -914,6 +920,9 @@ pub(super) struct RecordQueryArguments {
 pub(super) struct GroupLine {
     pub name: String,
     pub count: i64,
+    /// With a measure: its value over the group's records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -932,6 +941,9 @@ pub(super) struct RecordQueryValue {
     pub records: Vec<RecordLine>,
     /// Records the query finds, across every page.
     pub total: i64,
+    /// With a measure: its value over every record the query finds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
     /// With groupBy: each group with records, in order, and how many.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<GroupLine>,
@@ -1092,8 +1104,34 @@ pub(super) async fn record_query(
         if arguments.group_bucket.is_some() {
             config.group_bucket = arguments.group_bucket;
         }
+        let measured = arguments.measure.is_some() || arguments.measure_field.is_some();
+        if measured {
+            let field = match arguments.measure_field.as_deref() {
+                None => None,
+                Some(name) => match fields::find(&definitions, name) {
+                    Some(field) if !field.archived => Some(field.id),
+                    _ => {
+                        return Ok(ToolResult::invalid(
+                            "measureField",
+                            format!("{} has no field \"{name}\".", collection.name),
+                        ));
+                    }
+                },
+            };
+            let mut chart = config.chart.unwrap_or_default();
+            chart.measure = crate::views::definition::Measure {
+                op: arguments.measure.unwrap_or(if field.is_some() {
+                    crate::views::definition::MeasureOp::Sum
+                } else {
+                    crate::views::definition::MeasureOp::Count
+                }),
+                field,
+            };
+            config.chart = Some(chart);
+        }
         if let Err(message) = views::check(&config, &view_fields) {
-            return Ok(ToolResult::invalid("filters", message));
+            let at = if measured { "measure" } else { "filters" };
+            return Ok(ToolResult::invalid(at, message));
         }
         let only_fields = match &arguments.fields {
             None => None,
@@ -1167,6 +1205,7 @@ pub(super) async fn record_query(
         };
         let total = query::total(&mut connection, source.as_ref(), &spec).await?;
         let groups = query::group_counts(&mut connection, source.as_ref(), &spec).await?;
+        let value = query::measure_total(&mut connection, source.as_ref(), &spec).await?;
         let ids = page.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         let found = records::by_ids(
             &mut *connection,
@@ -1223,11 +1262,13 @@ pub(super) async fn record_query(
                 })
                 .collect(),
             total,
+            value,
             groups: groups
                 .into_iter()
                 .map(|group| GroupLine {
                     name: group.label,
                     count: group.count,
+                    value: group.value,
                 })
                 .collect(),
             next_cursor: page.next_cursor,
