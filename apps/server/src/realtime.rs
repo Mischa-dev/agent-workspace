@@ -99,6 +99,15 @@ impl RealtimeDelivery {
         }
     }
 
+    /// A workspace-wide event (its lifecycle, H1.24): delivered to the
+    /// workspace's enabled members, whichever spaces they are in.
+    fn is_workspace_wide(&self) -> bool {
+        matches!(
+            self,
+            Self::Durable { envelope } if envelope.event_type == "workspace.lifecycle.changed"
+        )
+    }
+
     fn is_visible_to_actor(&self, actor_id: Uuid) -> bool {
         self.recipient_actor_id()
             .is_none_or(|recipient_actor_id| recipient_actor_id == actor_id)
@@ -523,6 +532,27 @@ async fn event_is_authorized(
     if let Some(whiteboard_id) = event.whiteboard_id() {
         return crate::whiteboards::visible_to(&state.pool, whiteboard_id, principal.actor_id)
             .await;
+    }
+    if event.is_workspace_wide() {
+        // The envelope's space names the workspace; its members hear of it.
+        return sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM projects p
+                JOIN organization_memberships om
+                  ON om.organization_id = p.organization_id
+                 AND om.actor_id = $1
+                 AND om.enabled
+                WHERE p.id = $2
+            )
+            "#,
+        )
+        .bind(principal.actor_id)
+        .bind(event.project_id())
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await
+        .map_err(AppError::from);
     }
     let membership = sqlx::query_as::<_, RealtimeMembership>(
         r#"
