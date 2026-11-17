@@ -585,6 +585,24 @@ pub async fn change(
     {
         return Err(AppError::Validation("collection"));
     }
+    // A built module's collection can't start acting like tasks: switching
+    // the module off hides its records, and task reads don't follow module
+    // switches.
+    if acts_like_task && !current.acts_like_task {
+        let in_module = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM module_parts \
+             WHERE part_kind = 'collection' AND object_id = $1)",
+        )
+        .bind(collection_id)
+        .fetch_one(&mut *connection)
+        .await?;
+        if in_module {
+            return Err(AppError::Conflict(
+                "collection",
+                "a built module's collection can't act like tasks",
+            ));
+        }
+    }
     let active = sqlx::query_as::<_, (Uuid, String)>(
         "SELECT id, name FROM collections WHERE project_id = $1 AND archived_at IS NULL \
          ORDER BY position, id",

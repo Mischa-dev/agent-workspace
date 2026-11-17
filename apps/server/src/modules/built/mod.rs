@@ -220,7 +220,7 @@ pub async fn object_place(
         "collection" => {
             "SELECT project.organization_id, project.id FROM collections object \
              JOIN projects project ON project.id = object.project_id \
-             WHERE object.id = $1 AND object.builtin IS NULL"
+             WHERE object.id = $1 AND object.builtin IS NULL AND NOT object.acts_like_task"
         }
         "form" => {
             "SELECT object.organization_id, object.project_id FROM bug_report_links object \
