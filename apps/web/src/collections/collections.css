@@ -847,3 +847,56 @@ button.aw-collection__chiptext:hover,
 .aw-ctimeline__bar {
   cursor: pointer;
 }
+
+/* A filter group being built (T1.13): its conditions, joined by "or" or "and". */
+.aw-filtergroup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.aw-filtergroup__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-filtergroup__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-filtergroup__join {
+  flex: none;
+  width: 2.5em;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-filtergroup__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: var(--t-ui);
+  text-align: start;
+}
+
+button.aw-filtergroup__text:hover {
+  background: var(--content-hover);
+}
+
+.aw-filtergroup__empty {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}

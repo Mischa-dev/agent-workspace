@@ -1,8 +1,8 @@
-import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isReadOnlyType, likeOf, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isReadOnlyType, likeOf, type FieldClause, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import { typeInfo } from '../fields/fieldTypes'
 import { formatDateLabel } from '../ui/dateModel'
 import { dayFromNumber, dayNumber } from '../views/dates'
-import type { CollectionRecord, GroupCount, SortRule, ViewConfig } from './api'
+import type { CollectionRecord, FilterItem, GroupCount, SortRule, ViewConfig } from './api'
 
 /** How a record is named where its title is empty. */
 export const recordName = (record: Pick<CollectionRecord, 'title' | 'number'>) => record.title || `#${record.number}`
@@ -292,4 +292,12 @@ export function recordSpan(record: Pick<CollectionRecord, 'values'>, startField:
   const end = endField ? recordDay(record, endField) : null
   const last = end ? dayNumber(end) : first
   return { start: first, end: Math.max(first, last) }
+}
+
+export const isClause = (item: FilterItem): item is FieldClause => !('and' in item) && !('or' in item)
+
+/** The conditions a filter item holds, however deep, counted as the server limits them. */
+export function groupClauses(item: FilterItem): FieldClause[] {
+  if (isClause(item)) return [item]
+  return ('and' in item ? item.and : item.or).flatMap(groupClauses)
 }

@@ -34,6 +34,7 @@ export function CollectionToolbar({
   onArchived,
   onChange,
   onEditFilter,
+  onEditGroup,
   onFilter,
   onReset,
   onSave,
@@ -55,6 +56,8 @@ export function CollectionToolbar({
   onArchived: (archived: boolean) => void
   onChange: (config: ViewConfig) => void
   onEditFilter: (index: number, anchor: HTMLElement) => void
+  /** Opens a filter group to change it, or a new one (null). */
+  onEditGroup: (index: number | null) => void
   onFilter: (field: FieldDefinition, anchor: HTMLElement) => void
   onReset: () => void
   onSave: () => void
@@ -79,7 +82,12 @@ export function CollectionToolbar({
     if (document.activeElement instanceof HTMLElement) run(document.activeElement)
   }
   const filterItems: MenuEntry[] = active.length
-    ? [{ heading: 'Filter by' }, ...active.map((field) => ({ label: field.name, onSelect: anchorHere((anchor) => onFilter(field, anchor)) }))]
+    ? [
+        { heading: 'Filter by' },
+        ...active.map((field) => ({ label: field.name, onSelect: anchorHere((anchor) => onFilter(field, anchor)) })),
+        { separator: true as const },
+        { label: 'Add a group (this or that)…', icon: 'plus' as const, onSelect: () => onEditGroup(null) },
+      ]
     : [{ label: 'Add a field to filter by it', disabled: true, onSelect: () => undefined }]
   const sorted = config.sort[0] ?? null
   const sortItems: MenuEntry[] = [
@@ -214,9 +222,9 @@ export function CollectionToolbar({
             )
           })}
           {(config.filterGroups ?? []).map((group, index) => (
-            // A group ("this or that") is kept as saved: it can be removed here, not edited.
             <Chip
               key={`group-${index}`}
+              onEdit={() => onEditGroup(index)}
               onRemove={() => onChange({ ...config, filterGroups: (config.filterGroups ?? []).filter((_, at) => at !== index) })}
               text={groupText(group)}
             />

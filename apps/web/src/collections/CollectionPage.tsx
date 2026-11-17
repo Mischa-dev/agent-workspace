@@ -33,13 +33,14 @@ import {
   type CollectionView,
   type ViewConfig,
 } from './api'
-import { activeConfig, boardFields, dateFields, sameConfig, withColumnHidden } from './collectionModel'
+import { activeConfig, boardFields, dateFields, groupClauses, sameConfig, withColumnHidden } from './collectionModel'
 import { CollectionDetailsDialog, ViewNameDialog } from './CollectionDialogs'
 import { CollectionToolbar } from './CollectionToolbar'
 import type { ColumnActions } from './ColumnMenus'
 import { RecordCards } from './RecordCards'
 import { RecordPanel } from './RecordPanel'
 import { RecordTable } from './RecordTable'
+import { FilterGroupDialog } from './FilterGroupDialog'
 import { useRecordEdits } from './useRecordEdits'
 
 // Forms are managed now and then, so their dialog loads when it opens.
@@ -106,6 +107,8 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
   const [dialog, setDialog] = useState<Dialogs | null>(null)
   const collections = useCollections(projectId)
   const [filtering, setFiltering] = useState<Filtering | null>(null)
+  // The filter group being built (null: a new one) or changed (its index).
+  const [grouping, setGrouping] = useState<number | null | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const [deleteProblem, setDeleteProblem] = useState<string | null>(null)
   const recordId = params.get('record')
@@ -386,6 +389,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
             const field = body.fields.find((entry) => entry.id === config.filters[index]?.field)
             if (field) setFiltering({ field, index, anchor })
           }}
+          onEditGroup={setGrouping}
           onFilter={(field, anchor) => setFiltering({ field, index: null, anchor })}
           onReset={() => view && dropDraft(view.id)}
           onSave={() => void saveView()}
@@ -437,6 +441,28 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
           <RecordTable {...shared} actions={actions} />
         )}
       </div>
+      {grouping !== undefined ? (
+        <FilterGroupDialog
+          fields={body.fields}
+          group={grouping === null ? null : ((config.filterGroups ?? [])[grouping] ?? null)}
+          onApply={(group) => {
+            const groups = config.filterGroups ?? []
+            const next =
+              grouping === null
+                ? group
+                  ? [...groups, group]
+                  : groups
+                : group
+                  ? groups.map((entry, at) => (at === grouping ? group : entry))
+                  : groups.filter((_, at) => at !== grouping)
+            setConfig({ ...config, filterGroups: next })
+            setGrouping(undefined)
+          }}
+          onClose={() => setGrouping(undefined)}
+          others={[...config.filters, ...(config.filterGroups ?? []).filter((_, at) => at !== grouping).flatMap(groupClauses)]}
+          projectId={projectId}
+        />
+      ) : null}
       {filtering ? (
         <FieldFilterEditor
           anchor={filtering.anchor}
