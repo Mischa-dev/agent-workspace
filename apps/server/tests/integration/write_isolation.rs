@@ -468,7 +468,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "channel_create",
     "conversation_continue",
     "conversation_mark_read",
-    "conversation_members",
+    "conversation_members_update",
     "conversation_start",
     "conversation_update",
     "decision_record",
@@ -6368,7 +6368,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"messageId": b.file_message})],
         ),
         mcp_case(
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": a.group, "add": ["@wren"]}),
             vec![json!({"conversationId": b.group, "add": ["@mara"]})],
         )

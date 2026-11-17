@@ -230,6 +230,8 @@ pub const ALIASES: &[Alias] = &[
         sunset: None,
     },
     run_renamed!("mark_read" => "conversation_mark_read"),
+    // K2.8: answered in the envelope already.
+    run_renamed!("conversation_members" => "conversation_members_update"),
     run_renamed!("briefing" => "briefing_get"),
     renamed!("settings_set" => "setting_update"),
     renamed!("project_member_set" => "member_update"),

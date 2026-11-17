@@ -726,12 +726,12 @@ mod tests {
         (
             Post,
             "/api/v1/conversations/{id}/members",
-            Tool("conversation_members"),
+            Tool("conversation_members_update"),
         ),
         (
             Post,
             "/api/v1/conversations/{id}/members/{actor_id}/remove",
-            Tool("conversation_members"),
+            Tool("conversation_members_update"),
         ),
         (
             Post,

@@ -154,6 +154,8 @@ export type LinkedItem = { id: string; kind: string; status?: string | null; tex
 
 export type LinkedRepositoryProjection = { repository: RepositoryProjection; role: string }
 
+export type MemberRef = { handle: string; id: string; kind: string; name: string }
+
 export type Mention = { author: string; conversation: string; conversationId: string; messageId: string; project: string; sentAt: string; sequence: number; text: string }
 
 export type MessageContent = { nodes: MessageNode[]; version: number }
@@ -203,6 +205,8 @@ export type PageLine = { id: string; stale: boolean; title: string; updatedAt: s
 export type PartRef = { id: string; kind: string }
 
 export type PartView = { id: string; kind: string; name?: string | null }
+
+export type PinItem = { id: string; kind: string; text: string; title: string }
 
 export type PlanItem = { action: string; existingId?: string | null; key: string; kind: string; name: string; needsAdmin: boolean; reason?: string | null }
 
@@ -263,6 +267,8 @@ export type RunResultInput = { branch?: string | null; id?: string | null; kind:
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
 
 export type SearchResult = { at: string; author?: string | null; conversation?: string | null; conversationId?: string | null; id: string; kind: string; project: string; projectId?: string | null; snippet: string; title: string; url: string }
+
+export type SentMessage = { conversationId: string; idempotentReplay: boolean; messageId: string; sentAt: string; sequence: number; text: string }
 
 export type SkillLine = { description: string; name: string; pageId: string; stale: boolean; title: string; updatedAt: string; version: number }
 
@@ -342,9 +348,25 @@ export type BugReportLinkUpdateInput = { collection?: string | null; delete?: bo
 
 export type BugReportLinkUpdateOutput = unknown
 
+export type ChannelCreateInput = { name: string; projectId: string }
+
+export type ChannelCreateOutput = { archived: boolean; created?: boolean | null; id: string; kind: string; name: string; outcome?: string | null; status?: string | null; url: string; version: number }
+
+export type ConversationContinueInput = { conversationId: string }
+
+export type ConversationContinueOutput = { agentTurnsRemaining: number; asked?: MemberRef[]; conversationId: string; idempotentReplay?: boolean; latestMessageId?: string | null }
+
 export type ConversationMarkReadInput = { conversationId: string; fromMessageId?: string | null; unread?: boolean | null; upToSequence?: number | null }
 
 export type ConversationMarkReadOutput = { conversationId: string; lastReadSequence: number; unreadCount: number }
+
+export type ConversationMembersUpdateInput = { add?: string[] | null; conversationId: string; expectedVersion?: number | null; remove?: string[] | null }
+
+export type ConversationMembersUpdateOutput = { added?: MemberRef[]; conversationId: string; idempotentReplay?: boolean; left?: boolean; members: MemberRef[]; name: string; removed?: MemberRef[]; url: string; version: number }
+
+export type ConversationUpdateInput = { archived?: boolean | null; clearOutcome?: boolean | null; conversationId: string; expectedVersion?: number | null; name?: string | null; outcome?: string | null; status?: string | null }
+
+export type ConversationUpdateOutput = { archived: boolean; created?: boolean | null; id: string; kind: string; name: string; outcome?: string | null; status?: string | null; url: string; version: number }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -542,6 +564,10 @@ export type PersonCreateInput = { displayName: string; handle: string; roleId?: 
 
 export type PersonCreateOutput = { accountId: string; claimExpiresAt: string; claimToken?: string | null }
 
+export type PinSetInput = { conversationId: string; decisionId?: string | null; messageId?: string | null; pageId?: string | null; pinned?: boolean | null }
+
+export type PinSetOutput = { conversationId: string; id: string; kind: string; pinned: boolean; pins: PinItem[] }
+
 export type PlanImportInput = { commit?: boolean | null; expectedVersion?: number | null; importId?: string | null; pageId?: string | null; plan?: string | null; projectId: string; title?: string | null }
 
 export type PlanImportOutput = unknown
@@ -718,6 +744,14 @@ export type TemplateUpdateInput = { acceptanceCriteria?: string[] | null; archiv
 
 export type TemplateUpdateOutput = { created: boolean; template: unknown }
 
+export type ThreadStartInput = { conversationId: string; fromMessageId?: string | null; name?: string | null; text?: string | null }
+
+export type ThreadStartOutput = { created?: boolean | null; id: string; message?: SentMessage | null; name: string; outcome?: string | null; parentId: string; status: string; url: string }
+
+export type ThreadUpdateInput = { clearOutcome?: boolean | null; name?: string | null; outcome?: string | null; status?: string | null; threadId: string }
+
+export type ThreadUpdateOutput = { created?: boolean | null; id: string; message?: SentMessage | null; name: string; outcome?: string | null; parentId: string; status: string; url: string }
+
 export type ViewCreateInput = { delete?: boolean | null; expectedVersion?: number | null; fields?: string[] | null; layout?: string | null; name?: string | null; pinned?: boolean | null; projectId: string; query?: Record<string, string> | null; shared?: boolean | null; view?: string | null }
 
 export type ViewCreateOutput = { created: boolean; deleted: boolean; view?: unknown }
@@ -775,7 +809,11 @@ export type Operations = {
   bug_report_link_create: { input: BugReportLinkCreateInput; output: BugReportLinkCreateOutput }
   bug_report_link_list: { input: BugReportLinkListInput; output: BugReportLinkListOutput }
   bug_report_link_update: { input: BugReportLinkUpdateInput; output: BugReportLinkUpdateOutput }
+  channel_create: { input: ChannelCreateInput; output: ChannelCreateOutput }
+  conversation_continue: { input: ConversationContinueInput; output: ConversationContinueOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
+  conversation_members_update: { input: ConversationMembersUpdateInput; output: ConversationMembersUpdateOutput }
+  conversation_update: { input: ConversationUpdateInput; output: ConversationUpdateOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   dependency_graph_get: { input: DependencyGraphGetInput; output: DependencyGraphGetOutput }
@@ -825,6 +863,7 @@ export type Operations = {
   package_preview: { input: PackagePreviewInput; output: PackagePreviewOutput }
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }
+  pin_set: { input: PinSetInput; output: PinSetOutput }
   plan_import: { input: PlanImportInput; output: PlanImportOutput }
   project_get: { input: ProjectGetInput; output: ProjectGetOutput }
   project_list: { input: ProjectListInput; output: ProjectListOutput }
@@ -869,6 +908,8 @@ export type Operations = {
   template_create: { input: TemplateCreateInput; output: TemplateCreateOutput }
   template_list: { input: TemplateListInput; output: TemplateListOutput }
   template_update: { input: TemplateUpdateInput; output: TemplateUpdateOutput }
+  thread_start: { input: ThreadStartInput; output: ThreadStartOutput }
+  thread_update: { input: ThreadUpdateInput; output: ThreadUpdateOutput }
   view_create: { input: ViewCreateInput; output: ViewCreateOutput }
   view_list: { input: ViewListInput; output: ViewListOutput }
   view_update: { input: ViewUpdateInput; output: ViewUpdateOutput }

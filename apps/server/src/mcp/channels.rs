@@ -28,7 +28,7 @@ use crate::{
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ConversationValue {
+pub(crate) struct ConversationValue {
     pub id: String,
     /// channel, thread, or group.
     pub kind: String,
@@ -105,16 +105,16 @@ fn conversation_error(error: AppError, operation: &'static str) -> ToolResult<Co
 // ---------------------------------------------------------------------------
 // channel_create
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ChannelCreateArguments {
+pub(crate) struct ChannelCreateArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The channel's name, such as "design" or "releases".
     pub name: String,
 }
 
-pub(super) async fn channel_create(
+pub(crate) async fn channel_create(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ChannelCreateArguments,
@@ -215,9 +215,9 @@ async fn existing_view(
 // ---------------------------------------------------------------------------
 // conversation_update
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ConversationUpdateArguments {
+pub(crate) struct ConversationUpdateArguments {
     /// The channel, thread, or group.
     pub conversation_id: String,
     /// A new name.
@@ -237,7 +237,7 @@ pub(super) struct ConversationUpdateArguments {
     pub expected_version: Option<i64>,
 }
 
-pub(super) async fn conversation_update(
+pub(crate) async fn conversation_update(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ConversationUpdateArguments,
@@ -405,9 +405,9 @@ pub(super) async fn conversation_update(
 // ---------------------------------------------------------------------------
 // pin_set
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PinSetArguments {
+pub(crate) struct PinSetArguments {
     /// The conversation to pin to. Its pins are its brief: conversation_open
     /// shows them first.
     pub conversation_id: String,
@@ -422,7 +422,7 @@ pub(super) struct PinSetArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PinValue {
+pub(crate) struct PinValue {
     pub conversation_id: String,
     pub kind: String,
     pub id: String,
@@ -431,7 +431,7 @@ pub(super) struct PinValue {
     pub pins: Vec<super::talk::PinItem>,
 }
 
-pub(super) async fn pin_set(
+pub(crate) async fn pin_set(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PinSetArguments,

@@ -148,7 +148,13 @@ pub fn listed(
     }
     let switchable =
         crate::modules::manifest::get(meta.module).is_some_and(|module| module.switchable);
-    !switchable || modules.contains(meta.module)
+    // An operation another module also serves (threads in DMs and groups)
+    // is listed wherever either is on, as the call is allowed.
+    !switchable
+        || modules.contains(meta.module)
+        || crate::modules::registry::Registry::global()
+            .also_serving(meta.name)
+            .any(|also| modules.contains(also))
 }
 
 /// Whether `name` is an operation's tool, or an old name for one

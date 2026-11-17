@@ -69,7 +69,7 @@ mod automation_tools;
 mod batch_tools;
 pub(crate) mod briefing;
 pub(crate) mod bug_report_tools;
-mod channels;
+pub(crate) mod channels;
 mod code;
 mod collaboration;
 mod collection_tools;
@@ -82,7 +82,7 @@ mod environment_tools;
 pub(crate) mod field_tools;
 mod file_tools;
 mod github_tools;
-mod groups;
+pub(crate) mod groups;
 mod history;
 mod invitation_tools;
 pub(crate) mod labels;
@@ -110,7 +110,7 @@ mod run_pages;
 mod runs;
 mod settings_tools;
 mod sheet_tools;
-mod talk;
+pub(crate) mod talk;
 pub(crate) mod task_batch;
 mod workspace_template_tools;
 pub(crate) use task_batch::{ImportTask, create_for_import};
@@ -852,44 +852,6 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Add or remove people and agents in a group (pass the group, or a thread in it). Whoever you add can read everything said in the group so far. Remove your own @handle to leave. People can add and remove anyone; agents can only leave. DMs never change; channels are open to everyone in the project.",
-        annotations(
-            title = "Change group members",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn conversation_members(
-        &self,
-        Parameters(arguments): Parameters<groups::ConversationMembersArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<groups::GroupMembersValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(groups::conversation_members(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "People only. When the agents in a group (or a thread in one) have used their turns, let them take more, like the web app's Continue button: they get 6 more messages, and the other agents are asked to answer the latest agent message. Pass a clientRequestId so a retry doesn't grant another round.",
-        annotations(
-            title = "Let agents continue",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn conversation_continue(
-        &self,
-        Parameters(arguments): Parameters<groups::ConversationContinueArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<groups::ContinueValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(groups::conversation_continue(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
         description = "Your notifications, newest first: @mentions in messages and task comments, tasks assigned to you, approvals waiting on you, your runs finishing, failing or waiting, and failing checks or review requests on pull requests. Repeats collapse into one with a count. view: inbox (default), unread, snoozed or archived; category: all, mentions, tasks, runs or pull_requests. briefing lists the unread ones too.",
         annotations(
             title = "List notifications",
@@ -1008,101 +970,6 @@ impl McpServer {
     ) -> Json<common::ToolResult<talk::PeopleValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(talk::people_search(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Move a topic into its own thread, usually from the message where it started (fromMessageId), in a channel, DM or group. Optionally post the first message. Starting from the same message again returns the existing thread.",
-        annotations(
-            title = "Start thread",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn thread_start(
-        &self,
-        Parameters(arguments): Parameters<talk::ThreadStartArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<talk::ThreadValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(talk::thread_start(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Rename a thread or set where it stands: a status (Open, In progress, Decided, Done, Dropped, Blocked, or your own) and a one-line outcome. Do this when a discussion lands so nobody has to reread it.",
-        annotations(
-            title = "Update thread",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn thread_update(
-        &self,
-        Parameters(arguments): Parameters<talk::ThreadUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<talk::ThreadValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(talk::thread_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Create a channel in a project. If an active channel with that name already exists, it's returned instead (created: false).",
-        annotations(
-            title = "Create channel",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn channel_create(
-        &self,
-        Parameters(arguments): Parameters<channels::ChannelCreateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<channels::ConversationValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(channels::channel_create(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Change a channel, thread or group: rename it, set a thread's status and outcome, or archive or restore a channel or thread (archived). Archiving keeps everything and is refused while a run is going there. DMs can't be changed.",
-        annotations(
-            title = "Update conversation",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn conversation_update(
-        &self,
-        Parameters(arguments): Parameters<channels::ConversationUpdateArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<channels::ConversationValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(channels::conversation_update(&self.state, principal, arguments).await)
-    }
-
-    #[tool(
-        description = "Pin or unpin a message, page or decision in a conversation. Pins are the conversation's brief: conversation_open shows them first.",
-        annotations(
-            title = "Pin or unpin",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn pin_set(
-        &self,
-        Parameters(arguments): Parameters<channels::PinSetArguments>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<common::ToolResult<channels::PinValue>> {
-        let principal = principal_or!(parts, unauthenticated());
-        Json(channels::pin_set(&self.state, principal, arguments).await)
     }
 
     // -- Replies (agents) ----------------------------------------------------
@@ -5295,8 +5162,7 @@ mod tests {
     /// shrinks: give a tool one and take it off here. Each is safe to retry
     /// by its own key today (idempotentHint): a channel or label by its name,
     /// a pull request by its run's branch.
-    const CREATES_WITHOUT_RETRY_ID: &[&str] =
-        &["channel_create", "label_write", "pull_request_create"];
+    const CREATES_WITHOUT_RETRY_ID: &[&str] = &["label_write", "pull_request_create"];
 
     /// Agents read the tool list (titles, descriptions, argument and result
     /// schemas) to decide what to do, so it names no harness or provider

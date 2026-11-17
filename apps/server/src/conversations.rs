@@ -1,5 +1,6 @@
 // K2.7: the message operations.
 pub mod ops;
+pub mod threads;
 
 use std::{
     cmp::Reverse,

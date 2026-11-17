@@ -120,6 +120,38 @@
     "title": "Update bug report link"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "channel.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "channels",
+    "name": "channel_create",
+    "permission": "channels.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Create channel"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.continued"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "conversation_continue",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Let agents continue"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [
@@ -134,6 +166,38 @@
     "preview": false,
     "proposable": false,
     "title": "Mark read"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "conversation.members_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "conversation_members_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Change group members"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "conversation_update",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Update conversation"
   },
   {
     "automation": false,
@@ -892,6 +956,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "conversation.pinned"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "pin_set",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Pin or unpin"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "task.created",
       "task.updated"
     ],
@@ -1573,6 +1653,38 @@
     "preview": false,
     "proposable": false,
     "title": "Update task template"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "thread.started"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "channels",
+    "name": "thread_start",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Start thread"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "thread.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "thread_update",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Update thread"
   },
   {
     "automation": true,
