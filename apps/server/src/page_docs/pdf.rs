@@ -570,71 +570,95 @@ impl<'a> Layout<'a> {
                         .unwrap_or_default()
                 })
                 .collect::<Vec<_>>();
-            let height = cells.iter().map(Vec::len).max().unwrap_or(0).max(1) as f32 * leading
-                + 2.0 * padding;
-            self.need(height);
-            let top = self.y;
-            let bottom = top - height;
-            let header = row.first().is_some_and(|cell| cell.1);
-            if header {
-                self.page().draws.push(Draw::Rect {
-                    x: left,
-                    y: bottom,
-                    width,
-                    height,
-                    fill: 0.93,
-                });
+            let total = cells.iter().map(Vec::len).max().unwrap_or(0).max(1);
+            let full_height = total as f32 * leading + 2.0 * padding;
+            // A row that fits on a page moves to the next page whole; a
+            // longer one continues across pages, framed on each.
+            if full_height <= PAGE_HEIGHT - 2.0 * MARGIN {
+                self.need(full_height);
             }
-            for (column, lines) in cells.iter().enumerate() {
-                let x0 = left + column as f32 * column_width;
-                let align = row.get(column).and_then(|cell| cell.2);
-                for (line_index, line) in lines.iter().enumerate() {
-                    let y = top - padding - (line_index as f32 + 1.0) * leading + size * 0.3;
-                    let line_width: f32 = line
-                        .iter()
-                        .map(|piece| self.face.width(&piece.text, piece.style.size))
-                        .sum();
-                    let mut x = match align {
-                        Some(Align::Right) => x0 + column_width - padding - line_width,
-                        Some(Align::Center) => x0 + (column_width - line_width) / 2.0,
-                        _ => x0 + padding,
-                    };
-                    for piece in line {
-                        let piece_width = self.face.width(&piece.text, piece.style.size);
-                        if !piece.space {
-                            self.page().draws.push(Draw::Text {
-                                x,
-                                y,
-                                text: piece.text.clone(),
-                                style: piece.style.clone(),
-                                width: piece_width,
-                            });
+            let header = row.first().is_some_and(|cell| cell.1);
+            let mut start = 0;
+            while start < total {
+                let mut room = ((self.y - MARGIN - 2.0 * padding) / leading)
+                    .floor()
+                    .max(0.0) as usize;
+                if room == 0 {
+                    if self.y < PAGE_HEIGHT - MARGIN - 1.0 {
+                        self.new_page();
+                        continue;
+                    }
+                    room = 1;
+                }
+                let end = (start + room).min(total);
+                let height = (end - start) as f32 * leading + 2.0 * padding;
+                let top = self.y;
+                let bottom = top - height;
+                if header {
+                    self.page().draws.push(Draw::Rect {
+                        x: left,
+                        y: bottom,
+                        width,
+                        height,
+                        fill: 0.93,
+                    });
+                }
+                for (column, lines) in cells.iter().enumerate() {
+                    let x0 = left + column as f32 * column_width;
+                    let align = row.get(column).and_then(|cell| cell.2);
+                    for (line_index, line) in lines.iter().enumerate().take(end).skip(start) {
+                        let y = top - padding - ((line_index - start) as f32 + 1.0) * leading
+                            + size * 0.3;
+                        let line_width: f32 = line
+                            .iter()
+                            .map(|piece| self.face.width(&piece.text, piece.style.size))
+                            .sum();
+                        let mut x = match align {
+                            Some(Align::Right) => x0 + column_width - padding - line_width,
+                            Some(Align::Center) => x0 + (column_width - line_width) / 2.0,
+                            _ => x0 + padding,
+                        };
+                        for piece in line {
+                            let piece_width = self.face.width(&piece.text, piece.style.size);
+                            if !piece.space {
+                                self.page().draws.push(Draw::Text {
+                                    x,
+                                    y,
+                                    text: piece.text.clone(),
+                                    style: piece.style.clone(),
+                                    width: piece_width,
+                                });
+                            }
+                            x += piece_width;
                         }
-                        x += piece_width;
                     }
                 }
+                // Borders: the part's top and bottom, and every column edge.
+                for y in [top, bottom] {
+                    self.page().draws.push(Draw::Line {
+                        x1: left,
+                        y1: y,
+                        x2: left + width,
+                        y2: y,
+                        gray: 0.7,
+                    });
+                }
+                for column in 0..=columns {
+                    let x = left + column as f32 * column_width;
+                    self.page().draws.push(Draw::Line {
+                        x1: x,
+                        y1: top,
+                        x2: x,
+                        y2: bottom,
+                        gray: 0.7,
+                    });
+                }
+                self.y = bottom;
+                start = end;
+                if start < total {
+                    self.new_page();
+                }
             }
-            // Borders: the row's top and bottom, and every column edge.
-            for y in [top, bottom] {
-                self.page().draws.push(Draw::Line {
-                    x1: left,
-                    y1: y,
-                    x2: left + width,
-                    y2: y,
-                    gray: 0.7,
-                });
-            }
-            for column in 0..=columns {
-                let x = left + column as f32 * column_width;
-                self.page().draws.push(Draw::Line {
-                    x1: x,
-                    y1: top,
-                    x2: x,
-                    y2: bottom,
-                    gray: 0.7,
-                });
-            }
-            self.y = bottom;
         }
         self.gap(10.0);
     }
@@ -1185,5 +1209,24 @@ mod tests {
             .and_then(|count| count.parse::<usize>().ok())
             .unwrap_or(0);
         assert!(count > 3, "{count} pages");
+    }
+
+    #[test]
+    fn a_table_row_taller_than_a_page_continues_on_the_next() {
+        let words = (0..2500)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let markdown = format!("| Notes |\n| --- |\n| {words} |\n");
+        let pdf = export("Tall", &from_markdown(&markdown), None, &HashMap::new());
+        let source = String::from_utf8_lossy(&pdf);
+        let count = source
+            .split("/Count ")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|count| count.parse::<usize>().ok())
+            .unwrap_or(0);
+        assert!(count > 1, "{count} pages");
+        assert!(text_of(&pdf).contains("word2499"));
     }
 }
