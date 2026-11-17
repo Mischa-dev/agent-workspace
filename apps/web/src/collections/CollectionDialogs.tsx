@@ -109,8 +109,10 @@ export function CollectionDetailsDialog({
 const LAYOUTS: { value: ViewType; label: string; icon: 'table' | 'board' | 'list' | 'clock'; hint: string }[] = [
   { value: 'table', label: 'Table', icon: 'table', hint: 'Rows and columns, each value edited in place.' },
   { value: 'board', label: 'Board', icon: 'board', hint: 'A column for each value of a choice, person or checkbox field. Drag a card to change it.' },
+  { value: 'list', label: 'List', icon: 'list', hint: 'One line for each record, with the fields you choose beside its name.' },
   { value: 'gallery', label: 'Gallery', icon: 'list', hint: 'A card for each record, with the fields you choose.' },
   { value: 'calendar', label: 'Calendar', icon: 'clock', hint: 'A month, with each record on the day of a date field.' },
+  { value: 'timeline', label: 'Timeline', icon: 'clock', hint: 'Each record a bar from one date field to another, week by week.' },
 ]
 
 /** Names a new view (and picks its layout, when `layout` is given), or renames one. */

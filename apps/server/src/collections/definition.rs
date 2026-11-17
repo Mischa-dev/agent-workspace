@@ -164,9 +164,14 @@ pub struct ViewWrite {
     /// The title column's width in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_width: Option<u16>,
-    /// A calendar's date field, by name or ID.
+    /// A calendar's date field, by name or ID; where a timeline's bars
+    /// start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_field: Option<String>,
+    /// Where a timeline's bars end, a date field by name or ID; "" for
+    /// one-day bars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_field: Option<String>,
     /// Its place among the views, 1 being first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<i32>,
@@ -307,6 +312,10 @@ fn view_written(
         title_width: config.title_width,
         date_field: config
             .date_field
+            .and_then(field)
+            .map(|field| field.name.clone()),
+        end_field: config
+            .end_field
             .and_then(field)
             .map(|field| field.name.clone()),
         ..ViewWrite::default()
@@ -638,6 +647,24 @@ async fn config_from_written(
                 Ok(field) => {
                     return Ok(Err(format!(
                         "\"{}\" isn't a date field. A calendar shows records by a date field.",
+                        field.name
+                    )));
+                }
+                Err(message) => return Ok(Err(message)),
+            }
+        }
+    }
+    if let Some(end_field) = &write.end_field {
+        if end_field.trim().is_empty() {
+            config.end_field = None;
+        } else {
+            match active_field(collection, definitions, end_field) {
+                Ok(field) if field.field_type == FieldType::Date => {
+                    config.end_field = Some(field.id);
+                }
+                Ok(field) => {
+                    return Ok(Err(format!(
+                        "\"{}\" isn't a date field. A timeline's bars end on a date field.",
                         field.name
                     )));
                 }

@@ -113,12 +113,27 @@ export function CollectionToolbar({
       ]
     : [{ label: 'Group by a choice, status, person, checkbox or date field', disabled: true, onSelect: () => undefined }]
   const dated = dateFields(body.fields)
-  const dateItems: MenuEntry[] = dated.length
-    ? [{ heading: 'Show records by' }, ...dated.map((field) => ({ label: field.name, checked: config.dateField === field.id, onSelect: () => onChange({ ...config, dateField: field.id }) }))]
-    : [{ label: 'Add a date field to show records by it', disabled: true, onSelect: () => undefined }]
+  const dateItems: MenuEntry[] = !dated.length
+    ? [{ label: 'Add a date field to show records by it', disabled: true, onSelect: () => undefined }]
+    : layout === 'timeline'
+      ? [
+          { heading: 'Bars start on' },
+          ...dated.map((field) => ({
+            label: field.name,
+            checked: config.dateField === field.id,
+            onSelect: () => onChange({ ...config, dateField: field.id, endField: config.endField === field.id ? null : config.endField }),
+          })),
+          { separator: true as const },
+          { heading: 'Bars end on' },
+          { label: 'The same day', checked: !config.endField, onSelect: () => onChange({ ...config, endField: null }) },
+          ...dated
+            .filter((field) => field.id !== config.dateField)
+            .map((field) => ({ label: field.name, checked: config.endField === field.id, onSelect: () => onChange({ ...config, endField: field.id }) })),
+        ]
+      : [{ heading: 'Show records by' }, ...dated.map((field) => ({ label: field.name, checked: config.dateField === field.id, onSelect: () => onChange({ ...config, dateField: field.id }) }))]
   const fieldsWord = layout === 'table' ? 'Columns' : 'Fields'
   const fieldItems: MenuEntry[] = [
-    { heading: layout === 'table' ? 'Columns' : 'Fields on cards' },
+    { heading: layout === 'table' ? 'Columns' : layout === 'list' ? 'Fields on each line' : 'Fields on cards' },
     ...columnOrder(body.fields, config).map(({ field, hidden }) => ({
       label: field.name,
       checked: !hidden,
@@ -127,7 +142,7 @@ export function CollectionToolbar({
     })),
     ...(canBuild ? [{ separator: true as const }, { label: 'Add a field…', icon: 'plus' as const, onSelect: onAddField }] : []),
   ]
-  const groupField = layout === 'gallery' || layout === 'calendar' ? undefined : active.find((field) => field.id === config.groupBy)
+  const groupField = layout === 'gallery' || layout === 'calendar' || layout === 'timeline' ? undefined : active.find((field) => field.id === config.groupBy)
 
   return (
     <div className="aw-collection__toolbar">
@@ -145,7 +160,7 @@ export function CollectionToolbar({
         />
         <Menu items={filterItems} label="Filter" trigger={<Button icon={ListFilter} size="sm" variant="ghost">Filter</Button>} />
         <Menu items={sortItems} label="Sort" trigger={<Button icon={ArrowUpDown} size="sm" variant="ghost">Sort</Button>} />
-        {layout === 'gallery' || layout === 'calendar' ? null : (
+        {layout === 'gallery' || layout === 'calendar' || layout === 'timeline' ? null : (
           <Menu
             items={groupItems}
             label={layout === 'board' ? 'Columns by' : 'Group'}
@@ -156,10 +171,10 @@ export function CollectionToolbar({
             }
           />
         )}
-        {layout === 'calendar' ? (
+        {layout === 'calendar' || layout === 'timeline' ? (
           <Menu items={dateItems} label="Dates" trigger={<Button icon={CalendarDays} size="sm" variant="ghost">Dates</Button>} />
         ) : null}
-        {layout === 'calendar' ? null : (
+        {layout === 'calendar' || layout === 'timeline' ? null : (
           <Menu items={fieldItems} label={fieldsWord} trigger={<Button icon={Columns3} size="sm" variant="ghost">{fieldsWord}</Button>} />
         )}
         <span className="aw-collection__spacer" />

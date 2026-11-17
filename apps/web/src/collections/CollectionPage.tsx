@@ -43,10 +43,12 @@ import { RecordTable } from './RecordTable'
 import { useRecordEdits } from './useRecordEdits'
 
 // Forms are managed now and then, so their dialog loads when it opens.
-// The board, gallery and calendar pieces load when a view first uses them.
+// The board, list, gallery, calendar and timeline pieces load when a view first uses them.
 const CollectionBoardView = lazy(() => import('./CollectionBoardView').then((module) => ({ default: module.CollectionBoardView })))
 const CollectionCalendarView = lazy(() => import('./CollectionCalendarView').then((module) => ({ default: module.CollectionCalendarView })))
 const CollectionGalleryView = lazy(() => import('./CollectionGalleryView').then((module) => ({ default: module.CollectionGalleryView })))
+const CollectionListView = lazy(() => import('./CollectionListView').then((module) => ({ default: module.CollectionListView })))
+const CollectionTimelineView = lazy(() => import('./CollectionTimelineView').then((module) => ({ default: module.CollectionTimelineView })))
 const FormsDialog = lazy(() => import('./FormsDialog').then((module) => ({ default: module.FormsDialog })))
 
 const NO_CONFIG: ViewConfig = { filters: [], sort: [], groupBy: null, columns: [], titleWidth: null, dateField: null }
@@ -397,7 +399,7 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
             Showing archived records. Open one to restore it.
           </Banner>
         ) : null}
-        {layout === 'board' || layout === 'gallery' || layout === 'calendar' ? (
+        {layout !== 'table' ? (
           <Suspense fallback={<ListSkeleton label="Loading the view" rows={5} />}>
             {layout === 'board' ? (
               <CollectionBoardView
@@ -409,6 +411,16 @@ function CollectionWorkspace({ collectionId, project, user }: { collectionId: st
               />
             ) : layout === 'gallery' ? (
               <CollectionGalleryView {...shared} params={recordsParams({ ...recordsQuery, groupBy: null })} recordHref={recordHref} />
+            ) : layout === 'list' ? (
+              <CollectionListView {...shared} recordHref={recordHref} />
+            ) : layout === 'timeline' ? (
+              <CollectionTimelineView
+                {...shared}
+                dateFields={dateFields(body.fields)}
+                onDateField={(fieldId) => setConfig({ ...config, dateField: fieldId })}
+                query={recordsQuery}
+                recordHref={recordHref}
+              />
             ) : layout === 'calendar' ? (
               <CollectionCalendarView
                 {...shared}

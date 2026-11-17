@@ -185,6 +185,17 @@ impl Spec {
         self.filter = std::mem::take(&mut self.filter).and(clauses);
     }
 
+    /// Narrows to records that also meet `more`.
+    pub fn narrow_to(&mut self, more: Filter) {
+        self.filter = match std::mem::take(&mut self.filter) {
+            Filter::And(mut items) => {
+                items.push(more);
+                Filter::And(items)
+            }
+            other => Filter::And(vec![other, more]),
+        };
+    }
+
     fn definition(&self, id: Uuid) -> Option<&FieldDefinition> {
         self.definitions.iter().find(|field| field.id == id)
     }
@@ -542,6 +553,61 @@ pub fn date_range(
             values: vec![end.format("%Y-%m-%d").to_string()],
         },
     ])
+}
+
+/// The days of a timeline's range at most: a year and a bit.
+pub const MAX_SPAN_DAYS: i64 = 400;
+
+/// The filter for records whose bar, from `start` to `end` (both active
+/// date fields; no end date is a one-day bar), touches the days from
+/// `from` up to, not including, `to`: it starts before `to` and ends on or
+/// after `from`. A record without a start date has no bar.
+pub fn span_range(
+    definitions: &[FieldDefinition],
+    start: Uuid,
+    end: Uuid,
+    from: &str,
+    to: &str,
+) -> Result<Filter, String> {
+    for field in [start, end] {
+        let Some(definition) = definitions
+            .iter()
+            .find(|definition| definition.id == field && !definition.archived)
+        else {
+            return Err("The date field names a field this collection doesn't have.".to_owned());
+        };
+        if definition.field_type != FieldType::Date {
+            return Err(format!("\"{}\" isn't a date field.", definition.name));
+        }
+    }
+    if start == end {
+        return Err("A timeline's bars start and end on two different date fields.".to_owned());
+    }
+    let parse = |value: &str| NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d").ok();
+    let (Some(first), Some(last)) = (parse(from), parse(to)) else {
+        return Err("from and to are dates, YYYY-MM-DD.".to_owned());
+    };
+    let days = (last - first).num_days();
+    if !(1..=MAX_SPAN_DAYS).contains(&days) {
+        return Err(format!(
+            "A timeline's range runs forward, at most {MAX_SPAN_DAYS} days."
+        ));
+    }
+    let (first, last) = (
+        first.format("%Y-%m-%d").to_string(),
+        last.format("%Y-%m-%d").to_string(),
+    );
+    let clause = |field, op, values: Vec<String>| Filter::Clause(FieldClause { field, op, values });
+    Ok(Filter::And(vec![
+        clause(start, FieldOp::Lt, vec![last]),
+        Filter::Or(vec![
+            clause(end, FieldOp::Gte, vec![first.clone()]),
+            Filter::And(vec![
+                clause(end, FieldOp::Empty, Vec::new()),
+                clause(start, FieldOp::Gte, vec![first]),
+            ]),
+        ]),
+    ]))
 }
 
 fn by_key(by: SortBy) -> String {

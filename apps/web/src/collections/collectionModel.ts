@@ -1,6 +1,7 @@
 import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isReadOnlyType, likeOf, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import { typeInfo } from '../fields/fieldTypes'
 import { formatDateLabel } from '../ui/dateModel'
+import { dayFromNumber, dayNumber } from '../views/dates'
 import type { CollectionRecord, GroupCount, SortRule, ViewConfig } from './api'
 
 /** How a record is named where its title is empty. */
@@ -265,7 +266,7 @@ export function calendarMonth(value: string | null, today = new Date()): Date {
 export const monthKey = (month: Date) => `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`
 
 /** The day (YYYY-MM-DD) a calendar puts a record on, or null when its date field is empty. */
-export function recordDay(record: CollectionRecord, dateField: string): string | null {
+export function recordDay(record: Pick<CollectionRecord, 'values'>, dateField: string): string | null {
   const value = record.values[dateField]
   return typeof value === 'string' && value ? value.slice(0, 10) : null
 }
@@ -273,4 +274,22 @@ export function recordDay(record: CollectionRecord, dateField: string): string |
 /** Fields a calendar can show records by. */
 export function dateFields(fields: readonly FieldDefinition[]) {
   return fields.filter((field) => !field.archived && field.type === 'date').sort((left, right) => left.position - right.position)
+}
+
+/** The weeks a collection's timeline shows: from the Monday of the week before `anchor` (YYYY-MM-DD), `weeks` weeks long; `to` is the day after the last. */
+export function timelineWindow(anchor: string, weeks = 13) {
+  const day = dayNumber(anchor)
+  // Day 0 (1970-01-01) was a Thursday, so a Monday is a day number ≡ 4 (mod 7).
+  const monday = day - ((((day - 4) % 7) + 7) % 7) - 7
+  return { first: monday, last: monday + weeks * 7 - 1, from: dayFromNumber(monday), to: dayFromNumber(monday + weeks * 7) }
+}
+
+/** A record's bar on a timeline, as day numbers: from its start date to its end date (a day when there's none, or it's before the start). Null without a start. */
+export function recordSpan(record: Pick<CollectionRecord, 'values'>, startField: string, endField: string | null | undefined) {
+  const start = recordDay(record, startField)
+  if (!start) return null
+  const first = dayNumber(start)
+  const end = endField ? recordDay(record, endField) : null
+  const last = end ? dayNumber(end) : first
+  return { start: first, end: Math.max(first, last) }
 }

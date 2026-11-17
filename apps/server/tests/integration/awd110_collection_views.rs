@@ -244,7 +244,7 @@ async fn board_columns_and_calendar_months_read_only_their_own_records() {
         let mut cursor = None::<String>;
         loop {
             let mut path = format!(
-                "{uri}/records?view={pipeline}&group={key}&limit=15&sort=%5B%7B%22field%22%3A%22title%22%7D%5D"
+                "{uri}/records?view={pipeline}&group={key}&limit=15&sort=%5B%7B%22field%22%3A%22title%22%2C%22direction%22%3A%22asc%22%7D%5D"
             );
             if let Some(cursor) = &cursor {
                 path.push_str(&format!("&cursor={cursor}"));
@@ -399,4 +399,148 @@ fn urlencode(value: &str) -> String {
             _ => format!("%{byte:02X}"),
         })
         .collect()
+}
+
+/// T1.14: a timeline reads the records whose bar, from the start date to the
+/// end date (one day without an end), touches the weeks asked for, and no
+/// others; a list and a timeline are views any collection can have.
+#[tokio::test]
+async fn timeline_ranges_read_only_bars_that_touch_them() {
+    let Some(setup) = setup("awd110_timeline").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let created = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "name": "Trips",
+            "fields": [
+                {"name": "Leaves", "type": "date"},
+                {"name": "Returns", "type": "date"},
+            ],
+            "views": [
+                {"name": "Plan", "type": "timeline"},
+                {"name": "Lines", "type": "list"},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Trips"}),
+    )
+    .await;
+    let views = described["value"]["definition"]["views"].clone();
+    let plan = views
+        .as_array()
+        .expect("views")
+        .iter()
+        .find(|view| view["name"] == "Plan")
+        .expect("Plan")
+        .clone();
+    assert_eq!(plan["type"], "timeline", "{views}");
+    assert_eq!(plan["dateField"], "Leaves", "{views}");
+    assert_eq!(plan["endField"], "Returns", "{views}");
+
+    // Before: ends before the range. Across: starts before and ends after.
+    // Inside, Late (starts on its last day), Day (no end, inside), After
+    // (starts on the day after), Undated (no start).
+    let trips = [
+        ("Before", Some("2026-10-01"), Some("2026-10-31")),
+        ("Across", Some("2026-10-20"), Some("2026-12-20")),
+        ("Inside", Some("2026-11-05"), Some("2026-11-08")),
+        ("Late", Some("2026-11-30"), Some("2027-01-10")),
+        ("Day", Some("2026-11-15"), None),
+        ("After", Some("2026-12-01"), Some("2026-12-03")),
+        ("Undated", None, Some("2026-11-10")),
+    ];
+    let records = trips
+        .iter()
+        .map(|(title, leaves, returns)| {
+            let mut fields = json!({});
+            if let Some(leaves) = leaves {
+                fields["Leaves"] = json!(leaves);
+            }
+            if let Some(returns) = returns {
+                fields["Returns"] = json!(returns);
+            }
+            json!({"title": title, "fields": fields})
+        })
+        .collect::<Vec<_>>();
+    let written = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Trips", "records": records, "clientRequestId": "trips"}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+
+    let base = format!("/api/v1/projects/{work}/collections");
+    let (_, list) = get(&setup, &setup.browser, &base).await;
+    let collection = list["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .find(|entry| entry["name"] == "Trips")
+        .expect("Trips")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let uri = format!("{base}/{collection}");
+    let (_, body) = get(&setup, &setup.browser, &uri).await;
+    let field = |name: &str| {
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .find(|field| field["name"] == name)
+            .unwrap_or_else(|| panic!("{name}"))["id"]
+            .as_str()
+            .expect("id")
+            .to_owned()
+    };
+    let (leaves, returns) = (field("Leaves"), field("Returns"));
+    let (status, november) = get(
+        &setup,
+        &setup.browser,
+        &format!("{uri}/records?dateField={leaves}&endField={returns}&from=2026-11-01&to=2026-12-01&sort=%5B%7B%22field%22%3A%22title%22%2C%22direction%22%3A%22asc%22%7D%5D"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{november}");
+    assert_eq!(
+        titles(&november),
+        ["Across", "Day", "Inside", "Late"],
+        "{november}"
+    );
+    // A timeline's range may run longer than a calendar's, but not past a
+    // year and a bit, and its two fields differ.
+    let (status, year) = get(
+        &setup,
+        &setup.browser,
+        &format!("{uri}/records?dateField={leaves}&endField={returns}&from=2026-01-01&to=2027-01-01"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{year}");
+    for query in [
+        format!("dateField={leaves}&endField={returns}&from=2026-01-01&to=2028-01-01"),
+        format!("dateField={leaves}&endField={leaves}&from=2026-11-01&to=2026-12-01"),
+        format!("endField={returns}&from=2026-11-01&to=2026-12-01"),
+    ] {
+        let (status, refused) =
+            get(&setup, &setup.browser, &format!("{uri}/records?{query}")).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{query}: {refused}"
+        );
+    }
 }

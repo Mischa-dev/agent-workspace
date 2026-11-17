@@ -51,14 +51,16 @@ export type ViewConfig = {
   groupBucket?: DateBucket | null
   columns: ViewColumn[]
   titleWidth: number | null
-  /** The date field a calendar puts records on. */
+  /** The date field a calendar puts records on; where a timeline's bars start. */
   dateField: string | null
+  /** Where a timeline's bars end; none, and each record is one day. */
+  endField?: string | null
 }
 
 /** How a view lays out its records. */
 /** The kinds of view a collection draws today, of the one list (views/kinds.ts). */
-export type ViewType = Extract<ViewKind, 'table' | 'board' | 'gallery' | 'calendar'>
-export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'gallery', 'calendar']
+export type ViewType = Extract<ViewKind, 'table' | 'board' | 'list' | 'gallery' | 'calendar' | 'timeline'>
+export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline']
 const asViewType = (value: unknown): ViewType => (VIEW_TYPES as readonly unknown[]).includes(value) ? (value as ViewType) : 'table'
 
 export type CollectionView = { id: string; name: string; type: ViewType; config: ViewConfig; position: number; version: number; /** Everyone's; false for the person's own. */ shared: boolean }
@@ -196,6 +198,7 @@ export function normalizeConfig(value: unknown): ViewConfig {
     }),
     titleWidth: typeof raw.titleWidth === 'number' ? raw.titleWidth : null,
     dateField: typeof raw.dateField === 'string' && raw.dateField ? raw.dateField : null,
+    endField: typeof raw.endField === 'string' && raw.endField ? raw.endField : null,
   }
 }
 
@@ -329,6 +332,7 @@ export function configJson(config: ViewConfig) {
     ...(config.columns.length ? { columns: config.columns } : {}),
     ...(config.titleWidth ? { titleWidth: config.titleWidth } : {}),
     ...(config.dateField ? { dateField: config.dateField } : {}),
+    ...(config.dateField && config.endField ? { endField: config.endField } : {}),
   }
 }
 
@@ -386,8 +390,12 @@ export type RecordsQuery = {
   archived?: 'only'
   /** One group of the grouping: a board's column. */
   group?: string
-  /** Records whose date field is from `from` up to `to` (YYYY-MM-DD, `to` left out): a calendar's weeks. */
-  dates?: { field: string; from: string; to: string }
+  /**
+   * Records whose date field is from `from` up to `to` (YYYY-MM-DD, `to` left
+   * out): a calendar's weeks. With `endField`, records whose bar from one to
+   * the other touches those days: a timeline's.
+   */
+  dates?: { field: string; endField?: string | null; from: string; to: string }
 }
 
 /** The records list's parameters, in a fixed order, so one query has one cache entry. */
@@ -403,6 +411,7 @@ export function recordsParams(query: RecordsQuery) {
   if (query.group !== undefined) params.set('group', query.group)
   if (query.dates) {
     params.set('dateField', query.dates.field)
+    if (query.dates.endField) params.set('endField', query.dates.endField)
     params.set('from', query.dates.from)
     params.set('to', query.dates.to)
   }

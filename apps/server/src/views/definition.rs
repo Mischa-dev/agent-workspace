@@ -31,14 +31,18 @@ pub const MAX_COLUMN_WIDTH: u16 = 1_200;
 /// A view's kind: the one list in `crate::views` (T1.2).
 pub use crate::views::ViewKind as ViewType;
 
-/// The kinds a collection's view can be today: a table, a board (a column
-/// for each value of the field it groups by), a gallery (a card for each
-/// record) or a calendar (a month, each record on its date).
-pub const COLLECTION_VIEW_TYPES: [ViewType; 4] = [
+/// The kinds a collection's view can be (T1.14): a table, a board (a column
+/// for each value of the field it groups by), a list (one line for each
+/// record), a gallery (a card for each record), a calendar (a month, each
+/// record on its date) or a timeline (each record a bar from its date to its
+/// end date).
+pub const COLLECTION_VIEW_TYPES: [ViewType; 6] = [
     ViewType::Table,
     ViewType::Board,
+    ViewType::List,
     ViewType::Gallery,
     ViewType::Calendar,
+    ViewType::Timeline,
 ];
 
 /// A view kind a collection's view can be, by name.
@@ -48,7 +52,7 @@ pub fn parse_view_type(value: &str) -> Option<ViewType> {
 
 /// What a view or a query asks for when the type isn't one there is.
 pub const VIEW_TYPE_MESSAGE: &str =
-    "A view is a \"table\", \"board\", \"gallery\" or \"calendar\".";
+    "A view is a \"table\", \"board\", \"list\", \"gallery\", \"calendar\" or \"timeline\".";
 
 #[derive(
     Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
@@ -145,9 +149,13 @@ pub struct ViewConfig {
     /// The title column's width, in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_width: Option<u16>,
-    /// The date field a calendar puts records on.
+    /// The date field a calendar puts records on; where a timeline's bars
+    /// start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_field: Option<Uuid>,
+    /// Where a timeline's bars end; none, and each record is one day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_field: Option<Uuid>,
 }
 
 impl ViewConfig {
@@ -181,6 +189,7 @@ impl ViewConfig {
                 .collect(),
             title_width: self.title_width,
             date_field: self.date_field.filter(active),
+            end_field: self.end_field.filter(active),
         }
     }
 
@@ -212,6 +221,20 @@ impl ViewConfig {
                     first(&|field| field.field_type == FieldType::Date)
                         .ok_or("A calendar needs a date field. Add one first.")?,
                 );
+            }
+            ViewType::Timeline if self.date_field.is_none() => {
+                let mut dates = definitions
+                    .iter()
+                    .filter(|field| !field.archived && field.field_type == FieldType::Date)
+                    .collect::<Vec<_>>();
+                dates.sort_by_key(|field| field.position);
+                let start = dates
+                    .first()
+                    .ok_or("A timeline needs a date field. Add one first.")?;
+                self.date_field = Some(start.id);
+                if self.end_field.is_none() {
+                    self.end_field = dates.get(1).map(|field| field.id);
+                }
             }
             _ => {}
         }
@@ -321,6 +344,28 @@ pub fn check(config: &ViewConfig, definitions: &[FieldDefinition]) -> Result<(),
             }
             None => {
                 return Err("The date field names a field this collection doesn't have.".to_owned());
+            }
+        }
+    }
+    if let Some(end) = config.end_field {
+        match active(end) {
+            Some(field) if field.field_type != FieldType::Date => {
+                return Err(format!(
+                    "\"{}\" isn't a date field. A timeline's bars end on a date field.",
+                    field.name
+                ));
+            }
+            Some(_) if config.date_field == Some(end) => {
+                return Err(
+                    "A timeline's bars start and end on two different date fields.".to_owned(),
+                );
+            }
+            Some(_) if config.date_field.is_none() => {
+                return Err("A timeline's end date goes with a start date field.".to_owned());
+            }
+            Some(_) => {}
+            None => {
+                return Err("The end date names a field this collection doesn't have.".to_owned());
             }
         }
     }
@@ -1229,6 +1274,7 @@ mod tests {
             }],
             title_width: None,
             date_field: None,
+            end_field: None,
         };
         assert_eq!(check(&mine, &fields), Ok(()));
         let elsewhere = ViewConfig {
@@ -1286,6 +1332,43 @@ mod tests {
     }
 
     #[test]
+    fn timelines_run_from_one_date_field_to_another() {
+        let start = field("Start", FieldType::Date, false);
+        let mut end = field("End", FieldType::Date, false);
+        end.position = start.position + 1;
+        let notes = field("Notes", FieldType::Text, false);
+        let fields = vec![start.clone(), end.clone(), notes.clone()];
+        let timeline = ViewConfig::default()
+            .for_type(ViewType::Timeline, &fields)
+            .expect("a timeline");
+        assert_eq!(timeline.date_field, Some(start.id));
+        assert_eq!(timeline.end_field, Some(end.id));
+        assert!(check(&timeline, &fields).is_ok());
+        let same = ViewConfig {
+            date_field: Some(start.id),
+            end_field: Some(start.id),
+            ..ViewConfig::default()
+        };
+        assert!(check(&same, &fields).is_err());
+        let not_a_date = ViewConfig {
+            date_field: Some(start.id),
+            end_field: Some(notes.id),
+            ..ViewConfig::default()
+        };
+        assert!(check(&not_a_date, &fields).is_err());
+        let one_date = ViewConfig::default()
+            .for_type(ViewType::Timeline, std::slice::from_ref(&start))
+            .expect("one date is enough");
+        assert_eq!(one_date.end_field, None);
+        assert!(
+            ViewConfig::default()
+                .for_type(ViewType::Timeline, std::slice::from_ref(&notes))
+                .is_err()
+        );
+        assert!(parse_view_type("list").is_some() && parse_view_type("timeline").is_some());
+    }
+
+    #[test]
     fn boards_and_calendars_start_on_a_field_that_fits() {
         let notes = field("Notes", FieldType::Text, false);
         let old_date = field("Was due", FieldType::Date, true);
@@ -1336,6 +1419,6 @@ mod tests {
         };
         assert_eq!(stored.active(&fields).date_field, None);
         assert_eq!(parse_view_type(" Calendar "), Some(ViewType::Calendar));
-        assert_eq!(parse_view_type("list"), None);
+        assert_eq!(parse_view_type("chart"), None);
     }
 }

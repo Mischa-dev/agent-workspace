@@ -1133,6 +1133,9 @@ struct RecordsQuery {
     /// from `from` up to (not including) `to`, both YYYY-MM-DD. A
     /// calendar's month.
     date_field: Option<Uuid>,
+    /// With `date_field`, `from` and `to`: a timeline's end date field, so
+    /// records whose bar touches the range are read.
+    end_field: Option<Uuid>,
     from: Option<String>,
     to: Option<String>,
     search: Option<String>,
@@ -1264,7 +1267,14 @@ async fn list_records(
         spec.in_group = Some(group);
     }
     match (query.date_field, query.from.as_deref(), query.to.as_deref()) {
-        (None, None, None) => {}
+        (None, None, None) if query.end_field.is_none() => {}
+        (Some(field), Some(from), Some(to)) if query.end_field.is_some() => {
+            let end = query.end_field.unwrap_or(field);
+            match query::span_range(&view_fields, field, end, from, to) {
+                Ok(filter) => spec.narrow_to(filter),
+                Err(message) => return Ok(invalid("endField", message)),
+            }
+        }
         (Some(field), Some(from), Some(to)) => {
             match query::date_range(&view_fields, field, from, to) {
                 Ok(clauses) => spec.narrow(clauses),
