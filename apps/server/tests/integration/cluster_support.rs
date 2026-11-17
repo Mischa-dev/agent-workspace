@@ -153,6 +153,22 @@ impl Instance {
             .0
     }
 
+    /// What drains this instance before it stops (K5.7).
+    pub(crate) fn drainer(&self) -> agent_workspace_server::server::Drainer {
+        self.running.as_ref().expect("running").drainer()
+    }
+
+    /// `/health/ready`: its status and body.
+    pub(crate) async fn ready(&self) -> (StatusCode, Value) {
+        self.send(
+            Request::builder()
+                .uri("/health/ready")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+    }
+
     /// Stop gracefully.
     pub(crate) async fn stop(&mut self) {
         if let Some(running) = self.running.take() {
@@ -237,8 +253,11 @@ impl Cluster {
     /// Start one more instance; it gets the next name.
     pub(crate) async fn start(&mut self, extra: &[(&str, &str)]) -> &mut Instance {
         let name = NAMES[self.instances.len()];
-        let mut values =
-            BTreeMap::from([("AGENT_WORKSPACE_DATABASE_URL".to_owned(), self.url.clone())]);
+        let mut values = BTreeMap::from([
+            ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), self.url.clone()),
+            // Stopping drains at once unless a test asks for a drain time.
+            ("AGENT_WORKSPACE_DRAIN_SECONDS".to_owned(), "0".to_owned()),
+        ]);
         // `AGENT_WORKSPACE_TEST_POOLER=1` runs the suite the way a
         // transaction-mode pooler needs (K5.17): no prepared statements kept
         // and no listener, so everything runs on polls.
@@ -266,7 +285,7 @@ impl Cluster {
         let webhooks = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("webhook listener");
-        let running = server.spawn(listener, webhooks);
+        let running = server.spawn(listener, Some(webhooks));
         let base = format!("http://{}", running.address().expect("address"));
         self.instances.push(Instance {
             name,

@@ -174,6 +174,20 @@ pub struct AppConfig {
     /// How long a lease lives unless renewed (K5.2): renewed every third,
     /// given up by its holder after two thirds.
     pub lease_ttl: Duration,
+    /// What this instance does (K5.7): `AGENT_WORKSPACE_ROLES`, any of
+    /// `api`, `live` and `work` (default all three).
+    pub roles: crate::cluster::Roles,
+    /// Whether a `work` instance may hold the built-in host (runs, recovery,
+    /// repositories on this machine's disk): `AGENT_WORKSPACE_BUILTIN_HOST`,
+    /// default on.
+    pub builtin_host: bool,
+    /// How long a stopping instance answers "not ready" before it closes its
+    /// sockets and stops taking requests, so the balancer moves off it
+    /// first: `AGENT_WORKSPACE_DRAIN_SECONDS`, default 5.
+    pub drain: Duration,
+    /// Where an instance without `api` answers health checks:
+    /// `AGENT_WORKSPACE_HEALTH_ADDR`, default the application address.
+    pub health_addr: Option<SocketAddr>,
     /// How each access area decides while it moves onto `access` (K1 §4.3):
     /// `AGENT_WORKSPACE_ACCESS_<AREA>=old|compare|new`, each area's default
     /// from `access::compare::AREAS`.
@@ -389,7 +403,7 @@ impl AppConfig {
         let server_addr = parse(values, "SERVER_ADDR", "127.0.0.1:3100")?;
         let webhook_addr = parse(values, "WEBHOOK_ADDR", "127.0.0.1:3101")?;
         let database_url = required(values, "DATABASE_URL")?;
-        let database_max_connections = parse(values, "DATABASE_MAX_CONNECTIONS", "5")?;
+        let database_max_connections = parse(values, "DATABASE_MAX_CONNECTIONS", "10")?;
         let data_root = PathBuf::from(optional(values, "DATA_ROOT", ".agent-workspace"));
         let data_quota_bytes = parse(values, "DATA_QUOTA_BYTES", "21474836480")?;
         let minimum_free_bytes = parse(values, "MINIMUM_FREE_BYTES", "5368709120")?;
@@ -625,6 +639,40 @@ impl AppConfig {
                 reason: "must be between 2 and 300".into(),
             });
         }
+        let roles = optional(values, "ROLES", "api,live,work")
+            .parse::<crate::cluster::Roles>()
+            .map_err(|reason| ConfigError::Invalid {
+                key: format!("{PREFIX}ROLES"),
+                reason,
+            })?;
+        let builtin_host = match optional(values, "BUILTIN_HOST", "on")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "on" | "true" => true,
+            "off" | "false" => false,
+            _ => {
+                return Err(ConfigError::Invalid {
+                    key: format!("{PREFIX}BUILTIN_HOST"),
+                    reason: "expected on or off".into(),
+                });
+            }
+        };
+        let drain_seconds = parse::<u64>(values, "DRAIN_SECONDS", "5")?;
+        if drain_seconds > 120 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DRAIN_SECONDS"),
+                reason: "must be between 0 and 120".into(),
+            });
+        }
+        let health_addr = match optional(values, "HEALTH_ADDR", "").trim() {
+            "" => None,
+            address => Some(address.parse().map_err(|_| ConfigError::Invalid {
+                key: format!("{PREFIX}HEALTH_ADDR"),
+                reason: "expected an address and port, such as 127.0.0.1:3101".into(),
+            })?),
+        };
         let access_modes = access_modes(values)?;
         Ok(Self {
             environment,
@@ -676,6 +724,10 @@ impl AppConfig {
             client_address_header,
             instance_label,
             lease_ttl: Duration::from_secs(lease_seconds),
+            roles,
+            builtin_host,
+            drain: Duration::from_secs(drain_seconds),
+            health_addr,
             access_modes,
         })
     }
@@ -1666,7 +1718,7 @@ mod tests {
         let mut values = base_values();
         let standard = AppConfig::from_values(&values).expect("standard");
         assert_eq!(standard.profile, Profile::Standard);
-        assert_eq!(standard.database_max_connections, 5);
+        assert_eq!(standard.database_max_connections, 10);
         assert_eq!(standard.job_concurrency, 4);
         assert!(standard.link_previews);
 
@@ -1685,6 +1737,44 @@ mod tests {
 
         values.insert("AGENT_WORKSPACE_PROFILE".to_owned(), "roomy".to_owned());
         assert!(AppConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn roles_host_and_drain_are_read_with_safe_defaults() {
+        let mut values = base_values();
+        let default = AppConfig::from_values(&values).expect("defaults");
+        assert_eq!(default.roles, crate::cluster::Roles::ALL);
+        assert!(default.builtin_host);
+        assert_eq!(default.drain, Duration::from_secs(5));
+        assert_eq!(default.health_addr, None);
+
+        values.insert("AGENT_WORKSPACE_ROLES".to_owned(), " work ".to_owned());
+        values.insert("AGENT_WORKSPACE_BUILTIN_HOST".to_owned(), "off".to_owned());
+        values.insert("AGENT_WORKSPACE_DRAIN_SECONDS".to_owned(), "0".to_owned());
+        values.insert(
+            "AGENT_WORKSPACE_HEALTH_ADDR".to_owned(),
+            "127.0.0.1:3101".to_owned(),
+        );
+        let work = AppConfig::from_values(&values).expect("work only");
+        assert!(work.roles.work && !work.roles.api && !work.roles.live);
+        assert!(!work.builtin_host);
+        assert_eq!(work.drain, Duration::ZERO);
+        assert_eq!(
+            work.health_addr,
+            Some("127.0.0.1:3101".parse().expect("address"))
+        );
+
+        for (key, value) in [
+            ("AGENT_WORKSPACE_ROLES", "api,cron"),
+            ("AGENT_WORKSPACE_ROLES", ","),
+            ("AGENT_WORKSPACE_BUILTIN_HOST", "maybe"),
+            ("AGENT_WORKSPACE_DRAIN_SECONDS", "600"),
+            ("AGENT_WORKSPACE_HEALTH_ADDR", "nowhere"),
+        ] {
+            let mut refused = values.clone();
+            refused.insert(key.to_owned(), value.to_owned());
+            assert!(AppConfig::from_values(&refused).is_err(), "{key}={value}");
+        }
     }
 
     #[test]

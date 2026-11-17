@@ -47,7 +47,7 @@ variable that is set still wins.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AGENT_WORKSPACE_DATABASE_URL` | required | The PostgreSQL connection URL. Secret: prefer `AGENT_WORKSPACE_DATABASE_URL_FILE`. |
-| `AGENT_WORKSPACE_DATABASE_MAX_CONNECTIONS` | `5` | Connections in the server's pool. |
+| `AGENT_WORKSPACE_DATABASE_MAX_CONNECTIONS` | `10` | Connections in this process's pool, not counting the one listening connection. Several processes on one database each open their own: keep their sum (plus one listener each) under PostgreSQL's `max_connections`. |
 | `AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE` | `100` | Prepared statements each pooled connection keeps. Set `0` when the database URL goes through a transaction-mode pooler, which can't keep a connection's statements between transactions. |
 | `AGENT_WORKSPACE_DATABASE_LISTEN_URL` | the database URL | Where the one listening connection (outside the pool) goes for wakes and live frames. Point it straight at PostgreSQL when the main URL goes through a transaction-mode pooler. `off` runs on polls alone: live updates and lease hand-overs then take up to a second longer, and live text, sign-outs and module switches reach only the server they happen on. |
 | `AGENT_WORKSPACE_DATA_ROOT` | `.agent-workspace` | Where uploaded files, artifacts and other data on disk live. |
@@ -62,6 +62,10 @@ variable that is set still wins.
 | `AGENT_WORKSPACE_JOB_CONCURRENCY` | `4` | Background jobs run at once in this process (1 to 64). |
 | `AGENT_WORKSPACE_LEASE_SECONDS` | `15` | How long a server's hold on single-holder work (the built-in host, the event router) lasts unless renewed (2 to 300). A server that stops without letting go hands its work on after this long. |
 | `AGENT_WORKSPACE_INSTANCE_LABEL` | none | A name for this server process when several share one database, shown with its instances (at most 80 characters). |
+| `AGENT_WORKSPACE_ROLES` | `api,live,work` | What this process does, any of the three, comma separated. `api` serves the app, its API, MCP and GitHub webhooks; `live` holds browsers' live connections; `work` runs background jobs, the event log's sequencer and consumers, replies and the one-off startup work. A process with neither `api` nor `live` answers health checks only. Every role needs at least one process somewhere. |
+| `AGENT_WORKSPACE_BUILTIN_HOST` | `on` | Whether a `work` process may run agents on this machine (the built-in host: runs, their recovery, repositories on its disk). One process at a time holds it. `off` on processes whose machine shouldn't. |
+| `AGENT_WORKSPACE_DRAIN_SECONDS` | `5` | When asked to stop, how long this process answers `/health/ready` with 503 before it closes its live connections (browsers reconnect to another process) and stops taking requests (0 to 120). The service manager's stop timeout must be longer than this plus the longest request. |
+| `AGENT_WORKSPACE_HEALTH_ADDR` | the server address | Where a process with neither `api` nor `live` answers `/health/live`, `/health/ready` and `/health/version`. |
 | `AGENT_WORKSPACE_LINK_PREVIEWS` | `true` | Whether this server fetches previews of links people post. Off, no workspace gets them, whatever its own setting says. |
 | `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES` | `false` | Lets workspaces point their model provider and mail server at private, loopback and tailnet addresses, and mail at any port. Turn it on only for a local model or mail relay. |
 | `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS` | none | Comma-separated exact origins (such as `http://wake.internal:8732` for a listener on a private network) that agent wakeups and webhooks may reach over http or on a private address. Every other webhook must be public https. |

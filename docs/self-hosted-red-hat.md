@@ -207,7 +207,7 @@ AGENT_WORKSPACE_SERVER_ADDR=127.0.0.1:3100
 AGENT_WORKSPACE_WEBHOOK_ADDR=127.0.0.1:3101
 AGENT_WORKSPACE_ALLOWED_ORIGINS=http://127.0.0.1:3100
 AGENT_WORKSPACE_DATABASE_URL=postgres://agent_workspace:REPLACE_INTERACTIVELY@127.0.0.1:55432/agent_workspace
-AGENT_WORKSPACE_DATABASE_MAX_CONNECTIONS=5
+AGENT_WORKSPACE_DATABASE_MAX_CONNECTIONS=10
 AGENT_WORKSPACE_DATA_ROOT=/var/lib/agent-workspace
 AGENT_WORKSPACE_DATA_QUOTA_BYTES=21474836480
 AGENT_WORKSPACE_MINIMUM_FREE_BYTES=5368709120
@@ -272,6 +272,20 @@ session and holds no session locks. Behind one, set
 `AGENT_WORKSPACE_DATABASE_STATEMENT_CACHE=0`, and point
 `AGENT_WORKSPACE_DATABASE_LISTEN_URL` straight at PostgreSQL (or set it to
 `off` to run on polls alone), since a pooler can't hold a `LISTEN`.
+
+Any number of server processes can share one database (see
+`docs/self-host/configuration.md` for `AGENT_WORKSPACE_ROLES` and the rest).
+One process doing everything is the default and is enough here. For a restart
+without downtime, run two behind the reverse proxy, each with its own
+`SERVER_ADDR` and `INSTANCE_LABEL`, with the proxy checking `/health/ready`, and
+restart them one at a time: a stopping process answers 503 at once, moves its
+browsers' live connections to the other after `AGENT_WORKSPACE_DRAIN_SECONDS`,
+and hands over the work only one process may do. Agent runs on the built-in
+host are interrupted when the process holding it stops. Keep the unit's
+`TimeoutStopSec` (20 s) above the drain time plus the longest request. Each
+process opens `AGENT_WORKSPACE_DATABASE_MAX_CONNECTIONS` connections plus one
+listener; keep the total under PostgreSQL's `max_connections`. Settings ›
+Workspace › Server lists the processes, their roles and what each holds.
 
 GitHub App settings are optional and must be installed as separate owner-only
 files before adding their paths to this environment. Never print those files.

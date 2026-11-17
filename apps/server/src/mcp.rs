@@ -4091,47 +4091,32 @@ async fn run_tool(
 /// own by `authenticate_mcp`. So any well-formed session ID is resumed as a
 /// fresh session on the legacy protocol, where every version behaves alike.
 ///
-/// A session the client ended with `DELETE` stays ended: rmcp calls `delete`
-/// only then (never on idle expiry), and the ID is remembered so later
-/// requests get the unknown-session 404 the spec asks for. The memory is
-/// bounded and lasts until the next restart.
-#[derive(Default)]
+/// A session the client ended with `DELETE` stays ended on every server
+/// (K5.7): rmcp calls `delete` only then (never on idle expiry), and a digest
+/// of the ID goes into `mcp_ended_sessions`, so later requests get the
+/// unknown-session 404 the spec asks for (`authenticate_mcp` checks it, on
+/// servers that still hold the session too). Retention clears it after 30
+/// days.
 struct ResumeAnySession {
-    deleted: std::sync::Mutex<DeletedSessions>,
+    pool: sqlx::PgPool,
 }
 
 const MAX_SESSION_ID_LEN: usize = 128;
-/// How many deleted session IDs are remembered; the oldest go first.
-const MAX_DELETED_SESSIONS: usize = 4096;
 
-#[derive(Default)]
-struct DeletedSessions {
-    ids: std::collections::HashSet<String>,
-    order: std::collections::VecDeque<String>,
+fn session_digest(session_id: &str) -> Vec<u8> {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(session_id.as_bytes()).to_vec()
 }
 
-impl DeletedSessions {
-    fn insert(&mut self, session_id: &str) {
-        if !self.ids.insert(session_id.to_owned()) {
-            return;
-        }
-        self.order.push_back(session_id.to_owned());
-        while self.order.len() > MAX_DELETED_SESSIONS {
-            if let Some(oldest) = self.order.pop_front() {
-                self.ids.remove(&oldest);
-            }
-        }
-    }
-}
-
-impl ResumeAnySession {
-    fn was_deleted(&self, session_id: &str) -> bool {
-        self.deleted
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .ids
-            .contains(session_id)
-    }
+/// Whether a client ended this session; checked on every request that
+/// names one, before the session manager sees it.
+async fn session_ended(pool: &sqlx::PgPool, session_id: &str) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM mcp_ended_sessions WHERE session_digest = $1)",
+    )
+    .bind(session_digest(session_id))
+    .fetch_one(crate::db::scoped(pool))
+    .await?)
 }
 
 fn resumable_session_id(session_id: &str) -> bool {
@@ -4144,7 +4129,8 @@ fn resumable_session_id(session_id: &str) -> bool {
 #[async_trait::async_trait]
 impl SessionStore for ResumeAnySession {
     async fn load(&self, session_id: &str) -> Result<Option<SessionState>, SessionStoreError> {
-        if !resumable_session_id(session_id) || self.was_deleted(session_id) {
+        // An ended session never gets here: `authenticate_mcp` answers 404.
+        if !resumable_session_id(session_id) {
             return Ok(None);
         }
         Ok(Some(SessionState::new(
@@ -4166,10 +4152,14 @@ impl SessionStore for ResumeAnySession {
 
     async fn delete(&self, session_id: &str) -> Result<(), SessionStoreError> {
         if resumable_session_id(session_id) {
-            self.deleted
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(session_id);
+            sqlx::query(
+                "INSERT INTO mcp_ended_sessions (session_digest) VALUES ($1) \
+                 ON CONFLICT (session_digest) DO NOTHING",
+            )
+            .bind(session_digest(session_id))
+            .execute(crate::db::scoped(&self.pool))
+            .await
+            .map_err(|error| Box::new(error) as SessionStoreError)?;
         }
         Ok(())
     }
@@ -4210,7 +4200,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         .with_json_response(true)
         .with_max_request_body_bytes(MAX_MCP_BODY_BYTES)
         .with_cancellation_token(CancellationToken::new());
-    config.session_store = Some(std::sync::Arc::new(ResumeAnySession::default()));
+    config.session_store = Some(std::sync::Arc::new(ResumeAnySession {
+        pool: state.pool.clone(),
+    }));
     let service: StreamableHttpService<McpServer, LocalSessionManager> =
         StreamableHttpService::new(move || Ok(handler.clone()), Default::default(), config);
 
@@ -4397,6 +4389,17 @@ async fn authenticate_mcp(
                         let error = crate::ops::dispatch::Answer::error(&error);
                         return (error.status, axum::Json(error.body)).into_response();
                     }
+                }
+            }
+            // A session its client ended stays ended on every server (K5.7),
+            // even one that still holds it in memory.
+            if let Some(session) =
+                request_session(request.headers()).filter(|session| resumable_session_id(session))
+            {
+                match session_ended(&state.pool, session).await {
+                    Ok(true) => return StatusCode::NOT_FOUND.into_response(),
+                    Ok(false) => {}
+                    Err(error) => return error.into_response(),
                 }
             }
             if request.method() == http::Method::POST {
@@ -6169,12 +6172,10 @@ async fn identifier_project(
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 
-    use rmcp::transport::streamable_http_server::session::store::SessionStore;
-
     use super::{
-        HandshakeAnswer, HandshakeOutcome, HandshakeStep, MAX_DELETED_SESSIONS,
-        MAX_LOGGED_ERROR_CHARACTERS, ResumeAnySession, SERVER_INSTRUCTIONS, SLOW_HANDSHAKE_MS,
-        StatusCode, common, exact_bearer_token, generate_token,
+        HandshakeAnswer, HandshakeOutcome, HandshakeStep, MAX_LOGGED_ERROR_CHARACTERS,
+        SERVER_INSTRUCTIONS, SLOW_HANDSHAKE_MS, StatusCode, common, exact_bearer_token,
+        generate_token,
     };
 
     /// Whether `value` fits `schema`'s shape: required keys present, no key
@@ -6371,29 +6372,6 @@ mod tests {
         assert!(
             needless.is_empty(),
             "these take a clientRequestId now; take them off CREATES_WITHOUT_RETRY_ID: {needless:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn deleted_sessions_stay_deleted_within_a_bounded_memory() {
-        let store = ResumeAnySession::default();
-        assert!(store.load("live-session").await.expect("load").is_some());
-        store.delete("ended-session").await.expect("delete");
-        assert!(store.load("ended-session").await.expect("load").is_none());
-        assert!(store.load("live-session").await.expect("load").is_some());
-
-        for index in 0..MAX_DELETED_SESSIONS {
-            store
-                .delete(&format!("later-{index}"))
-                .await
-                .expect("delete");
-        }
-        let deleted = store.deleted.lock().expect("deleted sessions");
-        assert_eq!(deleted.ids.len(), MAX_DELETED_SESSIONS);
-        assert_eq!(deleted.order.len(), MAX_DELETED_SESSIONS);
-        assert!(
-            !deleted.ids.contains("ended-session"),
-            "the oldest goes first"
         );
     }
 

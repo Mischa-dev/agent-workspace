@@ -294,6 +294,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
         "the server's own key history, not any workspace's",
     ),
     (
+        "mcp_ended_sessions",
+        "digests of MCP session ids their clients ended; a session belongs to a connection, not a workspace (K5.7)",
+    ),
+    (
         "server_instances",
         "the server processes sharing this database and their heartbeats (K5.2)",
     ),

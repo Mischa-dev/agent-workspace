@@ -338,32 +338,55 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let server = Server::build(Arc::clone(&config), pool).await?;
-    let listener = TcpListener::bind(config.server_addr)
+    let roles = config.roles;
+    // An instance without `api` or `live` serves health checks only, on
+    // their own address when one is set.
+    let address = if roles.api || roles.live {
+        config.server_addr
+    } else {
+        config.health_addr.unwrap_or(config.server_addr)
+    };
+    let listener = TcpListener::bind(address)
         .await
-        .with_context(|| format!("bind application server to {}", config.server_addr))?;
-    let webhook_listener = TcpListener::bind(config.webhook_addr)
-        .await
-        .with_context(|| format!("bind GitHub webhook server to {}", config.webhook_addr))?;
+        .with_context(|| format!("bind application server to {address}"))?;
+    let webhook_listener = if roles.api {
+        Some(
+            TcpListener::bind(config.webhook_addr)
+                .await
+                .with_context(|| {
+                    format!("bind GitHub webhook server to {}", config.webhook_addr)
+                })?,
+        )
+    } else {
+        None
+    };
 
     tracing::info!(
-        address = %config.server_addr,
+        %address,
         environment = %config.environment,
+        roles = ?roles.names(),
+        builtin_host = roles.work && config.builtin_host,
         "Agent Workspace server listening"
     );
-    tracing::info!(
-        address = %config.webhook_addr,
-        github_configured = config.github.is_some(),
-        "GitHub webhook server listening"
-    );
+    if roles.api {
+        tracing::info!(
+            address = %config.webhook_addr,
+            github_configured = config.github.is_some(),
+            "GitHub webhook server listening"
+        );
+    }
 
     let running = server.spawn(listener, webhook_listener);
     let shutdown = running.shutdown();
+    let drainer = running.drainer();
     let supervisors = running.state().supervisors.clone();
     let wait = running.wait();
     tokio::pin!(wait);
     tokio::select! {
         result = &mut wait => result,
         () = shutdown_signal() => {
+            // Not ready, sockets moved off, then stop (K5.7).
+            drainer.drain().await;
             supervisors.request_shutdown();
             let _ = shutdown.send(true);
             wait.await

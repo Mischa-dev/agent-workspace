@@ -34,6 +34,7 @@ pub(crate) async fn follow_log(
         start,
         Arc::new(Notify::new()),
         sender.clone(),
+        agent_workspace_server::realtime::tail::Progress::default(),
         stopped.clone(),
     );
     let feed =
