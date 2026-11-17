@@ -3,10 +3,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
-import { useAuthenticatedSession } from '../auth/session'
 import { useHomeExperience } from '../experience/layout'
 import { atPhrase } from '../later/when'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import {
   Avatar,
   Button,
@@ -99,7 +98,6 @@ type ChangeOptions = {
 
 /** Everything that needs you, from every project: read, archive, snooze and act in place. */
 export function InboxPage() {
-  const session = useAuthenticatedSession()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
@@ -422,10 +420,11 @@ export function InboxPage() {
     return () => document.removeEventListener('keydown', onKey)
   })
 
+  useShellPage({ home: true, mainClassName: 'aw-main--page' })
   const caughtUp = !inbox.isPending && !inbox.isError && notifications.length === 0
 
   return (
-    <AppShell home mainClassName="aw-main--page" user={session.user}>
+    <>
       <div className="aw-page aw-page--full aw-inbox" data-detail-open={showingDetail ? 'true' : 'false'} ref={pageRef}>
         <PageHeader
           actions={
@@ -562,7 +561,7 @@ export function InboxPage() {
           </div>
         ) : null}
       </div>
-    </AppShell>
+    </>
   )
 }
 

@@ -1,7 +1,6 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
-import { useAuthenticatedSession } from '../auth/session'
 import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { LaunchQueue } from '../launch/LaunchQueue'
 import { launchesHref } from '../launch/launchModel'
@@ -9,7 +8,7 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject, useProjects } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
 import type { Project } from '../projects/types'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import {
   Button,
   ButtonLink,
@@ -78,21 +77,16 @@ function statusParam(value: string | null): RunStatusFilter {
 
 /** A project's Runs: the one Runs page, kept to that project and inside it. */
 export function ProjectRunsPage() {
-  const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading runs" />
-      </AppShell>
+      <ProjectPageLoading label="Loading runs" />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
   return <RunsPage project={project.data} />
@@ -104,7 +98,6 @@ export function ProjectRunsPage() {
  * first.
  */
 export function RunsPage({ project }: { project?: Project } = {}) {
-  const session = useAuthenticatedSession()
   const [params, setParams] = useSearchParams()
   const status = statusParam(params.get('status'))
   const mine = params.get('mine') === '1'
@@ -136,6 +129,8 @@ export function RunsPage({ project }: { project?: Project } = {}) {
   // Where a new run starts: the chosen project, or the first one you're in.
   const launchProject = projectId ?? choices[0]?.id
 
+  useShellPage({ home: !project, mainClassName: 'aw-main--page', project })
+
   const update = (key: string, value: string | null) => {
     const next = new URLSearchParams(params)
     if (value) next.set(key, value)
@@ -144,7 +139,7 @@ export function RunsPage({ project }: { project?: Project } = {}) {
   }
 
   return (
-    <AppShell home={!project} mainClassName="aw-main--page" project={project} user={session.user}>
+    <>
       <div className="aw-page aw-runs">
         <PageHeader icon="activity" title="Runs" />
         {project ? <RememberPlace location={{ kind: 'runs' }} project={project} /> : null}
@@ -218,7 +213,7 @@ export function RunsPage({ project }: { project?: Project } = {}) {
         ) : null}
         {usage ? <RunUsage projectId={projectId} /> : null}
       </div>
-    </AppShell>
+    </>
   )
 }
 

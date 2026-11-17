@@ -19,6 +19,10 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
   another site): linking single sign-on from a password session, signing in
   with it, staying signed in past the server's periodic check with WorkOS,
   signing out, and the message for a WorkOS account that isn't linked
+- `static-host.spec.ts`: the built app served as plain files from its own
+  origin (with only a `client-config` file pointing at the API) signs in and
+  works against the server on another origin. CI passes its web build as
+  `E2E_STATIC_DIST`; run alone, the spec builds one into `e2e-output/`
 - `whiteboards.spec.ts`: creating a whiteboard, drawing a rectangle on it,
   seeing a second tab on the same board pull the change from the live stream,
   and finding it still there after a reload

@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { legacyPathOf } from '../app/href'
 
 /** The pages in the Home space: what's yours across every project. */
 export const homeSpacePaths = ['/home', '/inbox', '/my-work', '/later', '/runs', '/whiteboards'] as const
 
-export function inHomeSpace(pathname: string) {
+export function inHomeSpace(address: string) {
+  const pathname = legacyPathOf(address)
   // All projects is reached from Home; a project's own pages are its space.
   if (pathname === '/projects') return true
   return homeSpacePaths.some((path) => pathname === path || pathname.startsWith(`${path}/`))

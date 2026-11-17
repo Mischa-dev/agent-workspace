@@ -43,6 +43,15 @@ export function useShellPresence(presence: ShellPresence): boolean {
   return register !== null
 }
 
+/**
+ * Everything a page tells the shell (W1.12): its space, how its main area is
+ * laid out, its panel. A page off `AppShell` calls this once, before any
+ * early return, and renders only its own content.
+ */
+export function useShellPage(presence: ShellPresence) {
+  return useShellPresence(presence)
+}
+
 /** The details panel beside this page (thread details, group members). `key` changes when the person asks to see something new in it. */
 export function useShellPanel(panel: ReactNode, key?: string, onDismiss?: () => void) {
   return useShellPresence({ context: panel, contextKey: key, onContextDismiss: onDismiss })

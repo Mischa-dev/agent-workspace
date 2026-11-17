@@ -3,8 +3,9 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
+import { useWorkspace } from '../app/workspace'
 import { useAuthenticatedSession } from '../auth/session'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { Banner, Button, ButtonLink, ErrorState, PageHeader, SelectField, TextField, describeError, showToast } from '../ui'
 import { listProjectTemplates, viewKeys } from '../views/api'
 import { useCreateProject, useSwitchProject } from './hooks'
@@ -30,12 +31,23 @@ export function CreateProjectPage() {
   )
   const [name, setName] = useState('')
   const [typedKey, setTypedKey] = useState<string | null>(null)
-  const [organizationId, setOrganizationId] = useState(creatableOrganizations[0]?.id ?? '')
+  // The new project goes in the workspace in the address when the person can
+  // create there; switching workspace on this page moves the form with it.
+  const addressed = useWorkspace()?.id ?? null
+  const preferredId = (creatableOrganizations.find((organization) => organization.id === addressed) ?? creatableOrganizations[0])?.id ?? ''
+  const [organizationId, setOrganizationId] = useState(preferredId)
+  const [followed, setFollowed] = useState(addressed)
   const [idempotencyKey] = useState(newIdempotencyKey)
   const [error, setError] = useState<string | null>(null)
   const [templateId, setTemplateId] = useState('')
   // A preset for the new project's layout; none follows the workspace's default.
   const [preset, setPreset] = useState<string | null>(null)
+  if (followed !== addressed) {
+    setFollowed(addressed)
+    setOrganizationId(preferredId)
+    setTemplateId('')
+    setPreset(null)
+  }
   const templates = useQuery({
     queryKey: viewKeys.projectTemplates(organizationId),
     queryFn: () => listProjectTemplates(organizationId),
@@ -56,9 +68,11 @@ export function CreateProjectPage() {
           : null
   const canCreate = session.user.capabilities.createProject && creatableOrganizations.length > 0
 
+  useShellPage({ mainClassName: 'aw-main--page' })
+
   if (!canCreate) {
     return (
-      <AppShell mainClassName="aw-main--page" user={session.user}>
+      <>
         <div className="aw-page aw-page--reading">
           <ErrorState
             action={
@@ -71,7 +85,7 @@ export function CreateProjectPage() {
             Only workspace owners and admins can create projects. Ask one of them to create it, or to change your role.
           </ErrorState>
         </div>
-      </AppShell>
+      </>
     )
   }
 
@@ -119,7 +133,7 @@ export function CreateProjectPage() {
 
   const organizationName = creatableOrganizations[0]?.name
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
+    <>
       <div className="aw-page aw-page--reading">
         <PageHeader icon="plus" title="New project" />
         {error && (
@@ -214,6 +228,6 @@ export function CreateProjectPage() {
           </div>
         </form>
       </div>
-    </AppShell>
+    </>
   )
 }

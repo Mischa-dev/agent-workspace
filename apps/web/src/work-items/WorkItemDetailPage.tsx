@@ -1,12 +1,11 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
-import { useAuthenticatedSession } from '../auth/session'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { useWorkItem, useWorkItemWorkflow } from './hooks'
 import { workItemHref } from './links'
@@ -18,7 +17,6 @@ const CreateWorkItemDialog = lazy(() => import('./CreateWorkItemDialog').then((m
 
 /** A task on its own page: the same parts as the side panel, with its fields in a rail beside the text when there's room. */
 export function WorkItemDetailPage() {
-  const session = useAuthenticatedSession()
   const navigate = useNavigate()
   const { projectId = '', workItemId = '' } = useParams()
   const project = useProject(projectId)
@@ -48,25 +46,22 @@ export function WorkItemDetailPage() {
     project.data?.navigation,
   )
 
+  useShellPage({ project: project.data })
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading task" />
-      </AppShell>
+      <ProjectPageLoading label="Loading task" />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
   // Viewers and workers read tasks but don't make them.
   const canCreate = !project.data.archivedAt && ['owner', 'admin', 'member'].includes(project.data.role)
   return (
-    <AppShell project={project.data} user={session.user}>
+    <>
       <div className="aw-taskpage">
         <NavigationSyncAlert {...navigationSync} />
         <TaskDetail
@@ -91,6 +86,6 @@ export function WorkItemDetailPage() {
           />
         </Suspense>
       ) : null}
-    </AppShell>
+    </>
   )
 }

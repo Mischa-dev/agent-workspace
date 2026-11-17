@@ -4,6 +4,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { describeError } from '../../app/mutations'
 import { useProfiles } from '../../agents/hooks'
 import {
+  automationKeys,
   createRule,
   updateRule,
   type AutomationRule,
@@ -17,10 +18,11 @@ import {
 import { useCollections } from '../../collections/api'
 import { getProjectConversationSidebar } from '../../conversations/api'
 import { listEnvironments } from '../../launch/api'
+import { launchKeys } from '../../launch/hooks'
 import { Banner, Button, Checkbox, Dialog, IconButton, SelectField, TextArea, TextField, showToast } from '../../ui'
 import '../../automations/automations.css'
 import { WEEKDAYS } from '../../automations/ruleModel'
-import { listViews } from '../../views/api'
+import { listViews, viewKeys } from '../../views/api'
 import { workItemPriorities } from '../../work-items/constants'
 import { useWorkItemWorkflow } from '../../work-items/hooks'
 import { useLabels } from '../../work-items/planningHooks'
@@ -131,16 +133,16 @@ export function RuleDialog({
   const [initial] = useState(() => JSON.stringify({ name, trigger, viewId, actions }))
   const dirty = JSON.stringify({ name, trigger, viewId, actions }) !== initial
   const views = useQuery({
-    queryKey: ['project', projectId, 'views'],
+    queryKey: viewKeys.viewChoices(projectId),
     queryFn: () => listViews(projectId),
   })
   const environments = useQuery({
-    queryKey: ['project', projectId, 'environments'],
+    queryKey: launchKeys.environments(projectId),
     queryFn: () => listEnvironments(projectId),
   })
   const profiles = useProfiles(projectId)
   const channels = useQuery({
-    queryKey: ['project', projectId, 'automations', 'channels'],
+    queryKey: automationKeys.channels(projectId),
     queryFn: () => getProjectConversationSidebar(projectId),
   })
   const channelList = channels.data?.channels.filter((channel) => !channel.archivedAt) ?? []

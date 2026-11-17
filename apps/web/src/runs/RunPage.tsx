@@ -5,10 +5,9 @@ import { Link, useParams } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { toastError } from '../app/mutations'
-import { useAuthenticatedSession } from '../auth/session'
 import { useProjectExperience } from '../experience/layout'
 import { threadHref } from '../launch/launchModel'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { ApprovalCard } from '../threads/ThreadPresentation'
 import { RunCardActions } from '../threads/ThreadRunControls'
@@ -49,7 +48,6 @@ const LIVE_REFRESH_MS = 5_000
  * reported.
  */
 export function RunPage() {
-  const session = useAuthenticatedSession()
   const { runId = '' } = useParams()
   const view = useQuery({
     queryKey: runKeys.view(runId),
@@ -62,9 +60,10 @@ export function RunPage() {
   })
   const notFound = view.isError && isApiError(view.error) && (view.error.status === 404 || view.error.code === 'not_found')
   usePageTitle(view.data ? runTitle(view.data) : null)
+  useShellPage({ home: true, mainClassName: 'aw-main--page' })
 
   return (
-    <AppShell home mainClassName="aw-main--page" user={session.user}>
+    <>
       <div className="aw-page aw-runs">
         <ButtonLink className="aw-runs__back" icon="arrow-left" size="sm" to="/runs" variant="ghost">
           All runs
@@ -75,7 +74,7 @@ export function RunPage() {
         {view.data?.builtin ? <BuiltinRun runId={view.data.id} /> : null}
         {view.data && !view.data.builtin ? <ReportedRunPage onRefresh={() => void view.refetch()} run={view.data} /> : null}
       </div>
-    </AppShell>
+    </>
   )
 }
 
@@ -165,7 +164,7 @@ function RunBody({ run }: { run: RunDetail }) {
     if (!wasBusy.current) return
     wasBusy.current = false
     void queryClient.invalidateQueries({ queryKey: runKeys.detail(run.id) })
-    void queryClient.invalidateQueries({ queryKey: ['runs', 'list'] })
+    void queryClient.invalidateQueries({ queryKey: runKeys.lists })
   }, [actions.busyAction, queryClient, run.id])
 
   const copyLog = () => {

@@ -10,6 +10,12 @@ export default {
       space: 'direct',
       page: () => import('./DirectConversationPage').then((module) => ({ default: module.DirectConversationPage })),
     },
+    // A DM's own address (R20): the same list in every workspace, drawn in the current one's shell.
+    {
+      path: '/dm/:conversationId',
+      space: 'direct',
+      page: () => import('./DirectConversationPage').then((module) => ({ default: module.DirectConversationPage })),
+    },
   ],
   palette: [
     { id: 'g:messages', space: 'workspace', rank: 60, label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['dms', 'direct messages', 'groups'], path: '/messages' },

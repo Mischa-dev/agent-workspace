@@ -44,6 +44,8 @@ import {
   type WorkspaceRoleView,
 } from './roles'
 import './roles.css'
+import { queryKeys } from '../../api/queryKeys'
+import { workspaceKeys } from './api'
 
 // AWD-75: the modules a role can turn off for its holders.
 const SWITCHABLE_MODULES = MODULE_IDS.filter((module) => module !== 'workspace')
@@ -77,9 +79,9 @@ export default function RolesPage({ workspace }: SettingsPageProps) {
   // reads from the projects list.
   const refresh = () =>
     Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['organization', organizationId] }),
+      queryClient.invalidateQueries({ queryKey: workspaceKeys.workspace(organizationId) }),
       refreshLayouts(queryClient),
-      queryClient.invalidateQueries({ queryKey: ['projects'] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.projectLists }),
     ])
   const remove = useMutation({
     mutationFn: (role: WorkspaceRoleView) => removeRole(organizationId, role),

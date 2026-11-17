@@ -85,13 +85,7 @@ export type Pin = {
 const project = (projectId: string) => `/api/v1/projects/${encodeURIComponent(projectId)}`
 
 // Project first, so a project's refresh and reset reach them.
-export const memoryKeys = {
-  pages: (projectId: string) => ['project', projectId, 'memory', 'pages'] as const,
-  page: (projectId: string, pageId: string) => ['project', projectId, 'memory', 'page', pageId] as const,
-  decisions: (projectId: string) => ['project', projectId, 'memory', 'decisions'] as const,
-  pins: (projectId: string, conversationId: string) =>
-    ['project', projectId, 'memory', 'pins', conversationId] as const,
-}
+export { memoryKeys } from './keys'
 
 /** The workspace's own pages live in its hidden space; this finds (or makes) it. */
 export function workspacePagesSpace(organizationId: string) {
