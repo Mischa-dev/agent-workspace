@@ -62,6 +62,8 @@ variable that is set still wins.
 | `AGENT_WORKSPACE_S3_SECRET_ACCESS_KEY_PATH` | none | An owner-only file holding the secret access key. |
 | `AGENT_WORKSPACE_SECRETS_KEY_PATH` | none (development: a keyring under `.agent-workspace-secrets/`) | The keyring that seals stored credentials: an owner-only file outside the data root, the web root and any Git work tree. If it names a file that doesn't exist yet in an existing directory, the server creates the keyring there on first start and logs the path (never the key). Back it up apart from database dumps. |
 
+With an object store, clients can also upload straight to it (`file_upload_start`, then `file_upload_finish`): the server signs a 15-minute `PUT` link fixed to the file's size, type and SHA-256 and checks what arrived, so large files never pass through it. Browsers need the bucket's CORS rules to allow `PUT` from the app's address with the `content-type` and `x-amz-checksum-sha256` headers. A workspace can also keep its uploads in a bucket of its own (`workspace_store_set`, for those who may manage its settings): the server writes, reads and deletes a test object there first, keeps the keys sealed in the keyring, and reaches the bucket only at a public address unless `AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES` is on.
+
 ## Background work and limits
 
 | Variable | Default | Meaning |

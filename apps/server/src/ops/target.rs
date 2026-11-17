@@ -128,6 +128,15 @@ const KINDS: &[(&str, &str)] = &[
                                WHERE parent.id = thing.access_parent_id) \
                 OR conversation_visible_to(thing.access_parent_id, $2))",
     ),
+    // K5.20: a direct upload, by its uploader alone, while they may still
+    // see its conversation.
+    (
+        "file_upload",
+        "SELECT upload.workspace_id, upload.space_id FROM file_uploads upload \
+         WHERE upload.id = $1 AND upload.uploaded_by_actor_id = $2 \
+           AND (upload.conversation_id IS NULL \
+                OR conversation_visible_to(upload.conversation_id, $2))",
+    ),
     // A1.3: the run service keeps its SQL (guard G1).
     ("run", crate::runs::store::LOCATE_SQL),
     // A1.8: a request goes by request_visible_to, which holds its
@@ -235,6 +244,7 @@ fn what_of(kind: &str) -> &'static str {
         "task" => "That task",
         "run" => "That run",
         "request" => "That request",
+        "file_upload" => "That upload",
         _ => "That",
     }
 }

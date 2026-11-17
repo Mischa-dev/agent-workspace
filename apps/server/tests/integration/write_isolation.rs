@@ -505,6 +505,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "incoming_hook_delete",
     "thing_link",
     "thing_unlink",
+    "file_upload_start",
+    "file_upload_finish",
+    "workspace_store_set",
+    "workspace_store_revoke",
     "label_write",
     "layout_preset_write",
     "field_write",
@@ -7006,6 +7010,39 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"from": b.page, "to": b.whiteboard, "kind": "about"})],
         )
         .rejecting(vec![json!({"from": a.page, "to": b.whiteboard, "kind": "about"})]),
+        // K5.20: direct uploads go only where the caller may post, and a
+        // workspace's own bucket is set only in the caller's workspace.
+        mcp_case(
+            "file_upload_start",
+            json!({"conversationId": a.channel, "name": "a.txt", "size": 1,
+                   "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"}),
+            vec![
+                json!({"conversationId": b.channel, "name": "a.txt", "size": 1,
+                       "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"}),
+                json!({"taskId": b.task, "name": "a.txt", "size": 1,
+                       "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"}),
+            ],
+        )
+        .without_own("files are kept on disk here, so a direct upload is unavailable; files_links.rs covers it"),
+        mcp_case(
+            "file_upload_finish",
+            json!({}),
+            vec![json!({"uploadId": b.task})],
+        )
+        .without_own("needs an object store; files_links.rs covers finishing"),
+        mcp_case(
+            "workspace_store_set",
+            json!({}),
+            vec![json!({"workspace": b.organization, "endpoint": "https://s3.example.com",
+                        "bucket": "net", "region": "us-east-1", "accessKeyId": "a",
+                        "secretAccessKey": "b"})],
+        )
+        .without_own("needs a bucket to probe; files_links.rs covers setting one"),
+        mcp_case(
+            "workspace_store_revoke",
+            json!({}),
+            vec![json!({"workspace": b.organization})],
+        ),
         // K3.26: incoming hooks, made and deleted in a space.
         mcp_case(
             "incoming_hook_create",

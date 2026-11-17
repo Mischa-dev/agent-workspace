@@ -88,6 +88,8 @@ export type RunResultInput = { branch?: string | null; id?: string | null; kind:
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
+export type WorkspaceStoreView = { bucket: string; endpoint: string; pathStyle: boolean; prefix: string; region: string; storeId: string; verifiedAt: string }
+
 export type ActivityListInput = { before?: number | null; limit?: number | null; thing: string }
 
 export type ActivityListOutput = { entries: ActivityEntry[]; kind: string }
@@ -111,6 +113,14 @@ export type DecisionListOutput = { decisions: DecisionView[] }
 export type DecisionRecordInput = { detail?: string | null; pin?: boolean; sourceConversationId?: string | null; sourceMessageId?: string | null; spaceId?: string | null; supersedes?: string | null; title: string }
 
 export type DecisionRecordOutput = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
+
+export type FileUploadFinishInput = { uploadId: string }
+
+export type FileUploadFinishOutput = { commentId?: string | null; contentType: string; createdAt: string; height?: number | null; id: string; name: string; size: number; uploadedBy: string; width?: number | null }
+
+export type FileUploadStartInput = { contentType?: string | null; conversationId?: string | null; forComment?: boolean; name: string; sha256: string; size: number; taskId?: string | null }
+
+export type FileUploadStartOutput = { expiresAt: string; headers: Record<string, string>; method: string; uploadId: string; url: string }
 
 export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
 
@@ -248,6 +258,18 @@ export type WorkspaceDeleteCancelInput = Record<string, never>
 
 export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
 
+export type WorkspaceStoreGetInput = Record<string, never>
+
+export type WorkspaceStoreGetOutput = { moving: boolean; store?: WorkspaceStoreView | null }
+
+export type WorkspaceStoreRevokeInput = Record<string, never>
+
+export type WorkspaceStoreRevokeOutput = { moving: boolean; store?: WorkspaceStoreView | null }
+
+export type WorkspaceStoreSetInput = { accessKeyId: string; bucket: string; endpoint: string; moveExisting?: boolean; pathStyle?: boolean; prefix?: string; region: string; secretAccessKey: string }
+
+export type WorkspaceStoreSetOutput = { moving: boolean; store?: WorkspaceStoreView | null }
+
 export type Operations = {
   activity_list: { input: ActivityListInput; output: ActivityListOutput }
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
@@ -255,6 +277,8 @@ export type Operations = {
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
+  file_upload_finish: { input: FileUploadFinishInput; output: FileUploadFinishOutput }
+  file_upload_start: { input: FileUploadStartInput; output: FileUploadStartOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
   history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
   history_show: { input: HistoryShowInput; output: HistoryShowOutput }
@@ -289,6 +313,9 @@ export type Operations = {
   thing_unlink: { input: ThingUnlinkInput; output: ThingUnlinkOutput }
   workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
   workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
+  workspace_store_get: { input: WorkspaceStoreGetInput; output: WorkspaceStoreGetOutput }
+  workspace_store_revoke: { input: WorkspaceStoreRevokeInput; output: WorkspaceStoreRevokeOutput }
+  workspace_store_set: { input: WorkspaceStoreSetInput; output: WorkspaceStoreSetOutput }
 }
 
 export type OpName = keyof Operations

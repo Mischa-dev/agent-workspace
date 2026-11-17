@@ -482,6 +482,18 @@ pub static FILE_REMOVED: EventType = fact(
     Some("file"),
     "A file was removed",
 );
+pub static FILE_UPLOAD_STARTED: EventType = signal(
+    "file.upload_started",
+    "workspace",
+    None,
+    "Someone started a direct upload to the file store",
+);
+pub static WORKSPACE_FILE_STORE_CHANGED: EventType = fact(
+    "workspace.file_store_changed",
+    "workspace",
+    None,
+    "The workspace's own file bucket was set or stopped",
+);
 
 // --- inbox -----------------------------------------------------------------
 pub static NOTIFICATION_CHANGED: EventType = signal(
@@ -565,6 +577,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &WORKSPACE_LIFECYCLE_CHANGED,
         &FILE_ATTACHED,
         &FILE_REMOVED,
+        &FILE_UPLOAD_STARTED,
+        &WORKSPACE_FILE_STORE_CHANGED,
         &NOTIFICATION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
         &ACCOUNT_ACCESS_CHANGED,

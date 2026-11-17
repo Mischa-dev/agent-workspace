@@ -29,12 +29,54 @@ const UNSIGNED: &str = "UNSIGNED-PAYLOAD";
 
 #[derive(Clone, Debug)]
 pub struct ObjectBucket {
+    /// The store's name in `files.store_id`.
+    id: String,
+    /// Where the bucket is. For a workspace's own bucket the key paths in
+    /// it are unused: its keys are held (`keys`).
     config: ObjectStoreConfig,
+    keys: Keys,
+    /// The operator's own store may be on a private address; a workspace's
+    /// may not (the outbound address guard applies to it).
+    private_ok: bool,
+}
+
+/// Where the access keys come from.
+#[derive(Clone)]
+enum Keys {
+    /// The operator's secret files, read on each use.
+    Files,
+    /// A workspace's own bucket's, opened from the secrets keyring.
+    Held(std::sync::Arc<Credentials>),
+}
+
+impl std::fmt::Debug for Keys {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Files => "Files",
+            Self::Held(_) => "Held",
+        })
+    }
 }
 
 struct Credentials {
     access_key: String,
     secret_key: Zeroizing<String>,
+}
+
+/// What a client sends with a direct upload: the address, and the headers
+/// the signature covers.
+#[derive(Clone, Debug)]
+pub struct PutLink {
+    pub url: Url,
+    pub headers: Vec<(String, String)>,
+}
+
+/// What the store says it holds under a key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Head {
+    pub length: u64,
+    /// The SHA-256 the store checked on upload (base64), when it keeps one.
+    pub sha256: Option<String>,
 }
 
 /// One request, signed.
@@ -44,8 +86,160 @@ struct Signed {
 }
 
 impl ObjectBucket {
+    /// The operator's store (`AGENT_WORKSPACE_S3_*`).
     pub fn new(config: ObjectStoreConfig) -> Self {
-        Self { config }
+        Self {
+            id: super::store::OBJECT.to_owned(),
+            config,
+            keys: Keys::Files,
+            private_ok: true,
+        }
+    }
+
+    /// A workspace's own bucket, with its keys. It is reached only at a
+    /// public address unless the operator allows private ones.
+    pub fn workspace(
+        id: String,
+        config: ObjectStoreConfig,
+        access_key: String,
+        secret_key: Zeroizing<String>,
+        private_ok: bool,
+    ) -> Self {
+        Self {
+            id,
+            config,
+            keys: Keys::Held(std::sync::Arc::new(Credentials {
+                access_key,
+                secret_key,
+            })),
+            private_ok,
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// A link a client uploads `key` to directly, for `ttl`: exactly
+    /// `length` bytes of `content_type` whose SHA-256 is `sha256`. The
+    /// signature covers all three, so the store refuses anything else.
+    pub fn presign_put(
+        &self,
+        key: &str,
+        ttl: Duration,
+        content_type: &str,
+        length: u64,
+        sha256: &[u8; 32],
+    ) -> Result<PutLink, AppError> {
+        use base64::Engine as _;
+        let credentials = self.credentials()?;
+        let mut url = self.object_url(Some(key))?;
+        let now = Utc::now();
+        let checksum = base64::engine::general_purpose::STANDARD.encode(sha256);
+        let headers = vec![
+            ("content-length".to_owned(), length.to_string()),
+            ("content-type".to_owned(), content_type.to_owned()),
+            ("host".to_owned(), host_header(&url)),
+            ("x-amz-checksum-sha256".to_owned(), checksum),
+        ];
+        let signed_headers = headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(";");
+        let mut query = vec![
+            ("X-Amz-Algorithm".to_owned(), "AWS4-HMAC-SHA256".to_owned()),
+            (
+                "X-Amz-Credential".to_owned(),
+                format!(
+                    "{}/{}",
+                    credentials.access_key,
+                    scope(&now, &self.config.region)
+                ),
+            ),
+            ("X-Amz-Date".to_owned(), amz_date(&now)),
+            (
+                "X-Amz-Expires".to_owned(),
+                ttl.as_secs().clamp(1, 604_800).to_string(),
+            ),
+            ("X-Amz-SignedHeaders".to_owned(), signed_headers),
+        ];
+        let signature = signature(
+            &credentials,
+            &self.config.region,
+            &now,
+            "PUT",
+            url.path(),
+            &query,
+            &headers,
+            UNSIGNED,
+        );
+        query.push(("X-Amz-Signature".to_owned(), signature));
+        url.set_query(Some(&canonical_query(&query)));
+        Ok(PutLink {
+            url,
+            headers: headers
+                .into_iter()
+                .filter(|(name, _)| name != "host" && name != "content-length")
+                .collect(),
+        })
+    }
+
+    /// What the store holds under `key`, or None when nothing is there.
+    pub async fn head(&self, key: &str) -> Result<Option<Head>, AppError> {
+        let response = self
+            .send(
+                Method::HEAD,
+                key,
+                &[],
+                &[("x-amz-checksum-mode".to_owned(), "ENABLED".to_owned())],
+                Bytes::new(),
+            )
+            .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let response = expect(response, "look at a file").await?;
+        let length = response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or(AppError::Internal("the object store gave no length"))?;
+        let sha256 = response
+            .headers()
+            .get("x-amz-checksum-sha256")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Ok(Some(Head { length, sha256 }))
+    }
+
+    /// The first `count` bytes under `key` (fewer when it is shorter).
+    pub async fn read_start(&self, key: &str, count: u64) -> Result<Vec<u8>, AppError> {
+        let range = format!("bytes=0-{}", count.saturating_sub(1));
+        let response = self
+            .send(
+                Method::GET,
+                key,
+                &[],
+                &[("range".to_owned(), range)],
+                Bytes::new(),
+            )
+            .await?;
+        let mut response = expect(response, "read a file").await?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| AppError::Internal("read a file from the object store"))?
+        {
+            bytes.extend_from_slice(&chunk);
+            if bytes.len() as u64 >= count {
+                break;
+            }
+        }
+        bytes.truncate(usize::try_from(count).unwrap_or(usize::MAX));
+        Ok(bytes)
     }
 
     pub async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), AppError> {
@@ -382,7 +576,7 @@ impl ObjectBucket {
         )?;
         let client = outbound::client_for(
             &signed.url,
-            true,
+            self.private_ok,
             outbound::Timeouts {
                 connect: Duration::from_secs(10),
                 total: None,
@@ -489,6 +683,12 @@ impl ObjectBucket {
     /// Read each time: the files are small, and a rotated key is picked up
     /// without a restart.
     fn credentials(&self) -> Result<Credentials, AppError> {
+        if let Keys::Held(held) = &self.keys {
+            return Ok(Credentials {
+                access_key: held.access_key.clone(),
+                secret_key: held.secret_key.clone(),
+            });
+        }
         let read = |path: &Path| {
             std::fs::read_to_string(path)
                 .map(|value| value.trim().to_owned())

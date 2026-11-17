@@ -73,6 +73,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("external_execution_requests", WORKSPACE_ID),
     ("field_definitions", WORKSPACE_ID),
     ("file_objects_pending", WORKSPACE_ID),
+    ("file_uploads", WORKSPACE_ID),
     ("files", ORGANIZATION_ID),
     ("git_worktrees", WORKSPACE_ID),
     ("github_connect_attempts", ORGANIZATION_ID),
@@ -212,6 +213,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("workspace_mail_settings", ORGANIZATION_ID),
     ("workspace_roles", ORGANIZATION_ID),
     ("workspace_slugs", WORKSPACE_ID),
+    ("workspace_stores", WORKSPACE_ID),
     ("workspace_template_uses", ORGANIZATION_ID),
     ("workspace_templates", ORGANIZATION_ID),
 ];

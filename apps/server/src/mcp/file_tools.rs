@@ -319,7 +319,7 @@ pub(super) async fn file_read(
         Err(AppError::NotFound(_)) => return read_result(ToolResult::not_found("That file"), None),
         Err(error) => return read_result(ToolResult::from_error(error, "file_read"), None),
     };
-    let store = match FileStore::named(&state.config, &row.store_id) {
+    let store = match FileStore::resolve(state, &row.store_id).await {
         Ok(store) => store,
         Err(error) => return read_result(ToolResult::from_error(error, "file_read"), None),
     };

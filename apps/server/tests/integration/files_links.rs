@@ -48,6 +48,12 @@ struct Fake {
     uploads: Arc<Mutex<Uploads>>,
     /// Multipart uploads completed.
     completed: Arc<Mutex<u32>>,
+    /// The SHA-256 (base64) each object was put with, when it was.
+    checksums: Arc<Mutex<BTreeMap<String, String>>>,
+    /// Bytes the server itself put (header-signed requests).
+    server_bytes: Arc<Mutex<u64>>,
+    /// Objects put through a presigned link.
+    direct_puts: Arc<Mutex<u32>>,
 }
 
 async fn s3(
@@ -105,12 +111,66 @@ async fn s3(
             }
         }
         (Method::PUT, None, None) => {
+            use base64::Engine as _;
+            let actual = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&body));
+            if presigned {
+                // As S3 does: every header the link signed must come, the
+                // length must be the body's, and a checksum must match.
+                let signed = query
+                    .get("X-Amz-SignedHeaders")
+                    .cloned()
+                    .unwrap_or_default();
+                for name in signed.split(';').filter(|name| *name != "host") {
+                    if !headers.contains_key(name) {
+                        return (StatusCode::FORBIDDEN, "SignatureDoesNotMatch").into_response();
+                    }
+                }
+                if headers
+                    .get(header::CONTENT_LENGTH)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<usize>().ok())
+                    != Some(body.len())
+                {
+                    return (StatusCode::BAD_REQUEST, "IncompleteBody").into_response();
+                }
+            }
+            if let Some(declared) = headers
+                .get("x-amz-checksum-sha256")
+                .and_then(|value| value.to_str().ok())
+            {
+                if declared != actual {
+                    return (StatusCode::BAD_REQUEST, "BadDigest").into_response();
+                }
+                fake.checksums
+                    .lock()
+                    .expect("lock")
+                    .insert(key.clone(), actual);
+            }
+            if presigned {
+                *fake.direct_puts.lock().expect("lock") += 1;
+            } else {
+                *fake.server_bytes.lock().expect("lock") += body.len() as u64;
+            }
             fake.objects
                 .lock()
                 .expect("lock")
                 .insert(key, body.to_vec());
             StatusCode::OK.into_response()
         }
+        (Method::HEAD, None, None) => match fake.objects.lock().expect("lock").get(&key) {
+            Some(bytes) => {
+                let mut response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_LENGTH, bytes.len());
+                if headers.contains_key("x-amz-checksum-mode")
+                    && let Some(checksum) = fake.checksums.lock().expect("lock").get(&key)
+                {
+                    response = response.header("x-amz-checksum-sha256", checksum.clone());
+                }
+                response.body(Body::empty()).expect("head")
+            }
+            None => StatusCode::NOT_FOUND.into_response(),
+        },
         (Method::POST, None, None) if query.contains_key("uploads") => {
             let id = Uuid::now_v7().simple().to_string();
             fake.uploads
@@ -143,7 +203,16 @@ async fn s3(
         }
         (Method::GET, None, None) => match fake.objects.lock().expect("lock").get(&key) {
             Some(bytes) => {
-                let mut response = bytes.clone().into_response();
+                let range = headers
+                    .get(header::RANGE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.strip_prefix("bytes=0-"))
+                    .and_then(|end| end.parse::<usize>().ok());
+                let bytes = match range {
+                    Some(end) => bytes[..bytes.len().min(end + 1)].to_vec(),
+                    None => bytes.clone(),
+                };
+                let mut response = bytes.into_response();
                 for (parameter, name) in [
                     ("response-content-type", header::CONTENT_TYPE),
                     ("response-content-disposition", header::CONTENT_DISPOSITION),
@@ -777,4 +846,374 @@ async fn files_move_between_stores_and_resume() {
     )
     .await;
     assert_eq!(bytes_of(response).await, b"file number 0");
+}
+
+/// A 1x1 PNG.
+const TINY_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+async fn op(setup: &Setup, name: &str, input: Value) -> (StatusCode, Value) {
+    let key = Uuid::now_v7().to_string();
+    let (status, body) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", setup.organization_id),
+            Some(&key),
+            input,
+        ),
+    )
+    .await;
+    if body["outcome"] == "ok" {
+        (status, body["value"].clone())
+    } else {
+        (status, body)
+    }
+}
+
+/// Sends bytes to a direct upload link as a client would.
+async fn put_direct(started: &Value, bytes: Vec<u8>) -> reqwest::StatusCode {
+    let mut request = reqwest::Client::new()
+        .put(started["url"].as_str().expect("url"))
+        .body(bytes);
+    for (name, value) in started["headers"].as_object().expect("headers") {
+        request = request.header(name, value.as_str().expect("header"));
+    }
+    request.send().await.expect("put").status()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+/// The key a direct upload link writes to, from its address.
+fn key_of(started: &Value) -> String {
+    let url = url::Url::parse(started["url"].as_str().expect("url")).expect("url");
+    decode(
+        url.path()
+            .strip_prefix(&format!("/{BUCKET}/"))
+            .expect("bucket"),
+    )
+}
+
+fn object_values(
+    root: &std::path::Path,
+    keys: &std::path::Path,
+    endpoint: String,
+) -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "AGENT_WORKSPACE_DATA_ROOT",
+            root.to_string_lossy().into_owned(),
+        ),
+        ("AGENT_WORKSPACE_FILE_STORE", "object".to_owned()),
+        ("AGENT_WORKSPACE_S3_ENDPOINT", endpoint),
+        ("AGENT_WORKSPACE_S3_BUCKET", BUCKET.to_owned()),
+        ("AGENT_WORKSPACE_S3_PATH_STYLE", "true".to_owned()),
+        (
+            "AGENT_WORKSPACE_S3_ACCESS_KEY_ID_PATH",
+            secret_file(keys, "access", ACCESS_KEY),
+        ),
+        (
+            "AGENT_WORKSPACE_S3_SECRET_ACCESS_KEY_PATH",
+            secret_file(keys, "secret", "test-secret-key"),
+        ),
+        ("AGENT_WORKSPACE_SECRETS_KEY_PATH", keyring(keys)),
+        // The workspace's own bucket below is a local stand-in.
+        ("AGENT_WORKSPACE_ALLOW_PRIVATE_ADDRESSES", "true".to_owned()),
+    ]
+}
+
+/// K5.20: a client uploads straight to the store; the server only signs
+/// the link and checks what arrived. A mismatch is refused and deleted, and
+/// a picture is served only once its stripped copy exists.
+#[tokio::test]
+async fn direct_uploads_skip_the_server() {
+    let Some(setup) = setup("files_direct").await else {
+        return;
+    };
+    let (fake, endpoint) = start_fake().await;
+    let root = tempfile::tempdir().expect("data root");
+    let keys = tempfile::tempdir().expect("keys");
+    let (app, _state) = app_with(&setup, &object_values(root.path(), keys.path(), endpoint));
+    let setup = Setup { app, ..setup };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let channel = create_channel(&setup, &work, "general").await;
+    sqlx::query(
+        r#"
+        INSERT INTO settings (id, organization_id, scope, key, value)
+        VALUES ($1, $2, 'workspace', 'files.max_upload_mb', '100'::jsonb)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(setup.organization_id)
+    .execute(&setup.pool)
+    .await
+    .expect("setting");
+
+    // 20 MiB: the server would have sent it in parts; it carries none of it.
+    let (_, big) = chunks(20, 1024 * 1024);
+    let (status, started) = op(
+        &setup,
+        "file_upload_start",
+        json!({"conversationId": channel, "name": "big.bin", "size": big.len(),
+               "sha256": sha256_hex(&big)}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    assert_eq!(started["method"], "PUT");
+    let upload_id = started["uploadId"].as_str().expect("upload").to_owned();
+    // Nothing is a file yet.
+    let response = get(
+        &setup.app,
+        Some(&setup.browser),
+        &format!("/api/v1/files/{upload_id}/content"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    // Bytes that aren't the ones declared are refused by the store.
+    assert_eq!(
+        put_direct(&started, vec![b'x'; big.len()]).await,
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    let (status, early) = op(&setup, "file_upload_finish", json!({"uploadId": upload_id})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "nothing arrived yet: {early}");
+    assert_eq!(
+        put_direct(&started, big.clone()).await,
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(*fake.direct_puts.lock().expect("lock"), 1);
+    assert!(
+        *fake.server_bytes.lock().expect("lock") < 1024 * 1024,
+        "the server sent the store under 1 MiB itself"
+    );
+    assert_eq!(
+        *fake.completed.lock().expect("lock"),
+        0,
+        "no multipart upload"
+    );
+    let (status, file) = op(&setup, "file_upload_finish", json!({"uploadId": upload_id})).await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+    let file_id = file["id"].as_str().expect("file").to_owned();
+    assert_eq!(file["size"], big.len());
+    let response = get(
+        &setup.app,
+        Some(&setup.browser),
+        &format!("/api/v1/files/{file_id}/content"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(bytes_of(response).await, big);
+    // Finishing again answers with the same file.
+    let (status, again) = op(&setup, "file_upload_finish", json!({"uploadId": upload_id})).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["id"], file_id.as_str());
+
+    // A store that took the wrong length: refused at the finish, and the
+    // bytes deleted.
+    let declared = b"ten bytes!".to_vec();
+    let (_, short) = op(
+        &setup,
+        "file_upload_start",
+        json!({"conversationId": channel, "name": "short.txt", "size": declared.len(),
+               "sha256": sha256_hex(&declared)}),
+    )
+    .await;
+    let short_key = key_of(&short);
+    fake.objects
+        .lock()
+        .expect("lock")
+        .insert(short_key.clone(), b"eleven byte".to_vec());
+    let (status, refused) = op(
+        &setup,
+        "file_upload_finish",
+        json!({"uploadId": short["uploadId"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["field"], "size", "{refused}");
+    assert!(!fake.objects.lock().expect("lock").contains_key(&short_key));
+    let (status, _) = op(
+        &setup,
+        "file_upload_finish",
+        json!({"uploadId": short["uploadId"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "the upload is gone");
+
+    // A picture: the uploaded bytes are never served; the stripped copy is
+    // a new object, and the upload's own bytes are deleted.
+    use base64::Engine as _;
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(TINY_PNG)
+        .expect("png");
+    let (_, picture) = op(
+        &setup,
+        "file_upload_start",
+        json!({"conversationId": channel, "name": "pic.png", "contentType": "image/png",
+               "size": png.len(), "sha256": sha256_hex(&png)}),
+    )
+    .await;
+    assert_eq!(put_direct(&picture, png).await, reqwest::StatusCode::OK);
+    let picture_key = key_of(&picture);
+    let (status, image) = op(
+        &setup,
+        "file_upload_finish",
+        json!({"uploadId": picture["uploadId"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{image}");
+    assert_eq!(image["width"], 1);
+    assert_ne!(image["id"], picture["uploadId"]);
+    let objects = fake.objects.lock().expect("lock").clone();
+    assert!(
+        !objects.contains_key(&picture_key),
+        "the upload's bytes went"
+    );
+    let image_id = Uuid::parse_str(image["id"].as_str().expect("id")).expect("id");
+    assert!(
+        objects
+            .keys()
+            .any(|key| key.ends_with(&image_id.simple().to_string()))
+    );
+}
+
+/// K5.20: a workspace's own bucket takes its new uploads, through the
+/// server or straight, once a probe there passed; its keys never appear in
+/// an answer or in a row as written.
+#[tokio::test]
+async fn a_workspace_bucket_takes_new_uploads() {
+    let Some(setup) = setup("files_own_bucket").await else {
+        return;
+    };
+    let (fake, endpoint) = start_fake().await;
+    let (own, own_endpoint) = start_fake().await;
+    let root = tempfile::tempdir().expect("data root");
+    let keys = tempfile::tempdir().expect("keys");
+    let (app, state) = app_with(&setup, &object_values(root.path(), keys.path(), endpoint));
+    let setup = Setup { app, ..setup };
+    let work = create_project(&setup, "WORK", "Work").await;
+    let channel = create_channel(&setup, &work, "general").await;
+    let secret = "own-bucket-secret-value";
+
+    // Keys the bucket refuses: the probe fails and nothing is recorded.
+    let (status, refused) = op(
+        &setup,
+        "workspace_store_set",
+        json!({"endpoint": own_endpoint, "bucket": BUCKET, "region": "us-east-1",
+               "pathStyle": true, "accessKeyId": "WRONG", "secretAccessKey": secret}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(!refused.to_string().contains(secret));
+    let (status, none) = op(&setup, "workspace_store_get", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{none}");
+    assert!(none.get("store").is_none(), "{none}");
+
+    let (status, set) = op(
+        &setup,
+        "workspace_store_set",
+        json!({"endpoint": own_endpoint, "bucket": BUCKET, "region": "us-east-1",
+               "pathStyle": true, "accessKeyId": ACCESS_KEY, "secretAccessKey": secret}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert!(!set.to_string().contains(secret), "{set}");
+    let store_id = set["store"]["storeId"].as_str().expect("store").to_owned();
+    assert!(store_id.starts_with("ws-"));
+    assert!(
+        own.objects.lock().expect("lock").is_empty(),
+        "the probe cleaned up"
+    );
+
+    // Through the server: into the workspace's bucket.
+    let (status, small) = upload(
+        &setup.app,
+        &setup.browser,
+        &format!("/api/v1/conversations/{channel}/files?name=small.txt"),
+        Body::from("in the workspace's bucket"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{small}");
+    let small = small["id"].as_str().expect("file").to_owned();
+    let stored: String = sqlx::query_scalar("SELECT store_id FROM files WHERE id = $1::uuid")
+        .bind(&small)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("row");
+    assert_eq!(stored, store_id);
+    assert_eq!(own.objects.lock().expect("lock").len(), 1);
+    assert!(fake.objects.lock().expect("lock").is_empty());
+    let response = get(
+        &setup.app,
+        Some(&setup.browser),
+        &format!("/api/v1/files/{small}/content"),
+    )
+    .await;
+    assert_eq!(bytes_of(response).await, b"in the workspace's bucket");
+
+    // Straight: the link points at the workspace's bucket.
+    let bytes = b"direct to the workspace".to_vec();
+    let (_, started) = op(
+        &setup,
+        "file_upload_start",
+        json!({"conversationId": channel, "name": "d.txt", "size": bytes.len(),
+               "sha256": sha256_hex(&bytes)}),
+    )
+    .await;
+    assert_eq!(
+        put_direct(&started, bytes.clone()).await,
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(*own.direct_puts.lock().expect("lock"), 1);
+    let (status, file) = op(
+        &setup,
+        "file_upload_finish",
+        json!({"uploadId": started["uploadId"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+
+    // The keys are in no row as written, nor in the audit trail.
+    for table in ["workspace_stores", "secrets", "audit_events", "events"] {
+        let found: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM {table} row WHERE row_to_json(row)::text LIKE '%' || $1 || '%'"
+        ))
+        .bind(secret)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("search");
+        assert_eq!(found, 0, "the secret is in {table}");
+    }
+
+    // Stopping: new uploads go to the server's store; old files still read.
+    let (status, cleared) = op(&setup, "workspace_store_revoke", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    let (status, later) = upload(
+        &setup.app,
+        &setup.browser,
+        &format!("/api/v1/conversations/{channel}/files?name=later.txt"),
+        Body::from("back on the server's store"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{later}");
+    assert_eq!(fake.objects.lock().expect("lock").len(), 1);
+    let response = get(
+        &setup.app,
+        Some(&setup.browser),
+        &format!("/api/v1/files/{small}/content"),
+    )
+    .await;
+    assert_eq!(bytes_of(response).await, b"in the workspace's bucket");
+
+    // Deleting the workspace's files reaches its own bucket too.
+    for store in files::workspace_store::all_of(&state, setup.organization_id)
+        .await
+        .expect("stores")
+    {
+        store
+            .delete_workspace(setup.organization_id)
+            .await
+            .expect("delete");
+    }
+    assert!(own.objects.lock().expect("lock").is_empty());
 }

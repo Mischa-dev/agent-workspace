@@ -1834,3 +1834,53 @@ async fn links_by_hand_need_edit_on_the_start_and_sight_of_the_end() {
     assert_eq!(gone["value"]["changed"], true, "{gone}");
     world.finish().await;
 }
+
+/// K5.20: a direct upload goes only into a conversation the caller may post
+/// in (never a private group they aren't in), and only someone who may
+/// manage settings sees or changes the workspace's own bucket.
+#[tokio::test]
+async fn direct_uploads_and_the_workspace_bucket_stay_inside_their_rules() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("lena", "member")
+        .private_group("secret", &["ana"])
+        .build("privacy_direct_uploads")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let secret = world.conversations["secret"].clone();
+    let lena = &world.people["lena"];
+    let (status, refused) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &route("file_upload_start"),
+            Some("lena-upload"),
+            json!({ "conversationId": secret, "name": "a.txt", "size": 1,
+                    "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb" }),
+        ),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{status} {refused}");
+    for (op, body) in [
+        ("workspace_store_get", json!({})),
+        ("workspace_store_revoke", json!({})),
+        (
+            "workspace_store_set",
+            json!({ "endpoint": "https://s3.example.com", "bucket": "mine",
+                    "region": "us-east-1", "accessKeyId": "a", "secretAccessKey": "b" }),
+        ),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser
+                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    world.finish().await;
+}

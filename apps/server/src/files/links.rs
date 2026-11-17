@@ -218,7 +218,7 @@ pub(super) async fn open_link(
     // Always a download: the link opens outside the app, and never as a
     // page on the app's own origin.
     let disposition = super::http::content_disposition(&row.name, true);
-    let store = FileStore::named(&state.config, &row.store_id)?;
+    let store = FileStore::resolve(&state, &row.store_id).await?;
     let remaining = u64::try_from(claims.expires - Utc::now().timestamp()).unwrap_or(1);
     if let Some(url) = store.presign_get(
         key,

@@ -72,7 +72,14 @@ pub async fn start(
     to: &str,
     workspace: Option<Uuid>,
 ) -> Result<jobs::Enqueued, AppError> {
-    FileStore::named(config, to)?;
+    let target = FileStore::resolve_with(pool, config, to).await?;
+    // A workspace's own bucket takes only that workspace's files.
+    if to.starts_with(super::store::WORKSPACE_PREFIX)
+        && workspace != super::workspace_store::workspace_of(pool, to).await?
+    {
+        return Err(AppError::Validation("workspace"));
+    }
+    drop(target);
     queue(
         pool,
         MovePayload {
@@ -84,7 +91,29 @@ pub async fn start(
     .await
 }
 
+/// Queues moving one workspace's files into its own bucket, in the
+/// caller's transaction (the bucket was just recorded in it).
+pub(crate) async fn start_in(
+    connection: &mut sqlx::PgConnection,
+    to: &str,
+    workspace: Uuid,
+) -> Result<jobs::Enqueued, AppError> {
+    jobs::enqueue(
+        &mut *connection,
+        job(MovePayload {
+            to: to.to_owned(),
+            workspace: Some(workspace),
+            after: None,
+        }),
+    )
+    .await
+}
+
 async fn queue(pool: &PgPool, payload: MovePayload) -> Result<jobs::Enqueued, AppError> {
+    jobs::enqueue(crate::db::scoped(pool), job(payload)).await
+}
+
+fn job(payload: MovePayload) -> NewJob {
     let mut job = NewJob::new(MOVE_KIND).payload(&payload).unique(format!(
         "files.move:{}:{}",
         payload.to,
@@ -96,7 +125,7 @@ async fn queue(pool: &PgPool, payload: MovePayload) -> Result<jobs::Enqueued, Ap
     if let Some(workspace) = payload.workspace {
         job = job.workspace(workspace);
     }
-    jobs::enqueue(crate::db::scoped(pool), job).await
+    job
 }
 
 #[derive(sqlx::FromRow)]
@@ -111,7 +140,13 @@ struct ToMove {
 
 /// Copies the next batch of files that aren't in `to` yet.
 pub async fn move_batch(state: &AppState, payload: &MovePayload) -> Result<Moved, AppError> {
-    let target = FileStore::named(&state.config, &payload.to)?;
+    let target = FileStore::resolve(state, &payload.to).await?;
+    if payload.to.starts_with(super::store::WORKSPACE_PREFIX)
+        && payload.workspace
+            != super::workspace_store::workspace_of(&state.pool, &payload.to).await?
+    {
+        return Err(AppError::Validation("workspace"));
+    }
     let batch = sqlx::query_as::<_, ToMove>(
         r#"
         SELECT id, store_id, storage_key, thumbnail_key, byte_size, sha256
@@ -147,7 +182,7 @@ pub async fn move_batch(state: &AppState, payload: &MovePayload) -> Result<Moved
 }
 
 async fn copy(state: &AppState, target: &FileStore, file: &ToMove) -> Result<(), AppError> {
-    let source = FileStore::named(&state.config, &file.store_id)?;
+    let source = FileStore::resolve(state, &file.store_id).await?;
     let length = u64::try_from(file.byte_size).unwrap_or(0);
     let stored = source.get(&file.storage_key).await?;
     // A key that was copied before a crash is written again from the start.
@@ -207,7 +242,7 @@ pub async fn prune_sources(pool: &PgPool, config: &AppConfig) -> Result<u64, App
             return Ok(pruned);
         }
         for (id, from, key, thumbnail) in batch {
-            let source = FileStore::named(config, &from)?;
+            let source = FileStore::resolve_with(pool, config, &from).await?;
             for key in std::iter::once(key).chain(thumbnail) {
                 source.delete(&key).await?;
             }

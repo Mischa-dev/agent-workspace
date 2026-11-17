@@ -231,7 +231,7 @@ async fn content(
     // so; pictures shown inline stay on our own origin, which the content
     // security policy allows.
     if download && redirects_downloads(&state, &row).await? {
-        let store = FileStore::named(&state.config, &row.store_id)?;
+        let store = FileStore::resolve(&state, &row.store_id).await?;
         if let Some(url) = store.presign_get(
             &row.storage_key,
             super::links::DEFAULT_TTL,
@@ -305,7 +305,7 @@ pub(crate) async fn serve(
     name: &str,
     download: bool,
 ) -> Result<Response, AppError> {
-    let stored = FileStore::named(&state.config, store_id)?.get(key).await?;
+    let stored = FileStore::resolve(state, store_id).await?.get(key).await?;
     let mut response = Response::new(stored.body);
     let headers = response.headers_mut();
     headers.insert(

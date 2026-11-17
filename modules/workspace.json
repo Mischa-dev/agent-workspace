@@ -27,6 +27,11 @@
     "history_restore": "change",
     "thing_link": "change",
     "thing_unlink": "change",
+    "file_upload_start": "create",
+    "file_upload_finish": "create",
+    "workspace_store_get": "describe",
+    "workspace_store_set": "change",
+    "workspace_store_revoke": "change",
     "module_list": "describe",
     "workspace_update": "change",
     "workspace_delete": "change",
@@ -87,7 +92,7 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["account.access_changed", "file.attached", "file.removed", "link.created", "link.deleted", "workspace.lifecycle_changed"],
+    "emits": ["account.access_changed", "file.attached", "file.removed", "file.upload_started", "link.created", "link.deleted", "workspace.file_store_changed", "workspace.lifecycle_changed"],
     "listens": []
   },
   "notifications": [],

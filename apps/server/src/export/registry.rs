@@ -193,6 +193,14 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "runtime state of this server (bytes being written to a store)",
             ),
             (
+                "file_uploads",
+                "runtime state of this server (a direct upload between its start and finish, a day at most)",
+            ),
+            (
+                "workspace_stores",
+                "a bucket reached with keys that never leave; set the bucket again in the new workspace",
+            ),
+            (
                 "link_previews",
                 "a cache or index derived from other rows, rebuilt on import",
             ),

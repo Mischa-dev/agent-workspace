@@ -90,6 +90,38 @@
     "title": "Record decision"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "file.attached"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "file_upload_finish",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Finish a direct upload"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "file.upload_started"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "file_upload_start",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Start a direct upload"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -613,5 +645,51 @@
     "preview": false,
     "proposable": false,
     "title": "Keep workspace"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_store_get",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "See the workspace's file bucket"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.file_store_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_store_revoke",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop using the workspace's own file bucket"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "workspace.file_store_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_store_set",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Use the workspace's own file bucket"
   }
 ]

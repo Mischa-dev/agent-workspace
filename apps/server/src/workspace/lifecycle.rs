@@ -908,7 +908,11 @@ async fn remove_bytes(
     for repository in repositories {
         crate::git_runtime::remove_repository_data(&state.config.data_root, *repository).await?;
     }
-    for store in crate::files::store::FileStore::all(&state.config) {
+    let own = crate::files::workspace_store::all_of(state, workspace).await?;
+    for store in crate::files::store::FileStore::all(&state.config)
+        .into_iter()
+        .chain(own)
+    {
         store.delete_workspace(workspace).await?;
     }
     Ok(())

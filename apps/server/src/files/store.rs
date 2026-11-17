@@ -22,6 +22,7 @@ use crate::{config::AppConfig, error::AppError};
 const LOCAL_FOLDER: &str = "files";
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)] // one per request, never in a collection
 pub enum FileStore {
     Local(LocalDisk),
     Object(super::object::ObjectBucket),
@@ -31,6 +32,8 @@ pub enum FileStore {
 pub const LOCAL: &str = "local";
 /// The S3-compatible store's.
 pub const OBJECT: &str = "object";
+/// A workspace's own bucket's id starts with this (K5.20).
+pub const WORKSPACE_PREFIX: &str = "ws-";
 
 /// Files on this machine's disk, under `<data root>/files`.
 #[derive(Clone, Debug)]
@@ -69,7 +72,40 @@ impl FileStore {
         })
     }
 
-    /// The store a file row names.
+    /// The store a file row names, a workspace's own bucket included.
+    pub async fn resolve(state: &crate::AppState, id: &str) -> Result<Self, AppError> {
+        Self::resolve_with(&state.pool, &state.config, id).await
+    }
+
+    /// [`Self::resolve`] for commands that have no full app state.
+    pub async fn resolve_with(
+        pool: &sqlx::PgPool,
+        config: &AppConfig,
+        id: &str,
+    ) -> Result<Self, AppError> {
+        if id.starts_with(WORKSPACE_PREFIX) {
+            return super::workspace_store::open(pool, config, id)
+                .await
+                .map(Self::Object);
+        }
+        Self::named(config, id)
+    }
+
+    /// Where a workspace's new uploads go: its own bucket when it has one
+    /// (K5.20), otherwise the server's primary store. Read on each upload,
+    /// never held per workspace.
+    pub async fn for_uploads(
+        state: &crate::AppState,
+        connection: &mut sqlx::PgConnection,
+        workspace: uuid::Uuid,
+    ) -> Result<Self, AppError> {
+        match super::workspace_store::active(&state.config, connection, workspace).await? {
+            Some(bucket) => Ok(Self::Object(bucket)),
+            None => Ok(Self::from_config(&state.config)),
+        }
+    }
+
+    /// One of this server's configured stores (not a workspace's own).
     pub fn named(config: &AppConfig, id: &str) -> Result<Self, AppError> {
         match (id, &config.object_store) {
             (LOCAL, _) => Ok(Self::local(config)),
@@ -93,10 +129,65 @@ impl FileStore {
 
     /// The store's name, kept with each file (`files.store_id`) so files
     /// can move between stores (K5.13).
-    pub fn id(&self) -> &'static str {
+    pub fn id(&self) -> &str {
         match self {
             Self::Local(_) => LOCAL,
-            Self::Object(_) => OBJECT,
+            Self::Object(bucket) => bucket.id(),
+        }
+    }
+
+    /// A link a client uploads straight to (K5.20); None for disk, which
+    /// keeps the upload route through the server.
+    pub fn presign_put(
+        &self,
+        key: &str,
+        ttl: std::time::Duration,
+        content_type: &str,
+        length: u64,
+        sha256: &[u8; 32],
+    ) -> Result<Option<super::object::PutLink>, AppError> {
+        valid(key)?;
+        match self {
+            Self::Local(_) => Ok(None),
+            Self::Object(bucket) => bucket
+                .presign_put(key, ttl, content_type, length, sha256)
+                .map(Some),
+        }
+    }
+
+    /// What is stored under a key, or None.
+    pub async fn head(&self, key: &str) -> Result<Option<super::object::Head>, AppError> {
+        valid(key)?;
+        match self {
+            Self::Local(disk) => match tokio::fs::metadata(disk.path(key)?).await {
+                Ok(metadata) => Ok(Some(super::object::Head {
+                    length: metadata.len(),
+                    sha256: None,
+                })),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+                Err(_) => Err(AppError::Internal("read file store metadata")),
+            },
+            Self::Object(bucket) => bucket.head(key).await,
+        }
+    }
+
+    /// The first `count` bytes under a key.
+    pub async fn read_start(&self, key: &str, count: u64) -> Result<Vec<u8>, AppError> {
+        valid(key)?;
+        match self {
+            Self::Local(disk) => {
+                use tokio::io::AsyncReadExt;
+                let file = tokio::fs::File::open(disk.path(key)?)
+                    .await
+                    .map_err(not_found)?;
+                let mut bytes = Vec::new();
+                file.take(count)
+                    .read_to_end(&mut bytes)
+                    .await
+                    .map_err(|_| AppError::Internal("read file from the file store"))?;
+                Ok(bytes)
+            }
+            Self::Object(bucket) => bucket.read_start(key, count).await,
         }
     }
 

@@ -1603,6 +1603,45 @@
           "outputTokens"
         ],
         "type": "object"
+      },
+      "WorkspaceStoreView": {
+        "description": "What anyone who manages the workspace's settings sees: never the keys.",
+        "properties": {
+          "bucket": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "pathStyle": {
+            "type": "boolean"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "storeId": {
+            "description": "The id files in it are stored under (`ws-` and its id).",
+            "type": "string"
+          },
+          "verifiedAt": {
+            "description": "When the server last checked it could write, read and delete there.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "storeId",
+          "endpoint",
+          "bucket",
+          "region",
+          "prefix",
+          "pathStyle",
+          "verifiedAt"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -3393,6 +3432,657 @@
         "summary": "Record decision",
         "tags": [
           "pages"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/file_upload_finish": {
+      "post": {
+        "description": "After sending a file's bytes to the link file_upload_start gave, make it a file: the server checks what arrived is the size (and SHA-256) declared, and refuses and deletes it otherwise. A picture loses its location data first. Returns the file; pass its id in message_send's or task_comment's attachmentIds as with file_upload. Calling it again returns the same file.",
+        "operationId": "file_upload_finish",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uploadId": {
+                    "description": "The uploadId file_upload_start gave.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uploadId"
+                ],
+                "title": "FileUploadFinishInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A file as messages, tasks and agents see it. Clients build its URLs from\nthe ID: `/api/v1/files/{id}/content` (add `?download=1` to save it) and,\nfor images, `/api/v1/files/{id}/thumbnail`.",
+                          "properties": {
+                            "commentId": {
+                              "description": "The task comment it belongs to, for a task's files.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "contentType": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "height": {
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "size": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "uploadedBy": {
+                              "type": "string"
+                            },
+                            "width": {
+                              "description": "Set for images that show inline.",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "contentType",
+                            "size",
+                            "uploadedBy",
+                            "createdAt"
+                          ],
+                          "title": "FileView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A file as messages, tasks and agents see it. Clients build its URLs from\nthe ID: `/api/v1/files/{id}/content` (add `?download=1` to save it) and,\nfor images, `/api/v1/files/{id}/thumbnail`.",
+                          "properties": {
+                            "commentId": {
+                              "description": "The task comment it belongs to, for a task's files.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "contentType": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "type": "string"
+                            },
+                            "height": {
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "size": {
+                              "format": "int64",
+                              "type": "integer"
+                            },
+                            "uploadedBy": {
+                              "type": "string"
+                            },
+                            "width": {
+                              "description": "Set for images that show inline.",
+                              "format": "int32",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "contentType",
+                            "size",
+                            "uploadedBy",
+                            "createdAt"
+                          ],
+                          "title": "FileView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Finish a direct upload",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/file_upload_start": {
+      "post": {
+        "description": "Upload a file of any size straight to the workspace's file store, without sending its bytes through this server. Give its name, exact size and SHA-256; send the bytes as the body of a PUT to the url, with the headers given, within 15 minutes; then call file_upload_finish with the uploadId. Where the server keeps files itself this answers direct_upload_unavailable: use file_upload instead.",
+        "operationId": "file_upload_start",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "contentType": {
+                    "default": null,
+                    "description": "Its type, such as application/pdf; worked out from the name if left out.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "conversationId": {
+                    "default": null,
+                    "description": "The conversation the file is for (sent with a message there later).",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "forComment": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "description": "The file's name.",
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "description": "Its SHA-256, as 64 hex characters. The store refuses bytes that\ndon't match.",
+                    "type": "string"
+                  },
+                  "size": {
+                    "description": "Its exact size in bytes.",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "taskId": {
+                    "default": null,
+                    "description": "Or the task: its own file, or (`forComment`) for a comment on it.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "size",
+                  "sha256"
+                ],
+                "title": "FileUploadStartInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "expiresAt": {
+                              "description": "The link stops working then; start again for a new one.",
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "headers": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "description": "Headers to send with them, exactly as given.",
+                              "type": "object"
+                            },
+                            "method": {
+                              "description": "Always PUT.",
+                              "type": "string"
+                            },
+                            "uploadId": {
+                              "description": "Pass it to file_upload_finish once the bytes are sent.",
+                              "type": "string"
+                            },
+                            "url": {
+                              "description": "Where to send the bytes, as the whole request body.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "uploadId",
+                            "method",
+                            "url",
+                            "headers",
+                            "expiresAt"
+                          ],
+                          "title": "FileUploadStarted",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "expiresAt": {
+                              "description": "The link stops working then; start again for a new one.",
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "headers": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "description": "Headers to send with them, exactly as given.",
+                              "type": "object"
+                            },
+                            "method": {
+                              "description": "Always PUT.",
+                              "type": "string"
+                            },
+                            "uploadId": {
+                              "description": "Pass it to file_upload_finish once the bytes are sent.",
+                              "type": "string"
+                            },
+                            "url": {
+                              "description": "Where to send the bytes, as the whole request body.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "uploadId",
+                            "method",
+                            "url",
+                            "headers",
+                            "expiresAt"
+                          ],
+                          "title": "FileUploadStarted",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Start a direct upload",
+        "tags": [
+          "workspace"
         ],
         "x-operation-kind": "create"
       }
@@ -14252,6 +14942,788 @@
           }
         },
         "summary": "Keep workspace",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/workspace_store_get": {
+      "post": {
+        "description": "Where the workspace's new uploads are stored: its own S3-compatible bucket (address, bucket, region, prefix; never its keys), or nothing when they go to the server's own store. Needs \"Manage settings\" where it acts.",
+        "operationId": "workspace_store_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "WorkspaceStoreGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "moving": {
+                              "description": "Whether this call started moving the workspace's existing files\ninto it.",
+                              "type": "boolean"
+                            },
+                            "store": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/WorkspaceStoreView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Where new uploads go; absent when they go to the server's own store."
+                            }
+                          },
+                          "required": [
+                            "moving"
+                          ],
+                          "title": "WorkspaceStoreOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "moving": {
+                              "description": "Whether this call started moving the workspace's existing files\ninto it.",
+                              "type": "boolean"
+                            },
+                            "store": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/WorkspaceStoreView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Where new uploads go; absent when they go to the server's own store."
+                            }
+                          },
+                          "required": [
+                            "moving"
+                          ],
+                          "title": "WorkspaceStoreOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "See the workspace's file bucket",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/workspace_store_revoke": {
+      "post": {
+        "description": "New uploads go to the server's own store again. Files already in the workspace's bucket stay there and are still read from it, so keep the bucket and its keys until they are moved. Needs \"Manage settings\" where it acts.",
+        "operationId": "workspace_store_revoke",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "WorkspaceStoreRevokeInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "moving": {
+                              "description": "Whether this call started moving the workspace's existing files\ninto it.",
+                              "type": "boolean"
+                            },
+                            "store": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/WorkspaceStoreView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Where new uploads go; absent when they go to the server's own store."
+                            }
+                          },
+                          "required": [
+                            "moving"
+                          ],
+                          "title": "WorkspaceStoreOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "moving": {
+                              "description": "Whether this call started moving the workspace's existing files\ninto it.",
+                              "type": "boolean"
+                            },
+                            "store": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/WorkspaceStoreView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Where new uploads go; absent when they go to the server's own store."
+                            }
+                          },
+                          "required": [
+                            "moving"
+                          ],
+                          "title": "WorkspaceStoreOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Stop using the workspace's own file bucket",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/workspace_store_set": {
+      "post": {
+        "description": "Store the workspace's new uploads in its own S3-compatible bucket. The server first writes, reads and deletes a test object there and refuses the bucket if any step fails. The keys are kept encrypted and never shown again. Files already stored stay where they are unless moveExisting is set. The bucket needs CORS allowing PUT from the app's address for direct uploads from a browser. Needs \"Manage settings\" where it acts.",
+        "operationId": "workspace_store_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "accessKeyId": {
+                    "type": "string"
+                  },
+                  "bucket": {
+                    "type": "string"
+                  },
+                  "endpoint": {
+                    "description": "The S3-compatible service's address alone, such as https://s3.us-east-1.amazonaws.com.",
+                    "type": "string"
+                  },
+                  "moveExisting": {
+                    "default": false,
+                    "description": "Also move the files already stored into it, a batch at a time.",
+                    "type": "boolean"
+                  },
+                  "pathStyle": {
+                    "default": false,
+                    "description": "Address the bucket as endpoint/bucket (most self-hosted stores)\nrather than bucket.endpoint.",
+                    "type": "boolean"
+                  },
+                  "prefix": {
+                    "default": "",
+                    "description": "Put before every key, such as workspace/ (optional).",
+                    "type": "string"
+                  },
+                  "region": {
+                    "description": "Such as us-east-1 (auto for some services).",
+                    "type": "string"
+                  },
+                  "secretAccessKey": {
+                    "description": "Kept encrypted; never shown again.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "endpoint",
+                  "bucket",
+                  "region",
+                  "accessKeyId",
+                  "secretAccessKey"
+                ],
+                "title": "WorkspaceStoreSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "moving": {
+                              "description": "Whether this call started moving the workspace's existing files\ninto it.",
+                              "type": "boolean"
+                            },
+                            "store": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/WorkspaceStoreView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Where new uploads go; absent when they go to the server's own store."
+                            }
+                          },
+                          "required": [
+                            "moving"
+                          ],
+                          "title": "WorkspaceStoreOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "moving": {
+                              "description": "Whether this call started moving the workspace's existing files\ninto it.",
+                              "type": "boolean"
+                            },
+                            "store": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/WorkspaceStoreView"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Where new uploads go; absent when they go to the server's own store."
+                            }
+                          },
+                          "required": [
+                            "moving"
+                          ],
+                          "title": "WorkspaceStoreOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Use the workspace's own file bucket",
         "tags": [
           "workspace"
         ],

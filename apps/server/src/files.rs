@@ -22,10 +22,14 @@ pub mod image;
 pub mod links;
 pub mod migrate;
 pub mod object;
+pub mod ops;
 pub mod store;
+pub mod upload;
+pub mod workspace_store;
 
 use std::collections::BTreeMap;
 
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgConnection, PgPool, Postgres, Transaction};
@@ -54,9 +58,10 @@ const CLEANUP_KIND: &str = "files.cleanup";
 /// A file as messages, tasks and agents see it. Clients build its URLs from
 /// the ID: `/api/v1/files/{id}/content` (add `?download=1` to save it) and,
 /// for images, `/api/v1/files/{id}/thumbnail`.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileView {
+    #[schemars(with = "String")]
     pub id: Uuid,
     pub name: String,
     pub content_type: String,
@@ -68,7 +73,9 @@ pub struct FileView {
     pub height: Option<i32>,
     /// The task comment it belongs to, for a task's files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
     pub comment_id: Option<Uuid>,
+    #[schemars(with = "String")]
     pub uploaded_by: Uuid,
     pub created_at: String,
 }
@@ -445,7 +452,7 @@ pub(crate) async fn store_prepared(
     let id = Uuid::now_v7();
     let storage_key = storage_key(organization_id, id);
     let thumbnail_key = thumbnail.as_ref().map(|_| format!("{storage_key}.thumb"));
-    let store = FileStore::from_config(&state.config);
+    let store = FileStore::for_uploads(state, transaction, organization_id).await?;
     let keys = std::iter::once(storage_key.as_str())
         .chain(thumbnail_key.as_deref())
         .collect::<Vec<_>>();
@@ -546,7 +553,7 @@ pub(crate) async fn store_body(
     let project_id = destination.project_id();
     let organization_id = organization_of(crate::db::scoped(&state.pool), project_id).await?;
     // A full workspace or disk refuses before a byte is written.
-    {
+    let store = {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         require_room(
             state,
@@ -556,8 +563,8 @@ pub(crate) async fn store_body(
             0,
         )
         .await?;
-    }
-    let store = FileStore::from_config(&state.config);
+        FileStore::for_uploads(state, &mut transaction, organization_id).await?
+    };
     let id = Uuid::now_v7();
     let storage_key = storage_key(organization_id, id);
     begin_objects(state, &store, organization_id, &[&storage_key]).await?;
@@ -778,7 +785,7 @@ async fn insert_file(
 /// Takes away the bytes [`store_prepared`] stored, when the transaction
 /// that held its row didn't commit.
 pub(crate) async fn discard_stored(state: &AppState, row: &FileRow) {
-    let Ok(store) = FileStore::named(&state.config, &row.store_id) else {
+    let Ok(store) = FileStore::resolve(state, &row.store_id).await else {
         return;
     };
     let keys = std::iter::once(row.storage_key.as_str())
@@ -1172,7 +1179,7 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
         // One file the store can't delete mustn't stop every later one: it
         // stays in the batch and is tried again next time.
         let mut failed = false;
-        match FileStore::named(&state.config, &store_id) {
+        match FileStore::resolve(state, &store_id).await {
             Ok(store) => {
                 for key in std::iter::once(key).chain(thumbnail_key) {
                     if let Err(error) = store.delete(&key).await {
@@ -1198,6 +1205,18 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
     for store in FileStore::all(&state.config) {
         deleted += sweep_pending_objects(state, &store).await?;
     }
+    // Pending bytes in a workspace's own bucket, by the stores they name.
+    let workspace_stores = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT store_id FROM file_objects_pending WHERE store_id LIKE 'ws-%'",
+    )
+    .fetch_all(crate::db::scoped(&state.pool))
+    .await?;
+    for store_id in workspace_stores {
+        if let Ok(store) = FileStore::resolve(state, &store_id).await {
+            deleted += sweep_pending_objects(state, &store).await?;
+        }
+    }
+    deleted += upload::sweep(state).await?;
     deleted += crate::link_previews::cleanup(state).await?;
     Ok(deleted)
 }

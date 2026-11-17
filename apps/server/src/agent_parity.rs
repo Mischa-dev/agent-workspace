@@ -946,6 +946,16 @@ mod tests {
         ),
         (
             Post,
+            "/live/v1/publish",
+            Plumbing("the server's own signed publishes to a separate live service"),
+        ),
+        (
+            Post,
+            "/internal/work/tick",
+            Plumbing("the operator's scheduler driving background work"),
+        ),
+        (
+            Post,
             "/api/v1/projects/{project_id}/invitations",
             Tool("invitation_write"),
         ),
