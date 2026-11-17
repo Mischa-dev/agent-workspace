@@ -1237,3 +1237,96 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
     assert_eq!(events, vec![Some(ada)]);
     world.finish().await;
 }
+
+/// `history_restore` picks its edit permission from the thing it resolves,
+/// so a caller who can read a page but not edit it must be refused and the
+/// page left as it was: an agent and a person, each on a viewer role. A
+/// member restores it, which shows the refusals are about the role and not
+/// a broken call.
+#[tokio::test]
+async fn history_restore_needs_the_things_edit_permission() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("REST")
+        .person("vera", "viewer")
+        .agent("rook", "viewer")
+        .agent("mara", "member")
+        .build("privacy_history_restore")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let (rook, mara) = (&world.agents["rook"], &world.agents["mara"]);
+    let as_mara = |name: &'static str, arguments: Value| async move {
+        structured(
+            &call_tool(app, &mara.token, &mara.session, name, arguments)
+                .await
+                .1,
+        )
+    };
+    let as_rook = |name: &'static str, arguments: Value| async move {
+        structured(
+            &call_tool(app, &rook.token, &rook.session, name, arguments)
+                .await
+                .1,
+        )
+    };
+
+    let written = as_mara(
+        "page_write",
+        json!({"projectId": "REST", "title": "Gate", "body": "Paint it red."}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let page = written["value"]["id"].as_str().expect("page").to_owned();
+    let edited = as_mara(
+        "page_write",
+        json!({"pageId": page, "body": "Paint it blue.", "expectedVersion": 1}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let body = || async {
+        sqlx::query_scalar::<_, String>("SELECT body FROM project_pages WHERE id = $1::uuid")
+            .bind(&page)
+            .fetch_one(world.pool())
+            .await
+            .expect("page body")
+    };
+    let arguments = json!({"thing": page, "version": 1, "expectedVersion": 2});
+
+    // The viewer agent reads the history but can't restore.
+    let listed = as_rook("history_list", json!({"thing": page})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let refused = as_rook("history_restore", arguments.clone()).await;
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "viewer agent: {refused}"
+    );
+    assert_eq!(body().await, "Paint it blue.");
+
+    // The viewer person, through the web, is refused the same way.
+    let (status, refused) = send(
+        app,
+        world.people["vera"].browser.request(
+            "POST",
+            "/api/v2/ops/history_restore",
+            Some("privacy-restore-vera"),
+            arguments.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "viewer person: {status} {refused}"
+    );
+    assert_eq!(body().await, "Paint it blue.");
+
+    // A member restores it.
+    let restored = as_mara("history_restore", arguments).await;
+    assert!(
+        matches!(restored["outcome"].as_str(), Some("ok" | "applied")),
+        "member: {restored}"
+    );
+    assert_eq!(body().await, "Paint it red.");
+    world.finish().await;
+}

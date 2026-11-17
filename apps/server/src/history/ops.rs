@@ -43,7 +43,9 @@ async fn visible_kind(call: &OpCall<'_>, id: Uuid) -> Result<String, OpError> {
     if !module_things::KINDS.contains(&kind.as_str()) {
         return Ok(kind);
     }
-    let mut projects = crate::search::browser_projects(&state.pool, account).await?;
+    let mut projects =
+        crate::search::reachable_projects(&state.pool, account, call.ctx.caller.connection_id)
+            .await?;
     if let Some(confined) = call.ctx.caller.confined_space {
         projects.retain(|project| *project == confined);
     }

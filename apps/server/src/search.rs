@@ -622,6 +622,16 @@ pub async fn projects_allowing(
 }
 
 pub async fn browser_projects(pool: &PgPool, actor_id: Uuid) -> Result<Vec<Uuid>, AppError> {
+    reachable_projects(pool, actor_id, None).await
+}
+
+/// The spaces a caller reaches through the credential it called with: an
+/// agent reaches by its connection, so its connection is passed here.
+pub async fn reachable_projects(
+    pool: &PgPool,
+    actor_id: Uuid,
+    connection_id: Option<Uuid>,
+) -> Result<Vec<Uuid>, AppError> {
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT project.id
@@ -629,10 +639,11 @@ pub async fn browser_projects(pool: &PgPool, actor_id: Uuid) -> Result<Vec<Uuid>
         JOIN project_memberships membership
           ON membership.project_id = project.id AND membership.actor_id = $1 AND membership.enabled
         WHERE project.archived_at IS NULL
-          AND actor_can_access_project($1, NULL, project.id)
+          AND actor_can_access_project($1, $2, project.id)
         "#,
     )
     .bind(actor_id)
+    .bind(connection_id)
     .fetch_all(crate::db::scoped(pool))
     .await?)
 }

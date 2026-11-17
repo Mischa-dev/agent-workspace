@@ -795,6 +795,11 @@ impl ClaimedOutboxEvent {
         self.project_id
     }
 
+    /// The stored payload, as written.
+    pub fn payload_json(&self) -> &serde_json::Value {
+        &self.payload
+    }
+
     pub fn attempt_count(&self) -> i32 {
         self.attempt_count
     }

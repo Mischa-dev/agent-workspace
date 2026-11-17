@@ -251,6 +251,15 @@ async fn listening(
 /// event published: when the event would route and its project listens,
 /// make sure one `events.router` pass is queued. The router reads the
 /// log, not the outbox; this only says "look now".
+///
+/// An event queued before the log existed (left unpublished across the
+/// upgrade) has no log entry, so it is put in the log here, with its own
+/// id, before the pass is queued; otherwise it would be marked published
+/// and never routed.
+///
+/// The pass is queued for no workspace: the router's cursor is shared by
+/// every workspace, so it must read the whole log, not one workspace's
+/// rows.
 pub async fn queue_route(
     transaction: &mut Transaction<'_, Postgres>,
     claim: &ClaimedOutboxEvent,
@@ -258,17 +267,34 @@ pub async fn queue_route(
     let Ok(payload) = claim.decode() else {
         return Ok(false);
     };
-    if route_source(payload).is_none() {
+    if route_source(payload.clone()).is_none() {
         return Ok(false);
     }
-    let Some(organization_id) = listening(transaction, claim.project_id()).await? else {
+    if listening(transaction, claim.project_id()).await?.is_none() {
         return Ok(false);
-    };
+    }
+    let logged = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (SELECT 1 FROM events WHERE id = $1)
+            OR EXISTS (SELECT 1 FROM event_staging WHERE id = $1)
+        "#,
+    )
+    .bind(claim.event_id())
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !logged {
+        super::legacy::mirror(
+            transaction,
+            claim.event_id(),
+            claim.project_id(),
+            &payload,
+            claim.payload_json(),
+        )
+        .await?;
+    }
     jobs::enqueue(
         &mut **transaction,
-        NewJob::new(ROUTER_KIND)
-            .project(organization_id, claim.project_id())
-            .unique(ROUTER_KIND),
+        NewJob::new(ROUTER_KIND).unique(ROUTER_KIND),
     )
     .await?;
     Ok(true)

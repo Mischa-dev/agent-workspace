@@ -725,3 +725,102 @@ async fn the_router_loses_and_repeats_no_delivery() {
     route_only(&state).await;
     assert_eq!(deliveries().await, (3, 3), "no delivery twice");
 }
+
+/// An event the outbox holds from before the log existed (unpublished
+/// across the upgrade, so it has no log entry) is put in the log when it is
+/// published, with its own id, and the router pass it queues belongs to no
+/// workspace: the router's cursor is shared, so a pass in one workspace's
+/// scope would skip the others' events.
+#[tokio::test]
+async fn an_outbox_event_from_before_the_log_still_routes() {
+    use agent_workspace_server::realtime::{RealtimeHub, publish_ready_outbox_batch};
+
+    let Some(world) = WorldBuilder::default()
+        .project("OLD")
+        .connected_app("helper")
+        .build("event_log_old_outbox")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool().clone();
+    let project = world.project("OLD");
+    sqlx::query(
+        "INSERT INTO webhook_subscriptions \
+             (id, organization_id, project_id, owner_actor_id, name, url, event_types) \
+         VALUES ($1, $2, $3::uuid, $4, 'Old outbox', 'https://receiver.invalid/hook', \
+                 '{message.created}')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(world.organization)
+    .bind(project)
+    .bind(world.owner.actor)
+    .execute(&pool)
+    .await
+    .expect("subscription");
+    let setup = Setup {
+        app: world.app.clone(),
+        browser: super::support::app::login(&world.app).await,
+        organization_id: world.organization,
+        pool: pool.clone(),
+        cleanup: None,
+    };
+    let channel = create_channel(&setup, project, "old").await;
+    // Everything so far is published and sequenced.
+    let hub = RealtimeHub::new(64);
+    while publish_ready_outbox_batch(&pool, &hub, "old-outbox-test")
+        .await
+        .expect("publish")
+        > 0
+    {}
+    while sequencer::step(&pool).await.expect("sequence") > 0 {}
+    sqlx::query("DELETE FROM background_jobs WHERE kind = 'events.router'")
+        .execute(&pool)
+        .await
+        .expect("clear router passes");
+
+    let helper = &world.apps["helper"];
+    let sent = tool(
+        &world.app,
+        &helper.token,
+        &helper.session,
+        "message_send",
+        json!({"conversationId": channel, "text": "from before", "clientRequestId": "old-1"}),
+    )
+    .await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+    // As if written before the log: the outbox row has no log entry.
+    let event_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT event_id FROM outbox_events \
+         WHERE event_type = 'conversation.message.created' AND published_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the unpublished event");
+    sqlx::query("DELETE FROM event_staging WHERE id = $1")
+        .bind(event_id)
+        .execute(&pool)
+        .await
+        .expect("forget the log entry");
+
+    while publish_ready_outbox_batch(&pool, &hub, "old-outbox-test")
+        .await
+        .expect("publish")
+        > 0
+    {}
+    while sequencer::step(&pool).await.expect("sequence") > 0 {}
+    let logged = sqlx::query_scalar::<_, String>("SELECT type FROM events WHERE id = $1")
+        .bind(event_id)
+        .fetch_optional(&pool)
+        .await
+        .expect("log");
+    assert_eq!(logged.as_deref(), Some("message.created"), "put in the log");
+    let passes = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>)>(
+        "SELECT organization_id, project_id FROM background_jobs WHERE kind = 'events.router'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("router passes");
+    assert_eq!(passes, vec![(None, None)], "one pass, for no workspace");
+    world.finish().await;
+}
