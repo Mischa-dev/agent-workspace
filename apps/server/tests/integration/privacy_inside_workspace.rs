@@ -1240,6 +1240,76 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
     world.finish().await;
 }
 
+/// K3.26: only someone who may manage automations makes or deletes an
+/// incoming hook; a member sees the space's hooks but never a secret.
+#[tokio::test]
+async fn incoming_hooks_need_automations_manage_and_never_show_a_secret() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("privacy_incoming_hooks")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let space = world.projects["WORK"].clone();
+    let (status, made) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("incoming_hook_create"),
+            Some("hook-1"),
+            json!({ "spaceId": space, "name": "Alerts" }),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let hook = made["value"]["hook"]["id"]
+        .as_str()
+        .expect("hook")
+        .to_owned();
+    let secret = made["value"]["secret"].as_str().expect("secret").to_owned();
+    let lena = &world.people["lena"];
+    let (_, listed) = send(
+        &world.app,
+        lena.browser.request(
+            "POST",
+            &route("incoming_hook_list"),
+            None,
+            json!({ "spaceId": space }),
+        ),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert_eq!(listed["value"]["hooks"][0]["id"], hook.as_str(), "{listed}");
+    assert!(!listed.to_string().contains(&secret), "{listed}");
+    for (op, body) in [
+        (
+            "incoming_hook_create",
+            json!({ "spaceId": space, "name": "Mine" }),
+        ),
+        (
+            "incoming_hook_delete",
+            json!({ "spaceId": space, "hookId": hook }),
+        ),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser
+                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    let still = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM incoming_hooks")
+        .fetch_one(world.pool())
+        .await
+        .expect("hooks");
+    assert_eq!(still, 1);
+    world.finish().await;
+}
+
 /// K4.26: an invitation link admits up to its number of people with its
 /// role, and the space it names; a revoked or expired link gets the same
 /// answer as an unknown one; someone who may invite but holds less than

@@ -154,6 +154,37 @@
     "scheduler.rs": 16,
     "usage/history.rs": 1
   },
+  "audit_inserts": {
+    "account_security.rs": 3,
+    "accounts/claims.rs": 1,
+    "auth/mod.rs": 2,
+    "auth/workos.rs": 1,
+    "auth/workos/agents.rs": 1,
+    "bootstrap.rs": 3,
+    "connected_apps.rs": 1,
+    "conversations.rs": 2,
+    "events/route.rs": 1,
+    "external_agents.rs": 1,
+    "external_execution.rs": 2,
+    "github.rs": 9,
+    "github/connect.rs": 2,
+    "invitations.rs": 2,
+    "launch.rs": 1,
+    "mcp.rs": 1,
+    "mcp/approvals.rs": 2,
+    "mcp/common.rs": 1,
+    "memberships.rs": 1,
+    "memory.rs": 1,
+    "ops/dispatch.rs": 1,
+    "password_reset.rs": 2,
+    "projects.rs": 1,
+    "roles.rs": 1,
+    "settings.rs": 1,
+    "spaces/invite_links.rs": 1,
+    "whiteboards.rs": 1,
+    "work_item_commands.rs": 6,
+    "workspace.rs": 2
+  },
   "background_spawns": {
     "github.rs": 1,
     "harnesses.rs": 1,
@@ -265,6 +296,11 @@
     "work_items.rs": 4,
     "work_items/imports.rs": 1,
     "work_items/views.rs": 1
+  },
+  "log_readers": {
+    "metrics.rs": 3,
+    "notifications.rs": 5,
+    "server_status.rs": 2
   },
   "message_inserts": {
     "api.rs": 1,

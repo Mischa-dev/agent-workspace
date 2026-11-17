@@ -1,5 +1,19 @@
 [
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "activity_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List activity"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -197,6 +211,52 @@
     "preview": false,
     "proposable": false,
     "title": "Unlink a host"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "incoming_hook.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "automations",
+    "name": "incoming_hook_create",
+    "permission": "automations.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Make an incoming hook"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "incoming_hook.deleted"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "automations",
+    "name": "incoming_hook_delete",
+    "permission": "automations.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Delete an incoming hook"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "automations",
+    "name": "incoming_hook_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List incoming hooks"
   },
   {
     "automation": true,

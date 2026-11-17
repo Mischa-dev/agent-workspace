@@ -1197,7 +1197,15 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &["secret_id"],
             },
         ],
-        not_exported: &[("webhook_deliveries", "a delivery log")],
+        not_exported: &[
+            ("webhook_deliveries", "a delivery log"),
+            (
+                "incoming_hooks",
+                "an address another service signs for with a secret, which never leaves; \
+                 make the hook again in the new workspace",
+            ),
+            ("incoming_hook_deliveries", "a delivery log"),
+        ],
     },
     ExportDecl {
         module: "suggestions",

@@ -1,6 +1,85 @@
 {
   "components": {
     "schemas": {
+      "ActivityEntry": {
+        "description": "One thing that happened.",
+        "properties": {
+          "actor": {
+            "description": "Their name in the workspace.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actorId": {
+            "description": "Who did it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "changed": {
+            "description": "Keys of what changed (\"title\", \"status\", a field id).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "position": {
+            "description": "Its place in the log: pass the last one as `before` for older\nentries.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "requestedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedById": {
+            "description": "Who asked for it, when someone asked an agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "description": "In a few words, from the catalogue: \"A task changed\".",
+            "type": "string"
+          },
+          "type": {
+            "description": "The event's type, such as `task.updated`.",
+            "type": "string"
+          },
+          "version": {
+            "description": "The version it made, where the thing keeps versions.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "via": {
+            "description": "The connected app they acted through, when it shows itself.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "position",
+          "at",
+          "type",
+          "summary",
+          "changed"
+        ],
+        "type": "object"
+      },
       "ActivityLine": {
         "description": "One activity as the run view draws it.",
         "properties": {
@@ -301,6 +380,36 @@
         ],
         "type": "object"
       },
+      "DeliveryView": {
+        "description": "One delivery: when, its id, and whether it was taken. Never its body.",
+        "properties": {
+          "deliveryId": {
+            "description": "The sender's id for it.",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "`accepted` or `refused`.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it was refused: `no_delivery_id`, `stale_timestamp`,\n`bad_signature` or `too_large`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receivedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deliveryId",
+          "outcome",
+          "receivedAt"
+        ],
+        "type": "object"
+      },
       "HistoryCaps": {
         "description": "What a kind's history can do, as the operations report it.",
         "properties": {
@@ -374,6 +483,51 @@
           "at",
           "summary",
           "changed"
+        ],
+        "type": "object"
+      },
+      "HookView": {
+        "description": "A hook, as its space's members see it. Never its secret.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastDeliveryAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "recent": {
+            "description": "The latest deliveries, accepted or refused, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryView"
+            },
+            "type": "array"
+          },
+          "spaceId": {
+            "type": "string"
+          },
+          "url": {
+            "description": "Where the sender posts.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "spaceId",
+          "name",
+          "url",
+          "createdAt",
+          "recent"
         ],
         "type": "object"
       },
@@ -1445,6 +1599,267 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v2/w/{workspace}/ops/activity_list": {
+      "post": {
+        "description": "What happened to a thing, newest first: each change with who made it, the app they used, who asked for it and the keys of what changed. No content: open the thing for that, or history_show for an older version.",
+        "operationId": "activity_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "The thing whose activity to read.",
+                "properties": {
+                  "before": {
+                    "description": "Only entries older than this position (the last one of a previous\npage).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "limit": {
+                    "description": "How many, newest first (default 30, at most 200).",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "thing": {
+                    "description": "The thing: its id or link (a task, page, board, sheet, record,\nconversation, run or pull request).",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "thing"
+                ],
+                "title": "ActivityListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "entries": {
+                              "description": "Newest first.",
+                              "items": {
+                                "$ref": "#/components/schemas/ActivityEntry"
+                              },
+                              "type": "array"
+                            },
+                            "kind": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "entries"
+                          ],
+                          "title": "ActivityListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "entries": {
+                              "description": "Newest first.",
+                              "items": {
+                                "$ref": "#/components/schemas/ActivityEntry"
+                              },
+                              "type": "array"
+                            },
+                            "kind": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "entries"
+                          ],
+                          "title": "ActivityListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List activity",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
     "/api/v2/w/{workspace}/ops/agent_create": {
       "post": {
         "description": "Make an agent in this workspace with a role within yours. It starts in the workspace's own space and joins projects like anyone. You manage it. Returns its credential once. Needs \"Add agents\" where it acts.",
@@ -5556,6 +5971,737 @@
           "agents"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/incoming_hook_create": {
+      "post": {
+        "description": "Make an address in a space that another service can post to, to start automation rules there (trigger kind incoming_hook with its hookId). Returns the hook's url and its signing secret, shown only this once. The sender signs each delivery: X-Hook-Delivery (its own id), X-Hook-Timestamp (Unix seconds) and X-Hook-Signature (sha256= and the hex HMAC-SHA256 of \"<timestamp>.<delivery id>.<body>\" keyed by the secret). Needs \"Manage automations\" where it acts.",
+        "operationId": "incoming_hook_create",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "description": "What sends to it, in a few words (\"Billing alerts\").",
+                    "type": "string"
+                  },
+                  "spaceId": {
+                    "description": "The space (a project) whose rules it starts: its id, link or key.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spaceId",
+                  "name"
+                ],
+                "title": "IncomingHookCreateInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "hook": {
+                              "$ref": "#/components/schemas/HookView"
+                            },
+                            "secret": {
+                              "description": "The signing secret, shown only in the answer that made the hook;\nabsent when a retry found a hook already made. A lost secret can't be\nshown again: delete the hook and make another.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "hook"
+                          ],
+                          "title": "IncomingHookCreated",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "hook": {
+                              "$ref": "#/components/schemas/HookView"
+                            },
+                            "secret": {
+                              "description": "The signing secret, shown only in the answer that made the hook;\nabsent when a retry found a hook already made. A lost secret can't be\nshown again: delete the hook and make another.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "hook"
+                          ],
+                          "title": "IncomingHookCreated",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Make an incoming hook",
+        "tags": [
+          "automations"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/incoming_hook_delete": {
+      "post": {
+        "description": "Delete an incoming hook, its secret and its deliveries: its url stops taking deliveries at once, and rules triggered by it stop firing. Needs \"Manage automations\" where it acts.",
+        "operationId": "incoming_hook_delete",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "hookId": {
+                    "description": "The hook's id.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "spaceId": {
+                    "description": "The space (a project) the hook is in: its id, link or key.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spaceId",
+                  "hookId"
+                ],
+                "title": "IncomingHookDeleteInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "deleted": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "deleted"
+                          ],
+                          "title": "IncomingHookDeleted",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "deleted": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "deleted"
+                          ],
+                          "title": "IncomingHookDeleted",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Delete an incoming hook",
+        "tags": [
+          "automations"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/incoming_hook_list": {
+      "post": {
+        "description": "List a space's incoming hooks: each one's url, when it last received a delivery, and its latest deliveries, accepted or refused with the reason. Use a hook's id in an automation rule's incoming_hook trigger.",
+        "operationId": "incoming_hook_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "spaceId": {
+                    "description": "The space (a project): its id, link or key.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spaceId"
+                ],
+                "title": "IncomingHookListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "hooks": {
+                              "description": "Newest first, each with its latest deliveries. Never a secret.",
+                              "items": {
+                                "$ref": "#/components/schemas/HookView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "hooks"
+                          ],
+                          "title": "IncomingHookListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "hooks": {
+                              "description": "Newest first, each with its latest deliveries. Never a secret.",
+                              "items": {
+                                "$ref": "#/components/schemas/HookView"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "hooks"
+                          ],
+                          "title": "IncomingHookListOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List incoming hooks",
+        "tags": [
+          "automations"
+        ],
+        "x-operation-kind": "query"
       }
     },
     "/api/v2/w/{workspace}/ops/invite_link_create": {

@@ -1623,6 +1623,20 @@ async fn build_body(
             };
             json!({ key: data })
         }
+        "incoming_hook.received" => {
+            let (Some(project_id), Some(hook_id), Some(delivery_id)) =
+                (due.project_id, subject.hook_id, subject.delivery_id)
+            else {
+                return Ok(None);
+            };
+            // The hook and the delivery's ids and time, never its body.
+            let Some(data) =
+                crate::incoming_hooks::webhook_data(pool, project_id, hook_id, delivery_id).await?
+            else {
+                return Ok(None);
+            };
+            data
+        }
         "run.updated" | "run.finished" => {
             let Some(run_id) = subject.agent_run_id else {
                 return Ok(None);

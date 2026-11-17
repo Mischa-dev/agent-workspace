@@ -56,6 +56,10 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
         "whiteboard.updated",
         "A whiteboard was saved as a new version",
     ),
+    (
+        "incoming_hook.received",
+        "An incoming hook received a delivery",
+    ),
 ];
 
 pub fn is_event_type(value: &str) -> bool {
@@ -102,6 +106,11 @@ pub struct Subject {
     pub sheet_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whiteboard_id: Option<Uuid>,
+    /// An incoming hook and one of its deliveries (K3.26).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_id: Option<Uuid>,
     /// For task.updated and record.updated: what changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed_fields: Vec<String>,
@@ -152,6 +161,7 @@ fn thing_of(event_type: &str, subject: &Subject) -> Option<ThingRef> {
         Some("page") => thing("page", subject.page_id),
         Some("sheet") => thing("sheet", subject.sheet_id),
         Some("whiteboard") => thing("whiteboard", subject.whiteboard_id),
+        Some("incoming_hook") => thing("incoming_hook", subject.hook_id),
         _ => None,
     }
 }
@@ -232,6 +242,22 @@ async fn heard(
                 format!("{event_type}:{thing}:{version}"),
                 logged.actor_account_id,
                 subject,
+            )]
+        }
+        // One per accepted delivery: the delivery's id is the key.
+        "incoming_hook.received" => {
+            let Some(delivery) = id_in("deliveryId") else {
+                return Ok(Vec::new());
+            };
+            vec![event(
+                event_type,
+                format!("incoming_hook:{delivery}"),
+                None,
+                Subject {
+                    hook_id: Some(thing),
+                    delivery_id: Some(delivery),
+                    ..Subject::default()
+                },
             )]
         }
         "task.created" => vec![event(

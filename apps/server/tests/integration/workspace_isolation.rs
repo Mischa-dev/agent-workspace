@@ -1969,6 +1969,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "approval_list",
     "automation_list",
     "automation_runs",
+    "incoming_hook_list",
     "briefing",
     "bug_report_link_list",
     "conversation_list",
@@ -1982,6 +1983,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "file_read",
     "history_list",
     "history_show",
+    "activity_list",
     "invite_link_list",
     "collection_list",
     "collection_describe",
@@ -2206,6 +2208,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("skill_list"),
         by_project("decision_list"),
+        by_project("incoming_hook_list"),
         case(
             "package_export",
             vec![json!({"spaceId": "WORK"}), json!({"wholeWorkspace": true})],
@@ -2696,6 +2699,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "history_show",
             vec![json!({"thing": a.page, "version": 1})],
             vec![json!({"thing": b.page, "version": 1})],
+            vec![],
+        ),
+        // K3.20: any thing's activity from the log.
+        case(
+            "activity_list",
+            vec![json!({"thing": a.page}), json!({"thing": a.task})],
+            vec![json!({"thing": b.page}), json!({"thing": b.task})],
             vec![],
         ),
     ]

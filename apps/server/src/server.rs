@@ -189,6 +189,10 @@ impl Server {
         if roles.work {
             crate::harnesses::spawn_reloader(state.clone());
         }
+        // Every instance knows its cluster, host or not, so a run started
+        // through this one's API wakes the lease holder instead of being
+        // admitted here without the lease.
+        state.supervisors.set_cluster(cluster.clone());
         // The run scheduler, recovery and host jobs, on whichever instance
         // holds the built-in host's lease (K5.3).
         let scheduler = tokio::spawn({

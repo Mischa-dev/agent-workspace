@@ -15,11 +15,18 @@
     "automation_runs": "query",
     "webhook_list": "query",
     "webhook_write": "change",
-    "webhook_deliveries": "query"
+    "webhook_deliveries": "query",
+    "incoming_hook_create": "create",
+    "incoming_hook_list": "query",
+    "incoming_hook_delete": "change"
   },
-  "routes": ["/api/v1/projects/{project_id}/automations*", "/api/v1/webhooks*"],
+  "routes": [
+    "/api/v1/projects/{project_id}/automations*",
+    "/api/v1/webhooks*",
+    "/api/v1/incoming-hooks*"
+  ],
   "events": {
-    "emits": [],
+    "emits": ["incoming_hook.received"],
     "listens": [
       "task.created",
       "task.updated",
@@ -36,7 +43,10 @@
   },
   "notifications": ["automation", "automation_disabled"],
   "search": [],
-  "automations": { "triggers": ["schedule"], "actions": ["notify", "run_operation"] },
+  "automations": {
+    "triggers": ["schedule", "incoming_hook"],
+    "actions": ["notify", "run_operation"]
+  },
   "things": [
     {
       "kind": "automation",

@@ -18,6 +18,8 @@ export type Envelope<T> =
   | { outcome: 'ok'; value: T; requestId?: string; replayed?: boolean; replaySafe?: boolean; preview?: boolean }
   | OpError
 
+export type ActivityEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; position: number; requestedBy?: string | null; requestedById?: string | null; summary: string; type: string; version?: number | null; via?: string | null }
+
 export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
 
 export type AgentUsageLine = { accountId: string; cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; handle?: string | null; inputTokens: number; name?: string | null; outputTokens: number; runs: number }
@@ -30,9 +32,13 @@ export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" 
 
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
 
+export type DeliveryView = { deliveryId: string; outcome: string; reason?: string | null; receivedAt: string }
+
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
 
 export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
+
+export type HookView = { createdAt: string; id: string; lastDeliveryAt?: string | null; name: string; recent: DeliveryView[]; spaceId: string; url: string }
 
 export type HostAgentView = { accountId: string; actions: unknown[]; backends: unknown[]; hostAgentRef: string; name?: string | null; status: string }
 
@@ -79,6 +85,10 @@ export type RunRecord = { activityCount: number; cancelRequestedAt?: string | nu
 export type RunResultInput = { branch?: string | null; id?: string | null; kind: string; number?: number | null; thingKind?: string | null; title?: string | null; url?: string | null }
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
+
+export type ActivityListInput = { before?: number | null; limit?: number | null; thing: string }
+
+export type ActivityListOutput = { entries: ActivityEntry[]; kind: string }
 
 export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
 
@@ -131,6 +141,18 @@ export type HostListOutput = { hosts: HostView[] }
 export type HostUnlinkInput = { hostId: string }
 
 export type HostUnlinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
+
+export type IncomingHookCreateInput = { name: string; spaceId: string }
+
+export type IncomingHookCreateOutput = { hook: HookView; secret?: string | null }
+
+export type IncomingHookDeleteInput = { hookId: string; spaceId: string }
+
+export type IncomingHookDeleteOutput = { deleted: boolean }
+
+export type IncomingHookListInput = { spaceId: string }
+
+export type IncomingHookListOutput = { hooks: HookView[] }
 
 export type InviteLinkCreateInput = { expiresInDays?: number | null; maxUses?: number | null; roleId?: string | null; space?: string | null }
 
@@ -217,6 +239,7 @@ export type WorkspaceDeleteCancelInput = Record<string, never>
 export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
 
 export type Operations = {
+  activity_list: { input: ActivityListInput; output: ActivityListOutput }
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
@@ -230,6 +253,9 @@ export type Operations = {
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
+  incoming_hook_create: { input: IncomingHookCreateInput; output: IncomingHookCreateOutput }
+  incoming_hook_delete: { input: IncomingHookDeleteInput; output: IncomingHookDeleteOutput }
+  incoming_hook_list: { input: IncomingHookListInput; output: IncomingHookListOutput }
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
   invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
   invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }

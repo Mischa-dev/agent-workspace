@@ -50,6 +50,7 @@ pub mod history;
 pub mod home;
 pub mod hosts;
 pub mod idempotency;
+pub mod incoming_hooks;
 pub mod invitations;
 pub mod jobs;
 pub mod later;

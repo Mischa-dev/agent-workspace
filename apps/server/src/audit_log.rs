@@ -1,8 +1,13 @@
 //! S8: the workspace's audit log, read.
 //!
-//! `audit_events` is written all over the server; this reads it for one
-//! workspace, newest first, with filters for who, which app, what kind and
-//! when. Owners and admins read it. An event about a conversation or a
+//! Two sources, read together (K3.20): the facts in the event log (a task
+//! changed, a page saved, with who, through which app and for whom) and
+//! `audit_events`, which still records what isn't a change to a thing
+//! (sign-ins, settings, keys) and every refused attempt. A succeeded audit
+//! row gives way to the facts logged about the same thing by the same
+//! request or transaction (same `now()`), which say more and carry no text.
+//! One workspace, newest first, with filters for who, which app, what kind
+//! and when. Owners and admins read it. An event about a conversation or a
 //! message shows only when the reader can see that conversation
 //! (`conversation_visible_to`), so the log never reveals a private
 //! conversation to someone outside it. Metadata holds ids and counts, never
@@ -212,7 +217,7 @@ async fn require_reader(
 /// conversations or messages they can't see. `$1` is the workspace, `$2`
 /// the reader.
 const VISIBLE_EVENTS: &str = r#"
-    FROM audit_events event
+    FROM event
     LEFT JOIN projects project ON project.id = event.project_id
     LEFT JOIN actors actor ON actor.id = event.actor_id
     LEFT JOIN organization_actor_profiles profile
@@ -254,6 +259,7 @@ async fn list_events(
     };
     let rows = sqlx::query_as::<_, EventRow>(&format!(
         r#"
+        {combined}
         SELECT event.id, event.occurred_at, event.action, event.outcome,
                event.actor_id,
                COALESCE(profile.display_name, user_account.display_name,
@@ -274,7 +280,8 @@ async fn list_events(
           AND ($10::timestamptz IS NULL OR (event.occurred_at, event.id) < ($10, $11))
         ORDER BY event.occurred_at DESC, event.id DESC
         LIMIT $12
-        "#
+        "#,
+        combined = crate::events::activity::audit_relation(),
     ))
     .bind(organization_id)
     .bind(principal.actor_id)
@@ -431,33 +438,38 @@ async fn facets(
             .to_lowercase()
             .cmp(&right.display_name.to_lowercase())
     });
-    let channels = sqlx::query_scalar::<_, String>(
+    let channels = sqlx::query_scalar::<_, String>(&format!(
         r#"
-        SELECT DISTINCT channel FROM audit_events
-        WHERE organization_id = $1 AND channel IS NOT NULL
+        {combined}
+        SELECT DISTINCT channel FROM event
+        WHERE channel IS NOT NULL
         ORDER BY 1
         "#,
-    )
+        combined = crate::events::activity::audit_relation(),
+    ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let clients = sqlx::query_scalar::<_, String>(
+    let clients = sqlx::query_scalar::<_, String>(&format!(
         r#"
-        SELECT client_name FROM audit_events
-        WHERE organization_id = $1 AND client_name IS NOT NULL
+        {combined}
+        SELECT client_name FROM event
+        WHERE client_name IS NOT NULL
         GROUP BY client_name ORDER BY max(occurred_at) DESC LIMIT 50
         "#,
-    )
+        combined = crate::events::activity::audit_relation(),
+    ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let kinds = sqlx::query_scalar::<_, String>(
+    let kinds = sqlx::query_scalar::<_, String>(&format!(
         r#"
-        SELECT DISTINCT split_part(action, '.', 1) FROM audit_events
-        WHERE organization_id = $1
+        {combined}
+        SELECT DISTINCT split_part(action, '.', 1) FROM event
         ORDER BY 1
         "#,
-    )
+        combined = crate::events::activity::audit_relation(),
+    ))
     .bind(organization_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;

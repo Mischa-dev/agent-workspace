@@ -83,6 +83,8 @@ pub(crate) struct World {
     pub(crate) import: String,
     pub(crate) webhook: Uuid,
     pub(crate) rule: Uuid,
+    /// An incoming hook in the project (K3.26).
+    pub(crate) incoming_hook: Uuid,
     pub(crate) whiteboard: Uuid,
     pub(crate) project_whiteboard: Uuid,
     /// A collection (AWD-90) with a field, a saved view and a record whose
@@ -1380,6 +1382,22 @@ async fn build_workspace(
         app,
         browser.request(
             "POST",
+            &format!("/api/v2/w/{organization}/ops/incoming_hook_create"),
+            Some(&format!("incoming-hook-{tag}")),
+            json!({"spaceId": project, "name": format!("Inbound{m}")}),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} incoming hook: {status} {created}"
+    );
+    let incoming_hook =
+        Uuid::parse_str(&string_at(&created, "/value/hook/id")).expect("incoming hook id");
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
             &format!("/api/v1/projects/{project}/bug-report-links"),
             None,
             json!({"name": format!("Game{m}")}),
@@ -1652,6 +1670,7 @@ async fn build_workspace(
         import,
         webhook,
         rule,
+        incoming_hook,
         whiteboard,
         project_whiteboard,
         collection,
