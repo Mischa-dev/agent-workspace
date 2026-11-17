@@ -398,7 +398,7 @@ async fn store_push(
     let signing = agent_workspace_host_protocol::new_push_secret(random);
     let signing_value = crate::secrets::SecretValue::new(signing.clone());
     let signing_id = crate::secrets::put(
-        &mut **transaction,
+        transaction,
         keys.as_ref(),
         crate::secrets::NewSecret {
             owner: crate::secrets::SecretOwner::Workspace { organization_id },
@@ -415,7 +415,7 @@ async fn store_push(
         None => None,
         Some(token) => Some(
             crate::secrets::put(
-                &mut **transaction,
+                transaction,
                 keys.as_ref(),
                 crate::secrets::NewSecret {
                     owner: crate::secrets::SecretOwner::Workspace { organization_id },
