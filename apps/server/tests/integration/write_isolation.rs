@@ -447,8 +447,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
 
 /// Every MCP tool that isn't read-only, which `mcp_cases` covers.
 const MCP_WRITE_TOOLS: &[&str] = &[
+    "account_workspace_add",
     "agent_create",
     "agent_managers_set",
+    "agent_pause",
+    "agent_resume",
     "agent_profile_write",
     "ai_analyze",
     "ai_suggestion_decide",
@@ -6156,6 +6159,25 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": b.agent, "remove": [a.rook]}),
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
+        ),
+        // A2.10: pausing and resuming an agent one manages, here; B's
+        // agent isn't in A. Resumed at once, so later cases run unpaused.
+        mcp_case(
+            "agent_pause",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
+        mcp_case(
+            "agent_resume",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
+        // A2.18: adding an agent one manages; it is already a member of
+        // A, so nothing changes. B's agent isn't one A's caller manages.
+        mcp_case(
+            "account_workspace_add",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
         ),
         // A2: an account's delivery connections are its own and its
         // managers'. B's connection and B's agent aren't A's to change.

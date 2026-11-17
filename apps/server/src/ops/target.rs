@@ -191,11 +191,21 @@ const KINDS: &[(&str, &str)] = &[
         "package_install",
         "SELECT workspace_id, space_id FROM package_installs WHERE id = $1 AND $2::uuid IS NOT NULL",
     ),
+    // A2.12: a file, in its space; who may read it is `files::readable_file`.
+    (
+        "file",
+        "SELECT organization_id, project_id FROM files WHERE id = $1 AND $2::uuid IS NOT NULL",
+    ),
     // A1.8: a request goes by request_visible_to, which holds its
     // conversation's and run's visibility.
     (
         "request",
-        "SELECT request.workspace_id, request.space_id FROM requests request \
+        // A request to let an account in (A2.18) is about the workspace,
+        // though it is asked in the workspace's own space.
+        "SELECT request.workspace_id, \
+                CASE WHEN request.subject_kind = 'account_join' THEN NULL \
+                     ELSE request.space_id END \
+         FROM requests request \
          WHERE request.id = $1 AND request_visible_to(request.id, $2)",
     ),
 ];
@@ -304,6 +314,7 @@ fn what_of(kind: &str) -> &'static str {
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",
         "request" => "That request",
+        "file" => "That file",
         _ => "That",
     }
 }

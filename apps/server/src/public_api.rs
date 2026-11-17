@@ -324,6 +324,9 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     for branch in branches {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
+            // A paused account's answer (A2.10) is the same for every
+            // operation: shared too.
+            Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
             Some("ok") => continue,
             Some(outcome) => format!("Refusal{}", pascal(outcome)),
             // The operation layer's own refusals, one branch listing them

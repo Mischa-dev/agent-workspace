@@ -40,6 +40,12 @@ const connection = {
   updatedAt: '2026-08-05T07:00:00Z',
 }
 
+const recipes = [
+  { id: 'first_app', title: 'First app' },
+  { id: 'codex', title: 'Codex' },
+  { id: 'other', title: 'Another app' },
+]
+
 function jsonResponse(body: unknown) {
   return Promise.resolve(
     new Response(JSON.stringify(body), {
@@ -87,6 +93,10 @@ describe('ExternalAgentSettings', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input)
+        if (path.endsWith('/api/v1/agent-recipes')) return jsonResponse(recipes)
+        if (path.includes('/api/v2/ops/status_list') || path.includes('/api/v2/ops/account_joinable_list')) {
+          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [] } })
+        }
         requests.push({ path, init })
         if (!init?.method || init.method === 'GET') {
           return jsonResponse({ connections: [connection] })
@@ -145,6 +155,10 @@ describe('ExternalAgentSettings', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input)
+        if (path.endsWith('/api/v1/agent-recipes')) return jsonResponse(recipes)
+        if (path.includes('/api/v2/ops/status_list') || path.includes('/api/v2/ops/account_joinable_list')) {
+          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [] } })
+        }
         paths.push(path)
         if (init?.method === 'POST') {
           created = true
@@ -196,6 +210,10 @@ describe('ExternalAgentSettings', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input)
+        if (path.endsWith('/api/v1/agent-recipes')) return jsonResponse(recipes)
+        if (path.includes('/api/v2/ops/status_list') || path.includes('/api/v2/ops/account_joinable_list')) {
+          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [] } })
+        }
         if (init?.method === 'POST') {
           created = true
           posts.push({ path, body: JSON.parse(String(init.body)) })
@@ -250,6 +268,10 @@ describe('ExternalAgentSettings', () => {
       'fetch',
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input)
+        if (path.endsWith('/api/v1/agent-recipes')) return jsonResponse(recipes)
+        if (path.includes('/api/v2/ops/status_list') || path.includes('/api/v2/ops/account_joinable_list')) {
+          return jsonResponse({ outcome: 'ok', value: { statuses: [], accounts: [] } })
+        }
         if (init?.method === 'POST') {
           posts.push({ path, body: JSON.parse(String(init.body)) })
           return jsonResponse({

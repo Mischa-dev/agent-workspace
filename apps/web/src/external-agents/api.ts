@@ -40,8 +40,17 @@ export type OneTimeCredential = {
   expiresAt: string
 }
 
-/** The apps a setup link writes its steps for. */
-export type SetupApp = 'claude_code' | 'codex' | 'other'
+/** An app a setup link writes its steps for: a recipe's id. */
+export type SetupApp = string
+
+/** A client an agent can run in, from the agent plugin's recipes. */
+export type SetupRecipe = { id: string; title: string }
+
+/** The apps the server has setup steps for, in its order. */
+export async function listSetupRecipes(): Promise<SetupRecipe[]> {
+  const recipes = await requestJson<unknown>('/api/v1/agent-recipes')
+  return Array.isArray(recipes) ? (recipes as SetupRecipe[]) : []
+}
 
 /** A one-time link that hands an agent its token, with the steps for its app. */
 export type SetupLink = {

@@ -262,6 +262,18 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
          people; covered in awd110_collection_forms",
     ),
     (
+        "/api/v1/agent-recipes",
+        "the agent plugin's setup recipes (A2.17), built into the server: the same list for \
+         everyone, reading no row of any workspace; covered in awd63_setup_links",
+    ),
+    (
+        "/api/v1/file-links/{token}",
+        "a short-lived file link (A2.12) is read by its signed token, not a session; the \
+         token names the account it was made for, which must still be able to read the file \
+         when it is fetched; covered in delivery (a_client_id_comes_back_and_a_file_link_\
+         follows_access), and file_link_get, which makes one, has a case here",
+    ),
+    (
         "/api/v1/auth/csrf",
         "hands the caller's own request-token cookie back to an allowed web origin (H1.41); \
          reads no row of any workspace; covered in client_config's unit tests",
@@ -2031,6 +2043,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "external_event_poll",
     "file_list",
     "file_read",
+    "file_link_get",
     "history_list",
     "history_show",
     "invite_link_list",
@@ -2040,6 +2053,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "sheet_list",
     "sheet_read",
     "host_list",
+    "account_joinable_list",
     "inbox_list",
     "invitation_list",
     "label_list",
@@ -2354,6 +2368,14 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({}),
                 json!({"workspace": a.organization, "includeInactive": true}),
             ],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // A2.18: the agents you could add here, asked of this workspace;
+        // another workspace can't be asked.
+        case(
+            "account_joinable_list",
+            vec![json!({}), json!({"workspace": a.organization})],
             vec![json!({"workspace": b.organization})],
             vec![],
         ),
@@ -2828,6 +2850,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"fileId": b.file.to_string()}),
                 json!({"fileId": b.task_file.to_string()}),
             ],
+            vec![],
+        ),
+        // A2.12: a link to a file only for a file the caller can read.
+        case(
+            "file_link_get",
+            vec![json!({"fileId": a.file.to_string()})],
+            vec![json!({"fileId": b.file.to_string()})],
             vec![],
         ),
         // K3.19: any thing's history by id alone.

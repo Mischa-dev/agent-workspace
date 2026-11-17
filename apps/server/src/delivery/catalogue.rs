@@ -110,6 +110,20 @@ pub const ENTRIES: &[Entry] = &[
         "reminder.due",
     ),
     entry(
+        "agent.paused",
+        "account",
+        true,
+        "You were paused: you hear nothing else until resumed",
+        "agent.paused",
+    ),
+    entry(
+        "agent.resumed",
+        "account",
+        true,
+        "You were resumed: what you missed follows",
+        "agent.resumed",
+    ),
+    entry(
         "connection.push_disabled",
         "connection",
         true,

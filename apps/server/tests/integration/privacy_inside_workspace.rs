@@ -1237,6 +1237,35 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
     .await
     .expect("events");
     assert_eq!(events, vec![Some(ada)]);
+
+    // A2.10: a member who doesn't manage rook can't pause or resume it.
+    // A2.18: nor add it to a workspace (she manages no agent and may not
+    // invite).
+    for (name, key) in [
+        ("agent_pause", "lena-pause"),
+        ("agent_resume", "lena-resume"),
+        ("account_workspace_add", "lena-add"),
+    ] {
+        let (status, body) = send(
+            &world.app,
+            world.people["lena"].browser.request(
+                "POST",
+                &format!("/api/v2/w/{}/ops/{name}", world.organization),
+                Some(key),
+                json!({ "account": rook }),
+            ),
+        )
+        .await;
+        assert_ne!(body["outcome"], "ok", "lena runs {name}: {status} {body}");
+    }
+    let paused = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM account_statuses WHERE account_id = $1 AND paused_at IS NOT NULL",
+    )
+    .bind(rook)
+    .fetch_one(world.pool())
+    .await
+    .expect("pauses");
+    assert_eq!(paused, 0);
     world.finish().await;
 }
 

@@ -447,7 +447,14 @@ pub async fn open(
     .bind(Value::Array(options))
     .bind(allow_text)
     .bind(
-        if kind == "approval" && (origin.run_id.is_some() || origin.subject.is_some()) {
+        // A join (A2.18) is answered by whoever its roles name; a run's
+        // approval needs `runs.approve`.
+        if kind == "approval"
+            && (origin.run_id.is_some()
+                || origin
+                    .subject
+                    .is_some_and(|(subject, _)| subject != crate::accounts::join::JOIN_SUBJECT))
+        {
             "runs.approve"
         } else {
             "requests.answer"
@@ -1185,6 +1192,10 @@ async fn follow(
     // A sponsored run request goes ahead or stops with its approval.
     if row.subject_kind.as_deref() == Some(crate::external_execution::REQUEST_SUBJECT) {
         crate::external_execution::approval_settled(state, transaction, row).await?;
+    }
+    // An agent from outside joins when an admin approves (A2.18).
+    if row.subject_kind.as_deref() == Some(crate::accounts::join::JOIN_SUBJECT) {
+        crate::accounts::join::settled(transaction, row).await?;
     }
     // A run on the built-in host goes on in process (A1.14).
     if let Some(run_id) = row.run_id

@@ -561,6 +561,9 @@ pub static REPLY_CANCELLED: EventType = addressed(
 );
 pub static SCHEDULE_DUE: EventType =
     addressed("schedule.due", "agents", None, "A follow-up you set is due");
+pub static AGENT_PAUSED: EventType = addressed("agent.paused", "agents", None, "You were paused");
+pub static AGENT_RESUMED: EventType =
+    addressed("agent.resumed", "agents", None, "You were resumed");
 pub static SCHEDULE_CHANGED: EventType = signal(
     "schedule.changed",
     "agents",
@@ -655,6 +658,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &REPLY_FOLLOWUP,
         &REPLY_CANCELLED,
         &SCHEDULE_DUE,
+        &AGENT_PAUSED,
+        &AGENT_RESUMED,
         &SCHEDULE_CHANGED,
         &CONNECTION_PUSH_DISABLED,
         &CONNECTION_CHANGED,

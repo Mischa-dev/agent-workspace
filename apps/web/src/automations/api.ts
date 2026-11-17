@@ -74,6 +74,7 @@ export type RuleAction =
   | { kind: 'notify'; recipients: Recipients; message: string }
   | { kind: 'post_message'; conversationId: string; text: string }
   | { kind: 'run_operation'; operation: string; input: Record<string, unknown> }
+  | { kind: 'ask_agent'; accountId: string; prompt: string; conversationId?: string | null }
 
 export type RuleActionKind = RuleAction['kind']
 

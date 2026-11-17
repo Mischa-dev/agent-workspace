@@ -99,6 +99,11 @@ pub struct MessageCreatedPayload {
     pub message_id: Uuid,
     pub sequence: i64,
     pub author_actor_id: Uuid,
+    /// The id the sender's client gave the message (its `clientRequestId`),
+    /// so a client recognises its own message when it comes back (A2.12).
+    /// An id the client chose, never content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_message_id: Option<String>,
 }
 
 /// A message was edited or removed. IDs and the revision only: never put
@@ -1035,6 +1040,7 @@ pub async fn enqueue_message_created(
             message_id,
             sequence,
             author_actor_id,
+            client_message_id: None,
         }),
     )
     .await
@@ -1147,6 +1153,7 @@ mod tests {
                 message_id: id(3),
                 sequence: 7,
                 author_actor_id: id(4),
+                client_message_id: None,
             })
         );
 
@@ -1284,6 +1291,7 @@ mod tests {
             message_id: id(3),
             sequence: 0,
             author_actor_id: id(4),
+            client_message_id: None,
         });
         assert_eq!(
             invalid_message.to_json(),

@@ -1,5 +1,36 @@
 [
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "agents",
+    "name": "account_joinable_list",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "Agents you could add here"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "project.membership.updated",
+      "request.raised"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "account_workspace_add",
+    "permission": "members.invite",
+    "preview": false,
+    "proposable": false,
+    "title": "Add an agent you have to this workspace"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -30,6 +61,40 @@
     "preview": false,
     "proposable": false,
     "title": "Set agent managers"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "agent.paused",
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "agent_pause",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Pause agent"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "agent.resumed",
+      "account.status.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "agent_resume",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Resume agent"
   },
   {
     "automation": false,
@@ -364,6 +429,20 @@
     "preview": false,
     "proposable": false,
     "title": "List events"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "file_link_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Link to a file"
   },
   {
     "automation": false,

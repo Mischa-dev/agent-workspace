@@ -1025,3 +1025,377 @@ async fn pushes_in_every_format_meet_the_contract() {
     }
     world.finish().await;
 }
+
+/// Run the log and the job queue until both are idle.
+async fn settle(world: &Workspace) {
+    use agent_workspace_server::jobs::{self, WorkerOptions};
+    let registry = jobs::default_registry();
+    let options = WorkerOptions {
+        concurrency: 1,
+        poll_interval: std::time::Duration::from_millis(20),
+        lease: std::time::Duration::from_secs(30),
+        worker_id: "delivery-test".to_owned(),
+    };
+    for _ in 0..10 {
+        let published = agent_workspace_server::events::catch_up(world.pool())
+            .await
+            .expect("publish");
+        let ran = jobs::run_due(&world.state, &registry, &options)
+            .await
+            .expect("run jobs");
+        if published == 0 && ran == 0 {
+            return;
+        }
+    }
+}
+
+/// A2.12: a client's own id comes back on `message.created`, a retried
+/// send posts once, what someone wrote is marked as content, and a file
+/// link works for five minutes only while its reader may see the file.
+#[tokio::test]
+async fn a_client_id_comes_back_and_a_file_link_follows_access() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .agent("rook", "member")
+        .private_group("ops", &["lena", "rook"])
+        .build("delivery_client_ids")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let ops = world.conversations["ops"].clone();
+    let say = json!({
+        "conversationId": ops,
+        "text": "Looking into it",
+        "clientRequestId": "rook-say-1"
+    });
+    let tool = |name: &'static str, arguments: Value| {
+        rook.call(&world.app, Call::Tool { name, arguments })
+    };
+    let (_, first) = tool("message_send", say.clone()).await;
+    let (_, again) = tool("message_send", say).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    let message = first["value"]["messageId"]
+        .as_str()
+        .expect("message")
+        .to_owned();
+    assert_eq!(
+        again["value"]["messageId"],
+        message.as_str(),
+        "a retry posts once"
+    );
+    let posted = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM messages WHERE conversation_id = $1::uuid AND author_actor_id = $2",
+    )
+    .bind(&ops)
+    .bind(rook.actor)
+    .fetch_one(world.pool())
+    .await
+    .expect("count");
+    assert_eq!(posted, 1);
+    let payload = sqlx::query_scalar::<_, Value>(&format!(
+        "SELECT payload FROM {} notice WHERE notice.payload ->> 'messageId' = $1 \
+         AND notice.event_type = 'conversation.message.created'",
+        super::support::NOTICES
+    ))
+    .bind(&message)
+    .fetch_one(world.pool())
+    .await
+    .expect("the message's event");
+    assert_eq!(payload["clientMessageId"], "rook-say-1", "{payload}");
+
+    // What someone wrote is marked as content, with its author.
+    let (_, read) = tool("conversation_read", json!({"conversationId": ops})).await;
+    let messages = read["value"]["messages"].as_array().expect("messages");
+    assert!(
+        messages.iter().all(|item| item["trust"] == "content"),
+        "{read}"
+    );
+
+    // A file in the group: a link fetches it with no credential.
+    let file = super::support::two_workspaces::upload(
+        &world.app,
+        &world.owner.browser,
+        &format!("/api/v1/conversations/{ops}/files?name=plan.txt"),
+        "text/plain",
+        b"the plan".to_vec(),
+    )
+    .await;
+    let (status, sent) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{ops}/messages"),
+            Some("file-message"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Plan"}]},
+                   "attachments": [file]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let (_, link) = tool("file_link_get", json!({"fileId": file})).await;
+    assert_eq!(link["outcome"], "ok", "{link}");
+    let url = link["value"]["url"].as_str().expect("url");
+    let path = &url[url.find("/api/").expect("path")..];
+    let fetch = || async {
+        let response = tower::ServiceExt::oneshot(
+            world.app.clone(),
+            axum::http::Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1_000_000)
+            .await
+            .expect("body");
+        (status, body)
+    };
+    let (status, body) = fetch().await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&body[..], b"the plan");
+    let forged = path.replacen("fl1.", "fl1.A", 1);
+    let response = tower::ServiceExt::oneshot(
+        world.app.clone(),
+        axum::http::Request::builder()
+            .uri(forged)
+            .body(axum::body::Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND, "a changed link");
+
+    // Rook leaves the group: the link and a new one are refused.
+    let (status, removed) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{ops}/members/{}/remove", rook.actor),
+            Some("remove-rook"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{removed}");
+    assert_eq!(fetch().await.0, StatusCode::NOT_FOUND);
+    let (_, refused) = tool("file_link_get", json!({"fileId": file})).await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    world.finish().await;
+}
+
+/// A2.13: an "Ask an agent" action posts the prompt as the rule's maker,
+/// mentioning the agent, so the agent is asked with the maker as the asker.
+#[tokio::test]
+async fn ask_an_agent_posts_as_the_maker_and_asks_them() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("delivery_ask_agent")
+        .await
+    else {
+        return;
+    };
+    let rook = world.agents["rook"].actor;
+    let work = world.project("WORK").to_owned();
+    let triage = channel(&world, "triage").await;
+    let (status, rule) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/automations"),
+            Some("ask-rule"),
+            json!({
+                "name": "Ask rook",
+                "trigger": {"kind": "task_created"},
+                "actions": [{"kind": "ask_agent", "accountId": rook,
+                             "conversationId": triage,
+                             "prompt": "Please triage {{task.title}}"}],
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{rule}");
+    let (status, task) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some("ask-task"),
+            json!({"title": "Login is slow"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{task}");
+    settle(&world).await;
+    let (author, text, asked) = sqlx::query_as::<_, (Uuid, String, Uuid)>(
+        "SELECT message.author_actor_id, message.plain_text, request.agent_actor_id \
+         FROM reply_requests request JOIN messages message ON message.id = request.message_id \
+         WHERE message.conversation_id = $1::uuid",
+    )
+    .bind(&triage)
+    .fetch_one(world.pool())
+    .await
+    .expect("rook was asked");
+    assert_eq!(author, world.owner.actor, "posted as the maker");
+    assert_eq!(asked, rook);
+    assert!(text.contains("Please triage Login is slow"), "{text}");
+
+    // Asking someone who isn't in the space is refused when saved.
+    let (status, refused) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/automations"),
+            Some("ask-nobody"),
+            json!({
+                "name": "Ask nobody",
+                "trigger": {"kind": "task_created"},
+                "actions": [{"kind": "ask_agent", "accountId": Uuid::now_v7(),
+                             "prompt": "Hello"}],
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    world.finish().await;
+}
+
+async fn owner_op(world: &Workspace, name: &str, input: Value) -> Value {
+    let (status, body) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{name}: {body}");
+    body
+}
+
+/// A2.10: a paused agent hears only about its pause until resumed, then
+/// what it missed in order; its changes do nothing; and a required request
+/// nobody picks up in time shows it and tells the agent's managers.
+#[tokio::test]
+async fn a_paused_agent_waits_and_an_unanswered_ask_shows() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("delivery_pause")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let general = channel(&world, "general").await;
+    let start = read(&world, rook, None).await["nextCursor"].clone();
+
+    let paused = owner_op(
+        &world,
+        "agent_pause",
+        json!({"account": rook.actor, "reason": "Too chatty"}),
+    )
+    .await;
+    assert_eq!(paused["value"]["status"], "paused", "{paused}");
+    let statuses = owner_op(&world, "status_list", json!({"accounts": [rook.actor]})).await;
+    assert!(
+        statuses["value"]["statuses"]
+            .as_array()
+            .expect("statuses")
+            .iter()
+            .any(|status| status["state"] == "paused"),
+        "{statuses}"
+    );
+    // Its changes do nothing, and say so.
+    let (_, said) = rook
+        .call(
+            &world.app,
+            Call::Tool {
+                name: "message_send",
+                arguments: json!({"conversationId": general, "text": "Still here"}),
+            },
+        )
+        .await;
+    assert_eq!(said["outcome"], "ok", "{said}");
+    assert_eq!(said["value"]["status"], "paused", "{said}");
+    assert_eq!(said["paused"], true, "{said}");
+    let posted =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM messages WHERE author_actor_id = $1")
+            .bind(rook.actor)
+            .fetch_one(world.pool())
+            .await
+            .expect("count");
+    assert_eq!(posted, 0, "nothing was posted");
+
+    // Asked while paused: it hears its pause, and nothing else yet.
+    post(
+        &world,
+        &general,
+        "ask-paused",
+        mention("Look at this ", rook.actor),
+    )
+    .await;
+    let page = read(&world, rook, Some(&start)).await;
+    assert_eq!(of_type(&page, "agent.paused").len(), 1, "{page}");
+    assert!(of_type(&page, "reply.requested").is_empty(), "held: {page}");
+    let held_at = page["nextCursor"].clone();
+    let again = read(&world, rook, Some(&held_at)).await;
+    assert!(
+        again["events"].as_array().expect("events").is_empty(),
+        "{again}"
+    );
+
+    // Resumed, what it missed arrives.
+    owner_op(&world, "agent_resume", json!({"account": rook.actor})).await;
+    let page = read(&world, rook, Some(&held_at)).await;
+    assert_eq!(of_type(&page, "reply.requested").len(), 1, "{page}");
+    assert_eq!(of_type(&page, "agent.resumed").len(), 1, "{page}");
+
+    // Nobody picks the ask up in time: it shows, and the owner hears once.
+    sqlx::query("UPDATE reply_requests SET claim_due_at = now() - interval '1 second' WHERE agent_actor_id = $1")
+        .bind(rook.actor)
+        .execute(world.pool())
+        .await
+        .expect("past due");
+    agent_workspace_server::replies::mark_unresponsive(world.pool())
+        .await
+        .expect("sweep");
+    agent_workspace_server::replies::mark_unresponsive(world.pool())
+        .await
+        .expect("sweep again");
+    let (status, timeline) = send(
+        &world.app,
+        world.owner.browser.request(
+            "GET",
+            &format!("/api/v1/conversations/{general}/timeline"),
+            None,
+            json!(null),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{timeline}");
+    let requests = timeline["replyRequests"].as_array().expect("requests");
+    assert!(
+        requests
+            .iter()
+            .any(|request| !request["unresponsiveAt"].is_null()),
+        "{timeline}"
+    );
+    let statuses = owner_op(&world, "status_list", json!({"accounts": [rook.actor]})).await;
+    assert!(
+        statuses["value"]["statuses"]
+            .as_array()
+            .expect("statuses")
+            .iter()
+            .any(|status| status["state"] == "unresponsive"),
+        "{statuses}"
+    );
+    world.finish().await;
+}

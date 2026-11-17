@@ -149,7 +149,15 @@ pub async fn read_batch(
     };
     // The modules on where each event happened, read once per place.
     let mut modules = HashMap::new();
+    // A2.10: where the recipient is paused, what it would hear waits: the
+    // cursor stops before the first such event and moves on once resumed.
+    let paused = if scanned == 0 {
+        Vec::new()
+    } else {
+        crate::statuses::paused_in(&mut *connection, scope.recipient).await?
+    };
     for (index, row) in rows.into_iter().enumerate() {
+        let before = batch.next;
         batch.next = row.event.position;
         if let Some(reason) = accept(&row, subscriptions)
             && scope
@@ -158,6 +166,11 @@ pub async fn read_batch(
                 .is_none_or(|limits| within_limits(limits, &row.event))
             && module_on(&mut *connection, &mut modules, &row).await?
         {
+            if held(&paused, &row.event) {
+                batch.next = before;
+                batch.has_more = false;
+                return Ok(batch);
+            }
             batch.delivered.push(Delivered {
                 event: row.event,
                 reason,
@@ -176,6 +189,18 @@ pub async fn read_batch(
         batch.next = batch.next.max(head);
     }
     Ok(batch)
+}
+
+/// Whether a paused recipient waits for this event: everything but its own
+/// pause, its connections and stopped replies, where it is paused.
+fn held(paused: &[Option<Uuid>], event: &LoggedEvent) -> bool {
+    let passes = event.event_type.starts_with("agent.")
+        || event.event_type.starts_with("connection.")
+        || event.event_type == "reply.cancelled";
+    !passes
+        && paused
+            .iter()
+            .any(|place| place.is_none_or(|workspace| workspace == event.workspace_id))
 }
 
 /// Whether the module an event belongs to is on where it happened: in its

@@ -348,6 +348,32 @@ async fn pipeline<O: Operation>(
     // call but the ones that still work then (keeping it).
     crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)
         .await?;
+    // A2.10: a paused account's changes do nothing here; each answers ok,
+    // saying so, so a client that retries doesn't loop on a refusal.
+    if writes
+        && !runs_while_paused(O::NAME)
+        && crate::statuses::is_paused(
+            &mut connection,
+            request.caller.account_id,
+            located.workspace_id,
+        )
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error))?
+    {
+        let mut body = Envelope::Ok {
+            value: serde_json::json!({ "status": "paused" }),
+            request_id: request.request_id,
+            replayed: false,
+            replay_safe: Some(true),
+            preview: request.preview,
+        }
+        .to_json();
+        body["paused"] = true.into();
+        return Ok(Answer {
+            status: StatusCode::OK,
+            body,
+        });
+    }
     drop(connection);
     // H1.1: an agent's or app's call spends its workspace's shared budget.
     // After the connection goes back: the shared counter takes its own.
@@ -482,6 +508,21 @@ async fn pipeline<O: Operation>(
         crate::scheduler::kick(state.clone());
     }
     Ok(answer)
+}
+
+/// The changes a paused account still makes (A2.10): its status, lifting a
+/// pause, its connections and reporting on runs it already has.
+fn runs_while_paused(name: &str) -> bool {
+    matches!(
+        name,
+        "status_set"
+            | "status_delete"
+            | "agent_resume"
+            | "run_activity_report"
+            | "run_result_report"
+            | "run_usage_report"
+            | "run_update"
+    ) || name.starts_with("connection_")
 }
 
 /// A caller reaching several workspaces, calling an operation whose target

@@ -907,7 +907,7 @@ async fn app_limit(
         return Ok(None);
     }
     Ok(Some(
-        crate::roles::app_access(&mut **transaction, connection.account_id)
+        crate::roles::app_access(transaction, connection.account_id)
             .await?
             .limits,
     ))

@@ -96,6 +96,8 @@ export type InstalledObject = { action: string; id: string; key: string; kind: s
 
 export type InviteLinkView = { active: boolean; createdAt: string; createdBy: string; expiresAt: string; id: string; maxUses?: number | null; revokedAt?: string | null; roleId: string; roleName: string; spaceId?: string | null; uses: number }
 
+export type JoinableAccount = { accountId: string; displayName: string; handle: string; handleTaken: boolean; kind: string }
+
 export type LastTest = { at: string; error?: string | null; ok: boolean; status?: number | null }
 
 export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
@@ -194,6 +196,14 @@ export type WhiteboardLine = { createdAt: string; createdBy?: string | null; del
 
 export type WhiteboardTemplateView = { builtIn: boolean; id: string; projectName?: string | null; title: string }
 
+export type AccountJoinableListInput = Record<string, never>
+
+export type AccountJoinableListOutput = { accounts: JoinableAccount[] }
+
+export type AccountWorkspaceAddInput = { account: string; handle?: string | null; roleId?: string | null }
+
+export type AccountWorkspaceAddOutput = { accountId: string; requestId?: string | null; spaceId?: string | null; status: string }
+
 export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
 
 export type AgentCreateOutput = { accountId: string; connectionId: string; credential?: string | null; credentialExpiresAt?: string | null; spaceId: string }
@@ -201,6 +211,14 @@ export type AgentCreateOutput = { accountId: string; connectionId: string; crede
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type AgentPauseInput = { account: string; everywhere?: boolean; reason?: string | null }
+
+export type AgentPauseOutput = { account: string; changed: boolean; status: string }
+
+export type AgentResumeInput = { account: string; everywhere?: boolean; reason?: string | null }
+
+export type AgentResumeOutput = { account: string; changed: boolean; status: string }
 
 export type AgentTemplateListInput = { spaceId?: string | null }
 
@@ -289,6 +307,10 @@ export type EventKindListOutput = { events: Entry[] }
 export type EventListInput = { connectionId?: string | null; cursor?: string | null; limit?: number | null; waitSeconds?: number | null }
 
 export type EventListOutput = { connectionId: string; events: Array<Record<string, unknown>>; hasMore: boolean; nextCursor: string }
+
+export type FileLinkGetInput = { fileId: string }
+
+export type FileLinkGetOutput = { contentType: string; expiresAt: string; name: string; size: number; url: string }
 
 export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
 
@@ -595,8 +617,12 @@ export type WorkspaceDeleteCancelInput = Record<string, never>
 export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
 
 export type Operations = {
+  account_joinable_list: { input: AccountJoinableListInput; output: AccountJoinableListOutput }
+  account_workspace_add: { input: AccountWorkspaceAddInput; output: AccountWorkspaceAddOutput }
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  agent_pause: { input: AgentPauseInput; output: AgentPauseOutput }
+  agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
@@ -619,6 +645,7 @@ export type Operations = {
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   event_kind_list: { input: EventKindListInput; output: EventKindListOutput }
   event_list: { input: EventListInput; output: EventListOutput }
+  file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
   history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
   history_show: { input: HistoryShowInput; output: HistoryShowOutput }

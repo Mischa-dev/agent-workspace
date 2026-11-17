@@ -68,6 +68,11 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "revoke",
             // A secret is replaced; the old one keeps working for a while.
             "rotate",
+            // An account stops acting and hearing until resumed (A2.10).
+            "pause",
+            "resume",
+            // An account joins a workspace (A2.18).
+            "add",
         ],
     ),
     (
