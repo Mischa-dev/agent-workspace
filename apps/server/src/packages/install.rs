@@ -255,10 +255,35 @@ const RULE_BY_NAME: &str = "SELECT id FROM automation_rules WHERE project_id = $
      AND lower(name) = lower($2) LIMIT 1";
 const PAGE_BY_TITLE: &str = "SELECT id FROM project_pages WHERE project_id = $1 \
      AND archived_at IS NULL AND lower(title) = lower($2) LIMIT 1";
-const AGENT_BY_KEY: &str = "SELECT id FROM agent_templates WHERE workspace_id = $1 \
-     AND archived_at IS NULL AND template_key = $2";
-const MODULE_BY_KEY: &str = "SELECT id FROM modules WHERE workspace_id = $1 \
-     AND archived_at IS NULL AND module_key = $2";
+/// Whether the viewer may see a workspace-keyed thing that lives in a
+/// space (`found.space_id`): one in a space they aren't in is reused
+/// without its id shown.
+const SPACE_VISIBLE: &str = "(found.space_id IS NULL OR EXISTS (SELECT 1 \
+     FROM project_memberships membership WHERE membership.project_id = found.space_id \
+     AND membership.actor_id = $3 AND membership.enabled))";
+const AGENT_BY_KEY: &str = "SELECT found.id, {visible} FROM agent_templates found \
+     WHERE found.workspace_id = $1 AND found.archived_at IS NULL AND found.template_key = $2";
+const MODULE_BY_KEY: &str = "SELECT found.id, {visible} FROM modules found \
+     WHERE found.workspace_id = $1 AND found.archived_at IS NULL AND found.module_key = $2";
+
+const IN_ANOTHER_SPACE: &str = "One with this key is in a space you aren't in, so it's left out.";
+
+/// A workspace-keyed thing by key, and its id only when the viewer may see it.
+async fn existing_seen(
+    connection: &mut PgConnection,
+    sql: &str,
+    workspace_id: Uuid,
+    key: &str,
+    viewer: Uuid,
+) -> Result<(Option<Uuid>, bool), AppError> {
+    let held = sqlx::query_as::<_, (Uuid, bool)>(&sql.replace("{visible}", SPACE_VISIBLE))
+        .bind(workspace_id)
+        .bind(key)
+        .bind(viewer)
+        .fetch_optional(&mut *connection)
+        .await?;
+    Ok((held.map(|(id, _)| id), held.is_some_and(|(_, seen)| !seen)))
+}
 
 /// The plan for installing `package` at `place`, read on `connection` (the
 /// install's own transaction, so it is the plan the install applies).
@@ -403,20 +428,25 @@ pub async fn plan(
                     continue;
                 }
                 match kind {
-                    ContentKind::Agent => found(
-                        kind_key,
-                        key,
-                        name,
-                        existing(connection, sql, workspace_id, key).await?,
-                    ),
+                    ContentKind::Agent => {
+                        let (held, hidden) =
+                            existing_seen(connection, sql, workspace_id, key, viewer).await?;
+                        if hidden {
+                            skipped(kind_key, key, name, IN_ANOTHER_SPACE)
+                        } else {
+                            found(kind_key, key, name, held)
+                        }
+                    }
                     ContentKind::Module => {
                         let module_key = crate::modules::built::full_key(key).unwrap_or_default();
-                        let mut line = found(
-                            kind_key,
-                            key,
-                            name,
-                            existing(connection, sql, workspace_id, &module_key).await?,
-                        );
+                        let (held, hidden) =
+                            existing_seen(connection, sql, workspace_id, &module_key, viewer)
+                                .await?;
+                        let mut line = if hidden {
+                            skipped(kind_key, key, name, IN_ANOTHER_SPACE)
+                        } else {
+                            found(kind_key, key, name, held)
+                        };
                         if space.is_none() && !matches!(place, Place::New(_)) {
                             line = skipped(kind_key, key, name, needs_space);
                         }
@@ -654,24 +684,31 @@ pub struct AgentTemplateView {
     pub install_id: Option<Uuid>,
 }
 
-/// The workspace's agent templates.
+/// The workspace's agent templates the reader can see: workspace-wide
+/// ones, and those in a space only to its current members.
 pub async fn agent_templates(
     connection: &mut PgConnection,
     workspace_id: Uuid,
     space_id: Option<Uuid>,
+    reader: Uuid,
 ) -> Result<Vec<AgentTemplateView>, AppError> {
     Ok(sqlx::query_as::<_, AgentTemplateView>(
         r#"
         SELECT id, template_key AS key, name, purpose, definition, space_id, install_id
-        FROM agent_templates
+        FROM agent_templates template
         WHERE workspace_id = $1 AND archived_at IS NULL
           AND ($2::uuid IS NULL OR space_id = $2)
+          AND (template.space_id IS NULL OR EXISTS (
+              SELECT 1 FROM project_memberships membership
+              WHERE membership.project_id = template.space_id
+                AND membership.actor_id = $3 AND membership.enabled))
         ORDER BY name, id
         LIMIT 200
         "#,
     )
     .bind(workspace_id)
     .bind(space_id)
+    .bind(reader)
     .fetch_all(&mut *connection)
     .await?)
 }

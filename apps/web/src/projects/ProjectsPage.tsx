@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import {
   Badge,
   Banner,
@@ -60,6 +60,8 @@ export function ProjectsPage() {
   const [chosen, setChosen] = useState<Shown>('active')
   const shown: Shown = archivedProjects.length ? chosen : 'active'
 
+  useShellPage({ home: true, mainClassName: 'aw-main--page' })
+
   // Opens the project at once where you left it, and records the visit in the background.
   const openProject = (project: Project, event: MouseEvent<HTMLAnchorElement>) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
@@ -73,7 +75,7 @@ export function ProjectsPage() {
   }
 
   return (
-    <AppShell home mainClassName="aw-main--page" user={session.user}>
+    <>
       <div className="aw-page aw-page--reading">
         <PageHeader
           actions={
@@ -169,7 +171,7 @@ export function ProjectsPage() {
           </Banner>
         ) : null}
       </div>
-    </AppShell>
+    </>
   )
 }
 

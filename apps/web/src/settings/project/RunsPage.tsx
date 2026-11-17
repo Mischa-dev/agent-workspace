@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { queryKeys } from '../../api/queryKeys'
 import type { AuthenticatedSession } from '../../auth/session'
 import { listHarnesses } from '../../execution/api'
-import { useEnvironments } from '../../launch/hooks'
+import { launchKeys, useEnvironments } from '../../launch/hooks'
 import { EnvironmentSettings } from '../../launch/LaunchSettings'
 import type { Project } from '../../projects/types'
 import { listRepositories } from '../../repositories/api'
@@ -48,7 +48,7 @@ function ProjectRuns({ project, session, setup = false }: { project: Project; se
   const canEditLists = harnesses.data?.some((harness) => harness.canEditCatalog) ?? false
   // The environments below mark the default, so they follow a change to it here.
   const environmentsChanged = (key: string) => {
-    if (key === 'run.environment') void queryClient.invalidateQueries({ queryKey: ['project', project.id, 'environments'] })
+    if (key === 'run.environment') void queryClient.invalidateQueries({ queryKey: launchKeys.environments(project.id) })
   }
   const options = {
     ...runSettingOptions(harnesses.data ?? [], harnessAt(effective.data, target)),

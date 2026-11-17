@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react'
 
+import { legacyPathOf } from '../app/href'
 import type { DirectConversation } from '../direct/api'
 import type { Project } from '../projects/types'
 
@@ -84,7 +85,8 @@ const PROJECT_TITLES: [RegExp, string][] = [
 ]
 
 /** The name of a page outside any project ("Search", "Settings"), or empty. */
-export function staticPageTitle(pathname: string) {
+export function staticPageTitle(address: string) {
+  const pathname = legacyPathOf(address)
   return STATIC_TITLES.find(([pattern]) => pattern.test(pathname))?.[1] ?? ''
 }
 

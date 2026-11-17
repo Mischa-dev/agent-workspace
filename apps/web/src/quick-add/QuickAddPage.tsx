@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 
+import { legacyPathOf } from '../app/href'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
@@ -21,7 +22,7 @@ export function QuickAddPage() {
   const session = useAuthenticatedSession()
   const location = useLocation()
   const [params] = useSearchParams()
-  const sharing = location.pathname === '/share'
+  const sharing = legacyPathOf(location.pathname) === '/share'
   const shared = useMemo(() => (sharing ? readSharedContent(params) : null), [params, sharing])
   const fileCount = sharing ? Number(params.get('files') ?? 0) : 0
   const [files, setFiles] = useState<File[] | null>(fileCount > 0 ? null : [])

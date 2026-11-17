@@ -238,6 +238,11 @@ export const aiKeys = {
   plans: (projectId: string) => ['project', projectId, 'ai', 'plans'] as const,
   plan: (projectId: string, importId: string) => ['project', projectId, 'ai', 'plans', importId] as const,
   readiness: (projectId: string, workItemId: string) => ['project', projectId, 'ai', 'readiness', workItemId] as const,
+  /** A task's readiness at one version of the task, so an edit rechecks it. */
+  readinessAt: (projectId: string, workItemId: string, version: number) =>
+    ['project', projectId, 'ai', 'readiness', workItemId, version] as const,
+  /** A conversation's catch-up summary over one range. */
+  catchUp: (conversationId: string, range: string) => ['conversation', conversationId, 'ai-summary', range] as const,
   workspace: (organizationId: string) => ['organization', organizationId, 'ai'] as const,
 }
 

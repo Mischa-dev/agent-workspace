@@ -364,10 +364,14 @@ pub(super) async fn install_planned(
         });
     }
     let live = |line: &&install::PlanItem| line.action != "skip";
+    // Roles, module switches, the default layout and the other admin lines
+    // change the whole workspace, so they are asked of the workspace even
+    // when the package lands in a space.
     let located = crate::ops::Located {
         workspace_id: workspace,
-        space_id: ctx.space_id,
+        space_id: None,
     };
+    let workspace_target = Target::Workspace(Some(workspace));
     if plan
         .items
         .iter()
@@ -377,7 +381,7 @@ pub(super) async fn install_planned(
         access_shim::check(
             tx,
             &ctx.caller,
-            &ctx.target,
+            &workspace_target,
             &located,
             Some(Perm::RolesManage),
             true,
@@ -394,7 +398,7 @@ pub(super) async fn install_planned(
         access_shim::check(
             tx,
             &ctx.caller,
-            &ctx.target,
+            &workspace_target,
             &located,
             Some(Perm::SettingsManage),
             true,
@@ -703,9 +707,10 @@ impl Operation for AgentTemplateList {
             (None, _) => None,
         };
         let workspace = call.ctx.workspace_id;
+        let reader = call.account_id();
         let tx = call.tx().await?;
         Ok(AgentTemplateListOutput {
-            templates: install::agent_templates(tx, workspace, space).await?,
+            templates: install::agent_templates(tx, workspace, space, reader).await?,
         })
     }
 }

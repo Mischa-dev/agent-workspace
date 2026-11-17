@@ -4,12 +4,11 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { queryKeys } from '../api/queryKeys'
 import { isApiError } from '../api/errors'
-import { useAuthenticatedSession } from '../auth/session'
 import { useProjectExperience } from '../experience/layout'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
-import { AppShell } from '../shell/AppShell'
+import { useShellPage } from '../shell/shellStore'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, ButtonLink, Checkbox, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, SelectField, countLabel, describeError, showToast } from '../ui'
 import { updateWorkItem } from '../work-items/api'
@@ -66,7 +65,6 @@ function rowsOf(timeline: Timeline): Row[] {
  * keys, to see what slips before saving.
  */
 export function TimelinePage() {
-  const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const showKeys = useProjectExperience(projectId).shows('tech.task_keys')
   const named = (task: TimelineTask) => (showKeys ? `${task.key} ${task.title}` : task.title)
@@ -110,18 +108,16 @@ export function TimelinePage() {
   const spans = useMemo(() => (data ? spansWith(data.tasks, change) : new Map()), [data, change])
   const slipped = useMemo(() => (data ? slips(data.tasks, data.milestones, data.dependencies, change) : null), [data, change])
 
+  // Until the page can draw, the shell keeps the space the address names.
+  useShellPage(project.data ? { mainClassName: 'aw-main--page', project: project.data } : {})
   if (project.isPending) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading the timeline" />
-      </AppShell>
+      <ProjectPageLoading label="Loading the timeline" />
     )
   }
   if (project.isError) {
     return (
-      <AppShell user={session.user}>
-        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
-      </AppShell>
+      <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
     )
   }
 
@@ -255,7 +251,7 @@ export function TimelinePage() {
 
   const slipCount = slipped?.tasks.size ?? 0
   return (
-    <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
+    <>
       <div className="aw-page aw-page--full aw-timeline">
         <PageHeader icon="clock" title="Timeline" />
         <WorkTabs current="timeline" projectId={project.data.id} />
@@ -430,6 +426,6 @@ export function TimelinePage() {
           </p>
         ) : null}
       </div>
-    </AppShell>
+    </>
   )
 }

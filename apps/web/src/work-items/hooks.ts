@@ -90,7 +90,7 @@ export function useAssignableActors(projectId: string, query: string) {
 /** Names for these members, however far down a search they'd come. */
 export function useNamedActors(projectId: string, ids: readonly string[]) {
   return useQuery({
-    queryKey: [...queryKeys.workItemAssignees(projectId, ''), 'ids', ids.join(',')] as const,
+    queryKey: queryKeys.workItemAssigneesByIds(projectId, ids),
     queryFn: () => namedAssignableActors(projectId, ids),
     enabled: Boolean(projectId) && ids.length > 0,
     staleTime: 60_000,

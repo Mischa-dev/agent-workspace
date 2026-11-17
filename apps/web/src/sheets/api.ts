@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
 import { apiUrl, requestJson } from '../api/client'
+import { sheetKeys } from './keys'
 
 /**
  * Sheets (AWD-54) on the web side: a project's spreadsheets. The server's
@@ -197,12 +198,7 @@ function normalizeResult(value: unknown): ChangeResult {
 const listPath = (projectId: string) => `/api/v1/projects/${encodeURIComponent(projectId)}/sheets`
 const sheetPath = (projectId: string, sheetId: string) => `${listPath(projectId)}/${encodeURIComponent(sheetId)}`
 
-export const sheetKeys = {
-  all: (projectId: string) => ['project', projectId, 'sheets'] as const,
-  list: (projectId: string) => ['project', projectId, 'sheets', 'list'] as const,
-  one: (projectId: string, sheetId: string) => ['project', projectId, 'sheets', sheetId] as const,
-  tab: (projectId: string, sheetId: string, tab: string) => ['project', projectId, 'sheets', sheetId, tab] as const,
-}
+export { sheetKeys } from './keys'
 
 export async function listSheets(projectId: string) {
   const payload = asRecord(await requestJson<unknown>(`${listPath(projectId)}?includeArchived=true`))

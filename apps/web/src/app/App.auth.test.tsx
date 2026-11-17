@@ -78,7 +78,8 @@ describe('App sign-in and session boundary', () => {
         method: 'POST',
       }),
     )
-    expect(storageSpy).not.toHaveBeenCalled()
+    // Only the workspace last used (its slug, W1.14a) is kept, for addresses without one.
+    expect(storageSpy.mock.calls).toEqual([['agent-workspace:workspace', 'mischa']])
     storageSpy.mockRestore()
   })
 

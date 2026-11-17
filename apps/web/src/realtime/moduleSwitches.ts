@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 
+import { queryKeys } from '../api/queryKeys'
 import { layoutKeys } from '../experience/layout'
 import { uuid, type RealtimeEnvelope } from './realtimeModel'
 
@@ -11,11 +12,11 @@ import { uuid, type RealtimeEnvelope } from './realtimeModel'
  */
 export function modulesChanged(queryClient: QueryClient, envelope: RealtimeEnvelope): boolean {
   if (envelope.type !== 'project.modules.updated') return false
-  void queryClient.invalidateQueries({ queryKey: ['projects'] })
+  void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
   void queryClient.invalidateQueries({ queryKey: layoutKeys.project(envelope.projectId), exact: true })
   const workspaceId = uuid(envelope.payload?.workspaceId)
   if (workspaceId) {
-    void queryClient.invalidateQueries({ queryKey: ['organization', workspaceId, 'modules'], exact: true })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workspaceModules(workspaceId), exact: true })
   }
   return true
 }

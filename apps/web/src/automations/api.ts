@@ -10,6 +10,7 @@ export const automationKeys = {
   webhooks: ['account', 'webhooks'] as const,
   deliveries: (webhookId: string) => ['account', 'webhooks', webhookId, 'deliveries'] as const,
   rules: (projectId: string) => ['project', projectId, 'automations'] as const,
+  channels: (projectId: string) => ['project', projectId, 'automations', 'channels'] as const,
   runs: (projectId: string, ruleId: string) => ['project', projectId, 'automations', ruleId, 'runs'] as const,
   openapi: ['public-api', 'openapi'] as const,
 }

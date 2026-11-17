@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Blocks } from 'lucide-react'
 
 import { requestJson } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { toastError } from '../../app/mutations'
 import { refreshLayouts } from '../../experience/api'
 import { Button, ErrorState, Icon, PageHeader, Row, RowList, Section, SettingsSkeleton, StatusChip, Switch, showToast } from '../../ui'
@@ -34,7 +35,7 @@ type ModulesResponse = {
   canManage: boolean
 }
 
-const modulesKey = (organizationId: string) => ['organization', organizationId, 'modules'] as const
+const modulesKey = queryKeys.workspaceModules
 const modulesPath = (organizationId: string) => `/api/v1/organizations/${encodeURIComponent(organizationId)}/modules`
 
 export default function ModulesPage({ workspace }: SettingsPageProps) {
@@ -55,7 +56,7 @@ function WorkspaceModules({ name, organizationId }: { name: string; organization
       // What everyone sees follows from the layouts, which carry the modules,
       // and the rail and the command menu from each project's modulesOff.
       void refreshLayouts(queryClient)
-      void queryClient.invalidateQueries({ queryKey: ['projects'] })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
       showToast({ tone: 'success', title: 'Modules saved', description: 'Everyone in the workspace sees the change.' })
     },
     onError: (error) => {
