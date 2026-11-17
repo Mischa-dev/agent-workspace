@@ -15,7 +15,7 @@ use agent_workspace_server::{
     jobs::{self, WorkerOptions},
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
-    realtime::{RealtimeHub, publish_ready_outbox_batch},
+    realtime::RealtimeHub,
     router,
 };
 use axum::http::StatusCode;
@@ -222,7 +222,7 @@ async fn pump(state: &AppState) {
         worker_id: "awd110-test".to_owned(),
     };
     for _ in 0..10 {
-        let published = publish_ready_outbox_batch(&state.pool, &state.realtime, "awd110-test")
+        let published = agent_workspace_server::events::catch_up(&state.pool)
             .await
             .expect("publish outbox");
         let ran = jobs::run_due(state, &registry, &options)
@@ -421,7 +421,7 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
     )
     .await;
     assert_eq!(late["outcome"], "ok", "{late}");
-    publish_ready_outbox_batch(&state.pool, &state.realtime, "awd110-test")
+    agent_workspace_server::events::catch_up(&state.pool)
         .await
         .expect("publish outbox");
     sqlx::query(

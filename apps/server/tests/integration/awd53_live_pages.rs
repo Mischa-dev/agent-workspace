@@ -352,7 +352,10 @@ async fn two_people_and_an_agent_edit_one_page_at_once_without_losing_text() {
 
     // Every change told open pages about it.
     let events = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events WHERE event_type = 'page.updated' AND payload->>'pageId' = $1",
+        &format!(
+"SELECT count(*) FROM {n} outbox WHERE event_type = 'page.updated' AND payload->>'pageId' = $1",
+ n = crate::support::NOTICES
+),
     )
     .bind(&page)
     .fetch_one(&setup.pool)

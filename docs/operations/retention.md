@@ -21,7 +21,6 @@ commands below still work for a dry run or a one-off cleanup.
 | OAuth authorization codes | used or expired, at least 1 day old | delete |
 | OAuth access tokens | expired or revoked, at least 7 days old | delete |
 | OAuth refresh tokens | used, expired, or revoked, at least 30 days old | unlink retained rotation references, then delete |
-| Published outbox rows | published at least 30 days ago | delete |
 | Completed temporary GitHub jobs | completed or exhausted at least 30 days ago | delete |
 | Access disagreements (K1's compare mode) | last seen at least 30 days ago | delete |
 

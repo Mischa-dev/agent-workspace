@@ -881,10 +881,7 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
         mcp_tasks::{add_member, space},
         message_edits::owner_id,
     };
-    use agent_workspace_server::{
-        github::{AutomationJob, apply_pull_request_automation},
-        realtime::publish_ready_outbox_batch,
-    };
+    use agent_workspace_server::github::{AutomationJob, apply_pull_request_automation};
     let Some((setup, seed, _temporary)) = seeded("p11_github_moves").await else {
         return;
     };
@@ -1009,7 +1006,7 @@ async fn a_merged_pull_request_moves_its_task_like_a_person_would() {
             worker_id: "p11-test".to_owned(),
         };
         for _ in 0..10 {
-            let published = publish_ready_outbox_batch(pool, &state.realtime, "p11-test")
+            let published = agent_workspace_server::events::catch_up(pool)
                 .await
                 .expect("publish outbox");
             let ran = agent_workspace_server::jobs::run_due(&state, &registry, &options)

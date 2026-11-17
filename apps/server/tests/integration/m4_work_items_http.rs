@@ -1078,7 +1078,10 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .expect("count M4 activity");
     assert_eq!(activity_count, 18);
     let outbox_count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events WHERE project_id = $1 AND resource_kind = 'work_item' AND conversation_id IS NULL",
+        &format!(
+"SELECT count(*) FROM {n} outbox WHERE project_id = $1 AND event_type = 'work_item.updated' AND conversation_id IS NULL",
+ n = crate::support::NOTICES
+),
     )
     .bind(seed.project_id)
     .fetch_one(&pool)
@@ -1086,7 +1089,10 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .expect("count M4 outbox events");
     assert_eq!(outbox_count, 19);
     let unplaced = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM outbox_events WHERE project_id = $1 AND event_type = 'work_item.updated' AND NOT (payload -> 'placement' ? 'statusId')",
+        &format!(
+"SELECT count(*) FROM {n} outbox WHERE project_id = $1 AND event_type = 'work_item.updated' AND NOT (payload -> 'placement' ? 'statusId')",
+ n = crate::support::NOTICES
+),
     )
     .bind(seed.project_id)
     .fetch_one(&pool)
