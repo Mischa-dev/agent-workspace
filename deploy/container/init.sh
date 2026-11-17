@@ -23,10 +23,16 @@ ENV
 fi
 # The containers read the secret files as their own users.
 chmod 0644 secrets/*
-# Where the backup profile writes its sets: the image's user may add files
-# but not list anyone else's.
+# Where the backup profile writes its sets. The image's user (10001) must
+# list them too, or retention can't find old sets to remove: it owns the
+# folder when we may hand it over, otherwise anyone may add and list, and
+# only a file's owner may remove it.
 mkdir -p backups
-chmod 0733 backups
+if chown 10001:10001 backups 2>/dev/null; then
+  chmod 0750 backups
+else
+  chmod 1777 backups
+fi
 if command -v docker >/dev/null 2>&1; then
   docker compose up -d
 else
