@@ -286,7 +286,7 @@ mod tests {
     use serde_json::json;
 
     use super::{InvalidRunConfig, RunConfig};
-    use crate::provider::{
+    use crate::harness::{
         demo::demo_manifest,
         manifest::{ModelEntry, SpeedOption},
     };

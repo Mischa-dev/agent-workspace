@@ -39,7 +39,9 @@ use super::{
     run_config::RunConfig,
     slots::{RunSlot, RunSlots},
 };
-use crate::{config::AppConfig, secrets::SecretValue};
+use agent_workspace_redaction::SecretValue;
+
+use crate::config::HarnessConfig;
 
 pub const CLAUDE_CLOUD_KIND: &str = "claude_cloud";
 const BETA: &str = "managed-agents-2026-04-01";
@@ -182,7 +184,7 @@ pub struct ClaudeCloudAdapter {
 }
 
 impl ClaudeCloudAdapter {
-    pub fn new(config: &AppConfig, host: HostCell) -> Result<Self, HarnessError> {
+    pub fn new(config: &HarnessConfig, host: HostCell) -> Result<Self, HarnessError> {
         Self::with_api(
             config.anthropic_api_url.clone(),
             config.codex_cloud_poll_interval,
@@ -513,7 +515,10 @@ fn event_outcome(
                 events.push(HarnessEvent::Request(HarnessRequest {
                     kind: RequestKind::Approval,
                     durable_id: format!("claude-cloud-approval-{id}"),
-                    summary: crate::run_log::cap(&crate::run_log::redact(&summary), 1_000),
+                    summary: agent_workspace_redaction::cap(
+                        &agent_workspace_redaction::redact(&summary),
+                        1_000,
+                    ),
                     options: vec![
                         RequestOption {
                             id: "approve".to_owned(),
@@ -625,7 +630,7 @@ async fn bring_back(
     let cwd = cwd.to_path_buf();
     let session_id = session_id.to_owned();
     tokio::task::spawn_blocking(move || {
-        crate::git_runtime::apply_result_and_commit(&cwd, &patch, &session_id, "Claude Code cloud")
+        crate::git::apply_result_and_commit(&cwd, &patch, &session_id, "Claude Code cloud")
     })
     .await
     .map_err(|_| HarnessError::InvalidResponse)?
@@ -716,7 +721,7 @@ impl HarnessSession for CloudSession {
                     Some(json!({
                         "agent": agent,
                         "environment_id": environment,
-                        "title": crate::run_log::cap(prompt.lines().next().unwrap_or("Agent Workspace run"), 120),
+                        "title": agent_workspace_redaction::cap(prompt.lines().next().unwrap_or("Agent Workspace run"), 120),
                         "resources": [{
                             "type": "github_repository",
                             "url": repository.url,
@@ -968,7 +973,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::provider::{
+    use crate::harness::{
         contract_tests::adapter_contract_with,
         host::{HarnessHost, RepositoryAccess},
     };

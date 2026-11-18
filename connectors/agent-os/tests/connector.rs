@@ -24,6 +24,8 @@ struct FakeController {
     submits: Arc<Mutex<Vec<Result<Value, ControllerError>>>>,
     /// The task's status `task-inspect` reports, and its output.
     status: Arc<Mutex<(String, Value)>>,
+    /// Answers to `task-cancel`, in turn (then a plain yes).
+    cancels: Arc<Mutex<Vec<Result<Value, ControllerError>>>>,
 }
 
 impl FakeController {
@@ -68,7 +70,14 @@ impl Controller for FakeController {
                     "observation": {"status": status, "output": output}}}),
                 )
             }
-            "task-cancel" => Ok(json!({})),
+            "task-cancel" => {
+                let mut cancels = self.cancels.lock().expect("cancels");
+                if cancels.is_empty() {
+                    Ok(json!({}))
+                } else {
+                    cancels.remove(0)
+                }
+            }
             other => Err(ControllerError::Rejected(format!("unknown {other}"))),
         }
     }
@@ -411,6 +420,38 @@ async fn stop_cancels_the_task() {
         sink.reports().last().expect("reported").1["state"],
         "cancelled"
     );
+    assert!(connector.receipts().unfinished().is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A stop whose answer is lost or refused leaves the run watched: the
+/// cancel is offered again, and only a confirmed stop forgets the task.
+#[tokio::test]
+async fn an_unconfirmed_stop_keeps_the_task() {
+    let fake = FakeController::default();
+    let sink = FakeSink::default();
+    let dir = state_dir();
+    let mut connector = Connector::new(config(dir.clone()), fake.clone()).expect("connector");
+    connector
+        .command(&start(RUN, "helper"), || Some(sink.clone()))
+        .await
+        .expect("ack");
+    *fake.cancels.lock().expect("cancels") = vec![
+        Err(ControllerError::Uncertain("timed out".to_owned())),
+        Err(ControllerError::Rejected("busy".to_owned())),
+    ];
+    assert!(connector.command(&cancel(RUN), || None).await.is_none());
+    let refused = connector.command(&cancel(RUN), || None).await.expect("ack");
+    assert_eq!(refused.outcome, Some(AckOutcome::Refused));
+    assert_eq!(connector.receipts().unfinished().len(), 1);
+    assert!(
+        sink.reports()
+            .iter()
+            .all(|(_, fields)| fields["state"] != "cancelled")
+    );
+    let ack = connector.command(&cancel(RUN), || None).await.expect("ack");
+    assert_eq!(ack.outcome, Some(AckOutcome::Done));
+    assert_eq!(fake.calls("task-cancel").len(), 3);
     assert!(connector.receipts().unfinished().is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }

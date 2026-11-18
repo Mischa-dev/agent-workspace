@@ -73,7 +73,7 @@ mod code;
 mod collaboration;
 mod collection_tools;
 mod comment_tools;
-mod common;
+pub(crate) mod common;
 mod criteria;
 #[cfg(test)]
 mod description_words;
@@ -102,7 +102,7 @@ mod project_template_tools;
 mod publish_tools;
 mod reactions;
 mod reads;
-mod replies;
+pub(crate) mod replies;
 mod repository_tools;
 mod role_tools;
 mod run_pages;
@@ -4460,8 +4460,14 @@ pub(crate) async fn resolve_bearer_principal(
         let Some(holder) = crate::runs::credentials::resolve(&state.pool, token).await? else {
             return Ok(None);
         };
-        let Ok(actor_kind) = parse_mcp_actor_kind(&holder.account_kind) else {
-            return Ok(None);
+        // The built-in host's agents are execution workers (A1.16); its run
+        // credential signs them in like any host's agent.
+        let actor_kind = match holder.account_kind.as_str() {
+            "execution_worker" => ActorKind::ExecutionWorker, // kind-check: mechanical (which account a run credential signs in)
+            other => match parse_mcp_actor_kind(other) {
+                Ok(kind) => kind,
+                Err(_) => return Ok(None),
+            },
         };
         return Ok(Some(McpPrincipal {
             credential_id: holder.credential_id,

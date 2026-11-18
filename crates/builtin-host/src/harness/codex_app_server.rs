@@ -41,10 +41,10 @@ use super::{
         AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, RunLocation,
         RunOptionSupport, SpeedOption, VersionRange,
     },
-    registry::ShutdownSignal,
     run_config::RunConfig,
+    shutdown::ShutdownSignal,
 };
-use crate::{config::AppConfig, git_runtime::absolute_runtime_path};
+use crate::{config::HarnessConfig, git::absolute_runtime_path};
 
 pub const CODEX_KIND: &str = "codex_app_server";
 /// The speed that sends no service tier.
@@ -212,7 +212,10 @@ enum Purpose {
 }
 
 impl CodexAdapter {
-    pub fn new(config: &AppConfig, shutdown: Arc<ShutdownSignal>) -> Result<Self, HarnessError> {
+    pub fn new(
+        config: &HarnessConfig,
+        shutdown: Arc<ShutdownSignal>,
+    ) -> Result<Self, HarnessError> {
         let codex_binary = absolute_runtime_path(&config.codex_binary)
             .map_err(|_| HarnessError::InvalidConfiguration)?;
         let neutral_cwd = absolute_runtime_path(&config.data_root)
@@ -1595,7 +1598,7 @@ fn approval_summary(method: &str, params: &Value) -> String {
         .chars()
         .filter(|character| !character.is_control() || *character == '\n')
         .collect::<String>();
-    crate::run_log::cap(&crate::run_log::redact(&summary), 1_000)
+    agent_workspace_redaction::cap(&agent_workspace_redaction::redact(&summary), 1_000)
 }
 
 fn provider_event_key(method: &str, raw: &Value) -> String {
@@ -1839,7 +1842,7 @@ fn lock<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, path::Path, sync::Arc, time::Duration};
+    use std::{fs, path::Path, sync::Arc, time::Duration};
 
     use serde_json::json;
     use uuid::Uuid;
@@ -1851,15 +1854,15 @@ mod tests {
         restart_backoff, turn_start_params,
     };
     use crate::{
-        config::AppConfig,
-        provider::{
+        config::HarnessConfig,
+        harness::{
             adapter::{
                 AccountHandle, HarnessAdapter, HarnessError, HarnessEvent, ItemKind, LoginStart,
                 RecoveredTurn, RequestKind,
             },
             contract_tests::adapter_contract,
-            registry::ShutdownSignal,
             run_config::RunConfig,
+            shutdown::ShutdownSignal,
         },
     };
 
@@ -2220,7 +2223,7 @@ mod tests {
         data_root: std::path::PathBuf,
         worktree: std::path::PathBuf,
         requests: std::path::PathBuf,
-        config: AppConfig,
+        config: HarnessConfig,
     }
 
     /// A stand-in `codex app-server` that answers the methods the adapter
@@ -2266,33 +2269,14 @@ done
         fs::write(&binary, script).expect("write fake Codex binary");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
             .expect("make fake Codex executable");
-        let config = AppConfig::from_values(&BTreeMap::from([
-            (
-                "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
-                "postgres://example.invalid/database".to_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
-                data_root.to_string_lossy().into_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_CODEX_BINARY".to_owned(),
-                binary.to_string_lossy().into_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_HARNESS_HOST_CONCURRENCY_LIMIT".to_owned(),
-                host_limit.to_string(),
-            ),
-            (
-                "AGENT_WORKSPACE_CODEX_REQUEST_TIMEOUT_SECONDS".to_owned(),
-                "2".to_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_CODEX_SHUTDOWN_TIMEOUT_SECONDS".to_owned(),
-                "1".to_owned(),
-            ),
-        ]))
-        .expect("fake Codex config");
+        let config = HarnessConfig {
+            data_root: data_root.clone(),
+            codex_binary: binary.clone(),
+            codex_host_concurrency_limit: host_limit,
+            codex_request_timeout: Duration::from_secs(2),
+            codex_shutdown_timeout: Duration::from_secs(1),
+            ..HarnessConfig::default()
+        };
         FakeCodex {
             _temporary: temporary,
             data_root,

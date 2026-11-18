@@ -74,15 +74,18 @@ pub async fn poll(
             Some(cursor) => {
                 let mut place = cursor::decode_place(&delivery.cursor_key, delivery.id, cursor)
                     .ok_or(AppError::Validation("cursor"))?;
-                // A2.10: resumed, the events held while paused come now, from
-                // where they start (what passed meanwhile comes again once).
+                // A2.10: once the pauses that held events change (one is
+                // resumed, even while another stays), the read goes back to
+                // where they start: what is no longer held comes now, what
+                // still is is held again, and what passed meanwhile comes
+                // again once.
                 if let Some(held) = place.held
-                    && crate::statuses::paused_in(connection, delivery.account_id)
-                        .await?
-                        .is_empty()
+                    && cursor::paused_fingerprint(
+                        &crate::statuses::paused_in(connection, delivery.account_id).await?,
+                    ) != held.paused
                 {
                     place = cursor::Place {
-                        after: held,
+                        after: held.at,
                         held: None,
                     };
                 }
@@ -93,7 +96,11 @@ pub async fn poll(
                         "This cursor is older than the events kept. Call briefing to catch up, then read without a cursor.",
                     ));
                 }
-                connections::mark_read(connection, delivery.id, place.held.unwrap_or(after))
+                connections::mark_read(
+                    connection,
+                    delivery.id,
+                    place.held.map_or(after, |held| held.at),
+                )
                     .await?;
                 place
             }
@@ -136,18 +143,32 @@ pub async fn poll(
         let (batch, lookups, head) = found;
         let now = tokio::time::Instant::now();
         if !batch.delivered.is_empty() || batch.has_more || now >= deadline {
+            let found = batch.held.map(|at| cursor::Held {
+                at,
+                paused: batch.paused,
+            });
+            // Each event's own cursor keeps what was held before it.
+            let held_before =
+                |position: i64| place.held.or(found.filter(|held| held.at < position));
             return Ok(Page {
                 events: batch
                     .delivered
                     .iter()
-                    .map(|item| envelope::envelope(item, &delivery, &lookups))
+                    .map(|item| {
+                        envelope::envelope(
+                            item,
+                            &delivery,
+                            &lookups,
+                            held_before(item.event.position),
+                        )
+                    })
                     .collect(),
                 next_cursor: cursor::encode_place(
                     &delivery.cursor_key,
                     delivery.id,
                     cursor::Place {
                         after: batch.next,
-                        held: place.held.or(batch.held),
+                        held: place.held.or(found),
                     },
                 ),
                 has_more: batch.has_more,

@@ -13,6 +13,8 @@ aws-lc-rs = { version = "1.17.3", default-features = false, features = ["aws-lc-
 axum = { version = "0.8.7", features = ["json", "ws"] }
 base64 = "0.22.1"
 command-fds = { version = "0.3.3", features = ["tokio"] }
+agent-workspace-redaction = { version = "0.0.1", path = "../../crates/redaction" }
+agent-workspace-builtin-host = { version = "0.0.1", path = "../../crates/builtin-host" }
 codex-bridge-spike = { version = "0.0.1", path = "../../tools/codex-bridge-spike" }
 agent-workspace-host-protocol = { version = "0.0.1", path = "../../crates/host-protocol" }
 chrono = "0.4.45"
@@ -69,6 +71,7 @@ chrono-tz = "0.10.4"
 jpeg-encoder = "0.7.0"
 imagesize = "0.15.0"
 mime_guess = "2.0.5"
+tower = { version = "0.5.2", features = ["util"] }
 
 [dev-dependencies]
 agent-workspace-delivery-contract = { version = "0.0.1", path = "../../crates/delivery-contract" }
@@ -77,7 +80,6 @@ agent-workspace-minimal-host = { version = "0.0.1", path = "../../examples/minim
 reqwest = { version = "0.12.28", default-features = false }
 tempfile = "3.23.0"
 tokio-tungstenite = "0.29.0"
-tower = { version = "0.5.2", features = ["util"] }
 
 [lints]
 workspace = true

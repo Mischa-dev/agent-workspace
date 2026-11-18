@@ -38,6 +38,7 @@ pub mod operations;
 pub mod ops;
 pub mod pages;
 pub mod reads;
+pub mod say;
 pub mod sql;
 pub mod state;
 pub mod steps;
@@ -50,6 +51,7 @@ pub use state::{Liveness, RunState};
 pub fn register_jobs(registry: &mut JobRegistry) {
     liveness::register_jobs(registry);
     usage::register_jobs(registry);
+    say::register_jobs(registry);
 }
 
 /// Built-in run states (`agent_runs.state`) that hold (or wait for) harness time. One list for starting a

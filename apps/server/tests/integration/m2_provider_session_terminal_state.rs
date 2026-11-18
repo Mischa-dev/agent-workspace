@@ -413,6 +413,7 @@ async fn insert_working_run(harness: &TestHarness, provider_session_id: Uuid) ->
     .execute(&harness.pool)
     .await
     .expect("insert working Agent Run linked to Provider Session");
+    crate::support::builtin_run_started(&harness.pool, run_id).await;
     run_id
 }
 

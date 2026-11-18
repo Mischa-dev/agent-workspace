@@ -167,7 +167,7 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
     ) -> Option<Ack> {
         match command.kind {
             CommandKind::Start => self.start(command, sink).await,
-            CommandKind::Cancel => Some(self.cancel(command).await),
+            CommandKind::Cancel => self.cancel(command).await,
             CommandKind::Inspect => Some(self.inspect(command)),
             CommandKind::Steer | CommandKind::Answer => Some(refused(
                 "unsupported",
@@ -272,26 +272,42 @@ impl<C: Controller, S: RunSink> Connector<C, S> {
         Some(accepted(&task))
     }
 
-    async fn cancel(&mut self, command: &Command) -> Ack {
+    /// Stops a run's task. The run is forgotten, and the cancel acknowledged
+    /// done, only once Agent OS confirms the stop: a lost answer leaves the
+    /// cancel unacknowledged (it is offered again), and a refusal leaves the
+    /// task running and watched, so its real end is still reported.
+    async fn cancel(&mut self, command: &Command) -> Option<Ack> {
         let Some(run_id) = command.run_id.map(|id| id.to_string()) else {
-            return Ack::new(AckOutcome::Done);
+            return Some(Ack::new(AckOutcome::Done));
         };
-        if let Some(mut active) = self.active.remove(&run_id) {
-            if let Some(task) = active.receipt.task_id() {
-                let _ = self
-                    .controller
-                    .call(json!({"operation": "task-cancel", "id": task}))
-                    .await;
+        let Some(active) = self.active.get_mut(&run_id) else {
+            return Some(Ack::new(AckOutcome::Done));
+        };
+        if let Some(task) = active.receipt.task_id().map(str::to_owned) {
+            match self
+                .controller
+                .call(json!({"operation": "task-cancel", "id": task}))
+                .await
+            {
+                Ok(_) => {}
+                Err(ControllerError::Uncertain(_)) => return None,
+                Err(ControllerError::Rejected(code)) => {
+                    return Some(refused(
+                        "agentos_refused",
+                        &format!("Agent OS wouldn't stop the task: {code}"),
+                    ));
+                }
             }
-            let key = format!("{}-cancelled", active.receipt.task_id().unwrap_or("task"));
-            let _ = active
-                .sink
-                .update(json!({"state": "cancelled"}), &key)
-                .await;
-            active.receipt.finished = Some("cancelled".to_owned());
-            let _ = self.receipts.save(&active.receipt);
         }
-        Ack::new(AckOutcome::Done)
+        let mut active = self.active.remove(&run_id)?;
+        let key = format!("{}-cancelled", active.receipt.task_id().unwrap_or("task"));
+        let _ = active
+            .sink
+            .update(json!({"state": "cancelled"}), &key)
+            .await;
+        active.receipt.finished = Some("cancelled".to_owned());
+        let _ = self.receipts.save(&active.receipt);
+        Some(Ack::new(AckOutcome::Done))
     }
 
     fn inspect(&self, command: &Command) -> Ack {

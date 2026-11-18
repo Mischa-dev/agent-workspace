@@ -15,8 +15,8 @@ use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
 use crate::{
-    error::AppError,
-    profile_runtime::{prepare_private_profile_directory, resolve_path_within_data_root},
+    error::RuntimeError,
+    profile::{prepare_private_profile_directory, resolve_path_within_data_root},
 };
 
 const MAX_GIT_ERROR_BYTES: usize = 8 * 1024;
@@ -61,6 +61,8 @@ pub struct PublishPush<'a> {
     pub base_commit: &'a str,
     pub intended_commit: &'a str,
     pub remote_url: &'a str,
+    /// The caller's code host checked `remote_url` is one of its own.
+    pub remote_is_safe: bool,
     pub token: &'a SecretString,
 }
 
@@ -73,7 +75,7 @@ pub enum RepositoryPreparationMode {
 pub fn expected_repository_mirror_path(
     data_root: &Path,
     repository_id: Uuid,
-) -> Result<PathBuf, AppError> {
+) -> Result<PathBuf, RuntimeError> {
     let data_root = absolute_runtime_path(data_root)?;
     let repository_root = prepare_private_profile_directory(
         &data_root,
@@ -87,7 +89,7 @@ pub fn managed_worktree_path(
     data_root: &Path,
     repository_id: Uuid,
     workspace_id: Uuid,
-) -> Result<PathBuf, AppError> {
+) -> Result<PathBuf, RuntimeError> {
     let data_root = absolute_runtime_path(data_root)?;
     let repository_root = prepare_private_profile_directory(
         &data_root,
@@ -97,7 +99,7 @@ pub fn managed_worktree_path(
     let candidate = repository_root.join(workspace_id.to_string());
     let canonical_data_root = data_root
         .canonicalize()
-        .map_err(|_| AppError::Internal("canonicalize worktree data root"))?;
+        .map_err(|_| RuntimeError::Internal("canonicalize worktree data root"))?;
     resolve_path_within_data_root(&canonical_data_root, &candidate)
 }
 
@@ -105,7 +107,7 @@ pub fn prepare_repository(
     data_root: &Path,
     repository: &RegisteredRepository,
     mode: RepositoryPreparationMode,
-) -> Result<PreparedRepository, AppError> {
+) -> Result<PreparedRepository, RuntimeError> {
     prepare_repository_inner(data_root, repository, mode, None)
 }
 
@@ -114,7 +116,7 @@ pub fn prepare_repository_with_token(
     repository: &RegisteredRepository,
     mode: RepositoryPreparationMode,
     token: &SecretString,
-) -> Result<PreparedRepository, AppError> {
+) -> Result<PreparedRepository, RuntimeError> {
     prepare_repository_inner(data_root, repository, mode, Some(token))
 }
 
@@ -123,7 +125,7 @@ fn prepare_repository_inner(
     repository: &RegisteredRepository,
     mode: RepositoryPreparationMode,
     token: Option<&SecretString>,
-) -> Result<PreparedRepository, AppError> {
+) -> Result<PreparedRepository, RuntimeError> {
     let data_root = absolute_runtime_path(data_root)?;
     let repository_root = prepare_private_profile_directory(
         &data_root,
@@ -132,7 +134,7 @@ fn prepare_repository_inner(
     )?;
     let expected_mirror = repository_root.join("mirror.git");
     if repository.mirror_path != expected_mirror {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "repository",
             "stored mirror path does not match the runtime root",
         ));
@@ -141,7 +143,7 @@ fn prepare_repository_inner(
     if repository.mirror_path.exists() {
         validate_existing_mirror(&repository.mirror_path, &repository.clone_url)?;
     } else if mode == RepositoryPreparationMode::VerifyImportedMirror {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "repository",
             "imported mirror is not available",
         ));
@@ -184,10 +186,10 @@ fn prepare_repository_inner(
 pub fn inspect_prepared_repository(
     data_root: &Path,
     repository: &RegisteredRepository,
-) -> Result<PreparedRepository, AppError> {
+) -> Result<PreparedRepository, RuntimeError> {
     let expected_mirror = expected_repository_mirror_path(data_root, repository.id)?;
     if repository.mirror_path != expected_mirror {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "repository",
             "stored mirror path does not match the runtime root",
         ));
@@ -201,7 +203,7 @@ pub fn adopt_legacy_mirror(
     data_root: &Path,
     repository: &RegisteredRepository,
     legacy_mirror: &Path,
-) -> Result<PreparedRepository, AppError> {
+) -> Result<PreparedRepository, RuntimeError> {
     let data_root = absolute_runtime_path(data_root)?;
     let legacy_mirror = resolve_path_within_data_root(&data_root, legacy_mirror)?;
     validate_existing_mirror(&legacy_mirror, &repository.clone_url)?;
@@ -212,7 +214,7 @@ pub fn adopt_legacy_mirror(
     )?;
     let expected_mirror = repository_root.join("mirror.git");
     if repository.mirror_path != expected_mirror {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "repository",
             "canonical mirror path does not match the runtime root",
         ));
@@ -242,9 +244,9 @@ pub fn adopt_legacy_mirror(
 
 /// A fresh run branch: the harness's prefix (`codex/run-`), the project key
 /// and a unique id.
-pub fn unique_run_branch(prefix: &str, project_key: &str) -> Result<String, AppError> {
+pub fn unique_run_branch(prefix: &str, project_key: &str) -> Result<String, RuntimeError> {
     if !is_run_branch_prefix(prefix) {
-        return Err(AppError::Invalid("unsafe run branch prefix"));
+        return Err(RuntimeError::Invalid("unsafe run branch prefix"));
     }
     let slug = project_key.to_ascii_lowercase();
     if slug.is_empty()
@@ -252,7 +254,7 @@ pub fn unique_run_branch(prefix: &str, project_key: &str) -> Result<String, AppE
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
     {
-        return Err(AppError::Invalid("unsafe project key"));
+        return Err(RuntimeError::Invalid("unsafe project key"));
     }
     Ok(format!("{prefix}{slug}-{}", Uuid::now_v7()))
 }
@@ -274,7 +276,7 @@ pub fn is_run_branch_prefix(prefix: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-pub fn resolve_base_commit(mirror: &Path, branch: &str) -> Result<String, AppError> {
+pub fn resolve_base_commit(mirror: &Path, branch: &str) -> Result<String, RuntimeError> {
     validate_mirror(mirror)?;
     validate_ref(branch)?;
     let reference = format!("refs/heads/{branch}^{{commit}}");
@@ -287,7 +289,7 @@ pub fn resolve_base_commit(mirror: &Path, branch: &str) -> Result<String, AppErr
     ])?;
     let commit = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "repository",
             "base commit could not be resolved",
         ));
@@ -300,26 +302,26 @@ pub fn create_worktree(
     worktree: &Path,
     branch: &str,
     base_commit: &str,
-) -> Result<(), AppError> {
+) -> Result<(), RuntimeError> {
     validate_mirror(mirror)?;
     validate_branch(branch)?;
     if !worktree.is_absolute() || worktree.exists() {
-        return Err(AppError::Invalid("unsafe or existing worktree path"));
+        return Err(RuntimeError::Invalid("unsafe or existing worktree path"));
     }
     let parent = worktree
         .parent()
-        .ok_or(AppError::Invalid("worktree has no parent"))?;
-    fs::create_dir_all(parent).map_err(|_| AppError::Internal("create worktree parent"))?;
+        .ok_or(RuntimeError::Invalid("worktree has no parent"))?;
+    fs::create_dir_all(parent).map_err(|_| RuntimeError::Internal("create worktree parent"))?;
     let canonical_parent = parent
         .canonicalize()
-        .map_err(|_| AppError::Internal("canonicalize worktree parent"))?;
+        .map_err(|_| RuntimeError::Internal("canonicalize worktree parent"))?;
     if worktree.parent() != Some(canonical_parent.as_path()) {
-        return Err(AppError::Invalid("worktree parent is not canonical"));
+        return Err(RuntimeError::Invalid("worktree parent is not canonical"));
     }
 
     let repository_root = mirror
         .parent()
-        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+        .ok_or(RuntimeError::Invalid("mirror has no repository root"))?;
     let _lock = repository_lock(repository_root)?;
     run_git([
         "--git-dir",
@@ -334,10 +336,16 @@ pub fn create_worktree(
     Ok(())
 }
 
-pub fn inspect_worktree(mirror: &Path, worktree: &Path) -> Result<WorktreeInspection, AppError> {
+pub fn inspect_worktree(
+    mirror: &Path,
+    worktree: &Path,
+) -> Result<WorktreeInspection, RuntimeError> {
     validate_mirror(mirror)?;
     if !worktree.is_absolute() || !worktree.is_dir() {
-        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+        return Err(RuntimeError::Conflict(
+            "git_worktree",
+            "worktree is not ready",
+        ));
     }
     let common_dir = run_git([
         OsString::from("-C"),
@@ -346,7 +354,7 @@ pub fn inspect_worktree(mirror: &Path, worktree: &Path) -> Result<WorktreeInspec
         OsString::from("--git-common-dir"),
     ])?;
     let common_dir = String::from_utf8(common_dir.stdout)
-        .map_err(|_| AppError::Conflict("git_worktree", "Git metadata is invalid"))?;
+        .map_err(|_| RuntimeError::Conflict("git_worktree", "Git metadata is invalid"))?;
     let common_dir = PathBuf::from(common_dir.trim());
     let common_dir = if common_dir.is_absolute() {
         common_dir
@@ -354,12 +362,12 @@ pub fn inspect_worktree(mirror: &Path, worktree: &Path) -> Result<WorktreeInspec
         worktree.join(common_dir)
     }
     .canonicalize()
-    .map_err(|_| AppError::Conflict("git_worktree", "Git metadata is missing"))?;
+    .map_err(|_| RuntimeError::Conflict("git_worktree", "Git metadata is missing"))?;
     let expected = mirror
         .canonicalize()
-        .map_err(|_| AppError::Conflict("repository", "mirror is not ready"))?;
+        .map_err(|_| RuntimeError::Conflict("repository", "mirror is not ready"))?;
     if common_dir != expected {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "worktree belongs to another repository",
         ));
@@ -372,7 +380,7 @@ pub fn inspect_worktree(mirror: &Path, worktree: &Path) -> Result<WorktreeInspec
         OsString::from("HEAD"),
     ])?;
     let branch = String::from_utf8(branch.stdout)
-        .map_err(|_| AppError::Conflict("git_worktree", "Git branch is invalid"))?
+        .map_err(|_| RuntimeError::Conflict("git_worktree", "Git branch is invalid"))?
         .trim()
         .to_owned();
     validate_branch(&branch)?;
@@ -387,22 +395,22 @@ pub fn inspect_publishable_worktree(
     worktree: &Path,
     expected_branch: &str,
     base_commit: &str,
-) -> Result<PublishInspection, AppError> {
+) -> Result<PublishInspection, RuntimeError> {
     validate_branch(expected_branch)?;
     validate_commit(base_commit)?;
     let repository_root = mirror
         .parent()
-        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+        .ok_or(RuntimeError::Invalid("mirror has no repository root"))?;
     let _lock = repository_lock(repository_root)?;
     let inspection = inspect_worktree(mirror, worktree)?;
     if inspection.dirty {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "dirty worktree is retained; commit intended changes through the Thread before publishing",
         ));
     }
     if inspection.branch != expected_branch {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "worktree branch does not match its durable workspace",
         ));
@@ -415,12 +423,12 @@ pub fn inspect_publishable_worktree(
         OsString::from("HEAD^{commit}"),
     ])?;
     let head_commit = String::from_utf8(head.stdout)
-        .map_err(|_| AppError::Conflict("git_worktree", "HEAD commit is invalid"))?
+        .map_err(|_| RuntimeError::Conflict("git_worktree", "HEAD commit is invalid"))?
         .trim()
         .to_owned();
     validate_commit(&head_commit)?;
     if head_commit == base_commit {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "workspace has no commit ahead of its recorded base",
         ));
@@ -434,7 +442,7 @@ pub fn inspect_publishable_worktree(
         OsString::from(&head_commit),
     ])
     .map_err(|_| {
-        AppError::Conflict(
+        RuntimeError::Conflict(
             "git_worktree",
             "workspace HEAD is not descended from its recorded base",
         )
@@ -445,7 +453,7 @@ pub fn inspect_publishable_worktree(
     })
 }
 
-pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), AppError> {
+pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), RuntimeError> {
     let inspection = inspect_publishable_worktree(
         request.mirror,
         request.worktree,
@@ -453,13 +461,13 @@ pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), AppError>
         request.base_commit,
     )?;
     if inspection.head_commit != request.intended_commit {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "workspace HEAD changed after publication was queued",
         ));
     }
-    if !crate::code_host::is_safe_remote(request.remote_url) {
-        return Err(AppError::Invalid("unsafe GitHub remote"));
+    if !request.remote_is_safe {
+        return Err(RuntimeError::Invalid("unsafe GitHub remote"));
     }
     let askpass = TemporaryAskpass::create(request.data_root)?;
     let refspec = format!(
@@ -505,38 +513,38 @@ pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), AppError>
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
-        .map_err(|_| AppError::Internal("start credentialed Git push"))?;
+        .map_err(|_| RuntimeError::Internal("start credentialed Git push"))?;
     let stdout = child
         .stdout
         .take()
-        .ok_or(AppError::Internal("capture Git push stdout"))?;
+        .ok_or(RuntimeError::Internal("capture Git push stdout"))?;
     let stderr = child
         .stderr
         .take()
-        .ok_or(AppError::Internal("capture Git push stderr"))?;
+        .ok_or(RuntimeError::Internal("capture Git push stderr"))?;
     let stdout_reader = thread::spawn(move || bounded_read(stdout, MAX_GIT_OUTPUT_BYTES));
     let stderr_reader = thread::spawn(move || bounded_read(stderr, MAX_GIT_ERROR_BYTES));
     let deadline = Instant::now() + GIT_NETWORK_TIMEOUT;
     let status = loop {
         if let Some(status) = child
             .try_wait()
-            .map_err(|_| AppError::Internal("wait for credentialed Git push"))?
+            .map_err(|_| RuntimeError::Internal("wait for credentialed Git push"))?
         {
             break status;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(AppError::Conflict("repository", "Git push timed out"));
+            return Err(RuntimeError::Conflict("repository", "Git push timed out"));
         }
         thread::sleep(Duration::from_millis(20));
     };
     let stdout = stdout_reader
         .join()
-        .map_err(|_| AppError::Internal("join Git push stdout reader"))??;
+        .map_err(|_| RuntimeError::Internal("join Git push stdout reader"))??;
     let stderr = stderr_reader
         .join()
-        .map_err(|_| AppError::Internal("join Git push stderr reader"))??;
+        .map_err(|_| RuntimeError::Internal("join Git push stderr reader"))??;
     if status.success() {
         return Ok(());
     }
@@ -545,26 +553,26 @@ pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), AppError>
         stderr_bytes = stderr.len(),
         "bounded credentialed Git push failed"
     );
-    Err(AppError::Conflict("repository", "Git push failed"))
+    Err(RuntimeError::Conflict("repository", "Git push failed"))
 }
 
-pub fn remove_clean_worktree(mirror: &Path, worktree: &Path) -> Result<(), AppError> {
+pub fn remove_clean_worktree(mirror: &Path, worktree: &Path) -> Result<(), RuntimeError> {
     let inspection = inspect_worktree(mirror, worktree)?;
     if inspection.dirty {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "dirty worktree is retained",
         ));
     }
     if worktree_has_ignored_files(worktree)? {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "worktree holding ignored files is retained",
         ));
     }
     let repository_root = mirror
         .parent()
-        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+        .ok_or(RuntimeError::Invalid("mirror has no repository root"))?;
     let _lock = repository_lock(repository_root)?;
     run_git([
         OsString::from("--git-dir"),
@@ -581,29 +589,29 @@ pub fn remove_published_worktree(
     worktree: &Path,
     expected_branch: &str,
     published_commit: &str,
-) -> Result<(), AppError> {
+) -> Result<(), RuntimeError> {
     validate_branch(expected_branch)?;
     validate_commit(published_commit)?;
     validate_mirror(mirror)?;
     let repository_root = mirror
         .parent()
-        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+        .ok_or(RuntimeError::Invalid("mirror has no repository root"))?;
     let _lock = repository_lock(repository_root)?;
     let inspection = inspect_worktree(mirror, worktree)?;
     if inspection.dirty {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "dirty worktree is retained",
         ));
     }
     if worktree_has_ignored_files(worktree)? {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "worktree holding ignored files is retained",
         ));
     }
     if inspection.branch != expected_branch {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "worktree branch does not match its durable workspace",
         ));
@@ -616,9 +624,9 @@ pub fn remove_published_worktree(
         OsString::from("HEAD^{commit}"),
     ])?;
     let head = String::from_utf8(head.stdout)
-        .map_err(|_| AppError::Conflict("git_worktree", "HEAD commit is invalid"))?;
+        .map_err(|_| RuntimeError::Conflict("git_worktree", "HEAD commit is invalid"))?;
     if head.trim() != published_commit {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "git_worktree",
             "unpushed worktree is retained",
         ));
@@ -633,15 +641,18 @@ pub fn remove_published_worktree(
     prune_worktrees_locked(mirror)
 }
 
-pub fn repair_and_prune_worktrees(mirror: &Path, worktree: Option<&Path>) -> Result<(), AppError> {
+pub fn repair_and_prune_worktrees(
+    mirror: &Path,
+    worktree: Option<&Path>,
+) -> Result<(), RuntimeError> {
     validate_mirror(mirror)?;
     let repository_root = mirror
         .parent()
-        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+        .ok_or(RuntimeError::Invalid("mirror has no repository root"))?;
     let _lock = repository_lock(repository_root)?;
     if let Some(worktree) = worktree {
         if !worktree.is_absolute() {
-            return Err(AppError::Invalid("unsafe worktree path"));
+            return Err(RuntimeError::Invalid("unsafe worktree path"));
         }
         run_git([
             OsString::from("--git-dir"),
@@ -657,26 +668,29 @@ pub fn repair_and_prune_worktrees(mirror: &Path, worktree: Option<&Path>) -> Res
 /// Removes everything the server keeps on disk for `repository_id`: its
 /// mirror and every managed worktree of it. Missing directories are fine,
 /// so a retry after a partial removal finishes the job.
-pub async fn remove_repository_data(data_root: &Path, repository_id: Uuid) -> Result<(), AppError> {
+pub async fn remove_repository_data(
+    data_root: &Path,
+    repository_id: Uuid,
+) -> Result<(), RuntimeError> {
     let data_root = absolute_runtime_path(data_root)?;
     for area in ["repositories", "worktrees"] {
         let directory = data_root.join(area).join(repository_id.to_string());
         match tokio::fs::remove_dir_all(&directory).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(AppError::Internal("remove repository data")),
+            Err(_) => return Err(RuntimeError::Internal("remove repository data")),
         }
     }
     Ok(())
 }
 
-pub fn absolute_runtime_path(path: &Path) -> Result<PathBuf, AppError> {
+pub fn absolute_runtime_path(path: &Path) -> Result<PathBuf, RuntimeError> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
     }
     std::env::current_dir()
         .map(|current| current.join(path))
-        .map_err(|_| AppError::Internal("resolve runtime path"))
+        .map_err(|_| RuntimeError::Internal("resolve runtime path"))
 }
 
 /// The trailer that marks a commit as carrying a harness's remote result,
@@ -692,9 +706,12 @@ pub fn apply_result_and_commit(
     patch: &[u8],
     result_ref: &str,
     subject: &str,
-) -> Result<Option<String>, AppError> {
+) -> Result<Option<String>, RuntimeError> {
     if !worktree.is_absolute() || !worktree.is_dir() {
-        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+        return Err(RuntimeError::Conflict(
+            "git_worktree",
+            "worktree is not ready",
+        ));
     }
     if result_ref.is_empty()
         || result_ref.len() > 200
@@ -702,7 +719,7 @@ pub fn apply_result_and_commit(
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
-        return Err(AppError::Invalid("harness result reference"));
+        return Err(RuntimeError::Invalid("harness result reference"));
     }
     let worktree_arg = worktree.as_os_str().to_owned();
     let trailer = format!("{RESULT_TRAILER} {result_ref}");
@@ -770,16 +787,19 @@ pub fn apply_result_and_commit(
         OsString::from("HEAD^{commit}"),
     ])?;
     let head = String::from_utf8(head.stdout)
-        .map_err(|_| AppError::Conflict("git_worktree", "HEAD commit is invalid"))?
+        .map_err(|_| RuntimeError::Conflict("git_worktree", "HEAD commit is invalid"))?
         .trim()
         .to_owned();
     validate_commit(&head)?;
     Ok(Some(head))
 }
 
-pub fn worktree_is_dirty(worktree: &Path) -> Result<bool, AppError> {
+pub fn worktree_is_dirty(worktree: &Path) -> Result<bool, RuntimeError> {
     if !worktree.is_absolute() || !worktree.is_dir() {
-        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+        return Err(RuntimeError::Conflict(
+            "git_worktree",
+            "worktree is not ready",
+        ));
     }
     let output = run_git([
         "-C",
@@ -797,9 +817,12 @@ pub fn worktree_is_dirty(worktree: &Path) -> Result<bool, AppError> {
 /// exist in no commit, so the loss is silent and unrecoverable. Removal
 /// paths check for them separately and retain the worktree instead.
 /// (Publish/retry dirtiness deliberately keeps the narrower meaning.)
-fn worktree_has_ignored_files(worktree: &Path) -> Result<bool, AppError> {
+fn worktree_has_ignored_files(worktree: &Path) -> Result<bool, RuntimeError> {
     if !worktree.is_absolute() || !worktree.is_dir() {
-        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+        return Err(RuntimeError::Conflict(
+            "git_worktree",
+            "worktree is not ready",
+        ));
     }
     let output = run_git([
         "-C",
@@ -847,13 +870,16 @@ pub fn run_diff(
     base: &str,
     head: Option<&str>,
     max_patch_bytes: usize,
-) -> Result<RunDiff, AppError> {
+) -> Result<RunDiff, RuntimeError> {
     validate_commit(base)?;
     if let Some(head) = head {
         validate_commit(head)?;
     }
     if !repository.is_absolute() || !repository.is_dir() {
-        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+        return Err(RuntimeError::Conflict(
+            "git_worktree",
+            "worktree is not ready",
+        ));
     }
     let args = |extra: &[&str]| {
         let mut args = vec![
@@ -956,14 +982,14 @@ fn parse_name_status(output: &[u8]) -> Vec<(String, String)> {
     statuses
 }
 
-fn validate_mirror(mirror: &Path) -> Result<(), AppError> {
+fn validate_mirror(mirror: &Path) -> Result<(), RuntimeError> {
     if !mirror.is_absolute() || !mirror.is_dir() {
-        return Err(AppError::Conflict("repository", "mirror is not ready"));
+        return Err(RuntimeError::Conflict("repository", "mirror is not ready"));
     }
     Ok(())
 }
 
-fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), AppError> {
+fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), RuntimeError> {
     validate_mirror(mirror)?;
     let origin = run_git([
         OsString::from("--git-dir"),
@@ -973,9 +999,9 @@ fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), 
         OsString::from("origin"),
     ])?;
     let origin = String::from_utf8(origin.stdout)
-        .map_err(|_| AppError::Conflict("repository", "origin is invalid"))?;
+        .map_err(|_| RuntimeError::Conflict("repository", "origin is invalid"))?;
     if origin.trim() != expected_origin {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "repository",
             "mirror origin does not match registration",
         ));
@@ -983,7 +1009,7 @@ fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), 
     Ok(())
 }
 
-fn validate_ref(value: &str) -> Result<(), AppError> {
+fn validate_ref(value: &str) -> Result<(), RuntimeError> {
     if value.is_empty()
         || value.len() > 255
         || value == "@"
@@ -1001,35 +1027,35 @@ fn validate_ref(value: &str) -> Result<(), AppError> {
             component.is_empty() || component.starts_with('.') || component.ends_with(".lock")
         })
     {
-        return Err(AppError::Invalid("unsafe Git reference"));
+        return Err(RuntimeError::Invalid("unsafe Git reference"));
     }
     Ok(())
 }
 
-pub fn validate_registered_ref(value: &str) -> Result<(), AppError> {
+pub fn validate_registered_ref(value: &str) -> Result<(), RuntimeError> {
     validate_ref(value)
 }
 
-fn validate_branch(value: &str) -> Result<(), AppError> {
+fn validate_branch(value: &str) -> Result<(), RuntimeError> {
     let owned = value
         .find("/run-")
         .is_some_and(|index| is_run_branch_prefix(&value[..index + 5]) && value.len() > index + 5);
     if !owned {
-        return Err(AppError::Invalid("unsafe Git branch"));
+        return Err(RuntimeError::Invalid("unsafe Git branch"));
     }
     validate_ref(value)
 }
 
-fn validate_commit(value: &str) -> Result<(), AppError> {
+fn validate_commit(value: &str) -> Result<(), RuntimeError> {
     if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(AppError::Invalid("unsafe Git commit"));
+        return Err(RuntimeError::Invalid("unsafe Git commit"));
     }
     Ok(())
 }
 
-fn repository_lock(repository_root: &Path) -> Result<RepositoryLock, AppError> {
+fn repository_lock(repository_root: &Path) -> Result<RepositoryLock, RuntimeError> {
     if !repository_root.is_absolute() || !repository_root.is_dir() {
-        return Err(AppError::Invalid("unsafe repository root"));
+        return Err(RuntimeError::Invalid("unsafe repository root"));
     }
     let path = repository_root.join("metadata.lock");
     let file = OpenOptions::new()
@@ -1039,15 +1065,15 @@ fn repository_lock(repository_root: &Path) -> Result<RepositoryLock, AppError> {
         .write(true)
         .mode(0o600)
         .open(path)
-        .map_err(|_| AppError::Internal("open repository metadata lock"))?;
+        .map_err(|_| RuntimeError::Internal("open repository metadata lock"))?;
     file.set_permissions(fs::Permissions::from_mode(0o600))
-        .map_err(|_| AppError::Internal("protect repository metadata lock"))?;
+        .map_err(|_| RuntimeError::Internal("protect repository metadata lock"))?;
     file.lock_exclusive()
-        .map_err(|_| AppError::Internal("lock repository metadata"))?;
+        .map_err(|_| RuntimeError::Internal("lock repository metadata"))?;
     Ok(RepositoryLock { file })
 }
 
-fn prune_worktrees_locked(mirror: &Path) -> Result<(), AppError> {
+fn prune_worktrees_locked(mirror: &Path) -> Result<(), RuntimeError> {
     run_git([
         OsString::from("--git-dir"),
         mirror.as_os_str().to_owned(),
@@ -1058,7 +1084,7 @@ fn prune_worktrees_locked(mirror: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn run_git<I, S>(arguments: I) -> Result<Output, AppError>
+fn run_git<I, S>(arguments: I) -> Result<Output, RuntimeError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -1067,7 +1093,7 @@ where
 }
 
 /// `run_git` with `input` written to Git's standard input.
-fn run_git_with_input<I, S>(arguments: I, input: Option<&[u8]>) -> Result<Output, AppError>
+fn run_git_with_input<I, S>(arguments: I, input: Option<&[u8]>) -> Result<Output, RuntimeError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -1100,7 +1126,7 @@ where
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
-        .map_err(|_| AppError::Internal("start Git"))?;
+        .map_err(|_| RuntimeError::Internal("start Git"))?;
     let stdin_writer = match (input, child.stdin.take()) {
         (Some(input), Some(mut stdin)) => {
             let input = input.to_vec();
@@ -1115,27 +1141,27 @@ where
     let stdout = child
         .stdout
         .take()
-        .ok_or(AppError::Internal("capture Git stdout"))?;
+        .ok_or(RuntimeError::Internal("capture Git stdout"))?;
     let stderr = child
         .stderr
         .take()
-        .ok_or(AppError::Internal("capture Git stderr"))?;
+        .ok_or(RuntimeError::Internal("capture Git stderr"))?;
     let stdout_reader = thread::spawn(move || bounded_read(stdout, MAX_GIT_OUTPUT_BYTES));
     let stderr_reader = thread::spawn(move || bounded_read(stderr, MAX_GIT_ERROR_BYTES));
     let status = child
         .wait()
-        .map_err(|_| AppError::Internal("wait for Git"))?;
+        .map_err(|_| RuntimeError::Internal("wait for Git"))?;
     if let Some(writer) = stdin_writer {
         writer
             .join()
-            .map_err(|_| AppError::Internal("join Git stdin writer"))?;
+            .map_err(|_| RuntimeError::Internal("join Git stdin writer"))?;
     }
     let stdout = stdout_reader
         .join()
-        .map_err(|_| AppError::Internal("join Git stdout reader"))??;
+        .map_err(|_| RuntimeError::Internal("join Git stdout reader"))??;
     let stderr = stderr_reader
         .join()
-        .map_err(|_| AppError::Internal("join Git stderr reader"))??;
+        .map_err(|_| RuntimeError::Internal("join Git stderr reader"))??;
     let output = Output {
         status,
         stdout,
@@ -1150,14 +1176,14 @@ where
         truncated = output.stderr.len() > MAX_GIT_ERROR_BYTES,
         "bounded Git command failed"
     );
-    Err(AppError::Conflict("repository", "Git operation failed"))
+    Err(RuntimeError::Conflict("repository", "Git operation failed"))
 }
 
 fn run_git_authenticated<I, S>(
     data_root: &Path,
     arguments: I,
     token: &SecretString,
-) -> Result<Output, AppError>
+) -> Result<Output, RuntimeError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -1192,38 +1218,41 @@ where
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
-        .map_err(|_| AppError::Internal("start credentialed Git"))?;
+        .map_err(|_| RuntimeError::Internal("start credentialed Git"))?;
     let stdout = child
         .stdout
         .take()
-        .ok_or(AppError::Internal("capture credentialed Git stdout"))?;
+        .ok_or(RuntimeError::Internal("capture credentialed Git stdout"))?;
     let stderr = child
         .stderr
         .take()
-        .ok_or(AppError::Internal("capture credentialed Git stderr"))?;
+        .ok_or(RuntimeError::Internal("capture credentialed Git stderr"))?;
     let stdout_reader = thread::spawn(move || bounded_read(stdout, MAX_GIT_OUTPUT_BYTES));
     let stderr_reader = thread::spawn(move || bounded_read(stderr, MAX_GIT_ERROR_BYTES));
     let deadline = Instant::now() + GIT_NETWORK_TIMEOUT;
     let status = loop {
         if let Some(status) = child
             .try_wait()
-            .map_err(|_| AppError::Internal("wait for credentialed Git"))?
+            .map_err(|_| RuntimeError::Internal("wait for credentialed Git"))?
         {
             break status;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(AppError::Conflict("repository", "Git operation timed out"));
+            return Err(RuntimeError::Conflict(
+                "repository",
+                "Git operation timed out",
+            ));
         }
         thread::sleep(Duration::from_millis(20));
     };
     let stdout = stdout_reader
         .join()
-        .map_err(|_| AppError::Internal("join credentialed Git stdout reader"))??;
+        .map_err(|_| RuntimeError::Internal("join credentialed Git stdout reader"))??;
     let stderr = stderr_reader
         .join()
-        .map_err(|_| AppError::Internal("join credentialed Git stderr reader"))??;
+        .map_err(|_| RuntimeError::Internal("join credentialed Git stderr reader"))??;
     let output = Output {
         status,
         stdout,
@@ -1237,16 +1266,16 @@ where
         stderr_bytes = output.stderr.len(),
         "bounded credentialed Git operation failed"
     );
-    Err(AppError::Conflict("repository", "Git operation failed"))
+    Err(RuntimeError::Conflict("repository", "Git operation failed"))
 }
 
 struct GitProcessPermit;
 
 impl GitProcessPermit {
-    fn try_acquire() -> Result<Self, AppError> {
+    fn try_acquire() -> Result<Self, RuntimeError> {
         reserve_process_slot(&ACTIVE_GIT_PROCESSES, MAX_CONCURRENT_GIT_PROCESSES)
             .then_some(())
-            .ok_or_else(|| AppError::rate_limited(1))?;
+            .ok_or_else(|| RuntimeError::rate_limited(1))?;
         Ok(Self)
     }
 }
@@ -1266,15 +1295,15 @@ impl Drop for GitProcessPermit {
     }
 }
 
-fn bounded_read(mut input: impl Read, maximum: usize) -> Result<Vec<u8>, AppError> {
+fn bounded_read(mut input: impl Read, maximum: usize) -> Result<Vec<u8>, RuntimeError> {
     let mut bytes = Vec::with_capacity(maximum.min(16 * 1024));
     input
         .by_ref()
         .take(u64::try_from(maximum).unwrap_or(u64::MAX).saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|_| AppError::Conflict("repository", "Git output could not be read"))?;
+        .map_err(|_| RuntimeError::Conflict("repository", "Git output could not be read"))?;
     if bytes.len() > maximum {
-        return Err(AppError::Conflict(
+        return Err(RuntimeError::Conflict(
             "repository",
             "Git output exceeded its bound",
         ));
@@ -1288,7 +1317,7 @@ struct TemporaryAskpass {
 }
 
 impl TemporaryAskpass {
-    fn create(data_root: &Path) -> Result<Self, AppError> {
+    fn create(data_root: &Path) -> Result<Self, RuntimeError> {
         let key = Uuid::now_v7().simple().to_string();
         let directory =
             prepare_private_profile_directory(data_root, &data_root.join("github/askpass"), &key)?;
@@ -1298,15 +1327,15 @@ impl TemporaryAskpass {
             .write(true)
             .mode(0o700)
             .open(&path)
-            .map_err(|_| AppError::Internal("create Git askpass helper"))?;
+            .map_err(|_| RuntimeError::Internal("create Git askpass helper"))?;
         file.write_all(
             b"#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s\\n' 'x-access-token' ;;\n  *Password*) printf '%s\\n' \"$AGENT_WORKSPACE_GIT_PASSWORD\" ;;\n  *) exit 1 ;;\nesac\n",
         )
-        .map_err(|_| AppError::Internal("write Git askpass helper"))?;
+        .map_err(|_| RuntimeError::Internal("write Git askpass helper"))?;
         file.sync_all()
-            .map_err(|_| AppError::Internal("sync Git askpass helper"))?;
+            .map_err(|_| RuntimeError::Internal("sync Git askpass helper"))?;
         file.set_permissions(fs::Permissions::from_mode(0o700))
-            .map_err(|_| AppError::Internal("protect Git askpass helper"))?;
+            .map_err(|_| RuntimeError::Internal("protect Git askpass helper"))?;
         Ok(Self { directory, path })
     }
 
