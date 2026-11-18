@@ -111,6 +111,8 @@ pub struct LockedWorkItem {
     pub status_id: Uuid,
     pub priority: String,
     pub assignee_actor_id: Option<Uuid>,
+    /// Who the work is handed to (T1.22), beside the assignee who owns it.
+    pub delegate_actor_id: Option<Uuid>,
     pub parent_work_item_id: Option<Uuid>,
     pub board_rank: i64,
     pub archived: bool,
@@ -125,7 +127,7 @@ pub struct LockedWorkItem {
 
 /// The columns `LockedWorkItem` reads, for every query that locks a task.
 pub const LOCKED_WORK_ITEM_COLUMNS: &str = "id, number, version, title, description, type_id, status_id, priority, \
-    assignee_actor_id, parent_work_item_id, board_rank, archived_at IS NOT NULL AS archived, \
+    assignee_actor_id, delegate_actor_id, parent_work_item_id, board_rank, archived_at IS NOT NULL AS archived, \
     blocked_reason, milestone_id, start_date, due_date, estimate, field_values";
 
 /// Planning fields a new task can start with.
@@ -146,6 +148,8 @@ pub struct TaskFieldChanges {
     pub estimate: Option<Option<f64>>,
     /// Marks the task blocked with this reason, or clears it.
     pub blocked_reason: Option<Option<String>>,
+    /// Hands the task to someone (T1.22), or takes it back.
+    pub delegate_actor_id: Option<Option<Uuid>>,
 }
 
 impl TaskFieldChanges {
@@ -155,6 +159,7 @@ impl TaskFieldChanges {
             && self.due_date.is_none()
             && self.estimate.is_none()
             && self.blocked_reason.is_none()
+            && self.delegate_actor_id.is_none()
     }
 }
 
@@ -281,6 +286,8 @@ pub enum UpdateWorkItemOutcome {
     Conflict(LockedWorkItem),
     NotFound,
     InvalidAssignee,
+    /// The delegate isn't someone who could be given the task.
+    InvalidDelegate,
     InvalidTransition {
         current_status_id: Uuid,
         requested_status_id: Uuid,
@@ -839,6 +846,15 @@ pub async fn update_locked_work_item(
         return Ok(UpdateWorkItemOutcome::InvalidAssignee);
     }
     let fields = &command.fields;
+    // A delegate is someone who could be the assignee.
+    if let Some(delegate) = fields.delegate_actor_id
+        && !validate_assignee(transaction, actor.project_id, delegate).await?
+    {
+        return Ok(UpdateWorkItemOutcome::InvalidDelegate);
+    }
+    let delegate_actor_id = fields
+        .delegate_actor_id
+        .unwrap_or(current.delegate_actor_id);
     let milestone_id = fields.milestone_id.unwrap_or(current.milestone_id);
     if milestone_id != current.milestone_id
         && let Some(milestone_id) = milestone_id
@@ -959,6 +975,9 @@ pub async fn update_locked_work_item(
     if assignee_actor_id != current.assignee_actor_id {
         changed_fields.push("assignee".to_owned());
     }
+    if delegate_actor_id != current.delegate_actor_id {
+        changed_fields.push("delegate".to_owned());
+    }
     if parent_work_item_id != current.parent_work_item_id {
         changed_fields.push("parent".to_owned());
     }
@@ -1027,6 +1046,12 @@ pub async fn update_locked_work_item(
     {
         emit_assigned(transaction, actor, current.id, assignee).await?;
     }
+    if delegate_actor_id != current.delegate_actor_id
+        && let Some(delegate) = delegate_actor_id
+    {
+        add_watcher(transaction, actor.project_id, current.id, delegate).await?;
+        emit_delegated(transaction, actor, current.id, delegate).await?;
+    }
     // The title and field values are the record's (crate::task_records);
     // the rest is the task's own.
     crate::task_records::write_shared(
@@ -1047,7 +1072,7 @@ pub async fn update_locked_work_item(
         SET description = $4, type_id = $5, status_id = $6,
             priority = $7, assignee_actor_id = $8, parent_work_item_id = $10,
             board_rank = $11, milestone_id = $12, start_date = $13, due_date = $14,
-            estimate = $15,
+            estimate = $15, delegate_actor_id = $17,
             blocked_reason = $16,
             blocked_at = CASE WHEN $16::text IS NULL THEN NULL
                               WHEN blocked_reason IS NOT DISTINCT FROM $16 THEN blocked_at
@@ -1075,6 +1100,7 @@ pub async fn update_locked_work_item(
     .bind(due_date)
     .bind(estimate)
     .bind(blocked_reason.as_deref())
+    .bind(delegate_actor_id)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
@@ -1091,6 +1117,7 @@ pub async fn update_locked_work_item(
         serde_json::json!(priority),
     );
     changes.id("assignee", current.assignee_actor_id, assignee_actor_id);
+    changes.id("delegate", current.delegate_actor_id, delegate_actor_id);
     changes.id("milestone", current.milestone_id, milestone_id);
     changes.value(
         "startDate",
@@ -2768,6 +2795,81 @@ async fn emit_assigned(
         .audience(crate::events::Audience::Account(assignee))
         .actor(actor.actor_id)
         .payload(serde_json::json!({ "taskId": work_item_id, "assigneeId": assignee })),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Hands a task to `delegate` when it has no delegate yet, as a launch does
+/// for the agent it starts (T1.22, A1.13), in the caller's transaction.
+/// Someone who can't hold the task (not a member of its project) is left
+/// out quietly: the launch goes ahead either way.
+pub async fn delegate_unless_set(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    delegate: Uuid,
+) -> Result<(), AppError> {
+    let Some(current) = lock_work_item(transaction, actor.project_id, work_item_id).await? else {
+        return Ok(());
+    };
+    if current.delegate_actor_id.is_some() || current.archived {
+        return Ok(());
+    }
+    let version = current.version;
+    let outcome = update_locked_work_item(
+        transaction,
+        actor,
+        current,
+        UpdateWorkItemCommand {
+            expected_version: version,
+            title: None,
+            description: None,
+            type_id: None,
+            status_id: None,
+            priority: None,
+            assignee_actor_id: None,
+            parent_work_item_id: None,
+            board_placement: None,
+            labels: None,
+            fields: TaskFieldChanges {
+                delegate_actor_id: Some(Some(delegate)),
+                ..TaskFieldChanges::default()
+            },
+            field_values: None,
+            summary: "Handed to the agent it was launched with",
+            audit_action: "work_item.delegated_by_launch",
+            audit_version_metadata: AuditVersionMetadata::Include,
+        },
+    )
+    .await?;
+    match outcome {
+        UpdateWorkItemOutcome::Applied { .. }
+        | UpdateWorkItemOutcome::Noop(_)
+        | UpdateWorkItemOutcome::InvalidDelegate => Ok(()),
+        _ => Err(AppError::Internal("handing a launched task to its agent")),
+    }
+}
+
+/// Tells the new delegate, and only them, that the task was handed to
+/// them (`task.delegated`, T1.22).
+async fn emit_delegated(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    delegate: Uuid,
+) -> Result<(), AppError> {
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::TASK_DELEGATED,
+            actor.project_id,
+            "task",
+            work_item_id,
+        )
+        .audience(crate::events::Audience::Account(delegate))
+        .actor(actor.actor_id)
+        .payload(serde_json::json!({ "taskId": work_item_id, "delegateId": delegate })),
     )
     .await?;
     Ok(())

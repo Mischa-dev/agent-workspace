@@ -173,6 +173,8 @@ struct Write {
     reservation: IdempotencyReservation,
     actor: CommandActor,
     project_key: String,
+    /// Whether the actor may build the project's collections too.
+    can_build: bool,
 }
 
 impl Write {
@@ -229,6 +231,7 @@ async fn start_write<T: Serialize>(
     if !allows(&actor, &membership, action)? {
         return Err(AppError::Forbidden);
     }
+    let can_build = allows(&actor, &membership, Action::CollectionBuild)?;
     if membership.project_archived_at.is_some() {
         return Err(AppError::ProjectArchived);
     }
@@ -253,6 +256,7 @@ async fn start_write<T: Serialize>(
             reservation,
             actor,
             project_key,
+            can_build,
         }))),
     }
 }
@@ -805,6 +809,8 @@ struct CreateFieldRequest {
     #[serde(default)]
     two_way: bool,
     pair_name: Option<String>,
+    /// The rules its values are held to.
+    rules: Option<crate::fields::rules::RulesInput>,
 }
 
 fn field_name_message() -> String {
@@ -899,6 +905,7 @@ async fn create_field(
             pair: request
                 .two_way
                 .then(|| request.pair_name.clone().unwrap_or_default()),
+            rules: request.rules.clone(),
         },
     )
     .await?
@@ -963,6 +970,8 @@ struct UpdateFieldRequest {
     button: Option<crate::fields::button::ButtonInput>,
     /// A rollup field's new relation, field and aggregate.
     rollup: Option<crate::fields::rollup::RollupInput>,
+    /// Its rules, all at once.
+    rules: Option<crate::fields::rules::RulesInput>,
 }
 
 async fn update_field(
@@ -1056,6 +1065,7 @@ async fn update_field(
             formula: request.formula.clone(),
             button: request.button.clone(),
             rollup: request.rollup.clone(),
+            rules: request.rules.clone(),
             expected_version: Some(request.expected_version),
         },
     )
@@ -1513,6 +1523,7 @@ async fn write_record(
         project_id,
         &collection,
         writer,
+        write.can_build,
         &definitions,
         "values",
         std::slice::from_ref(&input),

@@ -1418,6 +1418,17 @@
             ],
             "description": "A rollup field's rollup: the relation it reads, the related records'\nfield, and how to put their values together."
           },
+          "rules": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RulesInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The rules its values are held to, all at once (a rule left out is\noff): required, unique, default, min, max, pattern, buildersOnly."
+          },
           "target": {
             "description": "For a new link field: \"task\", \"page\", or \"record:<collection>\" for\nthe records of one of the project's collections, by name or ID.",
             "type": [
@@ -3765,6 +3776,56 @@
           "relation",
           "aggregate"
         ],
+        "type": "object"
+      },
+      "RulesInput": {
+        "additionalProperties": false,
+        "description": "A field's rules as someone writes them. Every rule is set at once: one\nleft out is off.",
+        "properties": {
+          "buildersOnly": {
+            "default": false,
+            "description": "Only people who may build the collection may change the value.",
+            "type": "boolean"
+          },
+          "default": {
+            "default": null,
+            "description": "A new record's value when it's given none, written as a value\nwould be; \"me\" for a person field, \"today\" for a date field."
+          },
+          "max": {
+            "default": null,
+            "description": "Number fields: the largest value allowed.",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min": {
+            "default": null,
+            "description": "Number fields: the smallest value allowed.",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pattern": {
+            "default": null,
+            "description": "Text fields: a pattern (regular expression) the whole value must\nmatch, at most 200 characters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required": {
+            "default": false,
+            "description": "Every record needs a value.",
+            "type": "boolean"
+          },
+          "unique": {
+            "default": false,
+            "description": "No two records may have the same value (text, email, URL, phone or\nnumber fields).",
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "RunActivityInput": {
@@ -58049,7 +58110,7 @@
     },
     "/api/v2/w/{workspace}/ops/task_update": {
       "post": {
-        "description": "Change a task: title, description, priority, assignee, type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), or archive it (archived: true; false restores; pass it on its own). Mark it blocked with blockedReason, or clear the blocker and move it to review with readyForReview: true (each on its own). Pass the version you last read as expectedVersion; on a conflict, open it again and retry. Needs \"Edit tasks\" where it acts.",
+        "description": "Change a task: title, description, priority, assignee, delegate (who it is handed to), type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), or archive it (archived: true; false restores; pass it on its own). Mark it blocked with blockedReason, or clear the blocker and move it to review with readyForReview: true (each on its own). Pass the version you last read as expectedVersion; on a conflict, open it again and retry. Needs \"Edit tasks\" where it acts.",
         "operationId": "task_update",
         "parameters": [
           {
@@ -58140,6 +58201,13 @@
                     "description": "true makes it a top-level task again.",
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "delegate": {
+                    "description": "Hand it to someone to do, keeping the assignee as its owner: \"me\",\n\"none\", an actor ID, or an @handle. People and agents can hold\neither role.",
+                    "type": [
+                      "string",
                       "null"
                     ]
                   },

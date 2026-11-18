@@ -23,6 +23,8 @@ import { buttonDraft, buttonInput } from './buttonDraft'
 import { FormulaEditor, type FormulaContext } from './FormulaEditor'
 import { RollupEditor } from './RollupEditor'
 import { rollupDraft } from './rollupDraft'
+import { RulesEditor } from './RulesEditor'
+import { rulesDraft, rulesInput, takesRules } from './rulesDraft'
 
 /** Named colors the server takes, in the order labels offer them. */
 const COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'gray'] as const
@@ -202,6 +204,10 @@ export function FieldDialog({
   const [initialRollup] = useState(() => JSON.stringify(rollup))
   const [button, setButton] = useState(() => buttonDraft(field, formulas?.fields ?? []))
   const [initialButton] = useState(() => JSON.stringify(button.steps.map(({ operation, arguments: input }) => [operation, input])))
+  const [rules, setRules] = useState(() => rulesDraft(field))
+  const [initialRules] = useState(() => JSON.stringify(rules))
+  // Rules are for collection fields (where formulas are offered too).
+  const hasRules = Boolean(formulas) && takesRules(type)
   const status = type === 'status'
   // A new status field without options gets the server's three.
   const choices = type === 'single_choice' || type === 'multiple_choice' || (status && (Boolean(field) || options.length > 0))
@@ -218,6 +224,10 @@ export function FieldDialog({
     if (isRollup && !rollup.relation) return setProblem('Add a Related records field first: a rollup reads the records it names.')
     if (isRollup && rollup.aggregate !== 'count' && !rollup.field) return setProblem('Pick the field of the related records it reads.')
     const rollupInput = isRollup ? { relation: rollup.relation, aggregate: rollup.aggregate, ...(rollup.field ? { field: rollup.field } : {}) } : undefined
+    const ruled = hasRules ? rulesInput(rules, type) : null
+    if (ruled && 'problem' in ruled) return setProblem(ruled.problem)
+    const rulesSettings = ruled && 'input' in ruled ? ruled.input : undefined
+    const rulesChanged = Boolean(rulesSettings) && JSON.stringify(rules) !== initialRules
     const pressed = isButton && formulas ? buttonInput(button) : null
     if (pressed && 'problem' in pressed) return setProblem(pressed.problem)
     const buttonSettings = pressed && 'input' in pressed ? pressed.input : undefined
@@ -249,6 +259,7 @@ export function FieldDialog({
           ...(isFormula && formulas && formula.trim() !== initialFormula.trim() ? { formula: formula.trim() } : {}),
           ...(buttonSettings && buttonChanged ? { button: buttonSettings } : {}),
           ...(rollupInput && JSON.stringify(rollup) !== initialRollup ? { rollup: rollupInput } : {}),
+          ...(rulesSettings && rulesChanged ? { rules: rulesSettings } : {}),
         },
         done,
       )
@@ -265,6 +276,7 @@ export function FieldDialog({
           ...(rollupInput ? { rollup: rollupInput } : {}),
           ...(isFormula ? { formula: formula.trim() } : {}),
           ...(buttonSettings ? { button: buttonSettings } : {}),
+          ...(rulesSettings && rulesChanged ? { rules: rulesSettings } : {}),
         },
         done,
       )
@@ -428,6 +440,14 @@ export function FieldDialog({
           </Button>
           {field ? <p className="aw-pagesection__desc">A removed option is archived: {records} that have it keep it.</p> : null}
         </fieldset>
+      ) : null}
+      {hasRules ? (
+        <RulesEditor
+          draft={rules}
+          onChange={setRules}
+          options={options.map((option) => option.name.trim()).filter(Boolean)}
+          type={type}
+        />
       ) : null}
     </Dialog>
   )

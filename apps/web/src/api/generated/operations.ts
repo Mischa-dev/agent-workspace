@@ -98,7 +98,7 @@ export type Entry = { addressed: boolean; family: string; kind: string; summary:
 
 export type FieldOp = "is" | "isNot" | "empty" | "notEmpty" | "contains" | "gt" | "gte" | "lt" | "lte" | "within" | "categoryIs" | "categoryIsNot"
 
-export type FieldWrite = { archived?: boolean | null; button?: ButtonInput | null; description?: string | null; field?: string | null; formula?: string | null; name?: string | null; options?: OptionInput[] | null; pairName?: string | null; position?: number | null; rollup?: RollupInput | null; target?: string | null; twoWay?: boolean | null; type?: string | null }
+export type FieldWrite = { archived?: boolean | null; button?: ButtonInput | null; description?: string | null; field?: string | null; formula?: string | null; name?: string | null; options?: OptionInput[] | null; pairName?: string | null; position?: number | null; rollup?: RollupInput | null; rules?: RulesInput | null; target?: string | null; twoWay?: boolean | null; type?: string | null }
 
 export type FigureGroup = { color?: string | null; count: number; key: string; name: string; value?: number | null }
 
@@ -221,6 +221,8 @@ export type ResultType = "number" | "text" | "boolean" | "date" | "list"
 export type RevisionItem = { redacted?: boolean; revision: number; text: string; truncated?: boolean; via?: string | null; writtenAt: string; writtenBy: string }
 
 export type RollupInput = { aggregate: string; field?: string | null; relation: string }
+
+export type RulesInput = { buildersOnly?: boolean; default?: unknown; max?: number | null; min?: number | null; pattern?: string | null; required?: boolean; unique?: boolean }
 
 export type RunActivityInput = { at?: string | null; id: string; kind: string; parentRef?: string | null; payload?: unknown; stepRef?: string | null; summary?: string | null }
 
@@ -826,7 +828,7 @@ export type TaskRestoreInput = { expectedVersion: number; taskId: string }
 
 export type TaskRestoreOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
 
-export type TaskUpdateInput = { addLabels?: string[] | null; afterTaskId?: string | null; archived?: boolean | null; assignee?: string | null; beforeTaskId?: string | null; blockedReason?: string | null; clearAssignee?: boolean | null; clearEstimate?: boolean | null; clearParent?: boolean | null; description?: string | null; dueDate?: string | null; estimate?: number | null; expectedVersion: number; fields?: Record<string, unknown> | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; readyForReview?: boolean | null; removeLabels?: string[] | null; startDate?: string | null; status?: string | null; taskId: string; title?: string | null; type?: string | null }
+export type TaskUpdateInput = { addLabels?: string[] | null; afterTaskId?: string | null; archived?: boolean | null; assignee?: string | null; beforeTaskId?: string | null; blockedReason?: string | null; clearAssignee?: boolean | null; clearEstimate?: boolean | null; clearParent?: boolean | null; delegate?: string | null; description?: string | null; dueDate?: string | null; estimate?: number | null; expectedVersion: number; fields?: Record<string, unknown> | null; milestone?: string | null; parentId?: string | null; position?: string | null; priority?: string | null; readyForReview?: boolean | null; removeLabels?: string[] | null; startDate?: string | null; status?: string | null; taskId: string; title?: string | null; type?: string | null }
 
 export type TaskUpdateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; resultId: string; url?: string | null; version: number; workItemId: string }
 

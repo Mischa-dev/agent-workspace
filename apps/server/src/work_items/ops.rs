@@ -229,6 +229,11 @@ pub struct TaskUpdateInput {
     pub assignee: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clear_assignee: Option<bool>,
+    /// Hand it to someone to do, keeping the assignee as its owner: "me",
+    /// "none", an actor ID, or an @handle. People and agents can hold
+    /// either role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate: Option<String>,
     /// Move to this status, by name (such as "In Progress").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -331,8 +336,8 @@ impl Operation for TaskUpdate {
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const DESTRUCTIVE: bool = true;
     const TITLE: &'static str = "Update task";
-    const DESCRIPTION: &'static str = "Change a task: title, description, priority, assignee, \
-        type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), \
+    const DESCRIPTION: &'static str = "Change a task: title, description, priority, assignee, delegate \
+        (who it is handed to), type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), \
         its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), \
         or archive it (archived: true; false restores; pass it on its own). Mark it blocked \
         with blockedReason, or clear the blocker and move it to review with readyForReview: \

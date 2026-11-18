@@ -24,6 +24,7 @@ export const PART_IDS = [
   'area.files',
   'task.type',
   'task.priority',
+  'task.delegate',
   'task.estimate',
   'task.custom_fields',
   'task.labels',

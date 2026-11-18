@@ -72,6 +72,9 @@ pub struct WorkItemProjection {
     pub status: StatusProjection,
     pub priority: String,
     pub assignee: Option<AssigneeProjection>,
+    /// Who it's handed to to do, beside its assignee (T1.22).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegate: Option<AssigneeProjection>,
     pub version: i64,
     pub archived: bool,
     pub parent_work_item_id: Option<String>,
@@ -192,6 +195,9 @@ struct WorkItemRow {
     assignee_actor_id: Option<Uuid>,
     assignee_display_name: Option<String>,
     assignee_handle: Option<String>,
+    delegate_actor_id: Option<Uuid>,
+    delegate_display_name: Option<String>,
+    delegate_handle: Option<String>,
     version: i64,
     archived: bool,
     parent_work_item_id: Option<Uuid>,
@@ -652,6 +658,15 @@ fn work_item_projection(
     let (description, description_truncated) =
         truncate(&row.description, MAX_DESCRIPTION_CHARACTERS);
     let assignee = assignee_projection(&row);
+    let delegate = row
+        .delegate_actor_id
+        .zip(row.delegate_display_name.clone())
+        .zip(row.delegate_handle.clone())
+        .map(|((actor_id, display_name), handle)| AssigneeProjection {
+            actor_id: actor_id.to_string(),
+            display_name,
+            handle,
+        });
     WorkItemProjection {
         id: row.id.to_string(),
         project_id: row.project_id.to_string(),
@@ -670,6 +685,7 @@ fn work_item_projection(
         },
         priority: row.priority,
         assignee,
+        delegate,
         version: row.version,
         archived: row.archived,
         parent_work_item_id: row.parent_work_item_id.map(|id| id.to_string()),
@@ -803,6 +819,9 @@ const WORK_ITEM_BY_ID_SELECT: &str = r#"
         wi.assignee_actor_id,
         assignee.display_name AS assignee_display_name,
         assignee.handle AS assignee_handle,
+        wi.delegate_actor_id,
+        delegate.display_name AS delegate_display_name,
+        delegate.handle AS delegate_handle,
         wi.version,
         wi.archived_at IS NOT NULL AS archived,
         wi.parent_work_item_id,
@@ -817,6 +836,8 @@ const WORK_ITEM_BY_ID_SELECT: &str = r#"
       ON status.project_id = wi.project_id AND status.id = wi.status_id
     LEFT JOIN project_memberships assignee
       ON assignee.project_id = wi.project_id AND assignee.actor_id = wi.assignee_actor_id
+    LEFT JOIN project_memberships delegate
+      ON delegate.project_id = wi.project_id AND delegate.actor_id = wi.delegate_actor_id
     WHERE wi.project_id = $1 AND wi.id = $2
 "#;
 

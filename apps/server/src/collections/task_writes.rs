@@ -280,6 +280,10 @@ fn update_problem(outcome: UpdateWorkItemOutcome, expected: i64) -> Option<Write
             &format!("values.{}", tasks::ASSIGNEE),
             "The assignee must be someone in the project who can hold tasks.",
         ),
+        UpdateWorkItemOutcome::InvalidDelegate => invalid(
+            &format!("values.{}", tasks::DELEGATE),
+            "The delegate must be someone in the project who can hold tasks.",
+        ),
         UpdateWorkItemOutcome::InvalidTransition { .. } => invalid(
             &format!("values.{}", tasks::STATUS),
             "The project's workflow doesn't allow that status change.",

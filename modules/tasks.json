@@ -69,7 +69,7 @@
     "/api/v1/bug-report-links/*",
     "/api/v1/bug-reports/*"
   ],
-  "events": { "emits": ["task.created", "task.updated", "task.assigned", "comment.mentioned", "task.placement_changed", "task.commented", "task.comment_changed", "milestone.created", "milestone.updated", "label.changed", "field.changed"], "listens": ["run.finished", "pull_request.merged"] },
+  "events": { "emits": ["task.created", "task.updated", "task.assigned", "task.delegated", "comment.mentioned", "task.placement_changed", "task.commented", "task.comment_changed", "milestone.created", "milestone.updated", "label.changed", "field.changed"], "listens": ["run.finished", "pull_request.merged"] },
   "notifications": ["assigned", "comment_mention", "task_changed", "ai_plan_import"],
   "search": ["tasks"],
   "automations": { "triggers": ["task_created", "task_matches"], "actions": ["set_field"] },
@@ -168,6 +168,7 @@
       "area.files",
       "task.type",
       "task.priority",
+      "task.delegate",
       "task.estimate",
       "task.custom_fields",
       "task.labels",

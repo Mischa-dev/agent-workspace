@@ -2756,6 +2756,7 @@ mod tests {
                 button: None,
                 inverse: None,
                 rollup: None,
+                rules: None,
             },
             position: 0,
             archived: false,

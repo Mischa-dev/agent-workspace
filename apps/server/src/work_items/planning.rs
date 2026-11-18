@@ -1447,6 +1447,10 @@ pub(super) async fn bulk_update(
                 "invalid_assignee",
                 "That person isn't an active member of the project.",
             )),
+            UpdateWorkItemOutcome::InvalidDelegate => problems.push(problem(
+                "invalid_delegate",
+                "That person isn't an active member of the project.",
+            )),
             UpdateWorkItemOutcome::InvalidTransition { .. } => problems.push(problem(
                 "invalid_transition",
                 "The workflow doesn't allow moving this task to that status.",

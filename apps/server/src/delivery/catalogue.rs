@@ -82,6 +82,13 @@ pub const ENTRIES: &[Entry] = &[
         "work_item.assigned",
     ),
     entry(
+        "task.delegated",
+        "task",
+        true,
+        "A task was handed to you to do",
+        "task.delegated",
+    ),
+    entry(
         "comment.mentioned",
         "task",
         true,

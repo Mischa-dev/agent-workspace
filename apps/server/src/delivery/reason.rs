@@ -129,7 +129,7 @@ pub fn decide(kind: &str, facts: Facts) -> Reason {
             "reply.requested" | "reply.followup" if facts.required => Reason::ReplyRequired,
             "reply.requested" | "reply.followup" => Reason::ReplyWelcome,
             "message.mentioned" | "comment.mentioned" => Reason::Mentioned,
-            "task.assigned" | "run.start" => Reason::Assigned,
+            "task.assigned" | "task.delegated" | "run.start" => Reason::Assigned,
             "run.cancel" => Reason::HostCommand,
             _ => Reason::Lifecycle,
         };

@@ -37,6 +37,7 @@ pub mod button;
 pub mod dependencies;
 pub mod formula;
 pub mod rollup;
+pub mod rules;
 
 /// Active fields one record kind of a project can have.
 pub const MAX_ACTIVE_FIELDS: i64 = 50;
@@ -519,6 +520,9 @@ pub struct FieldConfig {
     /// Rollup fields: what they read and how (T1.18).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollup: Option<rollup::RollupConfig>,
+    /// Collection fields: what their values are held to (T1.19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<rules::FieldRules>,
 }
 
 /// Where a field's value comes from in SQL (T1.5), so stored values, a
@@ -763,6 +767,9 @@ pub struct FieldView {
     /// Rollup fields: what they read and how.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollup: Option<rollup::RollupView>,
+    /// What its values are held to (collection fields).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<rules::RulesInput>,
     /// 1 is first.
     pub position: i32,
     pub archived: bool,
@@ -811,6 +818,7 @@ impl From<&FieldDefinition> for FieldView {
             button: field.config.button.as_ref().map(button::ButtonView::from),
             inverse: field.config.inverse.map(|id| id.to_string()),
             rollup: field.config.rollup.as_ref().map(rollup::RollupView::from),
+            rules: field.config.rules.as_ref().map(rules::RulesInput::from),
             position: field.position + 1,
             archived: field.archived,
             version: field.version,
@@ -2964,6 +2972,8 @@ pub struct NewField {
     /// A relation made two-way: its pair on the other collection, called
     /// this ("" for that collection's own name).
     pub pair: Option<String>,
+    /// The rules its values are held to.
+    pub rules: Option<rules::RulesInput>,
 }
 
 #[derive(Clone, Debug)]
@@ -3189,6 +3199,64 @@ async fn recompute_after(
     Ok(())
 }
 
+/// Checks rules written for `field` (`existing` once it has records):
+/// only collection fields take them, and a field made unique has no two
+/// live records with the same value already.
+async fn rules_config(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    kind: RecordKind,
+    field: &FieldDefinition,
+    input: &rules::RulesInput,
+    existing: bool,
+) -> Result<Result<Option<rules::FieldRules>, String>, AppError> {
+    let rules = match rules::normalize(field, input) {
+        Ok(Some(rules)) => rules,
+        Ok(None) => return Ok(Ok(None)),
+        Err(message) => return Ok(Err(message)),
+    };
+    if plain_collection_title(connection, project_id, kind)
+        .await?
+        .is_none()
+    {
+        return Ok(Err(
+            "Rules are for fields of collections whose records aren't tasks, for now.".to_owned(),
+        ));
+    }
+    let was_unique = field
+        .config
+        .rules
+        .as_ref()
+        .is_some_and(|rules| rules.unique);
+    if existing && rules.unique && !was_unique {
+        let same = sqlx::query_scalar::<_, Vec<i64>>(
+            "SELECT array_agg(number ORDER BY number) FROM collection_records \
+             WHERE project_id = $1 AND collection_id = $2 AND archived_at IS NULL \
+               AND field_values ? $3 \
+             GROUP BY lower(field_values ->> $3) HAVING count(*) > 1 \
+             ORDER BY min(number) LIMIT 1",
+        )
+        .bind(project_id)
+        .bind(kind.collection_id())
+        .bind(field.id.to_string())
+        .fetch_optional(&mut *connection)
+        .await?;
+        if let Some(numbers) = same {
+            let named = numbers
+                .iter()
+                .take(3)
+                .map(|number| format!("#{number}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(Err(format!(
+                "Records {named} have the same \"{}\". Change them first, then make it unique.",
+                field.name
+            )));
+        }
+    }
+    Ok(Ok(Some(rules)))
+}
+
 /// Creates a field. The caller holds the project lock
 /// (`work_item_commands::lock_membership`) and has checked the actor may
 /// manage the project's fields.
@@ -3315,6 +3383,23 @@ pub async fn create(
             Err(message) => return Ok(CreateFieldOutcome::InvalidSetting("button", message)),
         }
     }
+    if let Some(input) = &new.rules {
+        let field = FieldDefinition {
+            id,
+            name: new.name.clone(),
+            description: String::new(),
+            field_type: new.field_type,
+            config: config.clone(),
+            position: 0,
+            archived: false,
+            version: 0,
+            accessor: Accessor::Stored,
+        };
+        match rules_config(connection, project_id, kind, &field, input, false).await? {
+            Ok(rules) => config.rules = rules,
+            Err(message) => return Ok(CreateFieldOutcome::InvalidSetting("rules", message)),
+        }
+    }
     let pair = match (&new.pair, config.collection) {
         (Some(name), Some(collection)) => Some((name.trim().to_owned(), collection)),
         _ => None,
@@ -3414,6 +3499,7 @@ async fn make_pair(
             button: None,
             rollup: None,
             pair: None,
+            rules: None,
         },
     ))
     .await?;
@@ -3509,6 +3595,8 @@ pub struct FieldChange {
     pub button: Option<button::ButtonInput>,
     /// A rollup field's new rollup, as written.
     pub rollup: Option<rollup::RollupInput>,
+    /// Its rules, all at once.
+    pub rules: Option<rules::RulesInput>,
     /// Checked only when something would change.
     pub expected_version: Option<i64>,
 }
@@ -3661,6 +3749,17 @@ pub async fn change(
             Err(message) => return Ok(ChangeFieldOutcome::InvalidSetting("button", message)),
         }
     }
+    if let Some(input) = &change.rules {
+        let field = FieldDefinition {
+            name: name.clone(),
+            config: config.clone(),
+            ..current.clone()
+        };
+        match rules_config(connection, project_id, kind, &field, input, true).await? {
+            Ok(rules) => config.rules = rules,
+            Err(message) => return Ok(ChangeFieldOutcome::InvalidSetting("rules", message)),
+        }
+    }
     if normalize_name(&name).as_deref() != Some(name.as_str())
         || normalize_description(&description).as_deref() != Some(description.as_str())
     {
@@ -3693,10 +3792,14 @@ pub async fn change(
     if config.rollup != current.config.rollup {
         changed.push("rollup");
     }
+    if config.rules != current.config.rules {
+        changed.push("rules");
+    }
     let options_part = |config: &FieldConfig| FieldConfig {
         formula: None,
         button: None,
         rollup: None,
+        rules: None,
         ..config.clone()
     };
     if options_part(&config) != options_part(&current.config) {

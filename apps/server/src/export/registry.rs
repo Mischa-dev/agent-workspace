@@ -1036,6 +1036,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("blocked_by_actor_id", "actors"),
                     ("milestone_id", "project_milestones"),
                     ("collection_id", "collections"),
+                    ("delegate_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],

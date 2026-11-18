@@ -1506,6 +1506,8 @@ pub(super) async fn record_write(
         if module_off(state, principal).await? {
             return Ok(ToolResult::module_off("record_write", "Collections"));
         }
+        // Fields only builders change (T1.19).
+        let may_build = can_write_in(state, principal, project_id, Action::CollectionBuild).await?;
         let Writing {
             mut transaction,
             project_key,
@@ -1582,6 +1584,7 @@ pub(super) async fn record_write(
                 project_id,
                 &collection,
                 writer,
+                may_build,
                 &definitions,
                 "fields",
                 &inputs,

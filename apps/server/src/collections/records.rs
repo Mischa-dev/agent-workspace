@@ -845,13 +845,15 @@ pub struct WriteProblem {
 /// (`super::lock`) after the project lock. `values_argument` is what the
 /// caller calls the values ("fields" for agents, "values" for the web app),
 /// for refusals. The caller has checked the actor may edit records and
-/// that the collection isn't archived.
+/// that the collection isn't archived; `may_build` is whether they may
+/// also build it, which fields only builders change need (T1.19).
 #[allow(clippy::too_many_arguments)]
 pub async fn write(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection: &Collection,
     writer: Writer<'_>,
+    may_build: bool,
     definitions: &[FieldDefinition],
     values_argument: &str,
     inputs: &[RecordInput],
@@ -907,7 +909,7 @@ pub async fn write(
                     ),
                 );
             }
-            let changes = match resolve_values(
+            let mut changes = match resolve_values(
                 connection,
                 project_id,
                 collection,
@@ -924,7 +926,72 @@ pub async fn write(
                     return stop(ProblemKind::Invalid, &problem.field, problem.message);
                 }
             };
+            if let Some(field) = builders_only(&changes, None, may_build) {
+                return stop(
+                    ProblemKind::Invalid,
+                    &format!("{values_argument}.{}", field.name),
+                    builders_only_message(field, collection),
+                );
+            }
+            // Fields left out start with their defaults; one that no longer
+            // fits (an archived option, someone gone) is left empty.
+            let given = changes
+                .entries
+                .iter()
+                .map(|entry| entry.field.id)
+                .collect::<HashSet<_>>();
+            for field in definitions
+                .iter()
+                .filter(|field| !field.archived && !given.contains(&field.id))
+            {
+                let Some(default) = field
+                    .config
+                    .rules
+                    .as_ref()
+                    .and_then(fields::rules::default_written)
+                else {
+                    continue;
+                };
+                if let Ok(more) = resolve_values(
+                    connection,
+                    project_id,
+                    collection,
+                    writer,
+                    definitions,
+                    values_argument,
+                    &[(field.id.to_string(), default)],
+                    None,
+                )
+                .await?
+                {
+                    changes.entries.extend(more.entries);
+                }
+            }
             let values = changes.initial();
+            let fresh = changes
+                .entries
+                .iter()
+                .filter(|entry| entry.value.is_some())
+                .map(|entry| entry.field.id)
+                .collect::<HashSet<_>>();
+            if let Some((field, message)) = broken_rule(
+                connection,
+                project_id,
+                collection,
+                None,
+                definitions,
+                &values,
+                &fresh,
+                true,
+            )
+            .await?
+            {
+                return stop(
+                    ProblemKind::Invalid,
+                    &format!("{values_argument}.{field}"),
+                    message,
+                );
+            }
             if !work_item_fields::values_fit(&values) {
                 return stop(
                     ProblemKind::Invalid,
@@ -1040,6 +1107,13 @@ pub async fn write(
             Ok(changes) => changes,
             Err(problem) => return stop(ProblemKind::Invalid, &problem.field, problem.message),
         };
+        if let Some(field) = builders_only(&changes, Some(&current.field_values), may_build) {
+            return stop(
+                ProblemKind::Invalid,
+                &format!("{values_argument}.{}", field.name),
+                builders_only_message(field, collection),
+            );
+        }
         let mut changed = Vec::new();
         let mut history = Vec::new();
         let title = title.unwrap_or_else(|| current.title.clone());
@@ -1094,6 +1168,36 @@ pub async fn write(
                 ProblemKind::Invalid,
                 values_argument,
                 work_item_fields::TOO_LARGE.to_owned(),
+            );
+        }
+        // The values that change meet their rules; a restored record's
+        // unique values are checked again, since another may have taken them.
+        let fresh = definitions
+            .iter()
+            .filter(|field| {
+                let key = field.id.to_string();
+                values.get(&key) != current.field_values.get(&key)
+                    || (restoring && values.get(&key).is_some())
+            })
+            .map(|field| field.id)
+            .collect::<HashSet<_>>();
+        if !archiving
+            && let Some((field, message)) = broken_rule(
+                connection,
+                project_id,
+                collection,
+                Some(current.id),
+                definitions,
+                &values,
+                &fresh,
+                false,
+            )
+            .await?
+        {
+            return stop(
+                ProblemKind::Invalid,
+                &format!("{values_argument}.{field}"),
+                message,
             );
         }
         let archived = if restoring {
@@ -1181,6 +1285,108 @@ pub async fn write(
             .await?;
     }
     Ok(Ok(written))
+}
+
+/// The first field `changes` sets (to something new, against `current`)
+/// that only builders change, when the writer can't build.
+fn builders_only<'a>(
+    changes: &'a FieldValueChanges,
+    current: Option<&Value>,
+    may_build: bool,
+) -> Option<&'a FieldDefinition> {
+    if may_build {
+        return None;
+    }
+    changes
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .field
+                .config
+                .rules
+                .as_ref()
+                .is_some_and(|rules| rules.builders_only)
+        })
+        .find(|entry| {
+            let before = current.and_then(|values| values.get(entry.field.id.to_string()));
+            before != entry.value.as_ref()
+        })
+        .map(|entry| &entry.field)
+}
+
+fn builders_only_message(field: &FieldDefinition, collection: &Collection) -> String {
+    format!(
+        "Only people who can change {}'s fields set \"{}\".",
+        collection.name, field.name
+    )
+}
+
+/// The first rule a record's `values` break (T1.19), as the field's name
+/// and what to fix. `fresh` names the fields whose values are new: those
+/// meet their range, pattern and uniqueness, and a required one isn't
+/// cleared. A new record (`creating`) has a value for every required field.
+#[allow(clippy::too_many_arguments)]
+async fn broken_rule(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    collection: &Collection,
+    record: Option<Uuid>,
+    definitions: &[FieldDefinition],
+    values: &Value,
+    fresh: &HashSet<Uuid>,
+    creating: bool,
+) -> Result<Option<(String, String)>, AppError> {
+    for field in definitions.iter().filter(|field| !field.archived) {
+        let Some(rules) = field.config.rules.as_ref() else {
+            continue;
+        };
+        let key = field.id.to_string();
+        let value = values.get(&key).filter(|value| !value.is_null());
+        let is_fresh = fresh.contains(&field.id);
+        if rules.required && value.is_none() && (creating || is_fresh) {
+            return Ok(Some((
+                field.name.clone(),
+                format!("\"{}\" needs a value in {}.", field.name, collection.name),
+            )));
+        }
+        let (Some(value), true) = (value, is_fresh) else {
+            continue;
+        };
+        if let Err(message) = fields::rules::check(field, rules, value) {
+            return Ok(Some((field.name.clone(), message)));
+        }
+        if rules.unique {
+            let text = match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            let taken = sqlx::query_scalar::<_, i64>(
+                "SELECT number FROM collection_records \
+                 WHERE project_id = $1 AND collection_id = $2 AND archived_at IS NULL \
+                   AND ($3::uuid IS NULL OR id <> $3) \
+                   AND lower(field_values ->> $4) = lower($5) \
+                 ORDER BY number LIMIT 1",
+            )
+            .bind(project_id)
+            .bind(collection.id)
+            .bind(record)
+            .bind(&key)
+            .bind(&text)
+            .fetch_optional(&mut *connection)
+            .await?;
+            if let Some(number) = taken {
+                return Ok(Some((
+                    field.name.clone(),
+                    format!(
+                        "#{number} already has that \"{}\", and no two records of {} may share one.",
+                        field.name, collection.name
+                    ),
+                )));
+            }
+        }
+    }
+    Ok(None)
 }
 
 async fn create(

@@ -97,6 +97,10 @@ pub struct FieldWrite {
     /// this collection's name when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pair_name: Option<String>,
+    /// The rules its values are held to, all at once (a rule left out is
+    /// off): required, unique, default, min, max, pattern, buildersOnly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<fields::rules::RulesInput>,
 }
 
 /// A filter by field name, as agents write one.
@@ -990,6 +994,7 @@ pub async fn apply(
                     rollup: write.rollup.clone(),
                     pair: (write.two_way == Some(true))
                         .then(|| write.pair_name.clone().unwrap_or_default()),
+                    rules: write.rules.clone(),
                 },
             )
             .await?
@@ -1096,6 +1101,7 @@ pub async fn apply(
                 formula: write.formula.clone(),
                 button: write.button.clone(),
                 rollup: write.rollup.clone(),
+                rules: write.rules.clone(),
                 expected_version: None,
             },
         )
@@ -1448,6 +1454,7 @@ mod tests {
                 button: None,
                 inverse: None,
                 rollup: None,
+                rules: None,
             },
             position: 0,
             archived: false,

@@ -51,13 +51,15 @@ pub const START_DATE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000004");
 pub const DUE_DATE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000005");
 pub const LABELS: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000006");
 // The built-in fields views over tasks read beyond the six a collection
-// lists (T1.7). 00d and 00e are kept for Delegate and Cycle.
+// lists (T1.7). 00e is kept for Cycle.
 pub const TYPE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000007");
 pub const MILESTONE: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000008");
 pub const PARENT: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000009");
 pub const BLOCKED: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000a");
 pub const READY: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000b");
 pub const CLAIMED_BY: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000c");
+/// Who the task is handed to to do (T1.22).
+pub const DELEGATE: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000d");
 pub const ESTIMATE: Uuid = uuid!("0192f5c0-0000-7000-8000-00000000000f");
 pub const CREATED_BY: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000010");
 pub const CREATED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000011");
@@ -216,6 +218,7 @@ pub fn accessor(id: Uuid) -> Option<Accessor> {
               ORDER BY claim.expires_at DESC LIMIT 1)",
             "uuid",
         ),
+        DELEGATE => column("core.delegate_actor_id", "uuid"),
         ESTIMATE => column("core.estimate", "double precision"),
         CREATED_BY => column("core.created_by_actor_id", "uuid"),
         CREATED => column("core.created_at", "timestamptz"),
@@ -245,6 +248,7 @@ fn builtin(
             button: None,
             inverse: None,
             rollup: None,
+            rules: None,
         },
         position,
         archived: false,
@@ -417,6 +421,7 @@ pub async fn system_fields(
         builtin(CREATED, "Created", FieldType::Date, Vec::new(), 14),
         builtin(EDITED, "Edited", FieldType::Date, Vec::new(), 15),
         builtin(KEY, "Key", FieldType::Number, Vec::new(), 16),
+        builtin(DELEGATE, "Delegate", FieldType::Person, Vec::new(), 17),
     ]);
     Ok(found)
 }

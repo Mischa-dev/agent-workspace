@@ -51,6 +51,7 @@ pub(super) const REQUEST_ID_MESSAGE: &str = "Use a clientRequestId of 1 to 128 l
 pub(super) const TITLE_MESSAGE: &str = "Give it a title of 1 to 240 characters, on one line.";
 pub(super) const DESCRIPTION_MESSAGE: &str = "The description can be at most 100,000 characters, with no control characters except line breaks and tabs.";
 pub(super) const PRIORITY_MESSAGE: &str = "Use no_priority, low, medium, high, or urgent.";
+const DELEGATE_MESSAGE: &str = "Hand the task to someone in its project who can hold tasks: \"me\", an @handle, or an actor ID.";
 const ASSIGNEE_ID_MESSAGE: &str = "Pass the assignee as \"me\", an @handle, or an actor ID.";
 const ASSIGNEE_MESSAGE: &str =
     "That person can't be assigned tasks here: only active people and agents in the project can.";
@@ -62,7 +63,7 @@ pub(super) const MILESTONE_MESSAGE: &str =
 pub(super) const DATES_MESSAGE: &str = "The start date must be on or before the due date.";
 const POSITION_MESSAGE: &str = "Use top, bottom, or a position number (1 is the top of the column). To put it next to a task, use beforeTaskId or afterTaskId instead.";
 pub(super) const LABEL_COUNT_MESSAGE: &str = "Pass at most 20 labels at a time.";
-const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, type, status, position, parentId, clearParent, addLabels, removeLabels, milestone, startDate, dueDate, estimate, clearEstimate, or archived.";
+const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, delegate, type, status, position, parentId, clearParent, addLabels, removeLabels, milestone, startDate, dueDate, estimate, clearEstimate, or archived.";
 /// The most acceptance criteria one task_create call takes.
 const MAX_CRITERIA_ON_CREATE: usize = 50;
 const TASK_NOT_FOUND_MESSAGE: &str = "That task wasn't found, or you can't see it.";
@@ -145,6 +146,12 @@ pub struct UpdateWorkItemArguments {
     /// Custom field values by field name or ID; null clears one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Who the task is handed to (T1.22), by actor ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_actor_id: Option<String>,
+    /// true takes the task back from its delegate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_delegate: Option<bool>,
 }
 
 // The create arguments flatten NewTaskDetails, which serde can't combine
@@ -1009,9 +1016,22 @@ async fn update_work_item_inner(
             .fields
             .as_ref()
             .is_none_or(|fields| fields.is_empty())
+        && arguments.delegate_actor_id.is_none()
+        && arguments.clear_delegate != Some(true)
     {
         return Ok(WriteResult::invalid("update", NOTHING_TO_CHANGE_MESSAGE));
     }
+    let delegate_update = if arguments.clear_delegate == Some(true) {
+        Some(None)
+    } else {
+        match arguments.delegate_actor_id.as_deref() {
+            Some(value) => match parse_id(value) {
+                Some(actor_id) => Some(Some(actor_id)),
+                None => return Ok(WriteResult::invalid("delegate", DELEGATE_MESSAGE)),
+            },
+            None => None,
+        }
+    };
     if arguments.clear_assignee == Some(true) && arguments.assignee_actor_id.is_some() {
         return Ok(WriteResult::invalid(
             "update",
@@ -1248,6 +1268,7 @@ async fn update_work_item_inner(
                 due_date,
                 estimate,
                 blocked_reason: None,
+                delegate_actor_id: delegate_update,
             },
             summary: "Work Item updated through MCP",
             audit_action: "work_item.mcp_updated",
@@ -2317,6 +2338,9 @@ async fn finish_update_outcome(
         UpdateWorkItemOutcome::InvalidAssignee => {
             Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_MESSAGE))
         }
+        UpdateWorkItemOutcome::InvalidDelegate => {
+            Ok(WriteResult::invalid("delegate", DELEGATE_MESSAGE))
+        }
         UpdateWorkItemOutcome::InvalidMilestone => {
             Ok(WriteResult::invalid("milestone", MILESTONE_MESSAGE))
         }
@@ -3038,6 +3062,8 @@ mod tests {
             estimate: None,
             clear_estimate: None,
             fields: None,
+            delegate_actor_id: None,
+            clear_delegate: None,
         };
         assert_eq!(
             serde_json::to_string(&update).expect("update"),

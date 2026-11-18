@@ -45,6 +45,8 @@ export type WorkItem = {
   status: WorkItemStatus
   priority: WorkItemPriority
   assignee: WorkItemAssignee | null
+  /** Who it's handed to to do, beside the assignee who owns it (T1.22). */
+  delegate?: WorkItemAssignee | null
   version: number
   archivedAt: string | null
   createdAt: string
@@ -395,6 +397,8 @@ export type WorkItemPatch = {
   statusId?: string
   priority?: WorkItemPriority
   assigneeActorId?: string | null
+  /** Who it's handed to (T1.22); null takes it back. */
+  delegateActorId?: string | null
   parentWorkItemId?: string | null
   milestoneId?: string | null
   startDate?: string | null

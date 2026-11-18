@@ -17,6 +17,8 @@ export function pickToPatch(result: PickResult): Omit<WorkItemPatch, 'expectedVe
       return { priority: result.priority }
     case 'assignee':
       return { assigneeActorId: result.actor?.id ?? null }
+    case 'delegate':
+      return { delegateActorId: result.actor?.id ?? null }
     case 'milestone':
       return { milestoneId: result.milestone?.id ?? null }
     case 'type':
@@ -31,7 +33,7 @@ export function pickToPatch(result: PickResult): Omit<WorkItemPatch, 'expectedVe
 
 /** The bulk changes for a picker result, or null where bulk can't express it (type). */
 export function pickToBulk(result: PickResult): BulkChanges | null {
-  if (result.field === 'type') return null
+  if (result.field === 'type' || result.field === 'delegate') return null
   return pickToPatch(result) as BulkChanges
 }
 

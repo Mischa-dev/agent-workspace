@@ -16,6 +16,7 @@ type BuiltInField =
   | 'status'
   | 'priority'
   | 'assignee'
+  | 'delegate'
   | 'type'
   | 'labels'
   | 'milestone'
@@ -32,6 +33,7 @@ export const FIELD_NAMES: Record<BuiltInField, string> = {
   status: 'status',
   priority: 'priority',
   assignee: 'assignee',
+  delegate: 'delegate',
   type: 'type',
   labels: 'labels',
   milestone: 'milestone',
@@ -68,6 +70,8 @@ export function fieldValue(item: WorkItem, field: TaskField): string {
       return item.priority
     case 'assignee':
       return item.assignee?.actorId ?? ''
+    case 'delegate':
+      return item.delegate?.actorId ?? ''
     case 'type':
       return item.itemType.id
     case 'labels':
@@ -105,6 +109,8 @@ function patchValue(field: TaskField, patch: Patch): string | null {
       return patch.priority ?? ''
     case 'assignee':
       return patch.assigneeActorId ?? ''
+    case 'delegate':
+      return patch.delegateActorId ?? ''
     case 'type':
       return patch.typeId ?? ''
     case 'labels':

@@ -173,6 +173,13 @@
       "default": true
     },
     {
+      "id": "task.delegate",
+      "group": "task",
+      "label": "Delegate",
+      "description": "Who a task is handed to to do, often an agent, beside who owns it.",
+      "default": true
+    },
+    {
       "id": "task.estimate",
       "group": "task",
       "label": "Estimate",
@@ -561,6 +568,7 @@
         "area.board",
         "area.files",
         "task.priority",
+        "task.delegate",
         "task.labels",
         "task.custom_fields",
         "task.dates",
@@ -722,6 +730,7 @@
         "area.sheets",
         "area.files",
         "task.priority",
+        "task.delegate",
         "task.labels",
         "task.custom_fields",
         "task.milestone",
@@ -808,6 +817,7 @@
         "area.files",
         "task.type",
         "task.priority",
+        "task.delegate",
         "task.labels",
         "task.custom_fields",
         "task.dates",
@@ -859,6 +869,7 @@
         "area.decisions",
         "task.type",
         "task.priority",
+        "task.delegate",
         "task.estimate",
         "task.labels",
         "task.custom_fields",
@@ -895,6 +906,7 @@
         "area.pages",
         "area.decisions",
         "task.priority",
+        "task.delegate",
         "task.milestone",
         "task.dates",
         "talk.threads",

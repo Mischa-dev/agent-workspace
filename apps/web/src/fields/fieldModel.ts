@@ -57,6 +57,8 @@ export type FieldDefinition = {
   inverse?: string | null
   /** Rollup fields: the relation they read, the related records' field, and how. */
   rollup?: RollupSettings | null
+  /** Collection fields: what their values are held to. */
+  rules?: FieldRules | null
   /** 1 is first. */
   position: number
   archived: boolean
@@ -66,6 +68,22 @@ export type FieldDefinition = {
 /** One operation a button runs: its name, its title, and its arguments with `{{...}}` placeholders (fields as `{{#<id>}}`). */
 export type ButtonStep = { operation: string; title: string; arguments: Record<string, unknown> }
 export type ButtonSettings = { label: string; steps: ButtonStep[] }
+
+/**
+ * What a field's values are held to (T1.19): every record has one, no two
+ * share one, a new record's default ("me" and "today" worked out when it's
+ * added), a number's range, a text pattern, and whether only people who
+ * build the collection change it.
+ */
+export type FieldRules = {
+  required: boolean
+  unique: boolean
+  default: unknown
+  min: number | null
+  max: number | null
+  pattern: string | null
+  buildersOnly: boolean
+}
 
 /** What a formula gives, which decides how it filters, sorts and groups. */
 export type FormulaResult = 'number' | 'text' | 'boolean' | 'date' | 'list'
@@ -186,6 +204,7 @@ export function normalizeField(value: unknown): FieldDefinition {
     button: buttonOf(field.button),
     inverse: typeof field.inverse === 'string' ? field.inverse : null,
     rollup: rollupOf(field.rollup),
+    rules: rulesOf(field.rules),
     position: typeof field.position === 'number' ? field.position : 0,
     archived: field.archived === true,
     version: typeof field.version === 'number' ? field.version : 1,
@@ -225,6 +244,21 @@ function buttonOf(value: unknown): ButtonSettings | null {
       const step = asRecord(entry)
       return { operation: asString(step.operation), title: asString(step.title) || asString(step.operation), arguments: asRecord(step.arguments) }
     }),
+  }
+}
+
+function rulesOf(value: unknown): FieldRules | null {
+  if (!value || typeof value !== 'object') return null
+  const rules = asRecord(value)
+  const number = (entry: unknown) => (typeof entry === 'number' && Number.isFinite(entry) ? entry : null)
+  return {
+    required: rules.required === true,
+    unique: rules.unique === true,
+    default: rules.default ?? null,
+    min: number(rules.min),
+    max: number(rules.max),
+    pattern: typeof rules.pattern === 'string' && rules.pattern ? rules.pattern : null,
+    buildersOnly: rules.buildersOnly === true,
   }
 }
 

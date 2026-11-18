@@ -118,6 +118,7 @@ impl Operation for RecordCreate {
     ) -> Result<RecordCreateOutput, OpError> {
         let space_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
         let actor = call.account_id();
+        let caller = call.ctx.caller.clone();
         let tx = call.tx().await?;
         let Some(collection) = super::lock(tx, space_id, input.collection.id()).await? else {
             return Err(OpError::not_found("collection"));
@@ -180,6 +181,15 @@ impl Operation for RecordCreate {
                 .await
                 .map_err(crate::error::AppError::from)?;
         let definitions = super::field_definitions(tx, space_id, collection.id, true).await?;
+        // Fields only builders change (T1.19).
+        let may_build = crate::access::check(
+            tx,
+            &caller,
+            crate::access::Need::permission(Perm::CollectionsBuild),
+            crate::access::Target::Space(space_id),
+        )
+        .await?
+        .is_ok();
         let written = super::records::write(
             tx,
             space_id,
@@ -188,6 +198,7 @@ impl Operation for RecordCreate {
                 actor_id: actor,
                 project_key: &project_key,
             },
+            may_build,
             &definitions,
             "fields",
             &[super::records::RecordInput {

@@ -306,6 +306,12 @@ pub static TASK_ASSIGNED: EventType = addressed(
     Some("task"),
     "A task was assigned to you",
 );
+pub static TASK_DELEGATED: EventType = addressed(
+    "task.delegated",
+    "tasks",
+    Some("task"),
+    "A task was handed to you to do",
+);
 pub static COMMENT_MENTIONED: EventType = addressed(
     "comment.mentioned",
     "tasks",
@@ -661,6 +667,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &TASK_CREATED,
         &TASK_UPDATED,
         &TASK_ASSIGNED,
+        &TASK_DELEGATED,
         &COMMENT_MENTIONED,
         &TASK_PLACEMENT_CHANGED,
         &TASK_COMMENTED,
