@@ -121,6 +121,9 @@ function later(key: string, delay: number, run: () => void) {
 
 const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => isPageKey(query.queryKey, projectId)
 
+/** An operation's answer read through `opQuery`, by the operation's name. */
+const isOpKey = (key: readonly unknown[], name: string) => key[0] === 'op' && key[2] === name
+
 /** A thing's discussion summary (`comment_list` through `opQuery`), for one thing or any. */
 export function isCommentSummary(key: readonly unknown[], thingId?: string) {
   if (key[0] !== 'op' || key[2] !== 'comment_list') return false
@@ -130,8 +133,8 @@ export function isCommentSummary(key: readonly unknown[], thingId?: string) {
 }
 
 /**
- * A whiteboard.updated, page.updated, page.discussion.updated or
- * collection.updated event: tells
+ * A whiteboard.updated, page.updated, page.discussion.updated,
+ * collection.updated or dashboard.updated event: tells
  * whoever has the board or page open, then refreshes the lists. For a
  * collection, everything open of it refetches (its records, views and fields,
  * and a record beside them) and so does the project's list of collections,
@@ -165,7 +168,15 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
     later(`collection:${event.projectId}:${collection.collectionId}`, COLLECTION_DELAY_MS, () => {
       void queryClient.invalidateQueries({ queryKey: collectionKeys.one(event.projectId, collection.collectionId) })
       void queryClient.invalidateQueries({ queryKey: collectionKeys.lists(event.projectId) })
+      // An open dashboard's tiles read the records again.
+      void queryClient.invalidateQueries({ predicate: (query) => isOpKey(query.queryKey, 'dashboard_get') })
     })
+    return
+  }
+  if (event.type === 'dashboard.updated') {
+    later(`dashboards:${event.projectId}`, COLLECTION_DELAY_MS, () =>
+      void queryClient.invalidateQueries({ predicate: (query) => isOpKey(query.queryKey, 'dashboard_get') || isOpKey(query.queryKey, 'dashboard_list') }),
+    )
     return
   }
   const discussion = discussionChange(event)

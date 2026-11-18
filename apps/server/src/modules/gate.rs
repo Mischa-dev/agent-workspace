@@ -184,10 +184,6 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
         "/api/v1/threads/",
         "conversations follow the Messages switch, checked by their handlers",
     ),
-    (
-        "/api/v1/webhooks/",
-        "webhooks are workspace settings, checked by their handler",
-    ),
 ];
 
 /// The scope a route named by id acts in, looked up from the database.

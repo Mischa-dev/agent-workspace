@@ -232,6 +232,12 @@ pub static RUN_FINISHED: EventType = fact(
     "A run finished, failed or was stopped",
 )
 .automatable();
+pub static RUN_START_ASKED: EventType = addressed(
+    "run.start",
+    "runs",
+    Some("run"),
+    "The agent was asked to start a run it was given",
+);
 pub static RUN_CANCEL_ASKED: EventType = addressed(
     "run.cancel",
     "runs",
@@ -321,9 +327,9 @@ pub static LABEL_CHANGED: EventType = fact(
 );
 pub static VIEW_CHANGED: EventType = fact(
     "view.changed",
-    "tasks",
+    "collections",
     Some("view"),
-    "A saved view was added, changed or removed",
+    "A view of a collection was added, changed or removed",
 );
 pub static FIELD_CHANGED: EventType = fact(
     "field.changed",
@@ -396,6 +402,15 @@ pub static SHEET_UPDATED: EventType = fact(
 )
 .legacy(&["sheet.updated"])
 .automatable();
+
+// --- dashboards ------------------------------------------------------------
+pub static DASHBOARD_UPDATED: EventType = fact(
+    "dashboard.updated",
+    "dashboards",
+    Some("dashboard"),
+    "A shared dashboard's name or tiles changed, or it was removed",
+)
+.legacy(&["dashboard.updated"]);
 
 // --- whiteboards -----------------------------------------------------------
 pub static WHITEBOARD_SCENE_CHANGED: EventType = signal(
@@ -555,6 +570,9 @@ pub static REPLY_CANCELLED: EventType = addressed(
 );
 pub static SCHEDULE_DUE: EventType =
     addressed("schedule.due", "agents", None, "A follow-up you set is due");
+pub static AGENT_PAUSED: EventType = addressed("agent.paused", "agents", None, "You were paused");
+pub static AGENT_RESUMED: EventType =
+    addressed("agent.resumed", "agents", None, "You were resumed");
 pub static SCHEDULE_CHANGED: EventType = signal(
     "schedule.changed",
     "agents",
@@ -600,6 +618,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &THREAD_STATUS_CHANGED,
         &RUN_UPDATED,
         &RUN_FINISHED,
+        &RUN_START_ASKED,
         &RUN_CANCEL_ASKED,
         &REQUEST_RAISED,
         &REQUEST_ANSWERED,
@@ -626,6 +645,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &DECISION_RECORDED,
         &DECISION_UPDATED,
         &SHEET_UPDATED,
+        &DASHBOARD_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_UPDATED,
         &WHITEBOARD_VERSION_RESTORED,
@@ -648,6 +668,8 @@ pub fn catalog() -> &'static [&'static EventType] {
         &REPLY_FOLLOWUP,
         &REPLY_CANCELLED,
         &SCHEDULE_DUE,
+        &AGENT_PAUSED,
+        &AGENT_RESUMED,
         &SCHEDULE_CHANGED,
         &CONNECTION_PUSH_DISABLED,
         &CONNECTION_CHANGED,

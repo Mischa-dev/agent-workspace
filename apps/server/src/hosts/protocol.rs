@@ -476,6 +476,9 @@ pub struct DescribeRequest {
     pub actions: Vec<Value>,
     #[serde(default)]
     pub agents: Vec<Value>,
+    /// The provider accounts it runs on (A1.24), `[{ref, name}]`.
+    #[serde(default)]
+    pub accounts: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -646,6 +649,7 @@ pub async fn describe(
     }
     let described = Value::Array(agents.clone());
     bounded(&described, 128 * 1024, "agents")?;
+    let accounts = super::windows::described_accounts(&request.accounts)?;
 
     let mut transaction = pool.begin().await?;
     sqlx::query(
@@ -701,6 +705,7 @@ pub async fn describe(
             unbound_agents.push(reference.to_owned());
         }
     }
+    super::windows::bind_described(&mut transaction, host, &accounts).await?;
     transaction.commit().await?;
     Ok(Described {
         host_id: host.id,

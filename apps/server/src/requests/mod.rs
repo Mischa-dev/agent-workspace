@@ -447,10 +447,20 @@ pub async fn open(
     .bind(Value::Array(options))
     .bind(allow_text)
     .bind(
-        if kind == "approval" && (origin.run_id.is_some() || origin.subject.is_some()) {
-            "runs.approve"
-        } else {
-            "requests.answer"
+        // A join (A2.18) is answered by whoever its roles name; an agent a
+        // host made (A2.19) needs `agents.create`; a run's approval needs
+        // `runs.approve`.
+        match origin.subject {
+            Some((subject, _)) if subject == crate::hosts::register::REGISTER_SUBJECT => {
+                "agents.create"
+            }
+            Some((subject, _))
+                if kind == "approval" && subject != crate::accounts::join::JOIN_SUBJECT =>
+            {
+                "runs.approve"
+            }
+            _ if kind == "approval" && origin.run_id.is_some() => "runs.approve",
+            _ => "requests.answer",
         },
     )
     .bind(&accounts)
@@ -1060,6 +1070,11 @@ pub async fn answer(
     if !may_answer(transaction, caller, row).await? {
         return Err(AnswerError::NotYours);
     }
+    if raiser_left(transaction, row).await? {
+        return Err(AnswerError::Settled(
+            "The one who asked no longer has access here, so it can't be answered.".to_owned(),
+        ));
+    }
     let answer = clean_answer(row, option_id, typed)?;
     let settled = settle(
         transaction,
@@ -1072,6 +1087,29 @@ pub async fn answer(
     .await?
     .ok_or_else(|| AnswerError::Settled("This request was settled meanwhile.".to_owned()))?;
     Ok(settled)
+}
+
+/// Whether the account that raised the request has since lost the
+/// workspace (A1.8): its membership there was turned off. A host, which
+/// raises requests without being a member, never has.
+async fn raiser_left(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: &RequestRow,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM organization_memberships membership
+            LEFT JOIN actors account ON account.id = membership.actor_id
+            WHERE membership.organization_id = $1 AND membership.actor_id = $2
+              AND (NOT membership.enabled OR account.status IS DISTINCT FROM 'active')
+        )
+        "#,
+    )
+    .bind(row.workspace_id)
+    .bind(row.raised_by_account_id)
+    .fetch_one(&mut **transaction)
+    .await?)
 }
 
 /// Withdraw an open request its raiser no longer needs.
@@ -1185,6 +1223,14 @@ async fn follow(
     // A sponsored run request goes ahead or stops with its approval.
     if row.subject_kind.as_deref() == Some(crate::external_execution::REQUEST_SUBJECT) {
         crate::external_execution::approval_settled(state, transaction, row).await?;
+    }
+    // An agent from outside joins when an admin approves (A2.18).
+    if row.subject_kind.as_deref() == Some(crate::accounts::join::JOIN_SUBJECT) {
+        crate::accounts::join::settled(transaction, row).await?;
+    }
+    // An agent a host made is added when its approver says so (A2.19).
+    if row.subject_kind.as_deref() == Some(crate::hosts::register::REGISTER_SUBJECT) {
+        crate::hosts::register::settled(transaction, row, by).await?;
     }
     // A run on the built-in host goes on in process (A1.14).
     if let Some(run_id) = row.run_id

@@ -32,7 +32,7 @@ pub async fn requester_and_task(
         r#"
         SELECT run.requesting_actor_id,
                (SELECT launch.work_item_id FROM launches launch
-                WHERE launch.agent_run_id = run.id LIMIT 1)
+                WHERE launch.run_id = run.id LIMIT 1)
         FROM agent_runs run WHERE run.id = $1
         "#,
     )
@@ -231,7 +231,7 @@ pub async fn working_for(
             FROM launches launch
             JOIN task_rows work_item
               ON work_item.project_id = launch.project_id AND work_item.id = launch.work_item_id
-            WHERE launch.agent_run_id = run.id AND work_item.archived_at IS NULL
+            WHERE launch.run_id = run.id AND work_item.archived_at IS NULL
               -- The task's key and title only where the reader sees tasks.
               AND EXISTS (
                   SELECT 1 FROM project_memberships sees_task

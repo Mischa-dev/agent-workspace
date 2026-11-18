@@ -791,13 +791,6 @@ async fn viewers_read_and_only_builders_change_fields_and_views() {
             format!("{uri}/fields/{field}"),
             json!({"expectedVersion": 1, "name": "Mine"}),
         ),
-        ("POST", format!("{uri}/views"), json!({"name": "Mine"})),
-        (
-            "PATCH",
-            format!("{uri}/views/{view}"),
-            json!({"expectedVersion": 1, "name": "Mine"}),
-        ),
-        ("DELETE", format!("{uri}/views/{view}"), Value::Null),
         (
             "PATCH",
             uri.clone(),
@@ -812,6 +805,30 @@ async fn viewers_read_and_only_builders_change_fields_and_views() {
             "keeper {method} {path}: {body}"
         );
     }
+
+    // Nor share a view, or change or delete a shared one; a view of their
+    // own they may keep.
+    let ops = |name: &str| format!("/api/v2/w/{}/ops/{name}", setup.organization_id);
+    for (name, body) in [
+        (
+            "view_create",
+            json!({"collection": collection, "name": "Mine", "type": "table", "shared": true}),
+        ),
+        ("view_update", json!({"view": view, "name": "Mine"})),
+        ("view_delete", json!({"view": view})),
+    ] {
+        let (status, body) = write(&setup, &kim_browser, "POST", &ops(name), body).await;
+        assert_ne!(body["outcome"], "ok", "keeper {name}: {status} {body}");
+    }
+    let (status, own) = write(
+        &setup,
+        &kim_browser,
+        "POST",
+        &ops("view_create"),
+        json!({"collection": collection, "name": "Mine", "type": "table"}),
+    )
+    .await;
+    assert_eq!(own["outcome"], "ok", "keeper's own view: {status} {own}");
 
     // The same for an agent holding the role.
     let session = initialize(app, &mara_token).await.expect("Mara MCP");

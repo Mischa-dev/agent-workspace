@@ -513,6 +513,7 @@ pub(crate) async fn install(
                     intro: body["intro"].as_str().unwrap_or("").to_owned(),
                     fields: questions,
                     thanks: body["thanks"].as_str().unwrap_or("").to_owned(),
+                    daily_limit: None,
                 };
                 let form = crate::bug_reports::checked_form_in(tx, space, collection_id, &form)
                     .await?

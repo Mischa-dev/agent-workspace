@@ -271,6 +271,30 @@ impl From<RunOpError> for StartError {
     }
 }
 
+/// The host an agent account is run by, other than the built-in one, and
+/// its reference for the agent there: the active binding on the host seen
+/// most recently. `None`: the agent connects by itself or the built-in host
+/// runs it (A1.13 routes a launch by this).
+pub async fn binding_of(
+    executor: impl sqlx::PgExecutor<'_>,
+    account_id: Uuid,
+) -> Result<Option<(Uuid, String)>, AppError> {
+    Ok(sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT binding.host_id, binding.host_agent_ref
+        FROM host_agents binding
+        JOIN hosts host ON host.id = binding.host_id
+        WHERE binding.account_id = $1 AND binding.status = 'active'
+          AND host.status <> 'revoked' AND NOT host.builtin
+        ORDER BY (host.status = 'active') DESC, host.last_seen_at DESC NULLS LAST
+        LIMIT 1
+        "#,
+    )
+    .bind(account_id)
+    .fetch_optional(executor)
+    .await?)
+}
+
 /// Hand a queued run to the host its agent is bound to: the run is
 /// `starting` and the host has a start command for it. Starting the same
 /// run twice is refused by the run's state, and the start key keeps one
@@ -283,20 +307,7 @@ pub async fn start_run(
     let run = ops::locked(transaction, run_id)
         .await?
         .ok_or(StartError::Run(RunOpError::NotFound))?;
-    let binding = sqlx::query_as::<_, (Uuid, String)>(
-        r#"
-        SELECT binding.host_id, binding.host_agent_ref
-        FROM host_agents binding
-        JOIN hosts host ON host.id = binding.host_id
-        WHERE binding.account_id = $1 AND binding.status = 'active'
-          AND host.status <> 'revoked' AND NOT host.builtin
-        ORDER BY (host.status = 'active') DESC, host.last_seen_at DESC NULLS LAST
-        LIMIT 1
-        "#,
-    )
-    .bind(run.account_id)
-    .fetch_optional(&mut **transaction)
-    .await?;
+    let binding = binding_of(&mut **transaction, run.account_id).await?;
     let Some((host_id, host_agent_ref)) = binding else {
         return Err(StartError::NoHost);
     };

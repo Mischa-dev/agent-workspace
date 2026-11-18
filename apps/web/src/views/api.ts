@@ -1,16 +1,17 @@
 import { apiUrl, requestJson } from '../api/client'
+import { callOp, type OpInput, type OpOutput } from '../api/ops'
+import { projectLocationHref } from '../projects/locations'
 import { queryKeys } from '../api/queryKeys'
 
 /**
- * Saved views, My work, the timeline, templates, imports and export. The
+ * Views of tasks, My work, the timeline, templates, imports and export. The
  * query keys live here rather than in api/queryKeys so the pages that use
  * them stay out of the first load; project keys start with the project so a
  * project-wide invalidation reaches them.
  */
 export const viewKeys = {
-  views: (projectId: string) => ['project', projectId, 'saved-views'] as const,
-  /** The project's views as a picker lists them (automations). */
-  viewChoices: (projectId: string) => ['project', projectId, 'views'] as const,
+  /** The views of a project's tasks, by its Tasks collection. */
+  views: (projectId: string) => ['project', projectId, 'task-views'] as const,
   myWork: queryKeys.myWork,
   timeline: (projectId: string, query: Record<string, string>) => ['project', projectId, 'work-items', 'timeline-chart', query] as const,
   templates: (projectId: string) => ['project', projectId, 'task-templates'] as const,
@@ -24,70 +25,124 @@ export const viewKeys = {
 
 const projectPath = (projectId: string, path: string) => `/api/v1/projects/${encodeURIComponent(projectId)}/${path}`
 
-// Saved views
+// Views of tasks (the Tasks collection's views, through the view operations)
 
-export type SavedView = {
+export type TaskView = {
   id: string
+  collectionId: string
   name: string
+  /** table (the list), board, or another kind the collections screens show. */
+  type: string
   builtin: string | null
   shared: boolean
-  query: Record<string, string>
-  resolvedQuery: Record<string, string>
-  layout: 'list' | 'board'
-  fields: string[] | null
   pinned: boolean
+  /** Its place among your pins, then among the views. */
   position: number
-  canEdit: boolean
-  canDelete: boolean
   version: number
-  href: string
+  /** The view as the task list's address, when the list can say it. */
+  listParams: Record<string, string> | null
 }
 
-export type ViewDraft = {
+export type TaskViews = { views: TaskView[]; defaultViewId: string | null }
+
+/** Where a view of tasks opens: the task list with its filters, or with the view itself when the list can't say them. */
+export function taskViewHref(projectId: string, view: Pick<TaskView, 'id' | 'type' | 'listParams'>): string {
+  const parameters = new URLSearchParams(view.listParams ?? { viewId: view.id })
+  if (view.type === 'board') {
+    // A board's grouping is its columns.
+    const columns = parameters.get('groupBy')
+    parameters.delete('groupBy')
+    if (columns && columns !== 'status') parameters.set('columnsBy', columns)
+    parameters.set('view', 'board')
+  }
+  parameters.set('savedView', view.id)
+  return `${projectLocationHref(projectId, { kind: 'work_items' })}?${parameters.toString()}`
+}
+
+function taskView(value: OpOutput<'view_list'>['views'][number]): TaskView {
+  return {
+    id: value.id,
+    collectionId: value.collectionId,
+    name: value.name,
+    type: value.type,
+    builtin: value.builtin ?? null,
+    shared: value.shared,
+    pinned: value.pinned,
+    position: value.pinned ? (value.pinPosition ?? value.position) : value.position,
+    version: value.version,
+    listParams: value.listParams ?? null,
+  }
+}
+
+export async function listTaskViews(collectionId: string): Promise<TaskViews> {
+  const output = await callOp('view_list', { collection: collectionId }, { retries: 0 })
+  return { views: output.views.map(taskView), defaultViewId: output.defaultViewId ?? null }
+}
+
+/** The project's Tasks collection, where views of tasks are kept (listing collections makes it if it's missing). */
+export async function tasksCollectionId(projectId: string): Promise<string | null> {
+  const payload = await requestJson<{ collections?: Array<{ id?: unknown; builtin?: unknown }> } | null>(projectPath(projectId, 'collections'))
+  const found = payload?.collections?.find((collection) => collection.builtin === 'tasks')
+  return typeof found?.id === 'string' ? found.id : null
+}
+
+/** A project's views of tasks, with the collection they're kept in. */
+export async function listProjectTaskViews(projectId: string): Promise<TaskViews & { collectionId: string | null }> {
+  const collectionId = await tasksCollectionId(projectId)
+  if (!collectionId) return { views: [], defaultViewId: null, collectionId: null }
+  return { ...(await listTaskViews(collectionId)), collectionId }
+}
+
+export type TaskViewDraft = {
   name: string
   shared: boolean
-  query: Record<string, string>
   layout: 'list' | 'board'
-  fields: string[] | null
+  /** What the list showed, as the server read it (`config` of a list or board answer). */
+  config: unknown
 }
 
-export async function listViews(projectId: string): Promise<{ views: SavedView[]; canShare: boolean }> {
-  const response = await requestJson<{ views?: unknown; canShare?: unknown } | null>(projectPath(projectId, 'views'))
-  return { views: Array.isArray(response?.views) ? (response.views as SavedView[]) : [], canShare: response?.canShare === true }
+export async function createTaskView(collectionId: string, draft: TaskViewDraft, requestId: string) {
+  return taskView(
+    await callOp(
+      'view_create',
+      {
+        collection: collectionId,
+        name: draft.name,
+        type: draft.layout === 'board' ? 'board' : 'table',
+        config: draft.config as OpInput<'view_create'>['config'],
+        shared: draft.shared,
+      },
+      { requestId },
+    ),
+  )
 }
 
-export function createView(projectId: string, draft: ViewDraft, idempotencyKey: string) {
-  return requestJson<SavedView>(projectPath(projectId, 'views'), { method: 'POST', idempotencyKey, json: draft })
-}
-
-export function updateView(
-  projectId: string,
-  view: Pick<SavedView, 'id' | 'version'>,
-  changes: Partial<ViewDraft>,
-  idempotencyKey: string,
+export async function updateTaskView(
+  view: Pick<TaskView, 'id' | 'version' | 'shared'>,
+  change: { name?: string; config?: unknown; shared?: boolean },
+  requestId: string,
 ) {
-  return requestJson<SavedView>(projectPath(projectId, `views/${encodeURIComponent(view.id)}`), {
-    method: 'PATCH',
-    idempotencyKey,
-    json: { expectedVersion: view.version, ...changes },
-  })
+  return taskView(
+    await callOp(
+      'view_update',
+      {
+        view: view.id,
+        name: change.name,
+        config: change.config as OpInput<'view_update'>['config'],
+        share: change.shared === true && !view.shared ? true : undefined,
+      },
+      { requestId, expectedVersion: view.version },
+    ),
+  )
 }
 
-export function deleteView(projectId: string, view: Pick<SavedView, 'id' | 'version'>, idempotencyKey: string) {
-  return requestJson<unknown>(projectPath(projectId, `views/${encodeURIComponent(view.id)}`), {
-    method: 'DELETE',
-    idempotencyKey,
-    json: { expectedVersion: view.version },
-  })
+export async function deleteTaskView(view: Pick<TaskView, 'id'>, requestId: string) {
+  await callOp('view_delete', { view: view.id }, { requestId })
 }
 
 /** Pins a view to your sidebar or takes it off; `position` places it among your pins. */
-export function pinView(projectId: string, viewId: string, pinned: boolean, idempotencyKey: string, position?: number) {
-  return requestJson<SavedView>(projectPath(projectId, `views/${encodeURIComponent(viewId)}/pin`), {
-    method: 'POST',
-    idempotencyKey,
-    json: position === undefined ? { pinned } : { pinned, position },
-  })
+export async function pinTaskView(viewId: string, pinned: boolean, requestId: string, position?: number) {
+  await callOp('view_pin', position === undefined ? { view: viewId, pinned } : { view: viewId, pinned, position }, { requestId })
 }
 
 // My work

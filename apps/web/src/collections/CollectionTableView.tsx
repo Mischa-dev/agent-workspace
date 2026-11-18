@@ -6,7 +6,7 @@ import { TablePiece, type TablePieceItem } from '../pieces/TablePiece'
 import { Button, EmptyState, Icon, ListSkeleton, countLabel } from '../ui'
 import type { TableColumn } from '../ui/Table'
 import type { CollectionBody, CollectionRecord, RecordPage, ViewConfig } from './api'
-import { useRecords } from './api'
+import { BUILT_IN_TASK_FIELDS, useRecords } from './api'
 import { TITLE_WIDTH, referenceKind, tableItems, viewColumns } from './collectionModel'
 import { AddFieldHeader, FieldHeader, TitleHeader, type ColumnActions } from './ColumnMenus'
 import { NewRecordInput, TitleCell, ValueCell } from './RecordCells'
@@ -99,12 +99,12 @@ function RecordGrid({
     { id: 'number', header: '#', width: '64px' },
     {
       id: 'title',
-      header: <TitleHeader actions={actions} canBuild={body.canBuild} config={config} fields={body.fields} titleName={body.collection.titleName} />,
+      header: <TitleHeader actions={actions} canBuild={body.canBuild && !body.collection.builtin} config={config} fields={body.fields} titleName={body.collection.titleName} />,
       width: `${config.titleWidth ?? TITLE_WIDTH}px`,
     },
     ...columns.map(({ field, width }) => ({
       id: field.id,
-      header: <FieldHeader actions={actions} canBuild={body.canBuild} config={config} field={field} fields={body.fields} titleName={body.collection.titleName} />,
+      header: <FieldHeader actions={actions} canBuild={body.canBuild && !(body.collection.actsLikeTask && BUILT_IN_TASK_FIELDS.has(field.id))} config={config} field={field} fields={body.fields} titleName={body.collection.titleName} />,
       width: `${width}px`,
     })),
     { id: 'add', header: body.canBuild ? <AddFieldHeader actions={actions} /> : null, width: 'minmax(48px, 1fr)' },
@@ -117,6 +117,7 @@ function RecordGrid({
       columns.map(({ field }) => [
         field.id,
         <ValueCell
+          collection={{ projectId, id: body.collection.id }}
           editable={editable}
           field={field}
           key={field.id}

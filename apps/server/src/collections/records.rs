@@ -100,6 +100,9 @@ pub struct Record {
     pub title: String,
     /// Values keyed by field ID, as stored.
     pub field_values: Value,
+    /// Formula results keyed by field ID (`computed`): a value, or
+    /// `{"error": ...}`.
+    pub computed_values: Value,
     pub created_by_actor_id: Uuid,
     pub created_by_name: Option<String>,
     pub updated_by_actor_id: Uuid,
@@ -116,6 +119,17 @@ impl Record {
     /// back: system values aren't stored.
     pub fn shown_values(&self, definitions: &[FieldDefinition]) -> Value {
         let mut values = self.field_values.as_object().cloned().unwrap_or_default();
+        // Formula results, an error as `{"error": ...}`.
+        for field in definitions
+            .iter()
+            .filter(|field| field.field_type == FieldType::Formula)
+        {
+            let key = field.id.to_string();
+            match self.computed_values.get(&key) {
+                Some(value) => values.insert(key, value.clone()),
+                None => values.remove(&key),
+            };
+        }
         for field in definitions
             .iter()
             .filter(|field| field.field_type.is_system())
@@ -153,7 +167,7 @@ pub(super) fn record_from(tasks: bool) -> String {
 }
 
 pub(super) const RECORD_COLUMNS: &str = "record.id, record.collection_id, record.number, \
-     record.title, record.field_values, record.created_by_actor_id, \
+     record.title, record.field_values, record.computed_values, record.created_by_actor_id, \
      record_creator.display_name AS created_by_name, record.updated_by_actor_id, \
      record_editor.display_name AS updated_by_name, record.archived_at IS NOT NULL AS archived, \
      record.version, record.created_at::text AS created_at, record.updated_at::text AS updated_at";
@@ -879,7 +893,7 @@ pub async fn write(
                 );
             }
             let title = title.unwrap_or_default();
-            let record = create(
+            let mut record = create(
                 connection,
                 project_id,
                 collection,
@@ -889,6 +903,11 @@ pub async fn write(
                 &values,
             )
             .await?;
+            if let Some(computed) =
+                super::computed::refresh(connection, project_id, record.id, definitions).await?
+            {
+                record.computed_values = computed;
+            }
             next_number += 1;
             let mut history = Vec::new();
             if !title.is_empty() {
@@ -1046,6 +1065,7 @@ pub async fn write(
         .bind(writer.actor_id)
         .execute(&mut *connection)
         .await?;
+        super::computed::refresh(connection, project_id, current.id, definitions).await?;
         let action = if archiving {
             "archived"
         } else if restoring {

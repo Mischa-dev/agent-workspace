@@ -11,7 +11,7 @@ see only what that person can see right now.
   changes get a new one.
 - Every operation is `POST <base>/<operation>` with a JSON body. Operations
   are the same tools agents use over MCP (`task_list`, `task_create`,
-  `webhook_write`, `automation_write`, …), so anything an agent can do, a
+  `connection_create`, `automation_write`, …), so anything an agent can do, a
   script can.
 - `GET <base>/openapi.json` is the OpenAPI 3.1 document, generated from the
   Rust argument types (`apps/server/src/public_api.rs`). It needs no token.
@@ -35,26 +35,33 @@ curl -X POST "$SERVER/api/public/v1/task_list" \
 
 ## Webhooks
 
-Settings › Account › Webhooks, or the `webhook_list`, `webhook_write` and
-`webhook_deliveries` tools.
+A webhook is a connection with an address: the same delivery agents get
+(A2), pushed. Settings › Account › Webhooks, or the `connection_list`,
+`connection_create`, `connection_update`, `connection_secret_rotate`,
+`connection_test`, `connection_delivery_list`, `connection_redeliver` and
+`connection_remove` tools; `event_kind_list` lists the event kinds.
 
-- Events: `task.created`, `task.updated`, `run.updated`, `run.finished`,
-  `pull_request.checks_failed`, `pull_request.checks_passed`,
-  `pull_request.merged`, `pull_request.closed`, `message.created`.
-- A webhook belongs to the person (or connected app acting as them) who made
-  it and hears one workspace: every project they can see, or one project.
-  Each delivery is checked again when it's sent: messages go through
-  `conversation_visible_to`, pull requests through `pull_request_visible_to`.
-  A webhook whose owner left, or whose app was disconnected, turns itself
-  off with the reason; so does one that fails twenty deliveries in a row.
-- Body: `{"id", "type", "occurredAt", "workspaceId", "project", "data"}`.
-- Signing: `X-Workspace-Signature: sha256=<hex HMAC-SHA256 of
-  "<X-Workspace-Timestamp>.<raw body>">` with the webhook's secret. The secret
-  is shown once at creation or rotation and stored encrypted with the W1
-  secrets keyring. `X-Workspace-Delivery` is the same on every retry and on
-  "Send again", so a receiver can drop repeats.
-- Targets pass the same address checks as agent wakeups (PR #128): https,
-  no private or local addresses unless listed in
+- A webhook belongs to the account that made it and hears what it can see
+  in the spaces its subscription names (or the whole workspace), its own
+  changes included when `echoes` is on. Each event is checked again when it
+  is read: an event the account can no longer see, of a module that is off
+  where it happened, or that is no longer true is skipped. One a person's
+  app (or script) set up keeps to that app's limit, and stops, saying why,
+  when the app is disconnected; so does one that keeps failing for 48 hours
+  and 20 deliveries.
+- Body (the `standard` format): `{"type", "timestamp", "id", "cursor",
+  "workspace", "recipient", "reason", "actor", "data"}`. It carries ids,
+  kinds and field names, never text: fetch the thing with your own access.
+- Signing: Standard Webhooks. `webhook-id`, `webhook-timestamp` and
+  `webhook-signature: v1,<base64 HMAC-SHA256 of "<id>.<timestamp>.<raw
+  body>">`, keyed with the base64-decoded part of the `whsec_` secret. The
+  older `X-Workspace-Delivery`, `X-Workspace-Event`, `X-Workspace-Timestamp`
+  and `X-Workspace-Signature: sha256=<hex HMAC of "<timestamp>.<body>">` (keyed
+  with the whole secret) headers are sent too. The secret is shown once at creation or rotation and
+  stored encrypted. The id is the same on every retry and on a redelivery,
+  so a receiver can drop repeats.
+- Targets pass the same address checks as agent wakeups: https, no private
+  or local addresses unless listed in
   `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`, and the checked address is the
   one connected to.
 

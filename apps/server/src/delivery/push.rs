@@ -46,6 +46,7 @@ use crate::{
 
 pub const PUSH_KIND: &str = "delivery.push";
 pub const SWEEP_KIND: &str = "delivery.sweep";
+pub const PING_KIND: &str = "delivery.ping";
 /// Attempts before a delivery is marked failed.
 pub const MAX_ATTEMPTS: i32 = 8;
 /// Seconds to wait after each failed attempt, by attempts made so far.
@@ -89,6 +90,19 @@ pub fn register_jobs(registry: &mut JobRegistry) {
                 workspaces: None,
             },
             async move { push(&state, job.connection_id).await },
+        )
+        .await
+        .map_err(|error| JobError::retry(error.log_category()))
+    });
+    registry.register(PING_KIND, |context: JobContext| async move {
+        let job: PushJob = context.job.payload_as()?;
+        let state = context.state.clone();
+        tenancy::scoped(
+            Tenancy::Member {
+                account: job.account_id,
+                workspaces: None,
+            },
+            async move { ping(&state, job.connection_id).await },
         )
         .await
         .map_err(|error| JobError::retry(error.log_category()))
@@ -163,13 +177,17 @@ pub async fn sweep(pool: &sqlx::PgPool) -> Result<(), AppError> {
         r#"
         SELECT c.id, c.account_id, c.home_workspace_id
         FROM agent_connections c
+        CROSS JOIN LATERAL (
+            SELECT EXISTS (
+                SELECT 1 FROM deliveries d
+                WHERE d.connection_id = c.id AND d.state = 'pending'
+                  AND d.next_attempt_at <= now()) AS retry_due
+        ) due
         WHERE c.state = 'active' AND c.webhook_url IS NOT NULL
-          AND (c.push_cursor < (SELECT next_position - 1 FROM event_position_counter)
-               OR EXISTS (
-                   SELECT 1 FROM deliveries d
-                   WHERE d.connection_id = c.id AND d.state = 'pending'
-                     AND d.next_attempt_at <= now()))
-        ORDER BY c.id
+          AND (due.retry_due
+               OR c.push_cursor < (SELECT next_position - 1 FROM event_position_counter))
+        -- Retries first, then the connections furthest behind.
+        ORDER BY due.retry_due DESC, c.push_cursor, c.id
         LIMIT 1000
         "#,
     )
@@ -191,6 +209,89 @@ pub async fn sweep(pool: &sqlx::PgPool) -> Result<(), AppError> {
     for secret_id in retired {
         crate::secrets::delete(&mut *transaction, secret_id).await?;
     }
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Push to a connection now: after a redelivery is asked for.
+pub(crate) async fn queue_push(
+    connection: &mut PgConnection,
+    delivery: &Connection,
+) -> Result<(), AppError> {
+    crate::jobs::enqueue(
+        &mut *connection,
+        push_job(delivery.id, delivery.account_id, delivery.home_workspace_id),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Send a connection's webhook a test ping, on the job queue; the answer is
+/// kept on the connection (`last_test_*`).
+pub(crate) async fn queue_ping(
+    connection: &mut PgConnection,
+    delivery: &Connection,
+) -> Result<(), AppError> {
+    crate::jobs::enqueue(
+        &mut *connection,
+        NewJob::new(PING_KIND)
+            .payload(PushJob {
+                connection_id: delivery.id,
+                account_id: delivery.account_id,
+            })
+            .workspace(delivery.home_workspace_id)
+            .unique(format!("{PING_KIND}:{}", delivery.id))
+            .max_attempts(1),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Pings a connection's webhook, holding nothing open while it waits, and
+/// keeps what it answered.
+async fn ping(state: &AppState, connection_id: Uuid) -> Result<(), AppError> {
+    let (delivery, secrets) = {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let Some(delivery) = connections::load_any(&mut transaction, connection_id).await? else {
+            return Ok(());
+        };
+        if delivery.state == "removed" || delivery.webhook_url.is_none() {
+            return Ok(());
+        }
+        let secrets = signing_secrets(&mut transaction, state, delivery.id).await?;
+        transaction.commit().await?;
+        (delivery, secrets)
+    };
+    let url = delivery.webhook_url.clone().unwrap_or_default();
+    let answered = send_test(
+        &delivery,
+        &url,
+        &secrets,
+        &state.config.webhook_trusted_origins,
+    )
+    .await;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    sqlx::query(
+        "UPDATE agent_connections SET last_test_at = now(), last_test_status = $2, \
+         last_test_error = $3 WHERE id = $1",
+    )
+    .bind(delivery.id)
+    .bind(answered.status.map(i32::from))
+    .bind(
+        answered
+            .error
+            .map(|error| error.chars().take(200).collect::<String>()),
+    )
+    .execute(&mut *transaction)
+    .await?;
+    // The account's open pages show the answer.
+    tell_account(
+        &mut transaction,
+        &delivery,
+        &crate::events::catalog::CONNECTION_CHANGED,
+        Some((delivery.id, "connection")),
+    )
+    .await?;
     transaction.commit().await?;
     Ok(())
 }
@@ -241,10 +342,23 @@ async fn queue(state: &AppState, connection_id: Uuid) -> Result<Option<Queued>, 
     if delivery.state != "active" || delivery.webhook_url.is_none() {
         return Ok(None);
     }
+    // Pushed for the account itself, unless a person's app set it up.
+    let limits = if delivery.made_through_app {
+        match app_limit(&mut transaction, &delivery).await? {
+            Some(limits) => Some(limits),
+            None => {
+                transaction.commit().await?;
+                return Ok(None);
+            }
+        }
+    } else {
+        None
+    };
     let scope = Scope {
         recipient: delivery.account_id,
         workspaces: connections::reach(&mut transaction, &delivery).await?,
         space: None,
+        limits,
     };
     let subscriptions = connections::subscriptions(&mut transaction, &delivery).await?;
     let batch = read::read_batch(
@@ -277,12 +391,15 @@ async fn queue(state: &AppState, connection_id: Uuid) -> Result<Option<Queued>, 
         "UPDATE agent_connections SET push_cursor = GREATEST(push_cursor, $2) WHERE id = $1",
     )
     .bind(delivery.id)
-    .bind(batch.next)
+    // A2.10: while the account is paused, the cursor waits before what is
+    // held; what passed is queued again on the next sweep only once (a
+    // delivery is kept once per position).
+    .bind(batch.held.unwrap_or(batch.next))
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
     Ok(Some(Queued {
-        has_more: batch.has_more,
+        has_more: batch.has_more && batch.held.is_none(),
     }))
 }
 
@@ -352,9 +469,22 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
     .bind(IN_FLIGHT)
     .fetch_all(&mut *transaction)
     .await?;
+    // A person's app set it up: what is sent again (a retry, a redelivery)
+    // keeps to that app's limit as it is now.
+    let limits = if delivery.made_through_app && !due.is_empty() {
+        Some(app_limit(&mut transaction, &delivery).await?)
+    } else {
+        None
+    };
     let mut posts = Vec::new();
     let mut items = Vec::new();
-    for row in due {
+    for mut row in due {
+        if let Some(limits) = &limits {
+            row.deliverable = row.deliverable
+                && limits
+                    .as_ref()
+                    .is_some_and(|limits| read::within_limits(limits, &row.event));
+        }
         let body = if row.deliverable {
             legacy_body(&delivery, &row)
         } else {
@@ -701,25 +831,87 @@ async fn record(state: &AppState, claimed: &Claimed, results: Vec<Sent>) -> Resu
     .fetch_optional(&mut *transaction)
     .await?;
     if disabled.is_some() {
-        crate::events::emit(
-            &mut transaction,
-            crate::events::NewEvent {
-                id: Uuid::now_v7(),
-                ty: &crate::events::catalog::CONNECTION_PUSH_DISABLED,
-                workspace_id: Some(claimed.connection.home_workspace_id),
-                space_id: None,
-                thing: None,
-                access_thing: None,
-                version: None,
-                changes: &[],
-                audience: crate::events::Audience::Account(claimed.connection.account_id),
-                payload: json!({ "connectionId": claimed.connection.id }),
-                actor: None,
-                legacy_type: None,
-            },
-        )
-        .await?;
+        pushes_stopped(&mut transaction, &claimed.connection).await?;
     }
     transaction.commit().await?;
     Ok(())
+}
+
+/// Tells the account, on its other transports, that a connection's pushes
+/// stopped.
+async fn pushes_stopped(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    connection: &Connection,
+) -> Result<(), AppError> {
+    tell_account(
+        transaction,
+        connection,
+        &crate::events::catalog::CONNECTION_PUSH_DISABLED,
+        None,
+    )
+    .await
+}
+
+/// An event about the connection, addressed to its account.
+async fn tell_account(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    connection: &Connection,
+    ty: &'static crate::events::catalog::EventType,
+    thing: Option<(Uuid, &'static str)>,
+) -> Result<(), AppError> {
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent {
+            id: Uuid::now_v7(),
+            ty,
+            workspace_id: Some(connection.home_workspace_id),
+            space_id: None,
+            thing,
+            access_thing: None,
+            version: None,
+            changes: &[],
+            audience: crate::events::Audience::Account(connection.account_id),
+            payload: json!({ "connectionId": connection.id }),
+            actor: None,
+            legacy_type: None,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// For a connection a person's app set up: the app's delegation limit as it
+/// is now, or `None` when the app was disconnected (its pushes stop then).
+async fn app_limit(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    connection: &Connection,
+) -> Result<Option<crate::policy::AgentLimits>, AppError> {
+    let connected = match connection.via_grant_id {
+        Some(grant) => sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM mcp_oauth_grants WHERE id = $1 AND revoked_at IS NULL)",
+        )
+        .bind(grant)
+        .fetch_one(&mut **transaction)
+        .await?,
+        None => true,
+    };
+    if !connected {
+        let stopped = sqlx::query_scalar::<_, Uuid>(
+            "UPDATE agent_connections SET state = 'push_disabled', version = version + 1, \
+             updated_at = now(), disabled_reason = 'The app that set it up was disconnected.' \
+             WHERE id = $1 AND state = 'active' RETURNING id",
+        )
+        .bind(connection.id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        if stopped.is_some() {
+            pushes_stopped(transaction, connection).await?;
+        }
+        return Ok(None);
+    }
+    Ok(Some(
+        crate::roles::app_access(transaction, connection.account_id)
+            .await?
+            .limits,
+    ))
 }

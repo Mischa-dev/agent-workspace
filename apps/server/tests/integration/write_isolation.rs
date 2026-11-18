@@ -227,9 +227,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/fields",
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
-    "POST /api/v1/projects/{project_id}/collections/{collection_id}/views",
-    "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-    "DELETE /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/records",
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
     "POST /api/v1/projects/{project_id}/sheets",
@@ -267,10 +264,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/task-templates",
     "PATCH /api/v1/projects/{project_id}/task-templates/{template_id}",
     "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
-    "POST /api/v1/projects/{project_id}/views",
-    "DELETE /api/v1/projects/{project_id}/views/{view_id}",
-    "PATCH /api/v1/projects/{project_id}/views/{view_id}",
-    "POST /api/v1/projects/{project_id}/views/{view_id}/pin",
     "PUT /api/v1/projects/{project_id}/work-item-workflow",
     "POST /api/v1/projects/{project_id}/work-items",
     "POST /api/v1/projects/{project_id}/work-items/bulk",
@@ -322,12 +315,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/usage/accounts/{account_id}/rules/{rule}",
     "POST /api/v1/usage/accounts/{account_id}/schedules",
     "DELETE /api/v1/usage/accounts/{account_id}/schedules/{schedule_id}",
-    "POST /api/v1/webhooks",
-    "DELETE /api/v1/webhooks/{webhook_id}",
-    "PATCH /api/v1/webhooks/{webhook_id}",
-    "POST /api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-    "POST /api/v1/webhooks/{webhook_id}/rotate-secret",
-    "POST /api/v1/webhooks/{webhook_id}/test",
     "POST /api/v1/whiteboard-trash/empty",
     "POST /api/v1/whiteboards",
     "DELETE /api/v1/whiteboards/{id}",
@@ -387,6 +374,17 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
         "POST /api/v1/host/heartbeat",
         "a host's own call with its own token, about itself and its own runs \
          (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/windows",
+        "a host's own call with its own token, about the accounts it described; another \
+         host's account refs are refused (tests/integration/host_windows.rs)",
+    ),
+    (
+        "POST /api/v1/host/agents/register",
+        "a host's own call with its own token, proposing an agent for a workspace that \
+         owns it or that its owner is in; any other is refused \
+         (tests/integration/agent_register.rs)",
     ),
     (
         "POST /api/v1/host/notices",
@@ -453,8 +451,14 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
 
 /// Every MCP tool that isn't read-only, which `mcp_cases` covers.
 const MCP_WRITE_TOOLS: &[&str] = &[
+    "account_workspace_add",
     "agent_create",
     "agent_managers_set",
+    "agent_action_run",
+    "agent_offer_start",
+    "agent_register_decide",
+    "agent_pause",
+    "agent_resume",
     "agent_profile_write",
     "ai_analyze",
     "ai_suggestion_decide",
@@ -465,14 +469,19 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "automation_update",
     "channel_create",
     "connection_create",
+    "connection_redeliver",
     "connection_remove",
     "connection_secret_rotate",
+    "connection_test",
     "connection_update",
     "conversation_continue",
     "conversation_mark_read",
     "conversation_members_update",
     "conversation_start",
     "conversation_update",
+    "dashboard_create",
+    "dashboard_delete",
+    "dashboard_update",
     "decision_record",
     "environment_archive",
     "environment_check",
@@ -483,6 +492,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "github_automation_update",
     "github_installation_link",
     "history_restore",
+    "host_link",
     "host_agent_bind",
     "host_agent_unbind",
     "host_enrolment_create",
@@ -507,6 +517,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "bug_report_link_update",
     "collection_write",
     "record_write",
+    "button_press",
     "sheet_write",
     "later_save",
     "later_update",
@@ -612,12 +623,11 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "thread_start",
     "thread_update",
     "usage_batch_launch",
-    "webhook_create",
-    "webhook_delete",
-    "webhook_delivery_retry",
-    "webhook_ping_send",
-    "webhook_secret_rotate",
-    "webhook_update",
+    "view_create",
+    "view_default_set",
+    "view_delete",
+    "view_pin",
+    "view_update",
     "whiteboard_create",
     "whiteboard_duplicate",
     "whiteboard_update_elements",
@@ -1251,6 +1261,8 @@ struct Targets {
     /// The workspace's hosts (A1.11): the agent is bound to the first two
     /// as "net-agent" (HTTP, MCP); the last two are for unlinking.
     hosts: [Uuid; 4],
+    /// An agent the third host proposed (A2.19), waiting for approval.
+    proposal: Uuid,
     owner: Uuid,
     /// The agent, as an actor.
     agent: Uuid,
@@ -1300,8 +1312,8 @@ struct Targets {
     session: Uuid,
     api_token: Uuid,
     notification: Uuid,
-    /// A failed delivery of the webhook.
-    delivery: Uuid,
+    /// The event position of a failed delivery to the webhook.
+    delivery: i64,
     /// A reply request waiting for the agent, and one it holds.
     reply: Uuid,
     claimed_reply: Uuid,
@@ -1539,17 +1551,30 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         .await
         .expect("request");
     }
-    let delivery = Uuid::now_v7();
+    // Of a real event in the workspace's project, so the app may see it.
+    agent_workspace_server::events::catch_up(pool)
+        .await
+        .expect("sequence events");
+    let (delivery, event_id, event_type) = sqlx::query_as::<_, (i64, Uuid, String)>(
+        "SELECT position, id, type FROM events WHERE workspace_id = $1 AND space_id = $2 \
+         AND class = 'fact' ORDER BY position DESC LIMIT 1",
+    )
+    .bind(organization)
+    .bind(project)
+    .fetch_one(pool)
+    .await
+    .expect("an event in the project");
     sqlx::query(
         r#"
-        INSERT INTO webhook_deliveries (id, subscription_id, organization_id, event_type, event_key, state, attempts)
-        VALUES ($1, $2, $3, 'run.finished', $4, 'failed', 3)
+        INSERT INTO deliveries (connection_id, event_position, event_id, workspace_id, event_type, reason, state, attempts)
+        VALUES ($1, $2, $3, $4, $5, 'visible', 'failed', 3)
         "#,
     )
-    .bind(delivery)
     .bind(world.webhook)
+    .bind(delivery)
+    .bind(event_id)
     .bind(organization)
-    .bind(format!("net:{delivery}"))
+    .bind(&event_type)
     .execute(pool)
     .await
     .expect("webhook delivery");
@@ -1764,10 +1789,11 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         *host = sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version,
-                               described_agents, enrolled_by_account_id)
+                               described_agents, actions, offers, enrolled_by_account_id)
             VALUES (gen_random_uuid(), $1, $2, $3, '2026-11',
                     '[{"hostAgentRef": "net-agent", "name": "Net", "backends": [], "actions": []}]',
-                    $4)
+                    '[{"id": "net-action", "label": "Net"}]',
+                    '[{"id": "net-offer", "title": "Net"}]', $4)
             RETURNING id
             "#,
         )
@@ -1793,6 +1819,20 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .expect("host agent");
         }
     }
+    let proposal = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO agent_proposals (id, workspace_id, host_id, host_agent_ref, display_name,
+                                     handle, client_request_id)
+        VALUES (gen_random_uuid(), $1, $2, 'net-proposed', 'Net proposed', $3, 'net-proposal')
+        RETURNING id
+        "#,
+    )
+    .bind(organization)
+    .bind(hosts[2])
+    .bind(format!("net-proposed-{tag}"))
+    .fetch_one(pool)
+    .await
+    .expect("proposal");
     // The owner's delivery connection, with a webhook to sign for (A2).
     let connection = {
         let mut database = pool.acquire().await.expect("connection");
@@ -1870,6 +1910,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         custom_emoji,
         comment_thread,
         hosts,
+        proposal,
         questions,
         reported_runs,
         custom_role,
@@ -1881,16 +1922,18 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         wren,
         label: in_project("SELECT id FROM project_labels WHERE project_id = $1").await,
         field: in_project(
-            "SELECT id FROM field_definitions WHERE project_id = $1 AND collection_id IS NULL AND field_type = 'single_choice'",
+            "SELECT id FROM field_definitions WHERE project_id = $1 AND field_type = 'single_choice' AND archived_at IS NULL ORDER BY position LIMIT 1",
         )
         .await,
         person_field: in_project(
-            "SELECT id FROM field_definitions WHERE project_id = $1 AND collection_id IS NULL AND field_type = 'person'",
+            "SELECT id FROM field_definitions WHERE project_id = $1 AND field_type = 'person' AND archived_at IS NULL ORDER BY position LIMIT 1",
         )
         .await,
         milestone: in_project("SELECT id FROM project_milestones WHERE project_id = $1").await,
-        view: in_project("SELECT id FROM saved_views WHERE project_id = $1 AND builtin IS NULL")
-            .await,
+        view: in_project(
+            "SELECT id FROM collection_views WHERE project_id = $1 AND owner_actor_id IS NOT NULL",
+        )
+        .await,
         task_template: in_project("SELECT id FROM task_templates WHERE project_id = $1").await,
         recurring: in_project("SELECT id FROM recurring_tasks WHERE project_id = $1").await,
         project_template: in_organization(
@@ -2049,8 +2092,6 @@ struct Spares {
     bug_link: Uuid,
     /// A rule A's own automation_delete removes.
     rule: Uuid,
-    /// A webhook A's own webhook_delete removes.
-    webhook: Uuid,
     /// An environment A's own environment_archive archives.
     environment: Uuid,
     project_invitation: Uuid,
@@ -2094,8 +2135,10 @@ struct Spares {
     provider_account: Uuid,
     /// A custom role nobody holds, removed.
     role: Uuid,
-    /// A second view in A's collection, removed (a collection keeps one).
+    /// A second view in A's collection, removed by view_delete.
     collection_view: Uuid,
+    /// A second dashboard in A's project, removed by dashboard_delete.
+    dashboard: Uuid,
 }
 
 /// The redirect a hosted OAuth client registers.
@@ -2296,23 +2339,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .as_str()
         .and_then(|id| id.parse().ok())
         .expect("spare rule");
-    let spare_webhook = ok(
-        app,
-        browser,
-        "POST",
-        "/api/v1/webhooks",
-        json!({
-            "name": "Net spare hook",
-            "url": "https://hooks.example.com/net-spare",
-            "eventTypes": ["run.finished"],
-            "projectId": project,
-        }),
-    )
-    .await;
-    let spare_webhook = spare_webhook["webhook"]["id"]
-        .as_str()
-        .and_then(|id| id.parse().ok())
-        .expect("spare webhook");
     ok(
         app,
         browser,
@@ -2718,14 +2744,21 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         app,
         browser,
         "POST",
-        &format!(
-            "/api/v1/projects/{project}/collections/{}/views",
-            a.collection
-        ),
-        json!({"name": "Net spare view"}),
+        &format!("/api/v2/w/{}/ops/view_create", a.organization),
+        json!({"collection": a.collection, "name": "Net spare view", "type": "table", "shared": true}),
     )
     .await;
-    let collection_view = Uuid::parse_str(&string_at(&view, "/id")).expect("spare collection view");
+    let collection_view =
+        Uuid::parse_str(&string_at(&view, "/value/id")).expect("spare collection view");
+    let dashboard = ok(
+        app,
+        browser,
+        "POST",
+        &format!("/api/v2/w/{}/ops/dashboard_create", a.organization),
+        json!({"spaceId": a.project, "name": "Net spare dashboard"}),
+    )
+    .await;
+    let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("spare dashboard");
 
     // Last, so it's the newest of A's sessions: revoked by A's own request.
     login_as(app, "owner").await;
@@ -2749,7 +2782,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         harness,
         bug_link,
         rule: spare_rule,
-        webhook: spare_webhook,
         environment: spare_environment,
         project_invitation,
         agent_connection,
@@ -2775,6 +2807,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         agent_profile,
         provider_account,
         collection_view,
+        dashboard,
     }
 }
 
@@ -3088,7 +3121,7 @@ async fn one_workspace_never_writes_to_another() {
         "work_items",
         "messages",
         "project_labels",
-        "webhook_subscriptions",
+        "agent_connections",
     ] {
         assert!(before.contains_key(table), "B's digest has no {table} rows");
     }
@@ -5083,42 +5116,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             Expect::Rejected,
         )]),
         path_case(
-            "POST /api/v1/projects/{project_id}/collections/{collection_id}/views",
-            &[project(), id(a.collection, b.collection)],
-            json_body(json!({"name": "Net view", "config": {"sort": [{"field": "title"}]}})),
-        )
-        .rejecting(vec![
-            json!({"name": "Net view", "config": {"filters": [{"field": b.collection_field, "op": "notEmpty"}]}}),
-            json!({"name": "Net view", "config": {"groupBy": b.collection_field}}),
-            json!({"name": "Net view", "config": {"sort": [{"field": b.collection_field.to_string()}]}}),
-            json!({"name": "Net view", "config": {"columns": [{"field": b.collection_field}]}}),
-            json!({"name": "Net view", "config": {"filters": [{"field": ax.record_fields[0], "op": "is", "values": [b.rook]}]}}),
-            json!({"name": "Net view", "config": {"filters": [{"field": ax.record_fields[1], "op": "is", "values": [b.task]}]}}),
-            json!({"name": "Net view", "config": {"filters": [{"field": ax.record_fields[2], "op": "is", "values": [b.page]}]}}),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            &[
-                project(),
-                id(a.collection, b.collection),
-                id(a.collection_view, b.collection_view),
-            ],
-            versioned("collection_views", 2, json!({"name": "Net renamed view"})),
-        )
-        .rejecting(vec![json!({
-            "config": {"groupBy": b.collection_field},
-            "expectedVersion": version("collection_views", a.collection_view),
-        })]),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            &[
-                project(),
-                id(a.collection, b.collection),
-                id(sp.collection_view, b.collection_view),
-            ],
-            empty(),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/collections/{collection_id}/records",
             &[project(), id(a.collection, b.collection)],
             json_body(json!({"title": "Net record", "values": keyed(ax.record_fields[0], json!("me"))})),
@@ -5421,28 +5418,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[project(), secret()],
             empty(),
         ),
-        // Views
-        path_case(
-            "POST /api/v1/projects/{project_id}/views",
-            &[project()],
-            json_body(json!({"name": "Net view"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/views/{view_id}",
-            &[project(), id(ax.view, bx.view)],
-            versioned("saved_views", 1, json!({"name": "Launch view"})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/views/{view_id}/pin",
-            &[project(), id(ax.view, bx.view)],
-            json_body(json!({"pinned": true})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/views/{view_id}",
-            &[project(), id(ax.view, bx.view)],
-            empty(),
-        )
-        .last(),
         // The workflow
         path_case(
             "PUT /api/v1/projects/{project_id}/work-item-workflow",
@@ -5846,57 +5821,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         )
         .last(),
-        // Webhooks
-        body_case(
-            "POST /api/v1/webhooks",
-            &[],
-            json!({
-                "name": "Net hook",
-                "url": "https://hooks.example.com/net",
-                "eventTypes": ["run.finished"],
-                "organizationId": a.organization,
-            }),
-            vec![
-                json!({
-                    "name": "Net hook",
-                    "url": "https://hooks.example.com/net",
-                    "eventTypes": ["run.finished"],
-                    "organizationId": b.organization,
-                }),
-                json!({
-                    "name": "Net hook",
-                    "url": "https://hooks.example.com/net",
-                    "eventTypes": ["run.finished"],
-                    "projectId": b.project,
-                }),
-            ],
-        ),
-        path_case(
-            "PATCH /api/v1/webhooks/{webhook_id}",
-            &[id(a.webhook, b.webhook)],
-            versioned("webhook_subscriptions", 0, json!({"name": "Hook"})),
-        ),
-        path_case(
-            "POST /api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-            &[id(a.webhook, b.webhook), id(ax.delivery, bx.delivery)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/webhooks/{webhook_id}/rotate-secret",
-            &[id(a.webhook, b.webhook)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/webhooks/{webhook_id}/test",
-            &[id(a.webhook, b.webhook)],
-            empty(),
-        ),
-        path_case(
-            "DELETE /api/v1/webhooks/{webhook_id}",
-            &[id(a.webhook, b.webhook)],
-            empty(),
-        )
-        .last(),
         // Whiteboards
         body_case(
             "POST /api/v1/whiteboards",
@@ -6294,6 +6218,25 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
         ),
+        // A2.10: pausing and resuming an agent one manages, here; B's
+        // agent isn't in A. Resumed at once, so later cases run unpaused.
+        mcp_case(
+            "agent_pause",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
+        mcp_case(
+            "agent_resume",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
+        // A2.18: adding an agent one manages; it is already a member of
+        // A, so nothing changes. B's agent isn't one A's caller manages.
+        mcp_case(
+            "account_workspace_add",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
         // A2: an account's delivery connections are its own and its
         // managers'. B's connection and B's agent aren't A's to change.
         mcp_case(
@@ -6310,6 +6253,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "connection_secret_rotate",
             json!({"connectionId": ax.connection}),
             vec![json!({"connectionId": bx.connection})],
+        ),
+        // A2.6: a webhook's test and redelivery are its account's too.
+        mcp_case(
+            "connection_test",
+            json!({"connectionId": a.webhook}),
+            vec![json!({"connectionId": b.webhook})],
+        ),
+        mcp_case(
+            "connection_redeliver",
+            json!({"connectionId": a.webhook, "eventPosition": ax.delivery}),
+            vec![json!({"connectionId": b.webhook, "eventPosition": bx.delivery})],
         ),
         mcp_case(
             "connection_remove",
@@ -7090,6 +7044,15 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
         ]),
         mcp_case(
+            "button_press",
+            json!({"collection": a.collection, "field": a.collection_button, "record": "#1"}),
+            vec![json!({"collection": b.collection, "field": b.collection_button, "record": "#1"})],
+        )
+        .rejecting(vec![
+            json!({"collection": a.collection, "field": b.collection_button, "record": "#1"}),
+            json!({"collection": a.collection, "field": a.collection_button, "record": b.record}),
+        ]),
+        mcp_case(
             "sheet_write",
             json!({
                 "projectId": a.project,
@@ -7104,26 +7067,78 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"projectId": b.project, "name": "Net mcp sheet"}),
             ],
         ),
+        // Views (T1.6): a view goes in the collection named; B's views and
+        // collections can't be changed, pinned or made a default from A,
+        // and a filter can't name B's things.
         mcp_case(
             "view_create",
-            json!({"projectId": a.project, "name": "Net mcp view", "query": {"assigneeActorId": "me"}, "pinned": true}),
-            vec![json!({"projectId": b.project, "name": "Net mcp view"})],
+            json!({"collection": a.collection, "name": "Net mcp view", "type": "table"}),
+            vec![
+                json!({"collection": b.collection, "name": "Net mcp view", "type": "table"}),
+                json!({"collection": b.collection, "name": "Net shared", "type": "table", "shared": true}),
+            ],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "name": "Net", "query": {"milestoneId": bx.milestone}}),
-            json!({"projectId": a.project, "name": "Net", "query": {"labelIds": bx.label}}),
+            json!({"collection": a.collection, "name": "Net", "type": "table", "config": {"filters": [{"field": b.collection_field, "op": "notEmpty"}]}}),
+            json!({"collection": a.collection, "name": "Net", "type": "table", "config": {"groupBy": b.collection_field}}),
+            json!({"collection": a.collection, "name": "Net", "type": "table", "config": {"filters": [{"field": ax.record_fields[0], "op": "is", "values": [b.rook]}]}}),
+            json!({"collection": a.collection, "name": "Net", "type": "table", "config": {"filters": [{"field": ax.record_fields[1], "op": "is", "values": [b.task]}]}}),
         ]),
         mcp_case(
             "view_update",
-            json!({"projectId": a.project, "view": ax.view, "pinned": true}),
+            json!({"view": a.collection_view, "name": "Net renamed view"}),
             vec![
-                json!({"projectId": b.project, "view": bx.view, "name": "Net"}),
-                json!({"projectId": a.project, "view": bx.view, "name": "Net"}),
-                json!({"projectId": a.project, "view": bx.view, "pinned": true}),
-                json!({"projectId": a.project, "view": bx.view, "delete": true}),
+                json!({"view": b.collection_view, "name": "Net"}),
+                json!({"view": bx.view, "name": "Net"}),
             ],
         )
-        .rejecting(vec![json!({"projectId": a.project, "view": ax.view, "query": {"milestoneId": bx.milestone}})]),
+        .rejecting(vec![json!({"view": a.collection_view, "config": {"groupBy": b.collection_field}})]),
+        mcp_case(
+            "view_pin",
+            json!({"view": a.collection_view, "pinned": true}),
+            vec![
+                json!({"view": b.collection_view, "pinned": true}),
+                json!({"view": bx.view, "pinned": true}),
+            ],
+        ),
+        mcp_case(
+            "view_default_set",
+            json!({"collection": a.collection, "view": a.collection_view}),
+            vec![
+                json!({"collection": b.collection, "view": b.collection_view}),
+                json!({"collection": a.collection, "view": b.collection_view}),
+            ],
+        ),
+        mcp_case(
+            "view_delete",
+            json!({"view": sp.collection_view}),
+            vec![
+                json!({"view": b.collection_view}),
+                json!({"view": bx.view}),
+            ],
+        ),
+        // Dashboards (T1.32): made in the project named, over A's own views;
+        // B's dashboards can't be changed or removed from A.
+        mcp_case(
+            "dashboard_create",
+            json!({"spaceId": a.project, "name": "Net mcp dashboard", "tiles": [{"view": a.collection_view}]}),
+            vec![
+                json!({"spaceId": b.project, "name": "Net mcp dashboard"}),
+                json!({"spaceId": b.project, "name": "Net over B", "tiles": [{"view": b.collection_view}]}),
+            ],
+        )
+        .rejecting(vec![json!({"spaceId": a.project, "name": "Net", "tiles": [{"view": b.collection_view}]})]),
+        mcp_case(
+            "dashboard_update",
+            json!({"dashboard": a.dashboard, "name": "Net renamed dashboard"}),
+            vec![json!({"dashboard": b.dashboard, "name": "Net"})],
+        )
+        .rejecting(vec![json!({"dashboard": a.dashboard, "tiles": [{"view": b.collection_view}]})]),
+        mcp_case(
+            "dashboard_delete",
+            json!({"dashboard": sp.dashboard}),
+            vec![json!({"dashboard": b.dashboard})],
+        ),
         mcp_case(
             "label_create",
             json!({"projectId": a.project, "name": "Net mcp label"}),
@@ -7437,6 +7452,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"owner": "workspace", "workspace": b.organization, "label": "Net mcp host"})],
         ),
         mcp_case(
+            "host_link",
+            json!({"owner": "workspace", "workspace": a.organization, "cardUrl": "https://agent.example.com"}),
+            vec![json!({"owner": "workspace", "workspace": b.organization, "cardUrl": "https://agent.example.com"})],
+        )
+        .without_own("it reads an agent card over the network, which tests can't reach"),
+        mcp_case(
             "host_agent_bind",
             json!({"hostId": ax.hosts[1], "accountId": ax.agent, "hostAgentRef": "net-agent"}),
             vec![json!({"hostId": bx.hosts[1], "accountId": bx.agent, "hostAgentRef": "net-agent"})],
@@ -7449,52 +7470,32 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .no_effect(vec![json!({"hostId": ax.hosts[1], "accountId": bx.agent})])
         .last(),
+        // A2.19: B's proposal isn't A's to decide, and B's host and agent
+        // aren't A's to run actions on.
+        mcp_case(
+            "agent_register_decide",
+            json!({"proposal": ax.proposal, "decision": "refuse"}),
+            vec![json!({"proposal": bx.proposal, "decision": "refuse"})],
+        ),
+        mcp_case(
+            "agent_offer_start",
+            json!({"host": ax.hosts[2], "offerId": "net-offer"}),
+            vec![json!({"host": bx.hosts[2], "offerId": "net-offer"})],
+        ),
+        mcp_case(
+            "agent_action_run",
+            json!({"host": ax.hosts[2], "actionId": "net-action"}),
+            vec![
+                json!({"host": bx.hosts[2], "actionId": "net-action"}),
+                json!({"account": bx.agent, "actionId": "net-action"}),
+            ],
+        ),
         mcp_case(
             "host_unlink",
             json!({"hostId": ax.hosts[3]}),
             vec![json!({"hostId": bx.hosts[3]})],
         )
         .last(),
-        mcp_case(
-            "webhook_create",
-            json!({
-                "name": "Net mcp hook",
-                "url": "https://hooks.example.com/net-mcp",
-                "eventTypes": ["run.finished"],
-            }),
-            vec![json!({
-                "name": "Net mcp hook",
-                "url": "https://hooks.example.com/net-mcp",
-                "eventTypes": ["run.finished"],
-                "projectId": b.project,
-            })],
-        ),
-        mcp_case(
-            "webhook_update",
-            json!({"webhookId": a.webhook, "name": "Net mcp hook renamed", "expectedVersion": version("webhook_subscriptions", a.webhook)}),
-            vec![json!({"webhookId": b.webhook, "name": "Net", "expectedVersion": version("webhook_subscriptions", b.webhook)})],
-        ),
-        mcp_case(
-            "webhook_secret_rotate",
-            json!({"webhookId": a.webhook}),
-            vec![json!({"webhookId": b.webhook})],
-        ),
-        mcp_case(
-            "webhook_ping_send",
-            json!({"webhookId": a.webhook}),
-            vec![json!({"webhookId": b.webhook})],
-        ),
-        mcp_case(
-            "webhook_delivery_retry",
-            json!({"webhookId": a.webhook, "deliveryId": ax.delivery}),
-            vec![json!({"webhookId": b.webhook, "deliveryId": bx.delivery})],
-        )
-        .rejecting(vec![json!({"webhookId": a.webhook, "deliveryId": bx.delivery})]),
-        mcp_case(
-            "webhook_delete",
-            json!({"webhookId": sp.webhook}),
-            vec![json!({"webhookId": b.webhook})],
-        ),
         mcp_case(
             "bug_report_link_create",
             json!({"projectId": a.project, "name": "Net mcp link"}),

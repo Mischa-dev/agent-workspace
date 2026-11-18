@@ -20,7 +20,7 @@ export type Envelope<T> =
 
 export type AcceptanceCriterionProjection = { completed: boolean; id: string; position: number; text: string }
 
-export type Action = ({ agentProfileId?: string | null; environmentId?: string | null; kind: "launch"; prompt?: string | null }) | { field: string; kind: "set_field"; value: string } | { kind: "notify"; message: string; recipients: Recipients } | { conversationId: string; kind: "post_message"; text: string } | { input: unknown; kind: "run_operation"; operation: string }
+export type Action = ({ agentProfileId?: string | null; environmentId?: string | null; kind: "launch"; prompt?: string | null }) | { field: string; kind: "set_field"; value: string } | { kind: "notify"; message: string; recipients: Recipients } | { conversationId: string; kind: "post_message"; text: string } | { input: unknown; kind: "run_operation"; operation: string } | ({ accountId: string; conversationId?: string | null; kind: "ask_agent"; prompt: string })
 
 export type ActivityLine = { kind: string; occurredAt: string; parentRef?: string | null; payload: unknown; seq: number; stepRef?: string | null; summary: string }
 
@@ -36,11 +36,23 @@ export type AudienceInput = { accounts?: string[]; roles?: string[] }
 
 export type BlockedProjection = { blockedAt: string; blockedByActorId: string; reason: string }
 
+export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
+
+export type ButtonStepInput = { arguments?: Record<string, unknown>; operation: string }
+
+export type ButtonStepView = { arguments: Record<string, unknown>; operation: string; title: string }
+
+export type ButtonView = { label: string; steps: ButtonStepView[] }
+
 export type CandidateField = { id: string; name: string; options?: string[]; takesValue: boolean }
 
 export type CarriedValue = { field: string; followsMove?: boolean; targetField: string; taskId: string; taskKey: string; value: unknown }
 
 export type ChangedTask = { finished?: boolean | null; id: string; key: string; status?: string | null; statusGroup?: string | null; title?: string | null }
+
+export type ChartStyle = ("bar" | "line" | "donut") | "number"
+
+export type ChartWrite = { field?: string | null; measure?: MeasureOp | null; style?: ChartStyle | null }
 
 export type ClaimRun = { runId: string; state: string }
 
@@ -56,13 +68,13 @@ export type CommentThreadView = { anchor?: unknown; createdAt: string; id: strin
 
 export type Conditions = { filters?: Record<string, string>; viewId?: string | null }
 
-export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
+export type ConnectionView = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
 export type Content = { body?: Record<string, unknown> | null; key: string; kind: ContentKind; path?: string | null }
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
 
-export type ContextMessage = { author: string; authorKind: string; createdAt: string; edited?: boolean; messageId: string; removed?: boolean; text: string }
+export type ContextMessage = { author: string; authorId: string; authorKind: string; createdAt: string; edited?: boolean; messageId: string; removed?: boolean; text: string; trust: string }
 
 export type ConversationSummary = { id: string; kind: string; lastMessage?: LastMessage | null; members?: string | null; muted?: boolean; name: string; outcome?: string | null; parentId?: string | null; parentName?: string | null; projectId: string; projectName: string; status?: string | null; unreadCount: number; url: string }
 
@@ -78,11 +90,15 @@ export type CriterionValue = { completed: boolean; completedAt?: string | null; 
 
 export type CustomEmojiView = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
 
+export type DashboardEntry = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+
 export type DateBucket = "day" | "week" | "month"
 
 export type DecisionLine = { decidedAt: string; decidedBy: string; id: string; title: string }
 
 export type DecisionView = { createdAt: string; decidedBy: string; detail: string; id: string; projectId: string; sourceConversationId?: string | null; sourceConversationKind?: string | null; sourceConversationName?: string | null; sourceMessageId?: string | null; status: string; supersededByDecisionId?: string | null; title: string; via?: string | null }
+
+export type DeliveryView = { attempts: number; createdAt: string; deliveredAt?: string | null; elapsedMs?: number | null; eventId: string; eventPosition: number; eventType: string; lastError?: string | null; lastStatus?: number | null; nextAttemptAt?: string | null; reason: string; state: string }
 
 export type DependencyChange = { changed: number; key: string; ready?: boolean | null; version: number }
 
@@ -106,11 +122,15 @@ export type FieldFilterArgument = { field: string; op: FieldOp; values?: string[
 
 export type FieldOp = "is" | "isNot" | "empty" | "notEmpty" | "contains" | "gt" | "gte" | "lt" | "lte" | "within" | "categoryIs" | "categoryIsNot"
 
-export type FieldType = ("text" | "number" | "date" | "single_choice" | "multiple_choice" | "person" | "url" | "checkbox" | "link") | "long_text" | "status" | "people" | "labels" | "email" | "phone" | "created_time" | "edited_time" | "created_by" | "edited_by" | "auto_id"
+export type FieldType = ("text" | "number" | "date" | "single_choice" | "multiple_choice" | "person" | "url" | "checkbox" | "link") | "long_text" | "status" | "people" | "labels" | "email" | "phone" | "created_time" | "edited_time" | "created_by" | "edited_by" | "auto_id" | "formula" | "button"
 
-export type FieldView = { archived: boolean; collection?: string | null; description?: string; id: string; name: string; options?: OptionView[]; position: number; target?: LinkTarget | null; type: FieldType; version: number }
+export type FieldView = { archived: boolean; button?: ButtonView | null; collection?: string | null; description?: string; formula?: FormulaView | null; id: string; name: string; options?: OptionView[]; position: number; target?: LinkTarget | null; type: FieldType; version: number }
 
-export type FieldWrite = { archived?: boolean | null; description?: string | null; field?: string | null; name?: string | null; options?: OptionInput[] | null; position?: number | null; target?: string | null; type?: string | null }
+export type FieldWrite = { archived?: boolean | null; button?: ButtonInput | null; description?: string | null; field?: string | null; formula?: string | null; name?: string | null; options?: OptionInput[] | null; position?: number | null; target?: string | null; type?: string | null }
+
+export type FigureGroup = { color?: string | null; count: number; key: string; name: string; value?: number | null }
+
+export type Figures = { collectionName: string; groups: FigureGroup[]; measure?: string | null; records: string[]; style?: string | null; total: number; value?: number | null; viewName: string; viewType: string }
 
 export type FileSummary = { commentId?: string | null; contentType: string; fileId: string; height?: number | null; idempotentReplay?: boolean; name: string; size: number; width?: number | null }
 
@@ -120,7 +140,9 @@ export type FollowedThreadView = { id: string; lastActivityAt: string; messageCo
 
 export type FormFieldWrite = { field: string; required?: boolean }
 
-export type FormWrite = { fields?: FormFieldWrite[]; intro?: string | null; thanks?: string | null }
+export type FormWrite = { dailyLimit?: number | null; fields?: FormFieldWrite[]; intro?: string | null; thanks?: string | null }
+
+export type FormulaView = { result: ResultType; source: string }
 
 export type GuidePage = { body: string; pageId: string; stale: boolean; title: string; truncated: boolean; updatedAt: string; version: number }
 
@@ -158,9 +180,13 @@ export type InviteLinkView = { active: boolean; createdAt: string; createdBy: st
 
 export type IssueReason = "no_matching_field" | "option_missing" | "person_not_in_target" | "link_outside_move" | "page_link"
 
+export type JoinableAccount = { accountId: string; displayName: string; handle: string; handleTaken: boolean; kind: string }
+
 export type LabelLine = { archived: boolean; color: string; description?: string; id: string; name: string; taskCount: number; version: number }
 
 export type LastMessage = { at: string; author: string; removed?: boolean; text: string }
+
+export type LastTest = { at: string; error?: string | null; ok: boolean; status?: number | null }
 
 export type LayoutLine = { fromWorkspace: boolean; preset: string; tone: string; words?: WordLine[] }
 
@@ -181,6 +207,8 @@ export type LinkedRepositoryProjection = { repository: RepositoryProjection; rol
 export type LinkedTask = { id: string; key: string; status: string; title: string }
 
 export type LinkedThread = { id: string; name: string; url: string }
+
+export type MeasureOp = "count" | "sum" | "average" | "min" | "max"
 
 export type MemberRef = { handle: string; id: string; kind: string; name: string }
 
@@ -214,6 +242,8 @@ export type NewTask = { acceptanceCriteria?: string[]; assignee?: string | null;
 
 export type NotificationLine = { at: string; count: number; id: string; kind: string; preview?: string | null; project: string; read: boolean; snoozedUntil?: string | null; subject: string; subjectId: string; subjectKind: string; title: string; url: string }
 
+export type Offer = { hostId: string; hostName: string; offer: Record<string, unknown> }
+
 export type Operation = { arrowheads?: string | null; axis?: string | null; backgroundColor?: string | null; dataBase64?: string | null; direction?: string | null; dx?: number | null; dy?: number | null; edge?: string | null; fileId?: string | null; fillStyle?: string | null; fontSize?: number | null; frameId?: string | null; from?: string | null; gap?: number | null; height?: number | null; id?: string | null; ids?: string[] | null; link?: string | null; locked?: boolean | null; mimeType?: string | null; name?: string | null; op: string; opacity?: number | null; points?: number[][] | null; position?: string | null; roughness?: number | null; rounded?: boolean | null; strokeColor?: string | null; strokeStyle?: string | null; strokeWidth?: number | null; text?: string | null; textAlign?: string | null; to?: string | null; type?: string | null; width?: number | null; x?: number | null; y?: number | null }
 
 export type OperationResult = { ids: string[]; op: string }
@@ -242,6 +272,10 @@ export type PlanItem = { action: string; existingId?: string | null; key: string
 
 export type PlannedTask = { id: string; key: string; parentId?: string | null; title: string }
 
+export type PressedStep = { operation: string; value: unknown }
+
+export type PreviewRecord = { number: number; title: string }
+
 export type ProjectHeader = { id: string; key: string; name: string; role: string; url: string }
 
 export type ProjectLine = { archived?: boolean; id: string; key: string; messagesSpace: boolean; name: string; openTasks: number; role: string; unreadConversations: number; url: string; version: number }
@@ -257,6 +291,8 @@ export type PullRequestProjection = { baseRef: string; canonicalUrl: string; che
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
 export type ReactionSummary = { byYou: boolean; count: number; emoji: string; name: string; people: string[] }
+
+export type RecipeView = { id: string; title: string }
 
 export type Recipients = "owner" | "assignee" | "project_admins"
 
@@ -289,6 +325,8 @@ export type Requires = { contract?: string | null; modules?: string[] }
 export type Resolution = { action: ResolutionAction; issue: string; targetField?: string | null; value?: unknown }
 
 export type ResolutionAction = "leave" | "set"
+
+export type ResultType = "number" | "text" | "boolean" | "date" | "list"
 
 export type RevisionItem = { redacted?: boolean; revision: number; text: string; truncated?: boolean; via?: string | null; writtenAt: string; writtenBy: string }
 
@@ -348,13 +386,21 @@ export type ThreadRef = { id: string; name: string; status: string }
 
 export type ThreadUpdate = { changedAt: string; changedBy?: string | null; name: string; outcome?: string | null; status: string; threadId: string; under: string }
 
+export type TileEntry = { collection?: string | null; figures?: Figures | null; height: number; id: string; kind: TileKind; text: string; title: string; unseen?: string | null; view?: string | null; width: number }
+
+export type TileInput = { height?: number | null; id?: string | null; kind?: TileKind | null; text?: string | null; title?: string | null; view?: string | null; width?: number | null }
+
+export type TileKind = "view" | "text"
+
 export type Trigger = { kind: "task_created" } | { kind: "task_matches" } | { kind: "run_finished"; outcomes?: string[] } | { kind: "pull_request_checks_failed" } | ({ contains?: string | null; conversationId?: string | null; kind: "message_posted" }) | ({ every?: number; frequency: string; kind: "schedule"; monthDay?: number | null; time: string; timezone: string; weekdays?: number[] }) | ({ collectionId?: string | null; kind: "record_created" }) | ({ collectionId?: string | null; kind: "record_changed" }) | ({ kind: "page_changed"; pageId?: string | null }) | ({ kind: "sheet_changed"; sheetId?: string | null }) | ({ kind: "whiteboard_changed"; whiteboardId?: string | null }) | ({ kind: "capacity_window"; maxTasks?: number | null; providerAccountId?: string | null })
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
 export type UpdatedTask = { archived: boolean; changedFields?: string[]; id: string; index: number; key: string; status: string; url: string; version: number }
 
-export type ViewWrite = { columns?: ColumnWrite[] | null; dateField?: string | null; filters?: FilterWrite[] | null; groupBucket?: DateBucket | null; groupBy?: string | null; name?: string | null; position?: number | null; remove?: boolean | null; sort?: SortWrite[] | null; titleWidth?: number | null; type?: string | null; view?: string | null }
+export type ViewEntry = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
+
+export type ViewWrite = { chart?: ChartWrite | null; columns?: ColumnWrite[] | null; dateField?: string | null; endField?: string | null; filters?: FilterWrite[] | null; groupBucket?: DateBucket | null; groupBy?: string | null; name?: string | null; position?: number | null; remove?: boolean | null; sort?: SortWrite[] | null; titleWidth?: number | null; type?: string | null; view?: string | null }
 
 export type WatcherRef = { handle: string; kind: string; name: string }
 
@@ -368,6 +414,22 @@ export type WorkItemProjection = { acceptanceCriteria: AcceptanceCriterionProjec
 
 export type You = { access: string; actorId: string; connectedThrough?: string | null; handle: string; kind: string; name: string }
 
+export type AccountJoinableListInput = Record<string, never>
+
+export type AccountJoinableListOutput = { accounts: JoinableAccount[] }
+
+export type AccountWorkspaceAddInput = { account: string; handle?: string | null; roleId?: string | null }
+
+export type AccountWorkspaceAddOutput = { accountId: string; requestId?: string | null; spaceId?: string | null; status: string }
+
+export type AgentActionGetInput = { commandId: string }
+
+export type AgentActionGetOutput = { commandId: string; reply?: Record<string, unknown> | null; state: string }
+
+export type AgentActionRunInput = { account?: string | null; actionId: string; host?: string | null; input?: Record<string, unknown> | null }
+
+export type AgentActionRunOutput = { commandId: string; reply?: Record<string, unknown> | null; state: string }
+
 export type AgentCreateInput = { connectionName?: string | null; displayName: string; handle: string; ownerAccountId?: string | null; roleId?: string | null; scopes?: string[] | null }
 
 export type AgentCreateOutput = { accountId: string; connectionId: string; credential?: string | null; credentialExpiresAt?: string | null; spaceId: string }
@@ -375,6 +437,30 @@ export type AgentCreateOutput = { accountId: string; connectionId: string; crede
 export type AgentManagersSetInput = { add?: string[]; agent: string; remove?: string[] }
 
 export type AgentManagersSetOutput = { agent: string; managers: string[] }
+
+export type AgentOfferListInput = Record<string, never>
+
+export type AgentOfferListOutput = { offers: Offer[] }
+
+export type AgentOfferStartInput = { host: string; offerId: string }
+
+export type AgentOfferStartOutput = { commandId: string; page?: string | null }
+
+export type AgentPauseInput = { account: string; everywhere?: boolean; reason?: string | null }
+
+export type AgentPauseOutput = { account: string; changed: boolean; status: string }
+
+export type AgentRecipeListInput = Record<string, never>
+
+export type AgentRecipeListOutput = { recipes: RecipeView[] }
+
+export type AgentRegisterDecideInput = { decision: string; proposal: string; roleId?: string | null }
+
+export type AgentRegisterDecideOutput = { accountId?: string | null; proposalId: string; status: string }
+
+export type AgentResumeInput = { account: string; everywhere?: boolean; reason?: string | null }
+
+export type AgentResumeOutput = { account: string; changed: boolean; status: string }
 
 export type AgentTemplateListInput = { spaceId?: string | null }
 
@@ -424,6 +510,14 @@ export type BugReportLinkUpdateInput = { collection?: string | null; delete?: bo
 
 export type BugReportLinkUpdateOutput = unknown
 
+export type ButtonGetInput = { collection: string; field: string }
+
+export type ButtonGetOutput = { button: ButtonView; canPress: boolean; reason?: string | null }
+
+export type ButtonPressInput = { collection: string; field: string; record: string }
+
+export type ButtonPressOutput = { record: PreviewRecord; steps: PressedStep[] }
+
 export type ChannelCreateInput = { name: string; projectId: string }
 
 export type ChannelCreateOutput = { archived: boolean; created?: boolean | null; id: string; kind: string; name: string; outcome?: string | null; status?: string | null; url: string; version: number }
@@ -444,17 +538,29 @@ export type ConnectionCreateInput = { account?: string | null; name?: string | n
 
 export type ConnectionCreateOutput = { connection: ConnectionView; webhookSecret?: string | null }
 
+export type ConnectionDeliveryListInput = { before?: number | null; connectionId: string; limit?: number | null }
+
+export type ConnectionDeliveryListOutput = { deliveries: DeliveryView[]; nextBefore?: number | null }
+
 export type ConnectionListInput = { account?: string | null }
 
 export type ConnectionListOutput = { connections: ConnectionView[] }
 
+export type ConnectionRedeliverInput = { connectionId: string; eventPosition: number }
+
+export type ConnectionRedeliverOutput = { attempts: number; createdAt: string; deliveredAt?: string | null; elapsedMs?: number | null; eventId: string; eventPosition: number; eventType: string; lastError?: string | null; lastStatus?: number | null; nextAttemptAt?: string | null; reason: string; state: string }
+
 export type ConnectionRemoveInput = { connectionId: string }
 
-export type ConnectionRemoveOutput = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
+export type ConnectionRemoveOutput = { accountId: string; consecutiveFailures: number; disabledReason?: string | null; forCredential: boolean; homeWorkspaceId: string; id: string; isDefault: boolean; lastDeliveredAt?: string | null; lastError?: string | null; lastSeenAt?: string | null; lastTest?: LastTest | null; madeThroughApp: boolean; name: string; reachesAll: boolean; state: string; subscriptions: Subscription[]; version: number; webhookFormat: string; webhookUrl?: string | null }
 
 export type ConnectionSecretRotateInput = { connectionId: string }
 
 export type ConnectionSecretRotateOutput = { connection: ConnectionView; webhookSecret?: string | null }
+
+export type ConnectionTestInput = { connectionId: string }
+
+export type ConnectionTestOutput = { queued: boolean }
 
 export type ConnectionUpdateInput = { connectionId: string; expectedVersion?: number | null; name?: string | null; reachesAll?: boolean | null; subscriptions?: SubscriptionInput[] | null; webhookFormat?: string | null; webhookUrl?: string | null }
 
@@ -491,6 +597,26 @@ export type CustomEmojiListOutput = { emoji: CustomEmojiView[] }
 export type CustomEmojiUpdateInput = { id: string; retired: boolean }
 
 export type CustomEmojiUpdateOutput = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
+
+export type DashboardCreateInput = { description?: string | null; name: string; shared?: boolean | null; spaceId: string; tiles?: TileInput[] }
+
+export type DashboardCreateOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+
+export type DashboardDeleteInput = { dashboard: string }
+
+export type DashboardDeleteOutput = { id: string; removed: boolean }
+
+export type DashboardGetInput = { dashboard: string; figures?: boolean | null }
+
+export type DashboardGetOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+
+export type DashboardListInput = { spaceId: string }
+
+export type DashboardListOutput = { canShare: boolean; dashboards: DashboardEntry[] }
+
+export type DashboardUpdateInput = { dashboard: string; description?: string | null; expectedVersion?: number | null; name?: string | null; share?: boolean | null; tiles?: TileInput[] | null }
+
+export type DashboardUpdateOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -556,6 +682,14 @@ export type FieldUpdateInput = { archived?: boolean | null; description?: string
 
 export type FieldUpdateOutput = { changedFields: string[]; created: boolean; field: FieldView; note?: string | null }
 
+export type FileLinkGetInput = { fileId: string }
+
+export type FileLinkGetOutput = { contentType: string; expiresAt: string; name: string; size: number; url: string }
+
+export type FormulaPreviewInput = { collection: string; field?: string | null; formula: string; record?: number | null }
+
+export type FormulaPreviewOutput = { problem?: string | null; record?: PreviewRecord | null; result?: ResultType | null; value?: unknown }
+
 export type GithubAutomationUpdateInput = { expectedVersion?: number | null; projectId: string; pullRequestMerge?: boolean | null; pullRequestOpen?: boolean | null }
 
 export type GithubAutomationUpdateOutput = { automation?: Record<string, unknown> | null; done: string; installation?: Record<string, unknown> | null }
@@ -587,6 +721,10 @@ export type HostAgentUnbindOutput = { actions: unknown[]; agents: HostAgentView[
 export type HostEnrolmentCreateInput = { label?: string | null; owner: HostOwnerChoice }
 
 export type HostEnrolmentCreateOutput = { code: string; enrolmentId: string; expiresAt: string; owner: OwnerView }
+
+export type HostLinkInput = { accountId?: string | null; cardUrl: string; owner: HostOwnerChoice; token?: string | null }
+
+export type HostLinkOutput = { actions: unknown[]; agents: HostAgentView[]; builtin: boolean; canManage: boolean; capabilities: Record<string, unknown>; connection: string; createdAt: string; describedAgents: unknown[]; id: string; lastSeenAt?: string | null; moduleManifestUrl?: string | null; name: string; offers: unknown[]; owner: OwnerView; protocol: string; software?: string | null; softwareVersion?: string | null; status: string; version: number }
 
 export type HostListInput = { mineOnly?: boolean }
 
@@ -1032,49 +1170,29 @@ export type ThreadUpdateInput = { clearOutcome?: boolean | null; name?: string |
 
 export type ThreadUpdateOutput = { created?: boolean | null; id: string; message?: SentMessage | null; name: string; outcome?: string | null; parentId: string; status: string; url: string }
 
-export type ViewCreateInput = { delete?: boolean | null; expectedVersion?: number | null; fields?: string[] | null; layout?: string | null; name?: string | null; pinned?: boolean | null; projectId: string; query?: Record<string, string> | null; shared?: boolean | null; view?: string | null }
+export type ViewCreateInput = { collection: string; config?: unknown; name: string; position?: number | null; shared?: boolean; type: string }
 
-export type ViewCreateOutput = { created: boolean; deleted: boolean; view?: unknown }
+export type ViewCreateOutput = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
 
-export type ViewListInput = { projectId: string }
+export type ViewDefaultSetInput = { collection: string; role?: string | null; view?: string | null }
 
-export type ViewListOutput = { howToUse: string; views: unknown[] }
+export type ViewDefaultSetOutput = { defaultViewId?: string | null }
 
-export type ViewUpdateInput = { delete?: boolean | null; expectedVersion?: number | null; fields?: string[] | null; layout?: string | null; name?: string | null; pinned?: boolean | null; projectId: string; query?: Record<string, string> | null; shared?: boolean | null; view?: string | null }
+export type ViewDeleteInput = { view: string }
 
-export type ViewUpdateOutput = { created: boolean; deleted: boolean; view?: unknown }
+export type ViewDeleteOutput = { removed: string }
 
-export type WebhookCreateInput = { eventTypes: string[]; name: string; projectId?: string | null; url: string }
+export type ViewListInput = { collection: string }
 
-export type WebhookCreateOutput = unknown
+export type ViewListOutput = { defaultViewId?: string | null; views: ViewEntry[] }
 
-export type WebhookDeleteInput = { webhookId: string }
+export type ViewPinInput = { pinned: boolean; position?: number | null; view: string }
 
-export type WebhookDeleteOutput = unknown
+export type ViewPinOutput = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
 
-export type WebhookDeliveryListInput = { cursor?: string | null; limit?: number | null; webhookId: string }
+export type ViewUpdateInput = { config?: unknown; expectedVersion?: number | null; name?: string | null; position?: number | null; share?: boolean; view: string }
 
-export type WebhookDeliveryListOutput = unknown
-
-export type WebhookDeliveryRetryInput = { deliveryId: string; webhookId: string }
-
-export type WebhookDeliveryRetryOutput = unknown
-
-export type WebhookListInput = Record<string, never>
-
-export type WebhookListOutput = unknown
-
-export type WebhookPingSendInput = { webhookId: string }
-
-export type WebhookPingSendOutput = unknown
-
-export type WebhookSecretRotateInput = { webhookId: string }
-
-export type WebhookSecretRotateOutput = unknown
-
-export type WebhookUpdateInput = { eventTypes?: string[] | null; expectedVersion: number; name?: string | null; state?: string | null; url?: string | null; webhookId: string }
-
-export type WebhookUpdateOutput = unknown
+export type ViewUpdateOutput = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
 
 export type WhiteboardCreateInput = { fromTemplateId?: string | null; linkTo?: LinkArgument | null; operations?: Operation[] | null; projectId?: string | null; title: string; workspaceId?: string | null }
 
@@ -1117,8 +1235,18 @@ export type WorkspaceShapeSetInput = { planHash?: string | null; shape: string }
 export type WorkspaceShapeSetOutput = { installed: Installed; name: string; shape: string }
 
 export type Operations = {
+  account_joinable_list: { input: AccountJoinableListInput; output: AccountJoinableListOutput }
+  account_workspace_add: { input: AccountWorkspaceAddInput; output: AccountWorkspaceAddOutput }
+  agent_action_get: { input: AgentActionGetInput; output: AgentActionGetOutput }
+  agent_action_run: { input: AgentActionRunInput; output: AgentActionRunOutput }
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
   agent_managers_set: { input: AgentManagersSetInput; output: AgentManagersSetOutput }
+  agent_offer_list: { input: AgentOfferListInput; output: AgentOfferListOutput }
+  agent_offer_start: { input: AgentOfferStartInput; output: AgentOfferStartOutput }
+  agent_pause: { input: AgentPauseInput; output: AgentPauseOutput }
+  agent_recipe_list: { input: AgentRecipeListInput; output: AgentRecipeListOutput }
+  agent_register_decide: { input: AgentRegisterDecideInput; output: AgentRegisterDecideOutput }
+  agent_resume: { input: AgentResumeInput; output: AgentResumeOutput }
   agent_template_list: { input: AgentTemplateListInput; output: AgentTemplateListOutput }
   agent_usage_list: { input: AgentUsageListInput; output: AgentUsageListOutput }
   automation_create: { input: AutomationCreateInput; output: AutomationCreateOutput }
@@ -1131,14 +1259,19 @@ export type Operations = {
   bug_report_link_create: { input: BugReportLinkCreateInput; output: BugReportLinkCreateOutput }
   bug_report_link_list: { input: BugReportLinkListInput; output: BugReportLinkListOutput }
   bug_report_link_update: { input: BugReportLinkUpdateInput; output: BugReportLinkUpdateOutput }
+  button_get: { input: ButtonGetInput; output: ButtonGetOutput }
+  button_press: { input: ButtonPressInput; output: ButtonPressOutput }
   channel_create: { input: ChannelCreateInput; output: ChannelCreateOutput }
   comment_create: { input: CommentCreateInput; output: CommentCreateOutput }
   comment_list: { input: CommentListInput; output: CommentListOutput }
   comment_thread_update: { input: CommentThreadUpdateInput; output: CommentThreadUpdateOutput }
   connection_create: { input: ConnectionCreateInput; output: ConnectionCreateOutput }
+  connection_delivery_list: { input: ConnectionDeliveryListInput; output: ConnectionDeliveryListOutput }
   connection_list: { input: ConnectionListInput; output: ConnectionListOutput }
+  connection_redeliver: { input: ConnectionRedeliverInput; output: ConnectionRedeliverOutput }
   connection_remove: { input: ConnectionRemoveInput; output: ConnectionRemoveOutput }
   connection_secret_rotate: { input: ConnectionSecretRotateInput; output: ConnectionSecretRotateOutput }
+  connection_test: { input: ConnectionTestInput; output: ConnectionTestOutput }
   connection_update: { input: ConnectionUpdateInput; output: ConnectionUpdateOutput }
   conversation_continue: { input: ConversationContinueInput; output: ConversationContinueOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
@@ -1148,6 +1281,11 @@ export type Operations = {
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
   custom_emoji_list: { input: CustomEmojiListInput; output: CustomEmojiListOutput }
   custom_emoji_update: { input: CustomEmojiUpdateInput; output: CustomEmojiUpdateOutput }
+  dashboard_create: { input: DashboardCreateInput; output: DashboardCreateOutput }
+  dashboard_delete: { input: DashboardDeleteInput; output: DashboardDeleteOutput }
+  dashboard_get: { input: DashboardGetInput; output: DashboardGetOutput }
+  dashboard_list: { input: DashboardListInput; output: DashboardListOutput }
+  dashboard_update: { input: DashboardUpdateInput; output: DashboardUpdateOutput }
   decision_list: { input: DecisionListInput; output: DecisionListOutput }
   decision_record: { input: DecisionRecordInput; output: DecisionRecordOutput }
   dependency_graph_get: { input: DependencyGraphGetInput; output: DependencyGraphGetOutput }
@@ -1164,6 +1302,8 @@ export type Operations = {
   field_create: { input: FieldCreateInput; output: FieldCreateOutput }
   field_list: { input: FieldListInput; output: FieldListOutput }
   field_update: { input: FieldUpdateInput; output: FieldUpdateOutput }
+  file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }
+  formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   github_automation_update: { input: GithubAutomationUpdateInput; output: GithubAutomationUpdateOutput }
   github_installation_link: { input: GithubInstallationLinkInput; output: GithubInstallationLinkOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
@@ -1172,6 +1312,7 @@ export type Operations = {
   host_agent_bind: { input: HostAgentBindInput; output: HostAgentBindOutput }
   host_agent_unbind: { input: HostAgentUnbindInput; output: HostAgentUnbindOutput }
   host_enrolment_create: { input: HostEnrolmentCreateInput; output: HostEnrolmentCreateOutput }
+  host_link: { input: HostLinkInput; output: HostLinkOutput }
   host_list: { input: HostListInput; output: HostListOutput }
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
@@ -1284,16 +1425,11 @@ export type Operations = {
   thread_start: { input: ThreadStartInput; output: ThreadStartOutput }
   thread_update: { input: ThreadUpdateInput; output: ThreadUpdateOutput }
   view_create: { input: ViewCreateInput; output: ViewCreateOutput }
+  view_default_set: { input: ViewDefaultSetInput; output: ViewDefaultSetOutput }
+  view_delete: { input: ViewDeleteInput; output: ViewDeleteOutput }
   view_list: { input: ViewListInput; output: ViewListOutput }
+  view_pin: { input: ViewPinInput; output: ViewPinOutput }
   view_update: { input: ViewUpdateInput; output: ViewUpdateOutput }
-  webhook_create: { input: WebhookCreateInput; output: WebhookCreateOutput }
-  webhook_delete: { input: WebhookDeleteInput; output: WebhookDeleteOutput }
-  webhook_delivery_list: { input: WebhookDeliveryListInput; output: WebhookDeliveryListOutput }
-  webhook_delivery_retry: { input: WebhookDeliveryRetryInput; output: WebhookDeliveryRetryOutput }
-  webhook_list: { input: WebhookListInput; output: WebhookListOutput }
-  webhook_ping_send: { input: WebhookPingSendInput; output: WebhookPingSendOutput }
-  webhook_secret_rotate: { input: WebhookSecretRotateInput; output: WebhookSecretRotateOutput }
-  webhook_update: { input: WebhookUpdateInput; output: WebhookUpdateOutput }
   whiteboard_create: { input: WhiteboardCreateInput; output: WhiteboardCreateOutput }
   whiteboard_duplicate: { input: WhiteboardDuplicateInput; output: WhiteboardDuplicateOutput }
   whiteboard_link: { input: WhiteboardLinkInput; output: WhiteboardLinkOutput }

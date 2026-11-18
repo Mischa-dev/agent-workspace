@@ -522,37 +522,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/account/api-tokens/{credential_id}/revoke",
         CredentialManage
     ),
-    policy_route!("webhooks", Post, "/api/v1/webhooks", CredentialManage),
-    policy_route!(
-        "webhooks",
-        Patch,
-        "/api/v1/webhooks/{webhook_id}",
-        CredentialManage
-    ),
-    policy_route!(
-        "webhooks",
-        Delete,
-        "/api/v1/webhooks/{webhook_id}",
-        CredentialManage
-    ),
-    policy_route!(
-        "webhooks",
-        Post,
-        "/api/v1/webhooks/{webhook_id}/rotate-secret",
-        CredentialManage
-    ),
-    policy_route!(
-        "webhooks",
-        Post,
-        "/api/v1/webhooks/{webhook_id}/test",
-        CredentialManage
-    ),
-    policy_route!(
-        "webhooks",
-        Post,
-        "/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-        CredentialManage
-    ),
     policy_route!(
         "bug_reports",
         Post,
@@ -1338,7 +1307,14 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/host/heartbeat",
         HostCredential
     ),
+    boundary_route!("hosts/routes", Post, "/api/v1/host/windows", HostCredential),
     boundary_route!("hosts/routes", Post, "/api/v1/host/notices", HostCredential),
+    boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/agents/register",
+        HostCredential
+    ),
     boundary_route!(
         "hosts/routes",
         Post,
@@ -1635,24 +1611,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "collections/http",
         Post,
-        "/api/v1/projects/{project_id}/collections/{collection_id}/views",
-        CollectionBuild
-    ),
-    policy_route!(
-        "collections/http",
-        Patch,
-        "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-        CollectionBuild
-    ),
-    policy_route!(
-        "collections/http",
-        Delete,
-        "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-        CollectionBuild
-    ),
-    policy_route!(
-        "collections/http",
-        Post,
         "/api/v1/projects/{project_id}/collections/{collection_id}/records",
         CollectionRecordEdit
     ),
@@ -1768,30 +1726,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "ai/http",
         Post,
         "/api/v1/conversations/{id}/ai/summary",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/views",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/views/{view_id}",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/views/{view_id}",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/views/{view_id}/pin",
         WorkItemView
     ),
     policy_route!(

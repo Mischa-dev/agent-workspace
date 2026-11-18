@@ -634,18 +634,20 @@ fn links_sql(kind: &str) -> Option<&'static str> {
     })
 }
 
-/// Records whose link fields point at a task, page or another record
-/// (AWD-110): read apart
+/// Records (and tasks, whose records share their IDs) whose link fields
+/// point at a task, page or another record (AWD-110): read apart
 /// from `links_sql`, so a thing's stored links and these change on their own.
 /// `$1` is the thing, `$2` its kind.
 const RECORDS_LINKING_SQL: &str = r#"
-    SELECT 'about' AS link, 'incoming' AS direction, 'record' AS other_kind, record.id AS other_id
+    SELECT 'about' AS link, 'incoming' AS direction,
+           CASE WHEN collection.acts_like_task THEN 'task' ELSE 'record' END AS other_kind,
+           record.id AS other_id
     FROM field_definitions definition
+    JOIN collections collection ON collection.id = definition.collection_id
     JOIN collection_records record
       ON record.project_id = definition.project_id
      AND record.collection_id = definition.collection_id
     WHERE definition.field_type = 'link' AND definition.archived_at IS NULL
-      AND definition.collection_id IS NOT NULL
       AND definition.config->>'target' = $2
       AND record.field_values->>definition.id::text = $1::text
       AND record.archived_at IS NULL

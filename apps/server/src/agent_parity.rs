@@ -387,32 +387,6 @@ mod tests {
             "/api/v1/account/api-tokens/{credential_id}/revoke",
             Person("credentials are made and revoked by people"),
         ),
-        (Post, "/api/v1/webhooks", Tool("webhook_create")),
-        (
-            Patch,
-            "/api/v1/webhooks/{webhook_id}",
-            Tool("webhook_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/webhooks/{webhook_id}",
-            Tool("webhook_delete"),
-        ),
-        (
-            Post,
-            "/api/v1/webhooks/{webhook_id}/rotate-secret",
-            Tool("webhook_secret_rotate"),
-        ),
-        (
-            Post,
-            "/api/v1/webhooks/{webhook_id}/test",
-            Tool("webhook_ping_send"),
-        ),
-        (
-            Post,
-            "/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-            Tool("webhook_delivery_retry"),
-        ),
         (
             Post,
             "/api/v1/projects/{project_id}/bug-report-links",
@@ -1036,8 +1010,18 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/host/windows",
+            Plumbing("a host reporting its own accounts' plan windows, with its own credential"),
+        ),
+        (
+            Post,
             "/api/v1/host/notices",
             Plumbing("a host's notice about its agents, with its own credential"),
+        ),
+        (
+            Post,
+            "/api/v1/host/agents/register",
+            Plumbing("a host proposing an agent it made, with its own credential"),
         ),
         (
             Post,
@@ -1280,21 +1264,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views",
-            Tool("collection_write"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            Tool("collection_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/collections/{collection_id}/views/{view_id}",
-            Tool("collection_write"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/collections/{collection_id}/records",
             Tool("record_write"),
         ),
@@ -1392,26 +1361,6 @@ mod tests {
             Post,
             "/api/v1/conversations/{id}/ai/summary",
             Tool("ai_summarize"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/views",
-            Tool("view_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/views/{view_id}",
-            Tool("view_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/views/{view_id}",
-            Tool("view_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/views/{view_id}/pin",
-            Tool("view_update"),
         ),
         (
             Post,

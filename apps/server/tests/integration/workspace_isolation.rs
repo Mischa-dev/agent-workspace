@@ -189,7 +189,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/secrets",
     "/api/v1/projects/{project_id}/task-templates",
     "/api/v1/projects/{project_id}/timeline",
-    "/api/v1/projects/{project_id}/views",
     "/api/v1/projects/{project_id}/automations",
     "/api/v1/projects/{project_id}/bug-report-links",
     "/api/v1/projects/{project_id}/automations/{rule_id}/runs",
@@ -225,8 +224,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/usage/accounts/{account_id}/ready-tasks",
     "/api/v1/usage/accounts/{account_id}/batch",
     "/api/v1/usage/accounts/{account_id}/history",
-    "/api/v1/webhooks",
-    "/api/v1/webhooks/{webhook_id}/deliveries",
     "/api/v1/whiteboard-links",
     "/api/v1/whiteboards",
     "/api/v1/whiteboards/{id}",
@@ -262,6 +259,13 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
         "a form's public page reads it by the link's secret token, not a session; it holds \
          only the form (the collection's name and the asked fields), never records or \
          people; covered in awd110_collection_forms",
+    ),
+    (
+        "/api/v1/file-links/{token}",
+        "a short-lived file link (A2.12) is read by its signed token, not a session; the \
+         token names the account it was made for, which must still be able to read the file \
+         when it is fetched; covered in delivery (a_client_id_comes_back_and_a_file_link_\
+         follows_access), and file_link_get, which makes one, has a case here",
     ),
     (
         "/api/v1/auth/csrf",
@@ -1385,7 +1389,6 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![format!("{}/ai/graph", p(b))],
             vec![],
         ),
-        project_route("/api/v1/projects/{project_id}/views", "/views"),
         project_route("/api/v1/projects/{project_id}/automations", "/automations"),
         project_route(
             "/api/v1/projects/{project_id}/bug-report-links",
@@ -1402,18 +1405,6 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
                 vec![],
             )
         },
-        case(
-            "/api/v1/webhooks",
-            vec!["/api/v1/webhooks".to_owned()],
-            vec![],
-            vec![],
-        ),
-        case(
-            "/api/v1/webhooks/{webhook_id}/deliveries",
-            vec![format!("/api/v1/webhooks/{}/deliveries", a.webhook)],
-            vec![format!("/api/v1/webhooks/{}/deliveries", b.webhook)],
-            vec![],
-        ),
         project_route("/api/v1/projects/{project_id}/timeline", "/timeline"),
         project_route(
             "/api/v1/projects/{project_id}/task-templates",
@@ -2032,6 +2023,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "briefing_get",
     "bug_report_link_list",
     "connection_list",
+    "connection_delivery_list",
     "schedule_list",
     "conversation_list",
     "conversation_open",
@@ -2044,16 +2036,23 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "external_event_poll",
     "file_list",
     "file_read",
+    "file_link_get",
     "history_list",
     "history_show",
     "invite_link_list",
     "job_get",
     "collection_list",
     "collection_describe",
+    "formula_preview",
+    "button_get",
     "record_query",
     "sheet_list",
     "sheet_read",
     "host_list",
+    "account_joinable_list",
+    "agent_offer_list",
+    "agent_action_get",
+    "agent_recipe_list",
     "inbox_list",
     "invitation_list",
     "label_list",
@@ -2066,6 +2065,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "message_draft_list",
     "custom_emoji_list",
     "comment_list",
+    "dashboard_get",
+    "dashboard_list",
     "whiteboard_template_list",
     "milestone_list",
     "module_list",
@@ -2117,8 +2118,6 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "usage_batch",
     "usage_windows",
     "view_list",
-    "webhook_delivery_list",
-    "webhook_list",
     "whiteboard_list",
     "whiteboard_read",
     "whiteboard_render",
@@ -2246,6 +2245,24 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
+            "formula_preview",
+            vec![
+                json!({"collection": a.collection, "formula": "1 + 1"}),
+                json!({"collection": a.collection, "formula": "{Title} & \"!\"", "record": 1}),
+            ],
+            vec![json!({"collection": b.collection, "formula": "1 + 1"})],
+            vec![],
+        ),
+        case(
+            "button_get",
+            vec![json!({"collection": a.collection, "field": a.collection_button})],
+            vec![
+                json!({"collection": b.collection, "field": b.collection_button}),
+                json!({"collection": a.collection, "field": b.collection_button}),
+            ],
+            vec![],
+        ),
+        case(
             "record_query",
             vec![
                 json!({"projectId": "WORK", "collection": "Playtests"}),
@@ -2352,7 +2369,25 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"projectId": b.project})],
             vec![json!({"projectId": a.project, "taskId": b.task.to_string()})],
         ),
-        by_project("view_list"),
+        case(
+            "view_list",
+            vec![json!({"collection": a.collection})],
+            vec![json!({"collection": b.collection})],
+            vec![],
+        ),
+        // T1.32: B's dashboards neither list nor open in A.
+        case(
+            "dashboard_list",
+            vec![json!({"spaceId": a.project})],
+            vec![json!({"spaceId": b.project})],
+            vec![],
+        ),
+        case(
+            "dashboard_get",
+            vec![json!({"dashboard": a.dashboard})],
+            vec![json!({"dashboard": b.dashboard})],
+            vec![],
+        ),
         by_project("automation_list"),
         by_project("bug_report_link_list"),
         case(
@@ -2364,7 +2399,6 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![],
         ),
-        case("webhook_list", vec![json!({})], vec![], vec![]),
         // K2.21: a long call's answer is its caller's alone.
         case(
             "job_get",
@@ -2380,6 +2414,39 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"workspace": a.organization, "includeInactive": true}),
             ],
             vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // A2.18: the agents you could add here, asked of this workspace;
+        // another workspace can't be asked.
+        case(
+            "account_joinable_list",
+            vec![json!({}), json!({"workspace": a.organization})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // A2.19: the offers of the hosts you may use here; another
+        // workspace's aren't listed, and another's action reply isn't read.
+        case(
+            "agent_offer_list",
+            vec![json!({}), json!({"workspace": a.organization})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // A2.17: the same built-in list everywhere, but only asked where
+        // the caller is.
+        case(
+            "agent_recipe_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "agent_action_get",
+            vec![json!({"commandId": a.host_action})],
+            vec![
+                json!({"commandId": b.host_action}),
+                json!({"commandId": b.host_action, "workspace": b.organization}),
+            ],
             vec![],
         ),
         // A1.11: another workspace's hosts are out of reach.
@@ -2433,12 +2500,6 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"whiteboardId": b.whiteboard, "format": "svg"}),
                 json!({"whiteboardId": b.project_whiteboard}),
             ],
-            vec![],
-        ),
-        case(
-            "webhook_delivery_list",
-            vec![json!({"webhookId": a.webhook.to_string()})],
-            vec![json!({"webhookId": b.webhook.to_string()})],
             vec![],
         ),
         by_project("template_list"),
@@ -2831,6 +2892,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"account": b.agent})],
             vec![],
         ),
+        // A2.6: a webhook's delivery log is its account's; B's isn't A's.
+        case(
+            "connection_delivery_list",
+            vec![json!({"connectionId": a.webhook})],
+            vec![json!({"connectionId": b.webhook})],
+            vec![],
+        ),
         case(
             "schedule_list",
             vec![json!({}), json!({"includeFinished": true})],
@@ -2859,6 +2927,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"fileId": b.file.to_string()}),
                 json!({"fileId": b.task_file.to_string()}),
             ],
+            vec![],
+        ),
+        // A2.12: a link to a file only for a file the caller can read.
+        case(
+            "file_link_get",
+            vec![json!({"fileId": a.file.to_string()})],
+            vec![json!({"fileId": b.file.to_string()})],
             vec![],
         ),
         // K3.19: any thing's history by id alone.
@@ -2921,16 +2996,6 @@ async fn check_mcp(
 
     // P0.23: a read-only tool changes nothing. A's rows are digested before
     // and after each tool's calls; only the columns reads may touch differ.
-    // The first read of a project's views makes its built-in ones (until
-    // T1.40 drops saved_views); read them once first, as the web does on
-    // opening a project, so that isn't counted against the first view tool.
-    let (status, body) = get_text(
-        app,
-        &a.browser,
-        &format!("/api/v1/projects/{}/views", a.project),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
     let a_ids = sweep_ids(pool, a.organization).await;
     let a_list = a_ids.iter().cloned().collect::<Vec<_>>();
     // Fingerprints first, so a write landing during the digest is caught

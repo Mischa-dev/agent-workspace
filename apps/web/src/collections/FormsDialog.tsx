@@ -35,7 +35,7 @@ import {
   showToast,
 } from '../ui'
 import type { CollectionBody } from './api'
-import { askableFields, formDraft, formFromDraft, type FormDraft } from './formSettings'
+import { askableFields, dailyLimitProblem, formDraft, formFromDraft, MAX_DAILY_LIMIT, type FormDraft } from './formSettings'
 import '../styles/pages.css'
 
 type Step = { kind: 'list' } | { kind: 'edit'; link: BugReportLink | null } | { kind: 'shared'; name: string; url: string; replaced: boolean }
@@ -241,6 +241,11 @@ function FormEditor({
   })
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    const problem = dailyLimitProblem(draft)
+    if (problem) {
+      setError(problem)
+      return
+    }
     if (draft.name.trim()) save.mutate()
   }
   const toggle = (field: FieldDefinition, asked: boolean) =>
@@ -308,6 +313,16 @@ function FormEditor({
           onChange={(event) => setDraft({ ...draft, thanks: event.target.value })}
           rows={2}
           value={draft.thanks}
+        />
+        <TextField
+          hint="When it takes this many answers in a day, the form pauses and tells you. Turn it on again to take more."
+          inputMode="numeric"
+          label="Answers a day"
+          max={MAX_DAILY_LIMIT}
+          min={1}
+          onChange={(event) => setDraft({ ...draft, dailyLimit: event.target.value })}
+          type="number"
+          value={draft.dailyLimit}
         />
         {error ? <Banner tone="danger">{error}</Banner> : null}
       </div>

@@ -383,19 +383,25 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     .fetch_one(&setup.pool)
     .await
     .expect("high option");
+    let tasks = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM collections WHERE project_id = $1::uuid AND builtin = 'tasks'",
+    )
+    .bind(&work)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("Tasks collection");
     let (status, view) = send(
         app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/views"),
+            &format!("/api/v2/w/{}/ops/view_create", setup.organization_id),
             Some("high-risk-view"),
-            json!({"name": "High risk", "shared": true, "query": {
-                "fieldFilters": json!([{"field": risk, "op": "is", "values": [high]}]).to_string(),
-            }}),
+            json!({"collection": tasks, "name": "High risk", "type": "table", "shared": true,
+                   "config": {"filters": [{"field": risk, "op": "is", "values": [high]}]}}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{view}");
+    assert_eq!(view["outcome"], "ok", "{status} {view}");
     for (arguments, expected) in [
         (json!({"projectId": "WORK", "view": "High risk"}), vec![]),
         (
@@ -510,7 +516,7 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     assert_eq!(status, StatusCode::OK, "{board}");
     for column in board["columns"].as_array().expect("columns") {
         let filter = column["filter"].as_object().expect("filter");
-        assert!(filter.contains_key("groupField"), "{column}");
+        assert!(filter.contains_key("inGroup"), "{column}");
         let query = serde_urlencoded::to_string(
             filter
                 .iter()

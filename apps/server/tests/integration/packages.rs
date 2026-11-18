@@ -1,6 +1,7 @@
 //! M1.8: packages. Exporting a space with collections, a form, an
-//! automation, an outbound webhook, a role and a skill page gives a package
-//! with no token, secret, webhook address, member or form link in it; the
+//! automation, a role and a skill page (and the owner's webhook beside them)
+//! gives a package with no token, secret, webhook address, member or form
+//! link in it; the
 //! same setup exported twice has the same digest; the built-in templates
 //! read as packages that validate.
 
@@ -83,25 +84,21 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
     .fetch_one(pool)
     .await
     .expect("owner");
-    // An outbound webhook whose address carries its secret.
+    // The owner's webhook (a connection with an address) whose address
+    // carries its secret.
     let hook_secret = "T0KENinTheP4thAndQueryXyZ0123456789abcdef";
-    sqlx::query(
-        r#"
-        INSERT INTO webhook_subscriptions (
-            id, organization_id, project_id, owner_actor_id, name, url, event_types
-        ) VALUES ($1, $2, $3, $4, 'Builds out', $5, '{record.created}')
-        "#,
+    let hook = call(
+        "connection_create",
+        json!({
+            "name": "Builds out",
+            "webhookUrl": format!("https://hooks.example.org/services/{hook_secret}?key={hook_secret}"),
+            "reachesAll": false,
+            "subscriptions": [{"kinds": ["record.created"], "spaceIds": [space_id]}],
+            "clientRequestId": "pkg-hook",
+        }),
     )
-    .bind(Uuid::now_v7())
-    .bind(setup.organization_id)
-    .bind(space_id)
-    .bind(owner)
-    .bind(format!(
-        "https://hooks.example.org/services/{hook_secret}?key={hook_secret}"
-    ))
-    .execute(pool)
-    .await
-    .expect("webhook");
+    .await;
+    assert_eq!(hook["outcome"], "ok", "{hook}");
     let role = call(
         "role_write",
         json!({"projectId": "PKG", "name": "Tester", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
@@ -204,7 +201,6 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
         "collection:feedback",
         "form:feedback_form",
         "automation:triage",
-        "automation:builds_out",
         "role:tester",
         "skill:running_a_playtest",
     ] {
@@ -217,11 +213,6 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
         package
             .needs_admin
             .contains(&"form:feedback_form".to_owned())
-    );
-    assert!(
-        package
-            .needs_admin
-            .contains(&"automation:builds_out".to_owned())
     );
     let part = |kind: &str, key: &str| {
         package
@@ -258,9 +249,11 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
         json!(["trigger.collectionId"]),
         "{old_triage}"
     );
-    assert_eq!(
-        part("automation", "builds_out")["webhook"]["host"],
-        "hooks.example.org"
+    // A person's webhook is their own connection, not the space's setup: it
+    // isn't exported at all (A2.6).
+    assert!(
+        !kinds.iter().any(|kind| kind.ends_with(":builds_out")),
+        "{kinds:?}"
     );
 
     // Nothing private, by scanning the whole output.

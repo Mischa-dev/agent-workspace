@@ -13,13 +13,11 @@ impl CoreModule for Module {
     }
 
     fn register(&self, module: &mut Registrar<'_>) {
-        module.routes(crate::webhooks::router);
         module.routes(crate::automations::router);
         module.operations(crate::automations::ops::register_ops);
-        module.operations(crate::webhooks::ops::register_ops);
         module.export(ExportPart {
             name: "automations",
-            describe: "Automation rules and webhooks (no secrets).",
+            describe: "Automation rules (no secrets).",
         });
     }
 }

@@ -651,3 +651,154 @@ button.aw-collection__chiptext:hover,
   margin: 0;
   font: var(--t-ui);
 }
+
+/* A collection as a list (T1.14): one line for each record. */
+.aw-recordlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.aw-recordlist__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.aw-recordlist__heading {
+  margin: var(--space-3) 0 0;
+  color: var(--content-fg-muted);
+  font: var(--t-ui-strong);
+}
+
+.aw-recordlist__lines {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  list-style: none;
+}
+
+.aw-recordlist__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-recordlist__line:last-child {
+  border-bottom: none;
+}
+
+.aw-recordlist__line[aria-current] {
+  background: var(--content-hover);
+}
+
+.aw-recordlist__title {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: inherit;
+  font: var(--t-ui);
+  text-decoration: none;
+}
+
+.aw-recordlist__title:hover .aw-recordlist__name {
+  text-decoration: underline;
+}
+
+.aw-recordlist__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-recordlist__values {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 55%;
+  overflow: hidden;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-recordlist__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .aw-recordlist__line {
+    flex-wrap: wrap;
+    padding-block: var(--space-2);
+  }
+
+  .aw-recordlist__values {
+    max-width: 100%;
+  }
+}
+
+/* A timeline's bars open their record, so they don't grab. */
+.aw-ctimeline__bar {
+  cursor: pointer;
+}
+
+/* A filter group being built (T1.13): its conditions, joined by "or" or "and". */
+.aw-filtergroup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.aw-filtergroup__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-filtergroup__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-filtergroup__join {
+  flex: none;
+  width: 2.5em;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-filtergroup__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: var(--t-ui);
+  text-align: start;
+}
+
+button.aw-filtergroup__text:hover {
+  background: var(--content-hover);
+}
+
+.aw-filtergroup__empty {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}

@@ -64,7 +64,7 @@ export function ReplyStatusList({
               Stop
             </Button>
           ) : null}
-          {CAN_RETRY.has(request.status) ? (
+          {CAN_RETRY.has(request.status) || (request.status === 'pending' && request.unresponsiveAt) ? (
             <Button
               busy={busy?.requestId === request.id && busy.action === 'retry'}
               disabled={busy !== null}

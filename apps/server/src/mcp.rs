@@ -164,6 +164,12 @@ pub struct McpPrincipal {
 }
 
 impl McpPrincipal {
+    /// A host's short-lived credential for one run (A1.12): it reaches the
+    /// run's space only, whatever the agent's own connection reaches.
+    pub fn is_run_credential(&self) -> bool {
+        self.authentication_class == "run_credential"
+    }
+
     /// The caller `access` decides for. An app acting for a person is held
     /// to their delegation limit, which the edge loads and sets
     /// (`ops::mcp::caller_of`); this is the caller without it.
@@ -2283,6 +2289,39 @@ fn workspace_busy_refusal(tool: &str, retry_after_seconds: u64) -> rmcp::model::
     }
 }
 
+/// Whether a hand-written tool is a change a paused account doesn't make
+/// (A2.10): any tool not marked read-only, but giving back work it holds
+/// and marking what it has read.
+fn writes_while_unpaused_only(tool: &str) -> bool {
+    !matches!(
+        tool,
+        "reply_release" | "reply_pass" | "mark_read" | "notification_update"
+    ) && McpServer::tools().get(tool).is_some_and(|tool| {
+        tool.annotations
+            .as_ref()
+            .and_then(|annotations| annotations.read_only_hint)
+            != Some(true)
+    })
+}
+
+/// A paused account's change, not made. Like an operation's paused answer
+/// it isn't an error to retry; in the shape `refusal` uses so it fits the
+/// tool's own results.
+fn paused_answer(tool: &str) -> rmcp::model::CallToolResponse {
+    let message = "Your account is paused here, so this change wasn't made. It can be made again once you're resumed.".to_owned();
+    match refusal(tool, message) {
+        rmcp::model::CallToolResponse::Complete(mut result) => {
+            if let Some(structured) = result.structured_content.as_mut() {
+                structured["retryCategory"] = serde_json::json!("do_not_retry");
+                structured["code"] = serde_json::json!("paused");
+                structured["paused"] = serde_json::json!(true);
+            }
+            rmcp::model::CallToolResponse::Complete(result)
+        }
+        other => other,
+    }
+}
+
 /// Whether a tool shows in the caller's list.
 fn tool_listed(name: &str, reach: PermissionSet) -> bool {
     tool_permissions::reachable(name, reach)
@@ -2462,6 +2501,7 @@ async fn run_tool(
     // in `work_item_commands::lock_membership`, messages in the send
     // pipeline, new projects in `projects::insert_new_project`, operations
     // in the dispatcher).
+    let mut acting_in = None;
     if principal.project_explicit || !principal.account_wide {
         let open = match crate::db::scoped_one(&server.state.pool, async |connection| {
             crate::workspace::lifecycle::ensure_open_for_space(
@@ -2474,6 +2514,7 @@ async fn run_tool(
         .await
         {
             Ok(workspace) => {
+                acting_in = workspace;
                 // H1.1: the workspace's agents and apps share one budget.
                 if let Some(workspace) = workspace
                     && let Err(AppError::RateLimited {
@@ -2502,6 +2543,36 @@ async fn run_tool(
         };
         if !open {
             return Ok(suspended_refusal(&request.name));
+        }
+    }
+    // A2.10: a paused account's changes do nothing, by hand-written tool as
+    // by operation (`ops::dispatch::admit`).
+    if writes_while_unpaused_only(&request.name) {
+        let paused: Result<bool, AppError> =
+            crate::db::scoped_one(&server.state.pool, async |connection| {
+                Ok(match acting_in {
+                    Some(workspace) => {
+                        crate::statuses::is_paused(connection, principal.actor_id, workspace)
+                            .await?
+                    }
+                    // An account-wide call naming no space: paused anywhere is
+                    // paused for it.
+                    None => !crate::statuses::paused_in(connection, principal.actor_id)
+                        .await?
+                        .is_empty(),
+                })
+            })
+            .await;
+        match paused {
+            Ok(false) => {}
+            Ok(true) => return Ok(paused_answer(&request.name)),
+            Err(error) => {
+                tracing::error!(category = error.log_category(), "MCP pause lookup failed");
+                return Ok(refusal(
+                    &request.name,
+                    "Couldn't check your access just now. Try again.".to_owned(),
+                ));
+            }
         }
     }
     let call = McpServer::tools().call(rmcp::handler::server::tool::ToolCallContext::new(
@@ -4539,7 +4610,8 @@ async fn scoped_project(
         // belong to; agents reach the Projects their connection allows.
         // Older Project-scoped grants stay in their Project.
         let may_leave_home = match principal.actor_kind {
-            ActorKind::ExternalAgent => true,
+            // A host's run credential stays in its run's space.
+            ActorKind::ExternalAgent => !principal.is_run_credential(),
             ActorKind::Human => principal.account_wide,
             _ => false,
         };

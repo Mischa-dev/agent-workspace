@@ -227,6 +227,12 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The statuses an operation's own refusal answers with (its `outcome`
+/// says which), rather than the shared error body.
+fn refuses(status: &str) -> bool {
+    matches!(status, "403" | "404" | "409" | "422" | "503")
+}
+
 /// Moves a schema's `$defs` into `components.schemas` and points its
 /// references there. A definition keeps its own name when every tool that
 /// has one defines it the same way (shared message content, a thread's
@@ -274,6 +280,33 @@ fn hoist(tool: &str, schema: &Map<String, Value>, components: &mut Map<String, V
     let mut value = Value::Object(schema);
     rewrite_refs(&mut value, &names);
     value
+}
+
+/// The arguments every operation takes (the workspace, a write's
+/// `clientRequestId`, `preview`) are written once and referenced, so each
+/// new operation adds only what is its own.
+fn share_arguments(input: &mut Value, components: &mut Map<String, Value>) {
+    let Some(properties) = input.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (argument, key) in [
+        ("workspace", "WorkspaceArgument"),
+        ("clientRequestId", "ClientRequestId"),
+        ("preview", "PreviewArgument"),
+    ] {
+        let Some(schema) = properties.get(argument) else {
+            continue;
+        };
+        let shared = components
+            .entry(key.to_owned())
+            .or_insert_with(|| schema.clone());
+        if shared == schema {
+            properties.insert(
+                argument.to_owned(),
+                json!({ "$ref": format!("#/components/schemas/{key}") }),
+            );
+        }
+    }
 }
 
 /// Each tool hoists its own copy of the types it shares with others (a
@@ -327,6 +360,9 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     for branch in branches {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
+            // A paused account's answer (A2.10) is the same for every
+            // operation: shared too.
+            Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
             Some("ok") => continue,
             Some("started") => "Started".to_owned(),
             Some(outcome) => format!("Refusal{}", pascal(outcome)),
@@ -464,7 +500,8 @@ pub(crate) fn document() -> Value {
             .and_then(|annotations| annotations.title.clone())
             .or(tool.title.clone())
             .unwrap_or_else(|| name.replace('_', " "));
-        let input = hoist(&name, &tool.input_schema, &mut components);
+        let mut input = hoist(&name, &tool.input_schema, &mut components);
+        share_arguments(&mut input, &mut components);
         let output = tool
             .output_schema
             .as_ref()
@@ -497,28 +534,29 @@ pub(crate) fn document() -> Value {
         refusals.insert(
             result.clone(),
             json!({
-                "description": "The result. Its `outcome` says whether it worked; on a refusal, \
-                    the status, `outcome` and `message` say why.",
+                // Short: it repeats once per operation. The introduction
+                // says what each status and outcome means.
+                "description": "The result; its `outcome` says how it went.",
                 "content": { "application/json": { "schema": output } },
             }),
         );
         let own = json!({ "$ref": format!("#/components/responses/{result}") });
         responses.insert("200".to_owned(), own.clone());
-        // A refusal (403, 404, 409, 422) is the operation's own result, as
-        // is 503; the statuses every operation shares (401, 413, 429) are
-        // named, and take precedence over the 4XX range.
-        responses.insert("4XX".to_owned(), own.clone());
+        // The refusing statuses (403, 404, 409, 422, 503) share it through
+        // the 4XX and 5XX ranges; the statuses every operation answers the
+        // same way are named, which takes precedence over a range.
         for (status, _) in ERROR_STATUSES {
-            let response = if *status == "503" {
-                own.clone()
-            } else if matches!(*status, "403" | "404" | "409" | "422") {
-                continue;
-            } else {
+            if !refuses(status) {
                 // The same for every operation, so referenced rather than
                 // repeated, which keeps the document small as tools are added.
-                json!({ "$ref": format!("#/components/responses/Error{status}") })
-            };
-            responses.insert((*status).to_owned(), response);
+                responses.insert(
+                    (*status).to_owned(),
+                    json!({ "$ref": format!("#/components/responses/Error{status}") }),
+                );
+            }
+        }
+        for range in ["4XX", "5XX"] {
+            responses.insert(range.to_owned(), own.clone());
         }
         let mut post = json!({
             "operationId": name,
@@ -561,7 +599,7 @@ pub(crate) fn document() -> Value {
             "schemas": components,
             "responses": ERROR_STATUSES
                 .iter()
-                .filter(|(status, _)| !matches!(*status, "403" | "404" | "409" | "422" | "503"))
+                .filter(|(status, _)| !refuses(status))
                 .map(|(status, description)| {
                     (
                         format!("Error{status}"),

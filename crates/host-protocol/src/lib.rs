@@ -317,6 +317,56 @@ pub struct Description {
     pub actions: Vec<HostAction>,
     #[serde(default)]
     pub agents: Vec<DescribedAgent>,
+    /// The provider accounts the host runs on; it reports their plan
+    /// windows on `POST /api/v1/host/windows`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<DescribedAccount>,
+}
+
+/// A provider account a host runs on, by the host's own reference.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct DescribedAccount {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub name: String,
+}
+
+/// `POST /api/v1/host/windows`: the plan windows of described accounts.
+/// A full report: windows an account no longer lists are gone.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsReport {
+    pub accounts: Vec<AccountWindows>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountWindows {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default)]
+    pub windows: Vec<PlanWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<Value>,
+}
+
+/// One plan window: `key` is stable for the account (lowercase letters,
+/// digits and `._-`), `usedPercent` 0 to 100.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanWindow {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub used_percent: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_minutes: Option<i64>,
+    #[serde(default)]
+    pub limit_reached: bool,
 }
 
 /// The three things a host tells the server about one of its agents.
@@ -534,6 +584,16 @@ impl HostClient {
         let response = self
             .request(reqwest::Method::POST, "/api/v1/host/describe")
             .json(description)
+            .send()
+            .await?;
+        Self::read(response).await
+    }
+
+    /// Report the plan windows of accounts this host described.
+    pub async fn report_windows(&self, report: &WindowsReport) -> Result<Value, ClientError> {
+        let response = self
+            .request(reqwest::Method::POST, "/api/v1/host/windows")
+            .json(report)
             .send()
             .await?;
         Self::read(response).await

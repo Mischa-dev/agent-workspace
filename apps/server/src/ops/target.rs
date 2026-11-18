@@ -127,6 +127,27 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = item.project_id \
          WHERE item.id = $1 AND $2::uuid IS NOT NULL",
     ),
+    (
+        "collection",
+        "SELECT project.organization_id, project.id FROM collections collection \
+         JOIN projects project ON project.id = collection.project_id \
+         WHERE collection.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    // A view: shared, or the caller's own (another's personal view is
+    // not found).
+    (
+        "view",
+        "SELECT project.organization_id, project.id FROM collection_views view \
+         JOIN projects project ON project.id = view.project_id \
+         WHERE view.id = $1 AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2)",
+    ),
+    // A dashboard: shared, or the caller's own (anyone else's is not found).
+    (
+        "dashboard",
+        "SELECT dashboard.workspace_id, dashboard.space_id FROM dashboards dashboard \
+         WHERE dashboard.id = $1 \
+           AND (dashboard.owner_actor_id IS NULL OR dashboard.owner_actor_id = $2)",
+    ),
     // Any thing by id alone (K3.19), from the registry: a conversation or
     // anything that follows one (a message, a decision from it, a file in
     // it) only when the viewer may see that conversation. Those are checked
@@ -215,13 +236,6 @@ const KINDS: &[(&str, &str)] = &[
              WHERE membership.project_id = project.id AND membership.actor_id = $2 \
                AND membership.enabled)",
     ),
-    // K2.18: a webhook, for its owner only, in the space it's limited to
-    // or (space NULL) its workspace.
-    (
-        "webhook",
-        "SELECT organization_id, project_id FROM webhook_subscriptions \
-         WHERE id = $1 AND owner_actor_id = $2",
-    ),
     // K2.18: a repository, archived ones too, in its space; the command
     // checks who may see or manage it.
     (
@@ -238,11 +252,22 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = pull.project_id \
          WHERE pull.id = $1 AND pull_request_visible_to(pull.id, $2)",
     ),
+    // A2.12: a file, in its space; who may read it is `files::readable_file`.
+    (
+        "file",
+        "SELECT organization_id, project_id FROM files WHERE id = $1 AND $2::uuid IS NOT NULL",
+    ),
     // A1.8: a request goes by request_visible_to, which holds its
     // conversation's and run's visibility.
     (
         "request",
-        "SELECT request.workspace_id, request.space_id FROM requests request \
+        // A request to let an account in (A2.18) or add an agent a host
+        // made (A2.19) is about the workspace, though it is asked in the
+        // workspace's own space.
+        "SELECT request.workspace_id, \
+                CASE WHEN request.subject_kind IN ('account_join', 'agent_register') THEN NULL \
+                     ELSE request.space_id END \
+         FROM requests request \
          WHERE request.id = $1 AND request_visible_to(request.id, $2)",
     ),
 ];
@@ -351,9 +376,9 @@ fn what_of(kind: &str) -> &'static str {
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",
         "request" => "That request",
-        "webhook" => "That webhook",
         "repository" => "That repository",
         "pull_request" => "That pull request",
+        "file" => "That file",
         _ => "That",
     }
 }

@@ -10,6 +10,8 @@ import {
   boardFields,
   boardValue,
   calendarMonth,
+  recordSpan,
+  timelineWindow,
   groupableFields,
   columnOrder,
   historyValue,
@@ -243,5 +245,26 @@ describe('statuses, dates and system fields (T1.10)', () => {
     const fields = [stage, field('met', 'date', 2), field('tags', 'multiple_choice', 3), field('maker', 'created_by', 4), field('notes', 'long_text', 5)]
     expect(groupableFields(fields).map((entry) => entry.id)).toEqual(['stage', 'met', 'tags', 'maker'])
     expect(boardFields(fields).map((entry) => entry.id)).toEqual(['stage'])
+  })
+})
+
+describe('a collection timeline', () => {
+  it('starts on the Monday of the week before, and runs whole weeks', () => {
+    // 2026-11-18 is a Wednesday.
+    const window = timelineWindow('2026-11-18', 13)
+    expect(window.from).toBe('2026-11-09')
+    expect(window.to).toBe('2027-02-08')
+    expect(window.last - window.first + 1).toBe(91)
+    expect(timelineWindow('2026-11-16').from).toBe('2026-11-09')
+  })
+
+  it('draws a record from its start to its end, a day without one', () => {
+    const record = { values: { start: '2026-11-10', end: '2026-11-12' } }
+    const span = recordSpan(record, 'start', 'end')
+    expect(span && span.end - span.start).toBe(2)
+    const day = recordSpan(record, 'start', null)
+    expect(day && day.end - day.start).toBe(0)
+    expect(recordSpan({ values: { start: '2026-11-10', end: '2026-11-01' } }, 'start', 'end')?.end).toBe(recordSpan(record, 'start', null)?.start)
+    expect(recordSpan({ values: {} }, 'start', 'end')).toBeNull()
   })
 })

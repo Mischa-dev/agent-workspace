@@ -27,5 +27,7 @@ impl CoreModule for Module {
         module.operations(crate::workspace::ops::register_ops);
         module.operations(crate::workspace::reads::register_ops);
         module.operations(crate::ops::long::register_ops);
+        module.operations(crate::files::link::register_ops);
+        module.routes(crate::files::link::router);
     }
 }
