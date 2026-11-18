@@ -955,7 +955,11 @@ pub async fn ensure_default_workflow(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
 ) -> Result<bool, AppError> {
-    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+    // NO KEY UPDATE: it serializes provisioning a space's workflow, but
+    // doesn't block (or deadlock with) a row pointing at the space, such as
+    // a follow written in another transaction, whose key check takes KEY
+    // SHARE.
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR NO KEY UPDATE")
         .bind(project_id)
         .fetch_optional(&mut **transaction)
         .await?
