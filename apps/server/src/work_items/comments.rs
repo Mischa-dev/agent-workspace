@@ -458,6 +458,7 @@ pub(crate) fn browser_message_actor(principal: &AuthenticatedActor) -> MessageCo
         actor_kind: principal.actor_kind.clone(),
         mcp_credential: None,
         via_grant_id: None,
+        run_id: None,
     }
 }
 
