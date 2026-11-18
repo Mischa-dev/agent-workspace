@@ -96,24 +96,36 @@ async fn idle(pool: &PgPool) -> (i64, i64, String) {
 /// for at most three minutes: nothing staged, every consumer of the log
 /// that is moving at its head, and no job due or running. Catching up on
 /// a backlog isn't idle work; anything still running after it is.
+/// Waits until nothing is staged, no consumer that ran in the last minute
+/// is behind the head, and no job is running or due; then a few seconds
+/// more. Fails, naming what is still busy, if that takes over ten minutes:
+/// an idle measurement taken while work is still catching up says nothing.
 async fn settle(pool: &PgPool) {
-    for _ in 0..360 {
-        let busy = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM event_staging) \
-                 OR EXISTS (SELECT 1 FROM event_consumers \
-                            WHERE position < (SELECT next_position - 1 FROM event_position_counter) \
-                              AND updated_at > now() - interval '1 minute') \
-                 OR EXISTS (SELECT 1 FROM background_jobs \
-                            WHERE state = 'running' OR (state = 'queued' AND run_at <= now()))",
+    let busy_now = || async {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT NULLIF(concat_ws('; ', \
+                 (SELECT 'staged ' || count(*) FROM event_staging HAVING count(*) > 0), \
+                 (SELECT 'behind: ' || string_agg(name || ' by ' || \
+                         ((SELECT next_position - 1 FROM event_position_counter) - position), ', ') \
+                  FROM event_consumers \
+                  WHERE position < (SELECT next_position - 1 FROM event_position_counter) \
+                    AND updated_at > now() - interval '1 minute'), \
+                 (SELECT 'jobs: ' || string_agg(kind || ' ' || state, ', ') FROM background_jobs \
+                  WHERE state = 'running' OR (state = 'queued' AND run_at <= now()))), '')",
         )
         .fetch_one(pool)
         .await
-        .expect("busy");
-        if !busy {
+        .expect("busy")
+    };
+    let mut busy = None;
+    for _ in 0..1200 {
+        busy = busy_now().await;
+        if busy.is_none() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+    assert!(busy.is_none(), "never settled: {busy:?}");
     tokio::time::sleep(Duration::from_secs(3)).await;
 }
 
