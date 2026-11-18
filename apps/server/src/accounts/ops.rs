@@ -16,6 +16,7 @@ use crate::{
 
 pub fn register_ops(registry: &mut Registry) {
     registry.add::<AgentManagersSet>();
+    registry.add::<AccountOwnerTake>();
     super::join::register_ops(registry);
 }
 
@@ -209,5 +210,128 @@ impl Operation for AgentManagersSet {
             json!({ "added": added, "removed": removed }),
         );
         Ok(AgentManagersView { agent, managers })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// account_owner_take (K1.33, ruling R39)
+
+/// Take ownership of an agent or app account whose owning workspace is
+/// being deleted, so it isn't retired with it.
+pub struct AccountOwnerTake;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountOwnerTakeInput {
+    /// The agent or app account: its id or a link to it. It must be in this
+    /// workspace too.
+    pub account: IdRef,
+}
+
+impl Targeted for AccountOwnerTakeInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountOwnerView {
+    #[schemars(with = "String")]
+    pub account: Uuid,
+    /// Its owner now: you.
+    #[schemars(with = "String")]
+    pub owner_account: Uuid,
+}
+
+impl Operation for AccountOwnerTake {
+    const NAME: &'static str = "account_owner_take";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "agents";
+    const PERMISSION: Option<Perm> = Some(Perm::AgentsManage);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Take ownership of an agent";
+    const DESCRIPTION: &'static str = "Make an agent or app account your own when the workspace \
+        that owns it is being deleted, so it keeps working, with its memberships elsewhere, \
+        instead of being retired. You must manage it, and it must be in this workspace too.";
+    const EMITS: &'static [&'static str] = &["account.managers_changed"];
+
+    type Input = AccountOwnerTakeInput;
+    type Output = AccountOwnerView;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: AccountOwnerTakeInput,
+    ) -> Result<AccountOwnerView, OpError> {
+        let account = input.account.id();
+        let workspace_id = call.ctx.workspace_id;
+        let caller = call.ctx.caller.clone();
+        let tx = call.tx().await?;
+        // In this workspace, and owned by a workspace being deleted. The
+        // account row is locked so a retirement can't cross the take.
+        let owner = sqlx::query_as::<_, (Option<Uuid>, Option<String>)>(
+            "SELECT account.owner_workspace_id, owning.lifecycle \
+             FROM actors account \
+             JOIN organization_memberships membership \
+               ON membership.actor_id = account.id AND membership.organization_id = $2 \
+             LEFT JOIN organizations owning ON owning.id = account.owner_workspace_id \
+             WHERE account.id = $1 \
+             FOR UPDATE OF account",
+        )
+        .bind(account)
+        .bind(workspace_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?;
+        let Some((owning, lifecycle)) = owner else {
+            return Err(OpError::not_found("That agent"));
+        };
+        match access::may_manage_account(tx, &caller, account).await? {
+            Ok(_) => {}
+            Err(access::Denied::NotFound) => return Err(OpError::not_found("That agent")),
+            Err(_) => {
+                return Err(OpError::invalid(
+                    "account",
+                    "You can't manage that agent. Ask its owner or one of its managers.",
+                ));
+            }
+        }
+        if owning.is_none() || lifecycle.as_deref() != Some("deleting") {
+            return Err(OpError::invalid(
+                "account",
+                "Only an agent whose owning workspace is being deleted can be taken over.",
+            ));
+        }
+        sqlx::query(
+            "UPDATE actors SET owner_account_id = $2, owner_workspace_id = NULL, \
+                 updated_at = now() \
+             WHERE id = $1",
+        )
+        .bind(account)
+        .bind(caller.account_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?;
+        let mut event = crate::events::NewEvent::thing(
+            &crate::events::catalog::ACCOUNT_MANAGERS_CHANGED,
+            Uuid::nil(),
+            "account",
+            account,
+        )
+        .workspace(workspace_id)
+        .actor(caller.account_id)
+        .audience(crate::events::Audience::Workspace)
+        .payload(json!({ "owner": "account" }));
+        event.space_id = None;
+        crate::events::emit(tx, event).await?;
+        call.audit_target(
+            "account",
+            account,
+            json!({ "ownerWorkspace": owning, "ownerAccount": caller.account_id }),
+        );
+        Ok(AccountOwnerView {
+            account,
+            owner_account: caller.account_id,
+        })
     }
 }

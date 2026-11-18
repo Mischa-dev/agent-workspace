@@ -77,6 +77,9 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "resume",
             // A host's published action runs (A2.19).
             "run",
+            // Someone makes their own what another owned, such as an agent
+            // whose owning workspace is being deleted (K1.33).
+            "take",
             // Someone joins or leaves a space or a workspace, or is added or
             // taken out (K4.8, A2.18).
             "add",

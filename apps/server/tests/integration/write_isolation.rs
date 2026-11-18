@@ -455,6 +455,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "account_workspace_add",
     "agent_create",
     "agent_managers_set",
+    "account_owner_take",
     "agent_action_run",
     "agent_offer_start",
     "agent_register_decide",
@@ -3168,6 +3169,7 @@ async fn one_workspace_never_writes_to_another() {
         }
     }
     for case in &mcp {
+        fresh_call_budget(pool).await;
         for (arguments, expect) in &case.foreign {
             check_foreign_mcp(
                 app,
@@ -3197,6 +3199,7 @@ async fn one_workspace_never_writes_to_another() {
     }
     for last in [false, true] {
         for case in mcp.iter().filter(|case| case.last == last) {
+            fresh_call_budget(pool).await;
             check_own_mcp(app, pool, &mcp_callers, case, &b_ids, &mut report).await;
         }
     }
@@ -6016,6 +6019,16 @@ async fn check_foreign_mcp(
     }
 }
 
+/// Each token may make 600 MCP calls a minute (and each workspace 3,000),
+/// and this test makes more than that with the same few: it checks
+/// isolation, not load, so each case starts with fresh budgets.
+async fn fresh_call_budget(pool: &PgPool) {
+    sqlx::query("DELETE FROM rate_limit_counters")
+        .execute(pool)
+        .await
+        .expect("fresh call budget");
+}
+
 async fn check_own_mcp(
     app: &axum::Router,
     pool: &PgPool,
@@ -6196,6 +6209,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
         ),
+        // K1.33: B's agent isn't in A to take.
+        mcp_case(
+            "account_owner_take",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        )
+        .without_own("only while the owning workspace is being deleted; workspace_lifecycle.rs takes one"),
         // K1.32: sharing one page. B's page isn't A's to share, and B's
         // people can't be shared with in A.
         mcp_case(

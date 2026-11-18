@@ -1243,11 +1243,12 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
 
     // A2.10: a member who doesn't manage rook can't pause or resume it.
     // A2.18: nor add it to a workspace (she manages no agent and may not
-    // invite).
+    // invite). K1.33: nor take it over.
     for (name, key) in [
         ("agent_pause", "lena-pause"),
         ("agent_resume", "lena-resume"),
         ("account_workspace_add", "lena-add"),
+        ("account_owner_take", "lena-take"),
     ] {
         let (status, body) = send(
             &world.app,

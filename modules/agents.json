@@ -13,6 +13,7 @@
     "agent_list": "query",
     "agent_create": "create",
     "agent_managers_set": "change",
+    "account_owner_take": "change",
     "agent_ref_set": "change",
     "agent_ref_update": "change",
     "agent_ref_decide": "change",

@@ -294,6 +294,10 @@ export type AccountJoinableListInput = Record<string, never>
 
 export type AccountJoinableListOutput = { accounts: JoinableAccount[] }
 
+export type AccountOwnerTakeInput = { account: string }
+
+export type AccountOwnerTakeOutput = { account: string; ownerAccount: string }
+
 export type AccountWorkspaceAddInput = { account: string; handle?: string | null; roleId?: string | null }
 
 export type AccountWorkspaceAddOutput = { accountId: string; requestId?: string | null; spaceId?: string | null; status: string }
@@ -994,6 +998,7 @@ export type Operations = {
   account_block_list: { input: AccountBlockListInput; output: AccountBlockListOutput }
   account_block_set: { input: AccountBlockSetInput; output: AccountBlockSetOutput }
   account_joinable_list: { input: AccountJoinableListInput; output: AccountJoinableListOutput }
+  account_owner_take: { input: AccountOwnerTakeInput; output: AccountOwnerTakeOutput }
   account_workspace_add: { input: AccountWorkspaceAddInput; output: AccountWorkspaceAddOutput }
   agent_action_get: { input: AgentActionGetInput; output: AgentActionGetOutput }
   agent_action_run: { input: AgentActionRunInput; output: AgentActionRunOutput }

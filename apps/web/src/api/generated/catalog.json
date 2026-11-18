@@ -47,6 +47,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "account.managers_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "agents",
+    "name": "account_owner_take",
+    "permission": "agents.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Take ownership of an agent"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "project.membership.updated",
       "request.raised"
     ],
