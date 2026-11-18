@@ -471,7 +471,7 @@ async fn limits_for(
         "SELECT scope_kind, scope_id, period, soft_limit, hard_limit FROM spend_limits \
          WHERE workspace_id = $1 AND meter = $2 AND NOT per_account \
            AND period IN ('day', 'month') \
-           AND ((scope_kind = 'workspace' AND scope_id = $1) \
+           AND ((scope_kind = $6 AND scope_id = $1) \
              OR (scope_kind = 'account' AND scope_id = $3) \
              OR (scope_kind = 'space' AND scope_id = $4) \
              OR (scope_kind = 'conversation' AND scope_id = $5))",
@@ -481,6 +481,7 @@ async fn limits_for(
     .bind(ask.account_id)
     .bind(ask.space_id)
     .bind(ask.conversation_id)
+    .bind(Scope::Workspace.kind())
     .fetch_all(&mut *connection)
     .await?;
     for (kind, id, period, soft, hard) in rows {
@@ -1010,11 +1011,12 @@ pub async fn usage_for(
     let (month, resets) = Period::Month.bounds(Utc::now());
     let counters = sqlx::query_as::<_, (String, i64)>(
         "SELECT meter, quantity FROM usage_counters WHERE workspace_id = $1 \
-         AND period = 'month' AND period_start = $2 AND scope_kind = 'workspace' \
+         AND period = 'month' AND period_start = $2 AND scope_kind = $3 \
          AND scope_id = $1",
     )
     .bind(workspace)
     .bind(month)
+    .bind(Scope::Workspace.kind())
     .fetch_all(&mut *connection)
     .await?
     .into_iter()

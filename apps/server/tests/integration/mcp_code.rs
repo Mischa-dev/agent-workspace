@@ -76,18 +76,7 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
         ),
     ]))
     .expect("configuration");
-    if version != i64::MAX {
-        // Today's workspace creation writes tables an older schema doesn't
-        // have yet (plans, H1.25), so the demo workspace is made in the
-        // shape of the schema this database was held at; the seed adopts it.
-        sqlx::query(
-            "INSERT INTO organizations (id, name, slug) VALUES ($1, 'Demo Workspace', 'demo-workspace')",
-        )
-        .bind(Uuid::now_v7())
-        .execute(&pool)
-        .await
-        .expect("old workspace");
-    }
+    crate::a1_runs_record::demo_workspace_for_an_older_schema(&pool).await;
     let seed = dev_seed(&pool, &config).await.expect("seed");
     // The owner's password is for signing in, which an older schema doesn't
     // get (below); bootstrapping also ends first-run setup (H1.14), whose
