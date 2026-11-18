@@ -393,6 +393,10 @@ struct CreateWorkItemRequest {
     /// in this project the creator can see).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_message_id: Option<Uuid>,
+    /// C2.20: with a source message, also say so in its conversation ("Lena
+    /// made a message here into a task").
+    #[serde(default)]
+    say_so: bool,
     /// Custom field values by field ID or name (AWD-89).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     field_values: Option<serde_json::Map<String, serde_json::Value>>,
@@ -2588,6 +2592,26 @@ async fn create_work_item(
                 .rows_affected();
                 if linked == 0 {
                     return Err(AppError::Validation("sourceMessageId"));
+                }
+                if request.say_so {
+                    // visibility: the message was checked with conversation_visible_to just above.
+                    let conversation = sqlx::query_scalar::<_, Uuid>(
+                        "SELECT conversation_id FROM messages WHERE id = $1 -- visibility: checked just above",
+                    )
+                    .bind(message_id)
+                    .fetch_one(&mut *transaction)
+                    .await?;
+                    crate::conversations::system_entries::post(
+                        &mut transaction,
+                        conversation,
+                        &crate::conversations::system_entries::SystemEvent::MadeInto {
+                            actor_id: principal.actor_id,
+                            thing_kind: "task".to_owned(),
+                            thing_id: work_item_id,
+                            message_id: Some(message_id),
+                        },
+                    )
+                    .await?;
                 }
             }
             let row = fetch_work_item_in_transaction(
