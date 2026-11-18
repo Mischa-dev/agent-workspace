@@ -1924,6 +1924,36 @@
     "title": "Set sidebar section"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "spend_limit_list",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "List spend limits"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "workspace.spend_limits_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "spend_limit_set",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Set a spend limit"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

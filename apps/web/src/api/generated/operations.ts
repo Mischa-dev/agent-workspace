@@ -140,6 +140,8 @@ export type LastTest = { at: string; error?: string | null; ok: boolean; status?
 
 export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
 
+export type LimitableMeter = { id: string; name: string; unit: string }
+
 export type LinkArgument = { targetId: string; targetKind: string }
 
 export type LinkView = { key?: string | null; projectId: string; projectName: string; targetId: string; targetKind: string; title: string; url: string }
@@ -243,6 +245,8 @@ export type SidebarItem = { conversationId: string; kind: string; lastMessageAt?
 export type SidebarSection = { collapsed: boolean; id: string; items: SidebarItem[]; kind: string; name: string; position: number; show: string; sort: string; version: number }
 
 export type SortWrite = { direction?: Direction; field: string }
+
+export type SpendLimitView = { hardLimit?: number | null; id: string; meter: string; meterName: string; perAccount: boolean; period: string; scope: string; scopeId?: string | null; scopeName: string; softLimit?: number | null; unit: string; used?: number | null; version: number }
 
 export type StatusView = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
 
@@ -780,6 +784,14 @@ export type SidebarSectionSetInput = { collapsed?: boolean | null; delete?: bool
 
 export type SidebarSectionSetOutput = { sections: SidebarSection[]; workspaceSpaceId?: string | null }
 
+export type SpendLimitListInput = Record<string, never>
+
+export type SpendLimitListOutput = { limits: SpendLimitView[]; meters: LimitableMeter[] }
+
+export type SpendLimitSetInput = { hardLimit?: number | null; meter: string; perAccount?: boolean | null; period: string; remove?: boolean | null; scope: string; scopeId?: string | null; softLimit?: number | null }
+
+export type SpendLimitSetOutput = { limit?: SpendLimitView | null }
+
 export type StatusDeleteInput = { account?: string | null; workspaceOnly?: boolean }
 
 export type StatusDeleteOutput = { cleared: boolean }
@@ -1047,6 +1059,8 @@ export type Operations = {
   sidebar_item_move: { input: SidebarItemMoveInput; output: SidebarItemMoveOutput }
   sidebar_list: { input: SidebarListInput; output: SidebarListOutput }
   sidebar_section_set: { input: SidebarSectionSetInput; output: SidebarSectionSetOutput }
+  spend_limit_list: { input: SpendLimitListInput; output: SpendLimitListOutput }
+  spend_limit_set: { input: SpendLimitSetInput; output: SpendLimitSetOutput }
   status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
   status_list: { input: StatusListInput; output: StatusListOutput }
   status_set: { input: StatusSetInput; output: StatusSetOutput }

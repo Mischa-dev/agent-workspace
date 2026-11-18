@@ -5,6 +5,7 @@ import type { MeterUsage } from '../../api/generated/operations'
 import { formatBytes } from '../../files/model'
 import { EmptyState, ErrorState, ListSkeleton, PageHeader, StatusChip, formatDateTime } from '../../ui'
 import type { SettingsPageProps } from '../types'
+import { SpendLimits } from './SpendLimits'
 import './meters.css'
 
 // H1.25: the workspace's plan and what it has used, meter by meter. Nothing
@@ -89,6 +90,7 @@ export default function UsagePage({ workspace }: SettingsPageProps) {
           </ul>
         </section>
       )}
+      <SpendLimits workspaceId={workspace.id} />
     </>
   )
 }

@@ -112,6 +112,7 @@ impl Group {
             kind::RUN_COMPLETED | kind::RUN_FAILED => Self::Runs,
             kind::ASSIGNED | kind::TASK_CHANGED => Self::Tasks,
             kind::CHECKS_FAILED | kind::REVIEW_REQUESTED => Self::PullRequests,
+            kind::SPEND_LIMIT => Self::Usage,
             other if alerts::kind::ALL.contains(&other) => Self::Usage,
             _ => Self::Other,
         }

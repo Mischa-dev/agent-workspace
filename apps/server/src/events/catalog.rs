@@ -583,6 +583,12 @@ pub static WORKSPACE_FILE_STORE_CHANGED: EventType = fact(
     None,
     "The workspace's own file bucket was set or stopped",
 );
+pub static WORKSPACE_SPEND_LIMITS_CHANGED: EventType = fact(
+    "workspace.spend_limits_changed",
+    "workspace",
+    None,
+    "A spend limit was set, changed or removed",
+);
 pub static WORKSPACE_TRANSFER_CHANGED: EventType = fact(
     "workspace.transfer_changed",
     "workspace",
@@ -745,6 +751,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &FILE_REMOVED,
         &FILE_UPLOAD_STARTED,
         &WORKSPACE_FILE_STORE_CHANGED,
+        &WORKSPACE_SPEND_LIMITS_CHANGED,
         &WORKSPACE_TRANSFER_CHANGED,
         &ACCOUNT_STATUS_CHANGED,
         &ACCOUNT_PROFILE_CHANGED,

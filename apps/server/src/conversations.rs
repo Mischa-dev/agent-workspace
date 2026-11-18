@@ -1966,6 +1966,17 @@ pub(crate) async fn append_message_command_with(
     };
 
     let message_id = Uuid::now_v7();
+    // H1.27: a spend limit on messages (the workspace, the sender, the
+    // space, the conversation or each account in it) refuses here; a
+    // channel's limit covers its threads.
+    crate::metering::admit_message(
+        &mut transaction,
+        conversation.project_id,
+        conversation.parent_channel_id.unwrap_or(conversation.id),
+        actor.actor_id,
+        message_id,
+    )
+    .await?;
     let notify_everyone =
         may_notify_everyone(&mut *transaction, actor.actor_id, conversation.project_id).await?;
     sqlx::query(

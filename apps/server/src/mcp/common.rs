@@ -66,6 +66,14 @@ pub(super) enum ToolResult<T> {
     TemporarilyUnavailable {
         message: String,
     },
+    /// A limit the workspace set, or its plan's, refused it (H1.27).
+    LimitReached {
+        message: String,
+        /// For the operation that answers with it; a tool says the message.
+        #[serde(skip)]
+        #[schemars(skip)]
+        refusal: Box<crate::metering::LimitRefusal>,
+    },
 }
 
 impl<T> ToolResult<T> {
@@ -141,6 +149,10 @@ impl<T> ToolResult<T> {
             }
             AppError::PayloadTooLarge => Self::invalid("text", "That's too long."),
             // H1.24: refused where the write lands, as `run_tool` refuses.
+            AppError::LimitReached(refusal) => Self::LimitReached {
+                message: refusal.message.clone(),
+                refusal,
+            },
             AppError::WorkspaceSuspended => Self::PermissionDenied {
                 message: "This workspace is suspended or being deleted, so it can't be used. \
                           Its owners can see why in its settings."

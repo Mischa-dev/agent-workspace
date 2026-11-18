@@ -2161,6 +2161,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "status_list",
     "skill_get",
     "skill_list",
+    "spend_limit_list",
     "task_list",
     "task_open",
     "task_ready_list",
@@ -2378,6 +2379,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         // H1.25: B's usage never shows in A.
         case(
             "workspace_usage_get",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // H1.27: B's spend limits never show in A.
+        case(
+            "spend_limit_list",
             vec![json!({})],
             vec![json!({"workspace": b.organization})],
             vec![],

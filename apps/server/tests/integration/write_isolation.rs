@@ -544,6 +544,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_upload_finish",
     "workspace_store_set",
     "workspace_store_revoke",
+    "spend_limit_set",
     "workspace_export_start",
     "label_write",
     "layout_preset_write",
@@ -7388,6 +7389,22 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "workspace_store_revoke",
             json!({}),
             vec![json!({"workspace": b.organization})],
+        ),
+        // H1.27: a spend limit is set in the caller's workspace only, and
+        // never on B's account, space or conversation.
+        mcp_case(
+            "spend_limit_set",
+            json!({"scope": "workspace", "meter": "messages", "period": "day", "hardLimit": 1000}),
+            vec![
+                json!({"workspace": b.organization, "scope": "workspace", "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+                json!({"scope": "account", "scopeId": b.agent, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+                json!({"scope": "space", "scopeId": b.project, "meter": "messages",
+                       "period": "day", "hardLimit": 1}),
+                json!({"scope": "conversation", "scopeId": b.channel, "meter": "messages",
+                       "period": "minute", "perAccount": true, "hardLimit": 1}),
+            ],
         ),
         // H1.9: an export starts in the caller's own workspace only.
         mcp_case(

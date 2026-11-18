@@ -218,6 +218,10 @@ impl<T> BatchResult<T> {
                     retry_category,
                 },
                 ToolResult::Conflict { message } => Self::Conflict { message },
+                ToolResult::LimitReached { message, .. } => Self::PermissionDenied {
+                    message,
+                    retry_category: Some("do_not_retry".to_owned()),
+                },
             },
         }
     }

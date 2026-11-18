@@ -148,6 +148,7 @@ mod search_kinds;
 mod server_operators;
 mod settings_accounts;
 mod spaces;
+mod spend_limits;
 mod startup_lease;
 mod statuses;
 mod support;

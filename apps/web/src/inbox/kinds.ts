@@ -15,6 +15,7 @@ export const KIND_ICON: Record<string, IconName> = {
   reminder: 'clock',
   scheduled_send_failed: 'circle-alert',
   form_paused: 'circle-alert',
+  spend_limit: 'activity',
   assigned: 'work',
   request_raised: 'circle-help',
   request_answered: 'circle-check',

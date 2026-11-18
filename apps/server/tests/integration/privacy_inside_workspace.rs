@@ -2994,3 +2994,50 @@ async fn channel_writes_keep_to_private_channels() {
 
     world.finish().await;
 }
+
+/// H1.27: only someone who may manage settings lists or sets spend limits,
+/// and never on a direct conversation they aren't in.
+#[tokio::test]
+async fn spend_limits_need_settings_manage_and_keep_to_what_the_setter_sees() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("lena", "member")
+        .dm("ana", "lena")
+        .build("privacy_spend_limits")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let lena = &world.people["lena"];
+    for (op, body) in [
+        ("spend_limit_list", json!({})),
+        (
+            "spend_limit_set",
+            json!({"scope": "workspace", "meter": "messages", "period": "day", "hardLimit": 5}),
+        ),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser
+                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    let secret = world.conversations["ana+lena"].clone();
+    let (status, refused) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("spend_limit_set"),
+            Some("owner-secret-limit"),
+            json!({"scope": "conversation", "scopeId": secret, "meter": "messages",
+                   "period": "minute", "perAccount": true, "hardLimit": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{status} {refused}");
+    world.finish().await;
+}

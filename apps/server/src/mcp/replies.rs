@@ -136,6 +136,13 @@ pub(super) enum ReplyToolResult<T> {
     TemporarilyUnavailable {
         retry_category: String,
     },
+    /// A limit the workspace set, or its plan's, refused it (H1.27).
+    LimitReached {
+        message: String,
+        #[serde(skip)]
+        #[schemars(skip)]
+        refusal: Box<crate::metering::LimitRefusal>,
+    },
 }
 
 impl<T> ReplyToolResult<T> {
@@ -734,6 +741,10 @@ pub(super) async fn reply_send(
             },
         },
         Err(AppError::NotFound(_)) => ReplyToolResult::from_failure(ReadFailure::NotFound),
+        Err(AppError::LimitReached(refusal)) => ReplyToolResult::LimitReached {
+            message: refusal.message.clone(),
+            refusal,
+        },
         Err(AppError::Validation("attachments")) => ReplyToolResult::invalid("attachmentIds"),
         Err(AppError::Validation(_) | AppError::Invalid(_)) => ReplyToolResult::invalid("text"),
         Err(error) => {

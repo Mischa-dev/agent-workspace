@@ -103,6 +103,9 @@ pub mod kind {
     pub const THING_UPDATE: &str = "thing_update";
     /// T1.29: a public form you made reached its daily limit and paused.
     pub const FORM_PAUSED: &str = "form_paused";
+    /// H1.27: a spend limit the workspace set is near or reached, for whoever
+    /// manages its settings (and the account a limit is on).
+    pub const SPEND_LIMIT: &str = "spend_limit";
 
     /// Kinds that ask something of you (C2.4): someone mentioned or
     /// messaged you, gave you a task or a review, a request or a waiting run
@@ -123,6 +126,7 @@ pub mod kind {
         REMINDER,
         CONNECTION_PROBLEM,
         BUDGET_WARNING,
+        SPEND_LIMIT,
     ];
 }
 
@@ -2355,6 +2359,8 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
                     )
                 }),
         ),
+        // Its words come from the limit's numbers, not stored text (rule 10).
+        kind::SPEND_LIMIT => crate::metering::notice_words(&row.detail),
         other => (
             row.detail
                 .get("title")

@@ -234,7 +234,14 @@ pub(super) async fn run<O: Operation>(
 ) -> Answer {
     match pipeline::<O>(state, request, input).await {
         Ok(answer) => answer,
-        Err(error) => Answer::error(&error),
+        Err(error) => {
+            // H1.27: a refusal rolled the work back; its notice is given
+            // on its own.
+            if let OpError::LimitReached { refusal } = &error {
+                crate::metering::notice_refusal(&state.pool, refusal).await;
+            }
+            Answer::error(&error)
+        }
     }
 }
 
