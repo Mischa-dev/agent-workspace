@@ -3103,25 +3103,25 @@ impl McpServer {
     }
 }
 
-#[tool_handler(router = Self::tools())]
-impl ServerHandler for McpServer {
-    fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .enable_prompts()
-                .build(),
-        )
-        .with_server_info(Implementation::new("agent-workspace", "0.7.0"))
-        .with_instructions(SERVER_INSTRUCTIONS)
+/// The scope a tool call runs in. The MCP transport serves each session on
+/// its own task, so the request's scope doesn't reach the handler; the
+/// caller's account, carried with the request, does.
+fn tool_scope(context: &RequestContext<RoleServer>) -> crate::tenancy::Tenancy {
+    match context_principal(context) {
+        Some(principal) => crate::tenancy::Tenancy::Member {
+            account: principal.actor_id,
+            workspaces: None,
+        },
+        None => crate::tenancy::Tenancy::Anonymous,
     }
+}
 
+impl McpServer {
     /// The tools the caller's roles let them use (AWD-74): an agent sees
     /// only what it can call. The list differs per caller, so it's cached
     /// only by them.
-    async fn list_tools(
+    async fn list_tools_here(
         &self,
-        _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut tools = Self::tools().list_all();
@@ -3165,13 +3165,40 @@ impl ServerHandler for McpServer {
         .with_ttl_ms(LIST_TTL_MS)
         .with_cache_scope(CacheScope::Private))
     }
+}
+
+#[tool_handler(router = Self::tools())]
+impl ServerHandler for McpServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
+        )
+        .with_server_info(Implementation::new("agent-workspace", "0.7.0"))
+        .with_instructions(SERVER_INSTRUCTIONS)
+    }
+
+    /// The tools the caller's roles let them use (AWD-74): an agent sees
+    /// only what it can call. The list differs per caller, so it's cached
+    /// only by them.
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let scope = tool_scope(&context);
+        crate::tenancy::scoped(scope, self.list_tools_here(context)).await
+    }
 
     async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
-        run_tool(self, request, context).await
+        let scope = tool_scope(&context);
+        crate::tenancy::scoped(scope, run_tool(self, request, context)).await
     }
 
     async fn list_prompts(
@@ -4403,9 +4430,12 @@ async fn log_refused_bearer(state: &AppState, headers: &HeaderMap) {
         return;
     };
     let reason = if token.starts_with("aw_oauth_") {
-        oauth::rejected_access_token_reason(state, token)
-            .await
-            .unwrap_or("could not be checked")
+        crate::tenancy::system(
+            "auth.credential",
+            oauth::rejected_access_token_reason(state, token),
+        )
+        .await
+        .unwrap_or("could not be checked")
     } else {
         "not a current credential"
     };
@@ -4438,7 +4468,24 @@ fn unauthorized_response(state: &AppState, had_token: bool) -> Response {
     response
 }
 
+/// The account a request's bearer credential names, if it still may use
+/// it. The credential is looked up before its account is known, so the
+/// lookup runs server-wide (`auth.credential`): the row its digest names
+/// says whose it is, and the lookup checks that account's standing. The
+/// rest of the request then runs in that account's scope.
 pub(crate) async fn resolve_bearer_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<McpPrincipal>, AppError> {
+    let principal =
+        crate::tenancy::system("auth.credential", bearer_principal(state, headers)).await?;
+    if let Some(principal) = &principal {
+        crate::tenancy::signed_in(principal.actor_id);
+    }
+    Ok(principal)
+}
+
+async fn bearer_principal(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<McpPrincipal>, AppError> {

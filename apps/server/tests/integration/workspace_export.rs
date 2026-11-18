@@ -44,7 +44,7 @@ async fn an_export_holds_the_workspace_and_nothing_it_must_not() {
         .expect("transfer id")
         .parse::<Uuid>()
         .expect("uuid");
-    transfer::run_export(&fixture.state, id)
+    crate::support::run_export(&fixture.state, id)
         .await
         .expect("export runs");
 

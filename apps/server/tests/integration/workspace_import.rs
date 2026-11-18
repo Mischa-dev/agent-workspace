@@ -7,10 +7,7 @@
 use std::io::{Read, Write};
 
 use agent_workspace_server::{
-    export::{
-        import::{self, ImportError, RunLimits, StartImport},
-        transfer,
-    },
+    export::import::{self, ImportError, RunLimits, StartImport},
     files::store::FileStore,
     jobs,
 };
@@ -163,7 +160,9 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
         .as_str()
         .and_then(|id| id.parse::<Uuid>().ok())
         .expect("export");
-    transfer::run_export(state, export).await.expect("export");
+    crate::support::run_export(state, export)
+        .await
+        .expect("export");
     let archive = folder.path().join("a.awx");
     archive_of(&fixture, export, &archive).await;
 

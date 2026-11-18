@@ -62,14 +62,52 @@ pub enum Tenancy {
 pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // Looking up an account's workspaces, before its scope can be set.
     ("auth.lookup", &["tenancy/mod.rs"]),
+    // A credential presented before its account is known (an OAuth code,
+    // refresh or access token, a client or run credential): the row its
+    // digest names says whose it is, and the lookup checks that account's
+    // standing before the request takes the account's scope.
+    ("auth.credential", &["mcp.rs", "mcp/oauth.rs"]),
+    // The built-in host's scheduler, recovery and host jobs: they claim runs
+    // of every workspace, and check each against its run's space.
+    ("runs.host", &["server.rs"]),
+    // GitHub's own job queue, claimed across workspaces like the job queue.
+    ("github.jobs", &["server.rs"]),
+    // The reply worker: expires reply leases and marks unresponsive agents
+    // in every workspace.
+    ("replies.sweep", &["server.rs"]),
+    // Reloading every workspace's registered harnesses on each instance.
+    ("harnesses.reload", &["harnesses.rs"]),
+    // Commands an operator runs on the host, and the server's own start:
+    // preflight before migrating, a password or master key rotation, the
+    // default plan.
+    (
+        "server.operator",
+        &[
+            "bootstrap.rs",
+            "migration_preflight.rs",
+            "secrets.rs",
+            "metering/mod.rs",
+        ],
+    ),
+    // A live connection outlives any one request's list of workspaces: its
+    // reads check each frame against its account (`conversation_visible_to`,
+    // a document's own check), like the tail that feeds it.
+    (
+        "realtime.connections",
+        &["realtime/hub.rs", "realtime/contract/live.rs"],
+    ),
     // A whole-server backup or restore: every workspace's rows.
     ("backup", &["backup.rs"]),
     // First run (H1.14): the setup code, and the first account and
-    // workspace, made before anyone has a scope.
-    ("server.first_run", &["setup.rs"]),
+    // workspace, made before anyone has a scope (in the browser, or by the
+    // bootstrap commands on the host).
+    ("server.first_run", &["setup.rs", "bootstrap.rs", "seed.rs"]),
     // A billing provider's delivery (H1.33): the workspace is known only
     // once the provider names it.
     ("billing.webhook", &["billing/mod.rs"]),
+    // A signed GitHub delivery: its installation, and so its workspace, is
+    // known only once it is read.
+    ("github.webhook", &["github.rs"]),
     // An OpenID Connect sign-in (H1.18): accounts are server-wide, and the
     // workspace a verified domain joins is known only once it is read.
     ("auth.oidc", &["auth/oidc.rs"]),
@@ -93,6 +131,7 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
             "events/sequencer.rs",
             "realtime/tail.rs",
             "events/consumer.rs",
+            "server.rs",
         ],
     ),
     // An operator suspending or resuming a workspace from the command line

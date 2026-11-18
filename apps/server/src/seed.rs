@@ -31,6 +31,11 @@ pub const DEMO_REPOSITORY_NAME: &str = "demo-repository";
 pub const DEMO_CLONE_URL: &str = "https://github.com/example-org/demo-repository.git";
 
 pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppError> {
+    // A development server's first data, made before anyone has a scope.
+    crate::tenancy::system("server.first_run", dev_seed_here(pool, config)).await
+}
+
+async fn dev_seed_here(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppError> {
     if !config.environment.is_development() || !config.server_addr.ip().is_loopback() {
         return Err(AppError::DevelopmentAuthUnavailable);
     }

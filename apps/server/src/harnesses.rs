@@ -144,7 +144,8 @@ pub async fn reload(state: &AppState) -> Result<(), AppError> {
 pub fn spawn_reloader(state: AppState) {
     tokio::spawn(async move {
         loop {
-            if let Err(error) = reload(&state).await {
+            // Every workspace's registered harnesses.
+            if let Err(error) = crate::tenancy::system("harnesses.reload", reload(&state)).await {
                 tracing::warn!(
                     error_category = error.log_category(),
                     "registered harnesses not reloaded"

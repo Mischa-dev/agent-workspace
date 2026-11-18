@@ -2832,7 +2832,7 @@ async fn an_export_is_for_its_requester_alone() {
     .await;
     assert_eq!(started["outcome"], "ok", "{status} {started}");
     let id = started["value"]["id"].as_str().expect("id").to_owned();
-    agent_workspace_server::export::transfer::run_export(&world.state, id.parse().expect("uuid"))
+    crate::support::run_export(&world.state, id.parse().expect("uuid"))
         .await
         .expect("export runs");
     for (op, body) in [

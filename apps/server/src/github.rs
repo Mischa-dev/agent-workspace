@@ -5498,7 +5498,14 @@ async fn receive_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    match receive_webhook_inner(&state, &headers, &body).await {
+    // A signed delivery names its installation, and so its workspace, only
+    // once it is read.
+    match crate::tenancy::system(
+        "github.webhook",
+        receive_webhook_inner(&state, &headers, &body),
+    )
+    .await
+    {
         Ok(duplicate) => {
             let status = if duplicate {
                 StatusCode::OK

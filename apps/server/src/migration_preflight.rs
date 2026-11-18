@@ -40,6 +40,18 @@ pub async fn prepare_m3_repository_upgrade(
     pool: &PgPool,
     config: &AppConfig,
 ) -> Result<M3RepositoryUpgradePreflight, AppError> {
+    // Before migrating: every workspace's rows, run on the host.
+    crate::tenancy::system(
+        "server.operator",
+        prepare_m3_repository_upgrade_here(pool, config),
+    )
+    .await
+}
+
+async fn prepare_m3_repository_upgrade_here(
+    pool: &PgPool,
+    config: &AppConfig,
+) -> Result<M3RepositoryUpgradePreflight, AppError> {
     if !migration_pending(pool, 8, 11).await? {
         return Ok(M3RepositoryUpgradePreflight::default());
     }
@@ -134,6 +146,14 @@ struct LegacyRepositoryPath {
 /// conservatively disables Workers whose legacy dependencies are unavailable.
 /// Unknown legacy path layouts fail closed for explicit operator repair.
 pub async fn prepare_m3_upgrade(
+    pool: &PgPool,
+    config: &AppConfig,
+) -> Result<M3UpgradePreflight, AppError> {
+    // Before migrating: every workspace's rows, run on the host.
+    crate::tenancy::system("server.operator", prepare_m3_upgrade_here(pool, config)).await
+}
+
+async fn prepare_m3_upgrade_here(
     pool: &PgPool,
     config: &AppConfig,
 ) -> Result<M3UpgradePreflight, AppError> {

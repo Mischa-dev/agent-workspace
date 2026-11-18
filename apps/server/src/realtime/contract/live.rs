@@ -300,7 +300,11 @@ pub async fn socket(State(state): State<AppState>, upgrade: WebSocketUpgrade) ->
         .max_message_size(MAX_CLIENT_FRAME_BYTES)
         .on_upgrade(move |socket| async move {
             let keys = KeyringKeys(&state.config);
-            serve(socket, &router, receiver, &keys).await;
+            crate::tenancy::system(
+                "realtime.connections",
+                serve(socket, &router, receiver, &keys),
+            )
+            .await;
         })
         .into_response()
 }

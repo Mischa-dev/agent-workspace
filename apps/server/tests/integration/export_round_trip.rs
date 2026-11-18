@@ -15,7 +15,6 @@ use agent_workspace_server::{
         self,
         import::{self, RunLimits, StartImport},
         registry::DECLARATIONS,
-        transfer,
     },
     files::store::FileStore,
     setup,
@@ -220,7 +219,7 @@ async fn a_workspace_arrives_on_a_fresh_server_with_every_exported_column() {
         .as_str()
         .and_then(|id| id.parse::<Uuid>().ok())
         .expect("export");
-    transfer::run_export(&fixture.state, export)
+    crate::support::run_export(&fixture.state, export)
         .await
         .expect("export");
     let (store_id, key) = sqlx::query_as::<_, (String, String)>(

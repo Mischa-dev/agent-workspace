@@ -203,6 +203,19 @@ pub fn read_password_interactively() -> Result<String, BootstrapError> {
 pub async fn rotate_password(
     pool: &PgPool,
     command: PasswordRotationCommand,
+    password: String,
+) -> Result<PasswordRotationResult, BootstrapError> {
+    // Run by an operator on the host, before any scope.
+    crate::tenancy::system(
+        "server.operator",
+        rotate_password_here(pool, command, password),
+    )
+    .await
+}
+
+async fn rotate_password_here(
+    pool: &PgPool,
+    command: PasswordRotationCommand,
     mut password: String,
 ) -> Result<PasswordRotationResult, BootstrapError> {
     if let Err(error) = validate_password(&password) {
@@ -286,6 +299,20 @@ pub async fn rotate_password(
 }
 
 pub async fn bootstrap_admin(
+    pool: &PgPool,
+    command: BootstrapCommand,
+    password: String,
+) -> Result<BootstrapResult, BootstrapError> {
+    // Run from the host's command line before anyone has a scope: the
+    // first account and workspace, as on first run in the browser.
+    crate::tenancy::system(
+        "server.first_run",
+        bootstrap_admin_here(pool, command, password),
+    )
+    .await
+}
+
+async fn bootstrap_admin_here(
     pool: &PgPool,
     command: BootstrapCommand,
     mut password: String,
@@ -440,6 +467,20 @@ pub async fn bootstrap_admin(
 /// Provisions credentials for an existing human Actor during loopback-only
 /// development acceptance. The caller must enforce that runtime boundary.
 pub async fn bootstrap_development_member(
+    pool: &PgPool,
+    command: BootstrapCommand,
+    password: String,
+) -> Result<BootstrapResult, BootstrapError> {
+    // Run from the host's command line before anyone has a scope: the
+    // first account and workspace, as on first run in the browser.
+    crate::tenancy::system(
+        "server.first_run",
+        bootstrap_development_member_here(pool, command, password),
+    )
+    .await
+}
+
+async fn bootstrap_development_member_here(
     pool: &PgPool,
     command: BootstrapCommand,
     mut password: String,

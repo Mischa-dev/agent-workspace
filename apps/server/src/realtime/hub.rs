@@ -523,14 +523,17 @@ pub async fn websocket(
         .max_frame_size(MAX_REALTIME_CLIENT_FRAME_BYTES)
         .max_message_size(MAX_REALTIME_CLIENT_FRAME_BYTES)
         .on_upgrade(move |socket| {
-            serve_socket(
-                socket,
-                state,
-                headers,
-                principal,
-                receiver,
-                session_revocations,
-                protocol,
+            crate::tenancy::system(
+                "realtime.connections",
+                serve_socket(
+                    socket,
+                    state,
+                    headers,
+                    principal,
+                    receiver,
+                    session_revocations,
+                    protocol,
+                ),
             )
         })
         .into_response()

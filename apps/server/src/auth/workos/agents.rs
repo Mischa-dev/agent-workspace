@@ -885,12 +885,19 @@ mod tests {
         let seed = crate::seed::dev_seed(&pool, &app_config)
             .await
             .expect("WorkOS agent test operation");
-        let agent = crate::external_agents::provision(
-            &pool,
-            seed.project_id,
-            seed.human_actor_id,
-            "Test Agent",
-            "test_agent",
+        // Provisioned as the seeded person would, inside their scope.
+        let agent = crate::tenancy::scoped(
+            crate::tenancy::Tenancy::Member {
+                account: seed.human_actor_id,
+                workspaces: Some(vec![seed.organization_id]),
+            },
+            crate::external_agents::provision(
+                &pool,
+                seed.project_id,
+                seed.human_actor_id,
+                "Test Agent",
+                "test_agent",
+            ),
         )
         .await
         .expect("WorkOS agent test operation");

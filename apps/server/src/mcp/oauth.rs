@@ -652,8 +652,14 @@ async fn token(
         return Err(OAuthError::from(error));
     }
     let outcome = match request.grant_type.as_str() {
-        "authorization_code" => exchange_code(&state, &request).await,
-        "refresh_token" => refresh(&state, &request).await,
+        // A code or refresh token is looked up before its account is known:
+        // the row its digest names says whose it is (`auth.credential`).
+        "authorization_code" => {
+            crate::tenancy::system("auth.credential", exchange_code(&state, &request)).await
+        }
+        "refresh_token" => {
+            crate::tenancy::system("auth.credential", refresh(&state, &request)).await
+        }
         _ => Err(OAuthError::unsupported_grant("unsupported grant type")),
     };
     let response = match outcome {
@@ -1093,28 +1099,34 @@ async fn revoke(
     if request.token.len() > MAX_TOKEN {
         return Ok(StatusCode::OK);
     }
-    let digest = Sha256::digest(request.token.as_bytes()).to_vec();
-    let grant_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT grant_row.id FROM mcp_oauth_grants grant_row
-        LEFT JOIN mcp_oauth_access_tokens access ON access.grant_id = grant_row.id
-        LEFT JOIN mcp_oauth_refresh_tokens refresh ON refresh.grant_id = grant_row.id
-        WHERE grant_row.client_id = $1 AND (access.token_digest = $2 OR refresh.token_digest = $2)
-        LIMIT 1
-    "#,
-    )
-    .bind(client_id)
-    .bind(digest)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await
-    .map_err(AppError::from)?;
-    if let Some(grant_id) = grant_id {
-        let mut transaction = crate::db::scoped_tx(&state.pool)
-            .await
-            .map_err(AppError::from)?;
-        revoke_grant_family(&mut transaction, grant_id, false).await?;
-        transaction.commit().await.map_err(AppError::from)?;
-    }
+    // The token names its grant before its account is known
+    // (`auth.credential`).
+    crate::tenancy::system("auth.credential", async {
+        let digest = Sha256::digest(request.token.as_bytes()).to_vec();
+        let grant_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT grant_row.id FROM mcp_oauth_grants grant_row
+            LEFT JOIN mcp_oauth_access_tokens access ON access.grant_id = grant_row.id
+            LEFT JOIN mcp_oauth_refresh_tokens refresh ON refresh.grant_id = grant_row.id
+            WHERE grant_row.client_id = $1 AND (access.token_digest = $2 OR refresh.token_digest = $2)
+            LIMIT 1
+        "#,
+        )
+        .bind(client_id)
+        .bind(digest)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await
+        .map_err(AppError::from)?;
+        if let Some(grant_id) = grant_id {
+            let mut transaction = crate::db::scoped_tx(&state.pool)
+                .await
+                .map_err(AppError::from)?;
+            revoke_grant_family(&mut transaction, grant_id, false).await?;
+            transaction.commit().await.map_err(AppError::from)?;
+        }
+        Ok::<_, OAuthError>(())
+    })
+    .await?;
     Ok(StatusCode::OK)
 }
 

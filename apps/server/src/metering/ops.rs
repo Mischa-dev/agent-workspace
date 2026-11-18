@@ -522,7 +522,7 @@ impl Operation for SpendLimitSet {
         };
         if let Some(id) = changed {
             crate::events::emit(
-                &mut **tx,
+                tx,
                 NewEvent {
                     id: Uuid::now_v7(),
                     ty: &catalog::WORKSPACE_SPEND_LIMITS_CHANGED,

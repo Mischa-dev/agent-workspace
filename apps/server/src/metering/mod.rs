@@ -1359,6 +1359,11 @@ pub async fn start_plan(connection: &mut PgConnection, workspace: Uuid) -> Resul
 /// The plan new workspaces start on: `free` for a hosted server, else
 /// `self_hosted`. Run at start by the process that migrates.
 pub async fn set_default_plan(pool: &sqlx::PgPool, hosted: bool) -> Result<(), AppError> {
+    // At start: every workspace without a plan gets the default one.
+    crate::tenancy::system("server.operator", set_default_plan_here(pool, hosted)).await
+}
+
+async fn set_default_plan_here(pool: &sqlx::PgPool, hosted: bool) -> Result<(), AppError> {
     let plan = if hosted { "free" } else { "self_hosted" };
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let current = sqlx::query_scalar::<_, String>("SELECT id FROM plans WHERE is_default")

@@ -110,13 +110,17 @@ pub(crate) async fn builtin_run_record(
 /// the scheduler and its driver do, so the host can report on it with the
 /// credential the start brings.
 pub(crate) async fn builtin_run_started(pool: &sqlx::PgPool, run_id: uuid::Uuid) {
-    let mut transaction = agent_workspace_server::db::scoped_tx(pool)
-        .await
-        .expect("transaction");
-    agent_workspace_server::scheduler::issue_start(&mut transaction, run_id, "test")
-        .await
-        .expect("start");
-    transaction.commit().await.expect("commit");
+    let workspace = run_workspace(pool, run_id).await;
+    as_job(workspace, async {
+        let mut transaction = agent_workspace_server::db::scoped_tx(pool)
+            .await
+            .expect("transaction");
+        agent_workspace_server::scheduler::issue_start(&mut transaction, run_id, "test")
+            .await
+            .expect("start");
+        transaction.commit().await.expect("commit");
+    })
+    .await;
     sqlx::query(
         "UPDATE agent_runs SET start_command_id = (SELECT id FROM host_commands WHERE run_id = $1 AND kind = 'start') WHERE id = $1",
     )
@@ -225,4 +229,47 @@ pub(crate) async fn run_due_jobs(state: &agent_workspace_server::AppState) {
         .await
         .expect("run due jobs");
     }
+}
+
+/// Runs `work` as the job runner runs a job of `workspace`: in that
+/// workspace's scope, so under strict row rules (H1.63) it sees that
+/// workspace's rows and no other's. For tests that call a job's function
+/// directly instead of through the queue.
+pub(crate) async fn as_job<F: std::future::Future>(workspace: uuid::Uuid, work: F) -> F::Output {
+    agent_workspace_server::tenancy::scoped(
+        agent_workspace_server::tenancy::Tenancy::Workspace {
+            account: None,
+            workspace,
+        },
+        work,
+    )
+    .await
+}
+
+/// Runs an export as its job would: in the scope of the workspace it's for.
+pub(crate) async fn run_export(
+    state: &agent_workspace_server::AppState,
+    transfer: uuid::Uuid,
+) -> Result<(), agent_workspace_server::error::AppError> {
+    let workspace: uuid::Uuid =
+        sqlx::query_scalar("SELECT workspace_id FROM workspace_transfers WHERE id = $1")
+            .bind(transfer)
+            .fetch_one(&state.pool)
+            .await
+            .expect("the export's workspace");
+    as_job(
+        workspace,
+        agent_workspace_server::export::transfer::run_export(state, transfer),
+    )
+    .await
+}
+
+/// The workspace a run belongs to, for running its host's work in that
+/// workspace's scope ([`as_job`]).
+pub(crate) async fn run_workspace(pool: &sqlx::PgPool, run_id: uuid::Uuid) -> uuid::Uuid {
+    sqlx::query_scalar("SELECT workspace_id FROM agent_runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .expect("the run's workspace")
 }
