@@ -8,6 +8,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { callOp, newRequestId, opPrefix } from '../api/ops'
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
+import { RecentEditsBar, RecentEditsToggle } from '../changes/RecentEdits'
+import { useRecentEdits } from '../changes/useRecentEdits'
 import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
@@ -101,6 +103,11 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   const workspaceExperience = useWorkspaceExperience(detail.data?.whiteboard.projectId ? null : detail.data?.whiteboard.organizationId)
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null)
   const now = useNow()
+  // Recent edits (C1.10): what others just drew is outlined in their name;
+  // the toggle shows the last day's. A new drawing from anyone looks again.
+  const [allEdits, setAllEdits] = useState(false)
+  const lastDrawn = editors.reduce((latest, editor) => (editor.at > latest ? editor.at : latest), '')
+  const recent = useRecentEdits('whiteboard', whiteboardId, lastDrawn, { viewerId, all: allEdits })
   usePageTitle(detail.data?.whiteboard.title ?? null)
   if (detail.isPending || scene.isPending) return <PageSkeleton cards={1} label="Loading whiteboard" />
   if (detail.isError || scene.isError || !detail.data || !scene.data) {
@@ -227,6 +234,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             <span className="aw-sr-only">Recently edited by {others.map((editor) => editor.name).join(', ')}</span>
           </span>
         ) : null}
+        {whiteboard.projectId ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
         {proposals.length ? (
           <Button onClick={() => setPanel('proposals')} size="sm">
             {`Proposals (${proposals.length})`}
@@ -295,12 +303,18 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
           {saveFailure.message} Keep this page open so they aren’t lost.
         </Banner>
       ) : null}
+      {recent.newest ? (
+        <div className="aw-wb__recent">
+          <RecentEditsBar canUndo={editable} change={recent.newest} kind="whiteboard" />
+        </div>
+      ) : null}
       <div className="aw-wb__canvas">
         <Suspense fallback={<PageSkeleton cards={1} decorative label="Loading the canvas" />}>
           <BoardCanvas
             dark={isDarkPreset(preset)}
             draftRef={draftRef}
             editable={editable}
+            edited={recent.shown}
             initial={scene.data}
             onDraft={setDraftCount}
             onEditors={setEditors}

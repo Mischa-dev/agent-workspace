@@ -42,6 +42,7 @@ const STYLE_KEYS: Record<string, 'bold' | 'italic' | 'underline'> = { b: 'bold',
 export function SheetGrid({
   cells,
   commented,
+  edited,
   editable,
   onEdits,
   onResize,
@@ -58,6 +59,8 @@ export function SheetGrid({
   cells: Map<string, SheetCell>
   /** Cells a comment thread is about, by `row:column`: they get a corner mark. */
   commented?: ReadonlyMap<string, unknown>
+  /** Cells someone changed recently, by `row:column`, with who and when: outlined. */
+  edited?: ReadonlyMap<string, string>
   editable: boolean
   onEdits: (edits: GridEdit[]) => void
   onResize: (column: number, width: number | null) => void
@@ -351,6 +354,7 @@ export function SheetGrid({
           focused ? 'is-focused' : '',
           commented?.has(cellKey(row, column)) ? 'has-comment' : '',
           proposed?.has(key) ? 'is-proposed' : '',
+          edited?.has(key) ? 'is-edited' : '',
           (cell?.conditional ?? cell?.style)?.fill ? 'has-fill' : '',
           control?.allow === 'list' ? 'has-choices' : '',
           broken ? 'is-invalid' : '',
@@ -379,7 +383,7 @@ export function SheetGrid({
               if (dragging) onSelect({ anchor: selection.anchor, focus: { row, column } })
             }}
             style={cellLook(cell) as CSSProperties | undefined}
-            title={broken ? markTitle(broken) : cell?.input.startsWith('=') ? cell.input : (control?.hint ?? undefined)}
+            title={broken ? markTitle(broken) : (edited?.get(key) ?? (cell?.input.startsWith('=') ? cell.input : (control?.hint ?? undefined)))}
           >
             {control?.allow === 'checkbox' && !isEditing ? (
               <input

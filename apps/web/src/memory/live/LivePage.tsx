@@ -54,7 +54,7 @@ import type { PageSource } from '../MakePageDialog'
 import { canInsertTable, currentLink, inTasks, insertEmbed, insertTable, removeLink, selectedBlockIds, setLink, toggleTasks } from './commands'
 import { fromBase64, getPageDocument, sendPageUpdate, syncPageDocument, type PageDocument } from './documentApi'
 import { EmbedSlots } from './embeds'
-import { DiscussionMarks, discussionKey, selectionAnchor, type MarkedThread, type Marks } from './highlights'
+import { DiscussionMarks, discussionKey, selectionAnchor, type EditedBlock, type MarkedThread, type Marks } from './highlights'
 import { FROM_SERVER, PageSync, saveLabel, type SaveFailure, type SaveState } from './pageSync'
 import { pageExtensions } from './schema'
 import './live.css'
@@ -88,6 +88,8 @@ export type LivePageProps = {
   fallback: ReactNode
   /** Comments and suggestions to show in the page, and what commenting does (AWD-53). */
   discussion?: LiveDiscussion | null
+  /** Blocks someone changed recently, outlined (C1.10). */
+  edited?: EditedBlock[]
 }
 
 export type LiveDiscussion = {
@@ -112,7 +114,7 @@ function openDocument(snapshot: PageDocument) {
   return doc
 }
 
-export default function LivePage({ collections, discussion = null, fallback, pageId, projectId, sheets, title }: LivePageProps) {
+export default function LivePage({ collections, discussion = null, edited, fallback, pageId, projectId, sheets, title }: LivePageProps) {
   const [attempt, setAttempt] = useState(0)
   const [load, setLoad] = useState<Load | null>(null)
   const [unshowable, setUnshowable] = useState(false)
@@ -166,6 +168,7 @@ export default function LivePage({ collections, discussion = null, fallback, pag
       collections={collections ? projectId : null}
       sheets={sheets ? projectId : null}
       discussion={discussion}
+      edited={edited}
       doc={current.doc}
       key={current.attempt}
       onReload={reload}
@@ -220,6 +223,7 @@ function LiveEditor({
   collections,
   discussion,
   doc,
+  edited,
   onReload,
   onUnshowable,
   projectId,
@@ -231,6 +235,7 @@ function LiveEditor({
   collections: string | null
   discussion: LiveDiscussion | null
   doc: Y.Doc
+  edited?: EditedBlock[]
   onReload: () => void
   onUnshowable: () => void
   /** The space the page is in. */
@@ -385,9 +390,9 @@ function LiveEditor({
   const suggested = discussion?.suggested
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
-    const marks: Marks = { threads: threads ?? [], active, suggested: suggested ?? [] }
+    const marks: Marks = { threads: threads ?? [], active, suggested: suggested ?? [], edited }
     editor.view.dispatch(editor.state.tr.setMeta(discussionKey, marks).setMeta('addToHistory', false))
-  }, [editor, threads, active, suggested])
+  }, [editor, threads, active, suggested, edited])
 
   // After a reconnect, and on a timer while the live connection is down.
   useEffect(() => {

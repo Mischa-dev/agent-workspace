@@ -274,6 +274,25 @@ pub async fn write_elements(
     .bind(caller.actor_id)
     .execute(&mut **transaction)
     .await?;
+    let touched = accepted
+        .iter()
+        .map(|element| crate::change_sets::ElementBefore {
+            id: element.id.clone(),
+            before: stored.get(&element.id).map(|(_, _, data)| data.clone()),
+            version: element.version,
+        })
+        .collect();
+    crate::change_sets::record_board(
+        transaction,
+        caller.actor_id,
+        caller.via_grant_id,
+        whiteboard_id,
+        (scene_seq, next_seq),
+        touched,
+        // Drawing in the board's own editor comes in many small writes.
+        caller.channel == "browser",
+    )
+    .await?;
     notify(transaction, whiteboard_id).await?;
     outcome.scene_seq = next_seq;
     outcome.accepted = element_ids;

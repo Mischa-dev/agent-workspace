@@ -1101,3 +1101,116 @@ async fn a_chart_over_a_named_range_follows_its_cells() {
     assert_eq!(dropped["outcome"], "ok", "{dropped}");
     assert_eq!(dropped["value"]["charts"], json!([]), "{dropped}");
 }
+
+/// C1.10: every sheet write is a change, listed with the cells it touched
+/// and undone in a step: cells changed since are left and named, the undo
+/// can itself be undone, and a write that moved rows is outlined but put
+/// back by a restore instead.
+#[tokio::test]
+async fn a_sheet_write_is_undone_in_a_step() {
+    let Some(setup) = setup("c1_10_sheet_undo").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "UNDO", "Undo").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({"projectId": "UNDO", "name": "Budget",
+               "cells": [{"cell": "A1", "input": "1"}, {"cell": "B1", "input": "=A1*2"}],
+               "clientRequestId": "undo-0"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    let write = |cells: Value, key: &'static str| {
+        call(
+            "sheet_write",
+            json!({"projectId": "UNDO", "sheet": "Budget", "cells": cells, "clientRequestId": key}),
+        )
+    };
+    let three = write(
+        json!([{"cell": "A1", "input": "5"}, {"cell": "A2", "input": "7"}, {"cell": "C1", "input": "3"}]),
+        "undo-1",
+    )
+    .await;
+    assert_eq!(three["outcome"], "ok", "{three}");
+    let later = write(json!([{"cell": "C1", "input": "4"}]), "undo-2").await;
+    assert_eq!(later["outcome"], "ok", "{later}");
+
+    let list = |key: &'static str| {
+        let _ = key;
+        call(
+            "change_list",
+            json!({"thingKind": "sheet", "thingId": sheet}),
+        )
+    };
+    let changes = list("list-1").await;
+    assert_eq!(changes["outcome"], "ok", "{changes}");
+    let listed = changes["value"]["changes"].as_array().expect("changes");
+    assert_eq!(listed.len(), 3, "{changes}");
+    let middle = &listed[1];
+    assert_eq!(
+        middle["touched"]["cells"].as_array().map(Vec::len),
+        Some(3),
+        "{changes}"
+    );
+    assert_eq!(middle["undoable"], true, "{changes}");
+
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": middle["id"], "clientRequestId": "undo-undo"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    assert_eq!(undo["value"]["skipped"], json!(["Sheet1!C1"]), "{undo}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "UNDO", "sheet": "Budget"}),
+    )
+    .await;
+    assert_eq!(value_at(&read, "A1"), json!(1.0), "{read}");
+    assert_eq!(value_at(&read, "B1"), json!(2.0), "{read}");
+    assert_eq!(value_at(&read, "A2"), Value::Null, "{read}");
+    assert_eq!(value_at(&read, "C1"), json!(4.0), "{read}");
+
+    let again = call(
+        "change_undo",
+        json!({"changeSetId": middle["id"], "clientRequestId": "undo-again"}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+    let redo = call(
+        "change_undo",
+        json!({"changeSetId": undo["value"]["change"]["id"], "clientRequestId": "undo-redo"}),
+    )
+    .await;
+    assert_eq!(redo["outcome"], "ok", "{redo}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "UNDO", "sheet": "Budget"}),
+    )
+    .await;
+    assert_eq!(value_at(&read, "A1"), json!(5.0), "{read}");
+    assert_eq!(value_at(&read, "A2"), json!(7.0), "{read}");
+
+    let moved = call(
+        "sheet_write",
+        json!({"projectId": "UNDO", "sheet": "Budget",
+               "tabs": [{"tab": "Sheet1", "insertRowsAt": 1, "count": 1}],
+               "cells": [{"cell": "A1", "input": "top"}], "clientRequestId": "undo-3"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let changes = list("list-2").await;
+    assert_eq!(
+        changes["value"]["changes"][0]["undoable"], false,
+        "{changes}"
+    );
+}

@@ -1127,6 +1127,19 @@ pub async fn apply_import(
     apply_unbounded(connection, sheet, actor_id, changes, limit, &IronCalc).await
 }
 
+/// Puts cells back as an undo does (`change_sets::undo`), however many a
+/// change touched. The caller holds the sheet's row lock and has checked
+/// the actor may edit it.
+pub async fn apply_restoring(
+    connection: &mut PgConnection,
+    sheet: &Sheet,
+    actor_id: Uuid,
+    changes: &[Change],
+) -> Result<Result<Applied, Problem>, AppError> {
+    crate::events::ensure_actor(connection, actor_id).await?;
+    apply_unbounded(connection, sheet, actor_id, changes, 0, &IronCalc).await
+}
+
 async fn apply_unbounded(
     connection: &mut PgConnection,
     sheet: &Sheet,
@@ -1883,6 +1896,8 @@ async fn apply_unbounded(
     // Cells whose input or look this write changed, as they are now, for
     // the sheet's history (C1.13).
     let mut delta: Vec<history::Delta> = Vec::new();
+    // Cells whose input this write changed, and what each held (C1.10).
+    let mut touched: Vec<crate::change_sets::CellBefore> = Vec::new();
 
     // New tabs get IDs; every tab gets its position.
     let mut ids = Vec::with_capacity(working.len());
@@ -2266,6 +2281,12 @@ async fn apply_unbounded(
                 }
                 if input_changed {
                     inputs_changed += 1;
+                    touched.push(crate::change_sets::CellBefore {
+                        tab_id: id,
+                        row: cell.row,
+                        column: cell.column,
+                        before: stored.map(|stored| stored.input.clone()),
+                    });
                     input_cells.push(line);
                 } else if look_changed {
                     looks_changed += 1;
@@ -2291,6 +2312,12 @@ async fn apply_unbounded(
                 delete_columns.push(cell.column_number);
                 if cell.filled() {
                     inputs_changed += 1;
+                    touched.push(crate::change_sets::CellBefore {
+                        tab_id: cell.tab_id,
+                        row: cell.row_number,
+                        column: cell.column_number,
+                        before: Some(cell.input.clone()),
+                    });
                 } else {
                     looks_changed += 1;
                 }
@@ -2473,6 +2500,22 @@ async fn apply_unbounded(
     )
     .await?;
     history::record(&mut *connection, sheet.id, revision, tabs_changed, &delta).await?;
+    // Where rows, columns or tabs moved, a cell's place no longer says what
+    // it held, so that change is outlined but undone by a restore.
+    let moved = !removed.is_empty()
+        || working
+            .iter()
+            .any(|tab| tab.id.is_none() || tab.structure_changed || tab.sorted);
+    crate::change_sets::record_sheet(
+        &mut *connection,
+        sheet.project_id,
+        sheet.id,
+        actor_id,
+        (sheet.revision, revision),
+        touched,
+        !moved,
+    )
+    .await?;
     Ok(Ok(Applied {
         revision,
         inputs_changed,

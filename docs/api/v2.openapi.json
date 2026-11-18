@@ -373,7 +373,7 @@
             "type": "string"
           },
           "touched": {
-            "description": "What it touched, by lasting id: `{\"blocks\": [...]}` for a page."
+            "description": "What it touched, by lasting id: `{\"blocks\": [...]}` for a page,\n`{\"cells\": [{tabId, row, column}], \"more\": n}` for a sheet and\n`{\"elements\": [...], \"more\": n}` for a board."
           },
           "undoable": {
             "description": "Whether it can be undone in a step (what it replaced was kept and\nit hasn't been undone).",
@@ -11474,7 +11474,7 @@
     },
     "/api/v2/w/{workspace}/ops/change_list": {
       "post": {
-        "description": "List a page's recent changes, newest first: who made each, the versions it spans, which blocks it touched (by lasting id), and whether it can be undone. Undo one with change_undo.",
+        "description": "List a page's, sheet's or whiteboard's recent changes, newest first: who made each, the versions it spans, what it touched (a page's blocks by lasting id, a sheet's cells, a board's elements), and whether it can be undone. Undo one with change_undo.",
         "operationId": "change_list",
         "parameters": [
           {
@@ -11519,7 +11519,7 @@
                     "type": "string"
                   },
                   "thingKind": {
-                    "description": "The kind of thing: page.",
+                    "description": "The kind of thing: page, sheet or whiteboard.",
                     "type": "string"
                   }
                 },
@@ -11817,7 +11817,7 @@
     },
     "/api/v2/w/{workspace}/ops/change_undo": {
       "post": {
-        "description": "Undo one change to a page (change_list finds them): what it replaced comes back for every block nobody has changed since, and the rest are listed as skipped. The undo is a change of its own, so it can be undone too. Needs edit access.",
+        "description": "Undo one change to a page, sheet or whiteboard (change_list finds them): what it replaced comes back for every block, cell or element nobody has changed since, and the rest are listed as skipped. The undo is a change of its own, so it can be undone too. Needs edit access.",
         "operationId": "change_undo",
         "parameters": [
           {

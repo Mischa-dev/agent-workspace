@@ -68,6 +68,9 @@ import { PageEmbed } from './embeds/PageEmbed'
 import { PageDownloadMenu, PageImportButton } from './PageTransfer'
 import { pageTree, parentChoices, type TreePage } from './pageTree'
 import type { LiveDiscussion } from './live/LivePage'
+import { useAuthenticatedSession } from '../auth/session'
+import { RecentEditsBar, RecentEditsToggle } from '../changes/RecentEdits'
+import { outlineTitle, useRecentEdits } from '../changes/useRecentEdits'
 import './memory.css'
 import '../styles/pages.css'
 
@@ -378,6 +381,12 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
     queryFn: () => getDiscussion(pageId),
     enabled: showsDiscussion,
   })
+  // Recent edits (C1.10): blocks others just changed are outlined with who
+  // and when; the toggle shows the last day's.
+  const viewerId = useAuthenticatedSession().user.actorId
+  const [allEdits, setAllEdits] = useState(false)
+  const recent = useRecentEdits('page', pageId, page.data?.version, { viewerId, all: allEdits })
+  const editedBlocks = useMemo(() => [...recent.shown].map(([blockId, outline]) => ({ blockId, title: outlineTitle(outline) })), [recent.shown])
   const [draft, setDraft] = useState<CommentAnchor | null>(null)
   const [activeThread, setActiveThread] = useState<string | null>(null)
   const startComment = useCallback((anchor: CommentAnchor) => {
@@ -465,6 +474,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
         actions={
           editing ? null : (
             <>
+              {live ? <RecentEditsToggle on={allEdits} onChange={setAllEdits} /> : null}
               {experience.shows('page.import_export') ? <PageDownloadMenu pageId={pageId} /> : null}
               {canEdit && !current.archived && !current.isGuide ? (
                 <Button icon={FolderInput} onClick={() => setMoving(true)}>
@@ -553,9 +563,11 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
         </div>
       ) : live ? (
         <Suspense fallback={<div className="aw-memory__live-wait">{read}</div>}>
+          <RecentEditsBar canUndo={canEdit} change={recent.newest} kind="page" onUndone={() => void queryClient.invalidateQueries({ queryKey: memoryKeys.page(projectId, pageId) })} />
           <LivePage
             collections={experience.shows('area.collections')}
             discussion={liveDiscussion}
+            edited={editedBlocks}
             fallback={read}
             pageId={pageId}
             projectId={projectId}

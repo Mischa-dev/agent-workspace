@@ -1469,3 +1469,110 @@ async fn board_notes_become_tasks_and_a_page() {
     .await;
     assert_eq!(refused["outcome"], "not_found", "{refused}");
 }
+
+/// C1.10: board writes are changes. An agent's edits are one change each,
+/// a person's drawing joins into one while they keep drawing, and undo puts
+/// back the elements nobody touched since (an added one goes).
+#[tokio::test]
+async fn board_changes_are_listed_and_undone() {
+    let Some(setup) = setup("c110_board_undo").await else {
+        return;
+    };
+    let space = space(&setup).await;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let owner = &setup.browser;
+    let (wren, token) = create_agent(&setup.app, owner, &space, "Wren", "wren").await;
+    add_member(&setup, &work, wren, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let call = |name: &'static str, arguments: Value| {
+        let token = token.clone();
+        let session = session.clone();
+        let app = &setup.app;
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let created = call(
+        "whiteboard_create",
+        json!({"projectId": work, "title": "Flow", "operations": [
+            {"op": "add", "type": "rectangle", "id": "plan", "text": "Plan"},
+        ]}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let board = created["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let edited = call(
+        "whiteboard_edit",
+        json!({"whiteboardId": board, "operations": [
+            {"op": "update", "id": "plan", "x": 400},
+            {"op": "add", "type": "ellipse", "id": "ship", "x": 800},
+        ]}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let listed = call(
+        "change_list",
+        json!({"thingKind": "whiteboard", "thingId": board}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let changes = listed["value"]["changes"].as_array().expect("changes");
+    assert_eq!(changes.len(), 2, "one change per agent edit: {listed}");
+    let touched = changes[0]["touched"]["elements"]
+        .as_array()
+        .expect("elements");
+    assert!(
+        touched.contains(&json!("plan")) && touched.contains(&json!("ship")),
+        "{listed}"
+    );
+
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": changes[0]["id"], "clientRequestId": "board-undo"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    let now = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        element(&now, "plan").expect("plan")["x"],
+        json!(0.0),
+        "{now}"
+    );
+    assert!(
+        element(&now, "ship").is_none_or(|ship| ship["isDeleted"] == true),
+        "{now}"
+    );
+
+    // A person's drawing joins one change while they keep at it.
+    let raw = call(
+        "whiteboard_read",
+        json!({"whiteboardId": board, "elementIds": ["plan"], "raw": true}),
+    )
+    .await;
+    let mut plan = raw["value"]["raw"][0].clone();
+    for step in 1..=3 {
+        plan["y"] = json!(step * 100);
+        plan["version"] = json!(plan["version"].as_i64().expect("version") + 1);
+        write(&setup, owner, &board, vec![plan.clone()]).await;
+    }
+    let listed = call(
+        "change_list",
+        json!({"thingKind": "whiteboard", "thingId": board}),
+    )
+    .await;
+    let changes = listed["value"]["changes"].as_array().expect("changes");
+    assert_eq!(changes.len(), 4, "three strokes, one change: {listed}");
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": changes[0]["id"], "clientRequestId": "board-undo-2"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    let now = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        element(&now, "plan").expect("plan")["y"],
+        json!(0.0),
+        "{now}"
+    );
+}

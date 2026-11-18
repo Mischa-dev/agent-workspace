@@ -3,11 +3,12 @@ import '@excalidraw/excalidraw/index.css'
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { CaptureUpdateAction, Excalidraw, reconcileElements, restoreElements } from '@excalidraw/excalidraw'
 import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
-import type { AppState, BinaryFileData, BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
+import type { AppState, BinaryFileData, BinaryFiles, Collaborator, ExcalidrawImperativeAPI, SocketId } from '@excalidraw/excalidraw/types'
 import { useNavigate } from 'react-router-dom'
 
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { onWhiteboardChange } from '../realtime/liveDocuments'
+import type { Outline } from '../changes/recentEdits'
 import { describeError } from '../ui'
 import { getFile, getScene, uploadFile, writeScene, type Editor, type SceneView, type StoredElement } from './api'
 import { missingFiles, remember, unsaved, type Known, type SaveState } from './sync'
@@ -45,6 +46,8 @@ export type BoardCanvasProps = {
   /** How many elements the unsent drawing changes. */
   onDraft?: (count: number) => void
   draftRef?: MutableRefObject<DraftHandle | null>
+  /** Elements someone changed recently, by id (C1.10): outlined in their name. */
+  edited?: ReadonlyMap<string, Outline>
 }
 
 type Element = OrderedExcalidrawElement
@@ -63,6 +66,7 @@ export default function BoardCanvas({
   suggesting = false,
   onDraft,
   draftRef,
+  edited,
 }: BoardCanvasProps) {
   const navigate = useNavigate()
   const realtime = useOptionalRealtime()
@@ -310,11 +314,30 @@ export default function BoardCanvas({
     }
   }, [editable, known, save, suggesting])
 
+  // Recent edits (C1.10): the board outlines another person's selection in
+  // their colour and name, so each author's changed elements show as theirs.
+  const showEdited = useCallback(() => {
+    const board = api.current
+    if (!board) return
+    const byActor = new Map<string, { username: string; ids: Record<string, true> }>()
+    for (const [id, outline] of edited ?? []) {
+      const entry = byActor.get(outline.actorId) ?? { username: outline.actor, ids: {} }
+      entry.ids[id] = true
+      byActor.set(outline.actorId, entry)
+    }
+    const collaborators = new Map<SocketId, Collaborator>(
+      [...byActor].map(([actorId, entry]) => [`edited:${actorId}` as SocketId, { id: actorId, username: entry.username, selectedElementIds: entry.ids }]),
+    )
+    board.updateScene({ collaborators, captureUpdate: CaptureUpdateAction.NEVER })
+  }, [edited])
+  useEffect(() => showEdited(), [showEdited])
+
   return (
     <Excalidraw
       excalidrawAPI={(instance) => {
         api.current = instance
         void loadFiles(initial.elements)
+        showEdited()
       }}
       initialData={{
         elements: restoreElements(asElements(initial.elements), null),

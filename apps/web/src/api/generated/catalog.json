@@ -292,7 +292,9 @@
     "automation": true,
     "destructive": true,
     "emits": [
-      "page.updated"
+      "page.updated",
+      "sheet.updated",
+      "whiteboard.updated"
     ],
     "idempotent": true,
     "kind": "change",

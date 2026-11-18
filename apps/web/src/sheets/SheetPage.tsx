@@ -6,6 +6,8 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { opPrefix, opQuery } from '../api/ops'
 import { AnchoredThreadPanel } from '../discussion/AnchoredThreadPanel'
+import { RecentEditsBar, RecentEditsToggle } from '../changes/RecentEdits'
+import { outlineTitle, useRecentEdits } from '../changes/useRecentEdits'
 import { useProjectExperience } from '../experience/layout'
 import { useAuthenticatedSession, type SessionUser } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
@@ -137,6 +139,10 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const [sendingDraft, setSendingDraft] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const proposals = useSheetProposals(sheetId, Boolean(body?.canEdit || body?.canSuggest))
+  // Recent edits (C1.10): cells others just changed are outlined with who
+  // and when; the toggle shows the last day's.
+  const [allEdits, setAllEdits] = useState(false)
+  const recent = useRecentEdits('sheet', sheetId, body?.sheet.revision, { viewerId: user.actorId, all: allEdits })
   const shownTab = body?.tabs.find((entry) => entry.id === body.tab)
   const activeView = views.data?.views.find((view) => view.id === viewId && view.tabId === body?.tab) ?? null
   const frozenRows = shownTab?.frozenRows ?? 0
@@ -218,6 +224,9 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const tabPending = new Map([...pending].filter(([at]) => at.startsWith(prefix)).map(([at, input]) => [at.slice(prefix.length), input]))
   for (const [at, change] of draft) if (at.startsWith(prefix) && change.type === 'cell') tabPending.set(at.slice(prefix.length), change.input)
   const proposedHere = tab && body.canEdit ? proposedOn(proposals, tab.id) : undefined
+  const editedHere = new Map(
+    [...recent.shown].filter(([at]) => at.startsWith(prefix)).map(([at, outline]) => [at.slice(prefix.length), outlineTitle(outline)]),
+  )
   const scope = sheetKeys.one(projectId, sheetId)
   const key = sheetKeys.tab(projectId, sheetId, tabParam)
 
@@ -700,6 +709,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
             ) : null}
           </div>
         ) : null}
+        <RecentEditsBar canUndo={editable && !body.sheet.archived} change={recent.newest} kind="sheet" onUndone={() => void refresh()} />
         {phone ? (
           <SheetCards body={body} onOpen={(row, column) => (writable ? setDialog({ kind: 'cell', row, column, revision: body.sheet.revision }) : undefined)} tab={tab} />
         ) : (
@@ -717,6 +727,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
               <Button icon="search" onClick={() => setFinding(true)} size="sm" variant="ghost">
                 Find
               </Button>
+              <RecentEditsToggle on={allEdits} onChange={setAllEdits} />
               {proposals.length ? (
                 <Button onClick={() => setReviewing(true)} size="sm" variant="ghost">
                   {`Proposals (${proposals.length})`}
@@ -781,6 +792,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
               <SheetGrid
                 cells={cells}
                 commented={marks}
+                edited={editedHere}
                 editable={writable || suggesting}
                 key={tab.id}
                 onEdits={suggesting ? suggestEdit : edit}

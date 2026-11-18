@@ -169,12 +169,19 @@
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-/* A cell a comment thread is about: a mark in its top-right corner. */
+/* A cell someone changed recently (C1.10): outlined, who and when on hover. */
+.aw-grid__cell.is-edited {
+  outline: 2px solid color-mix(in oklab, var(--accent) 70%, transparent);
+  outline-offset: -2px;
+}
+
+/* A cell a waiting proposal would set. */
 .aw-grid__cell.is-proposed {
   outline: 1px dashed var(--accent);
   outline-offset: -2px;
 }
 
+/* A cell a comment thread is about: a mark in its top-right corner. */
 .aw-grid__cell.has-comment::after {
   position: absolute;
   top: 0;
