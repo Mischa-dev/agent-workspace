@@ -27,6 +27,8 @@ pub const WORKSPACE_ID: &str = "workspace_id";
 /// Workspace-owned tables and their tenant column.
 pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("account_claims", WORKSPACE_ID),
+    ("account_group_members", WORKSPACE_ID),
+    ("account_groups", WORKSPACE_ID),
     ("account_join_requests", WORKSPACE_ID),
     ("agent_profiles", ORGANIZATION_ID),
     ("agent_proposals", WORKSPACE_ID),
@@ -154,6 +156,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("provider_connections", WORKSPACE_ID),
     ("provider_sessions", WORKSPACE_ID),
     ("push_deliveries", WORKSPACE_ID),
+    ("push_receipts", WORKSPACE_ID),
     ("push_subscriptions", ORGANIZATION_ID),
     ("recurring_task_occurrences", WORKSPACE_ID),
     ("recurring_tasks", WORKSPACE_ID),
@@ -166,6 +169,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("run_usage", WORKSPACE_ID),
     ("runs", WORKSPACE_ID),
     ("saved_items", ORGANIZATION_ID),
+    ("saved_searches", WORKSPACE_ID),
     ("scheduled_messages", ORGANIZATION_ID),
     ("secrets", ORGANIZATION_ID),
     ("settings", ORGANIZATION_ID),
@@ -174,6 +178,8 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("sheet_revisions", WORKSPACE_ID),
     ("sheet_tabs", WORKSPACE_ID),
     ("sheets", WORKSPACE_ID),
+    ("sidebar_items", WORKSPACE_ID),
+    ("sidebar_sections", WORKSPACE_ID),
     ("task_import_links", WORKSPACE_ID),
     ("task_imports", WORKSPACE_ID),
     ("task_templates", WORKSPACE_ID),
@@ -227,12 +233,20 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
 pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     ("_sqlx_migrations", "the schema's migration ledger"),
     (
+        "account_blocks",
+        "whom an account blocked: accounts are server-wide (R19), and a block holds in every workspace",
+    ),
+    (
         "account_managers",
         "who manages an agent or app account: accounts and their naming are server-wide (R19)",
     ),
     (
         "account_statuses",
         "an account's status: accounts are server-wide (R19); a row naming a workspace shows only there",
+    ),
+    (
+        "account_profiles",
+        "an account's profile and avatar: accounts are server-wide (R19), shown only to people who share a workspace with it",
     ),
     (
         "actors",
@@ -249,6 +263,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "deleted_workspaces",
         "the one line a deleted workspace leaves, for billing and staff: its workspace is gone (H1.24)",
+    ),
+    (
+        "dm_requests",
+        "a message request between two accounts in a DM: DMs belong to their participants, not a workspace (R20)",
     ),
     (
         "event_consumer_failures",

@@ -10,6 +10,7 @@ import { accountKeys } from './api'
 import { Avatar, Banner, Button, PageHeader, Section, SettingsSkeleton, TextField, describeLoadError, showToast } from '../../ui'
 import type { SettingsPageProps } from '../types'
 import { EmailSection } from './EmailSection'
+import { ProfileSection } from '../../profiles/ProfileSection'
 import '../../styles/pages.css'
 
 /** Why a single sign-on link that came back here (`?workosError=`) didn't go through. */
@@ -20,7 +21,7 @@ function linkFailure(reason: string | null) {
   return reason ? 'Single sign-on didn’t link. Try again.' : null
 }
 
-/** Account › Profile: your name, your email address, your GitHub username and how you sign in. */
+/** Account › Profile: your name, about you (title, pronouns, time zone, picture), your email address, your GitHub username and how you sign in. */
 export default function ProfilePage({ session, workspace }: SettingsPageProps) {
   const client = useQueryClient()
   const [parameters, setParameters] = useSearchParams()
@@ -94,6 +95,7 @@ export default function ProfilePage({ session, workspace }: SettingsPageProps) {
           </Button>
         </form>
       </Section>
+      <ProfileSection name={session.user.displayName} />
       <EmailSection canSetUpEmail={workspace?.role === 'owner'} />
       <Section
         description="Used only to find pull requests that ask for your review."

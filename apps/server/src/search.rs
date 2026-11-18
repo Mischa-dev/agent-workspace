@@ -21,6 +21,9 @@ use crate::{
     modules::state::ProjectModules,
 };
 
+pub mod grammar;
+pub mod ops;
+
 pub const MAX_QUERY_CHARACTERS: usize = 200;
 
 pub fn router() -> Router<AppState> {
@@ -94,13 +97,191 @@ impl SearchKind {
 
 #[derive(Clone, Debug, Default)]
 pub struct SearchFilter {
-    pub conversation_id: Option<Uuid>,
-    pub author_id: Option<Uuid>,
+    /// Only these conversations and their threads.
+    pub conversation_ids: Option<Vec<Uuid>>,
+    /// Only what these accounts wrote (assigned, for tasks; last changed, for
+    /// pages, records and sheets).
+    pub author_ids: Option<Vec<Uuid>>,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
+    /// The grammar's `has:` and `is:` filters, as `has:file`, `is:dm`.
+    pub flags: Vec<String>,
     /// The caller's credential reaches one project only: workspace boards,
     /// which are in no project, are out of its reach.
     pub confined: bool,
+}
+
+impl SearchFilter {
+    /// Whether anything besides the words narrows the search.
+    pub fn narrows(&self) -> bool {
+        self.conversation_ids.is_some()
+            || self.author_ids.is_some()
+            || self.since.is_some()
+            || self.until.is_some()
+            || !self.flags.is_empty()
+    }
+
+    /// Of `kinds`, those this filter can find anything in. Only messages
+    /// carry `has:`, `is:unread` and `is:saved`; `is:thread` and `is:dm`
+    /// also keep threads and files sent there. With no words, only
+    /// conversations' messages, threads and files are listed.
+    fn kinds_for(&self, text: &str, kinds: &[SearchKind]) -> Vec<SearchKind> {
+        let messages_only = self
+            .flags
+            .iter()
+            .any(|flag| flag.starts_with("has:") || flag == "is:unread" || flag == "is:saved");
+        let in_conversations = text.is_empty()
+            || self
+                .flags
+                .iter()
+                .any(|flag| flag == "is:thread" || flag == "is:dm");
+        kinds
+            .iter()
+            .copied()
+            .filter(|kind| !messages_only || *kind == SearchKind::Messages)
+            .filter(|kind| {
+                !in_conversations
+                    || matches!(
+                        kind,
+                        SearchKind::Messages | SearchKind::Threads | SearchKind::Files
+                    )
+            })
+            .collect()
+    }
+}
+
+/// A query in the search grammar, made into what [`search`] takes: its
+/// words, kinds and filter. `None` when a filter names nothing the viewer
+/// can see (an `in:#channel` they can't read, a `from:` no one has), so
+/// nothing can match.
+pub struct Resolved {
+    pub text: String,
+    pub kinds: Vec<SearchKind>,
+    pub filter: SearchFilter,
+}
+
+/// Turns parsed grammar into a search: `from:` and `in:` are looked up
+/// among the spaces searched, `in:` only among conversations the viewer
+/// can read. `kinds` (from a separate argument) and `kind:` both narrow.
+pub async fn resolve(
+    pool: &PgPool,
+    viewer: Uuid,
+    projects: &[Uuid],
+    parsed: &grammar::ParsedQuery,
+    kinds: &[SearchKind],
+    mut filter: SearchFilter,
+) -> Result<Option<Resolved>, AppError> {
+    let mut chosen = kinds.to_vec();
+    if !parsed.kinds.is_empty() {
+        let named = parsed
+            .kinds
+            .iter()
+            .filter_map(|kind| SearchKind::parse(kind))
+            .collect::<Vec<_>>();
+        chosen = if chosen.is_empty() {
+            named
+        } else {
+            chosen
+                .into_iter()
+                .filter(|kind| named.contains(kind))
+                .collect()
+        };
+        if chosen.is_empty() {
+            return Ok(None);
+        }
+    }
+    if !parsed.from.is_empty() {
+        let handles = parsed
+            .from
+            .iter()
+            .filter(|handle| *handle != "me")
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut authors = sqlx::query_scalar::<_, Uuid>(
+            "SELECT DISTINCT actor_id FROM project_memberships \
+             WHERE project_id = ANY($1) AND enabled AND lower(handle) = ANY($2)",
+        )
+        .bind(projects)
+        .bind(&handles)
+        .fetch_all(crate::db::scoped(pool))
+        .await?;
+        if parsed.from.iter().any(|handle| handle == "me") {
+            authors.push(viewer);
+        }
+        let Some(authors) = narrow(filter.author_ids.take(), authors) else {
+            return Ok(None);
+        };
+        filter.author_ids = Some(authors);
+    }
+    if !(parsed.in_channels.is_empty() && parsed.in_people.is_empty()) {
+        let places = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT conversation.id
+            FROM conversations conversation
+            WHERE conversation.project_id = ANY($2)
+              AND conversation.archived_at IS NULL
+              AND conversation_visible_to(conversation.id, $1)
+              AND (
+                  (conversation.kind = 'channel'
+                   AND (lower(conversation.name) = ANY($3)
+                        OR lower(replace(conversation.name, ' ', '-')) = ANY($3)))
+                  OR (conversation.kind = 'dm' AND EXISTS (
+                      SELECT 1
+                      FROM conversation_members them
+                      JOIN project_memberships person
+                        ON person.project_id = them.project_id AND person.actor_id = them.actor_id
+                      WHERE them.conversation_id = conversation.id
+                        AND them.actor_id <> $1
+                        AND lower(person.handle) = ANY($4)))
+              )
+            "#,
+        )
+        .bind(viewer)
+        .bind(projects)
+        .bind(&parsed.in_channels)
+        .bind(&parsed.in_people)
+        .fetch_all(crate::db::scoped(pool))
+        .await?;
+        let Some(places) = narrow(filter.conversation_ids.take(), places) else {
+            return Ok(None);
+        };
+        filter.conversation_ids = Some(places);
+    }
+    let day = |value: &Option<String>| {
+        value
+            .as_deref()
+            .and_then(|day| chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+            .and_then(|day| day.and_hms_opt(0, 0, 0))
+            .map(|time| time.and_utc())
+    };
+    if let Some(after) = day(&parsed.after) {
+        filter.since = Some(filter.since.map_or(after, |since| since.max(after)));
+    }
+    if let Some(before) = day(&parsed.before) {
+        let until = before - chrono::Duration::microseconds(1);
+        filter.until = Some(filter.until.map_or(until, |current| current.min(until)));
+    }
+    filter
+        .flags
+        .extend(parsed.has.iter().map(|has| format!("has:{has}")));
+    filter
+        .flags
+        .extend(parsed.is.iter().map(|is| format!("is:{is}")));
+    Ok(Some(Resolved {
+        text: parsed.text.clone(),
+        kinds: chosen,
+        filter,
+    }))
+}
+
+/// `found` within `already`, when both narrow; `None` when nothing is left.
+fn narrow(already: Option<Vec<Uuid>>, mut found: Vec<Uuid>) -> Option<Vec<Uuid>> {
+    if let Some(already) = already {
+        found.retain(|id| already.contains(id));
+    }
+    found.sort_unstable();
+    found.dedup();
+    (!found.is_empty()).then_some(found)
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -199,15 +380,22 @@ pub async fn search(
     limit: i64,
 ) -> Result<Vec<SearchHit>, AppError> {
     let text = text.trim();
-    if text.is_empty() || text.chars().count() > MAX_QUERY_CHARACTERS {
+    if (text.is_empty() && !filter.narrows()) || text.chars().count() > MAX_QUERY_CHARACTERS {
         return Err(AppError::Validation("query"));
     }
     let limit = limit.clamp(1, 100);
-    let kinds = if kinds.is_empty() {
-        &SearchKind::ALL[..]
-    } else {
-        kinds
-    };
+    let kinds = filter.kinds_for(
+        text,
+        if kinds.is_empty() {
+            &SearchKind::ALL[..]
+        } else {
+            kinds
+        },
+    );
+    let kinds = kinds.as_slice();
+    if kinds.is_empty() {
+        return Ok(Vec::new());
+    }
     // AWD-75: each kind searches only where its module is on.
     let modules = {
         let mut connection = crate::db::scoped_tx(pool).await?;
@@ -297,15 +485,19 @@ pub async fn search(
             .bind(viewer)
             .bind(projects)
             .bind(text)
-            .bind(filter.conversation_id)
-            .bind(filter.author_id)
+            .bind(filter.conversation_ids.as_deref())
+            .bind(filter.author_ids.as_deref())
             .bind(filter.since)
             .bind(filter.until)
             .bind(limit);
+        if matches!(kind, SearchKind::Messages | SearchKind::Threads) {
+            query = query.bind(&filter.flags[..]);
+        }
         if *kind == SearchKind::Files {
             query = query
                 .bind(&task_projects[..])
-                .bind(&conversation_projects[..]);
+                .bind(&conversation_projects[..])
+                .bind(&filter.flags[..]);
         }
         if *kind == SearchKind::Whiteboards {
             query = query.bind(&board_workspaces[..]);
@@ -328,8 +520,9 @@ pub async fn search(
 }
 
 // Every query takes the same parameters:
-// $1 viewer, $2 projects, $3 text, $4 conversation, $5 author, $6 since,
-// $7 until, $8 limit. Unused ones are compared against NULL so the planner
+// $1 viewer, $2 projects, $3 text ('' when only filters narrow it, for the
+// kinds that allow that), $4 conversations, $5 authors, $6 since, $7 until,
+// $8 limit. Unused ones are compared against NULL so the planner
 // drops them. The files query also takes $9, the projects where the viewer
 // still sees tasks (`projects_showing_tasks`), for files attached to tasks,
 // and $10, the projects whose conversations show with the modules on for
@@ -341,8 +534,9 @@ const MESSAGES_SQL: &str = r#"
            COALESCE(author.display_name, 'Someone') || ' in ' ||
                CASE WHEN conversation.kind = 'dm' THEN 'a DM' ELSE conversation.name END AS title,
            NULL::text AS status,
-           ts_headline('english', message.plain_text, query.q,
-                       'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') AS snippet,
+           CASE WHEN $3 = '' THEN left(message.plain_text, 300)
+                ELSE ts_headline('english', message.plain_text, query.q,
+                                 'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') END AS snippet,
            message.project_id, project.organization_id AS workspace_id,
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
            conversation.id AS conversation_id, conversation.name AS conversation_name,
@@ -353,22 +547,50 @@ const MESSAGES_SQL: &str = r#"
                 THEN COALESCE(conversation.parent_channel_id, conversation.id)
                 ELSE conversation.id END AS link_id,
            NULL::uuid AS link_child,
-           (ts_rank(message.search_vector, query.q) * 1.0)::real AS rank
+           (CASE WHEN $3 = '' THEN 0 ELSE ts_rank(message.search_vector, query.q) END)::real AS rank
     FROM query, messages message
     JOIN conversations conversation ON conversation.id = message.conversation_id
     JOIN projects project ON project.id = message.project_id
     CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
     LEFT JOIN project_memberships author
       ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
-    WHERE message.search_vector @@ query.q
+    WHERE ($3 = '' OR message.search_vector @@ query.q)
       AND message.removed_at IS NULL
       AND message.project_id = ANY($2)
       AND conversation.archived_at IS NULL
       AND conversation_visible_to(conversation.id, $1)
-      AND ($4::uuid IS NULL OR conversation.id = $4 OR conversation.parent_channel_id = $4)
-      AND ($5::uuid IS NULL OR message.author_actor_id = $5)
+      AND ($4::uuid[] IS NULL OR conversation.id = ANY($4) OR conversation.parent_channel_id = ANY($4))
+      AND ($5::uuid[] IS NULL OR message.author_actor_id = ANY($5))
       AND ($6::timestamptz IS NULL OR message.created_at >= $6)
       AND ($7::timestamptz IS NULL OR message.created_at <= $7)
+      -- $9 (messages only): the grammar's has: and is: filters.
+      AND ('has:file' <> ALL($9) OR EXISTS (
+          SELECT 1 FROM files attached
+          WHERE attached.message_id = message.id AND attached.removed_at IS NULL))
+      AND ('has:link' <> ALL($9) OR message.plain_text ~* 'https?://')
+      AND ('has:reaction' <> ALL($9) OR EXISTS (
+          SELECT 1 FROM message_reactions reaction WHERE reaction.message_id = message.id))
+      AND ('has:pin' <> ALL($9) OR EXISTS (
+          SELECT 1 FROM conversation_pins pin
+          WHERE pin.target_kind = 'message' AND pin.target_id = message.id))
+      AND ('has:task' <> ALL($9) OR EXISTS (
+          SELECT 1 FROM thing_references reference
+          WHERE reference.source_kind = 'message' AND reference.source_id = message.id
+            AND reference.target_kind = 'task'))
+      AND ('is:thread' <> ALL($9) OR conversation.kind = 'thread')
+      AND ('is:dm' <> ALL($9) OR space.direct)
+      AND ('is:saved' <> ALL($9) OR EXISTS (
+          SELECT 1 FROM saved_items saved
+          WHERE saved.actor_id = $1 AND saved.message_id = message.id))
+      AND ('is:unread' <> ALL($9) OR (
+          message.author_actor_id IS DISTINCT FROM $1
+          AND NOT EXISTS (
+              SELECT 1
+              FROM conversation_entries entry
+              JOIN conversation_read_states state
+                ON state.conversation_id = entry.conversation_id AND state.actor_id = $1
+              WHERE entry.message_id = message.id
+                AND entry.sequence <= state.highest_seen_sequence)))
     ORDER BY rank DESC, message.created_at DESC
     LIMIT $8
 "#;
@@ -386,22 +608,26 @@ const THREADS_SQL: &str = r#"
            CASE WHEN space.direct THEN 'direct' ELSE 'thread' END AS link_kind,
            CASE WHEN space.direct THEN parent.id ELSE thread.id END AS link_id,
            NULL::uuid AS link_child,
-           (ts_rank(to_tsvector('english', thread.name || ' ' || COALESCE(thread.thread_outcome, '')),
-                    query.q) * 1.5)::real AS rank
+           (CASE WHEN $3 = '' THEN 0
+                 ELSE ts_rank(to_tsvector('english', thread.name || ' ' || COALESCE(thread.thread_outcome, '')),
+                              query.q) * 1.5 END)::real AS rank
     FROM query, conversations thread
     JOIN conversations parent ON parent.id = thread.parent_channel_id
     JOIN projects project ON project.id = thread.project_id
     CROSS JOIN LATERAL (SELECT project.kind = 'direct' AS direct) space
     WHERE thread.kind = 'thread'
-      AND to_tsvector('english', thread.name || ' ' || COALESCE(thread.thread_outcome, '')) @@ query.q
+      AND ($3 = ''
+           OR to_tsvector('english', thread.name || ' ' || COALESCE(thread.thread_outcome, '')) @@ query.q)
       AND thread.project_id = ANY($2)
       AND thread.archived_at IS NULL
       AND conversation_visible_to(thread.id, $1)
-      AND ($4::uuid IS NULL OR parent.id = $4 OR thread.id = $4)
-      AND ($5::uuid IS NULL OR thread.thread_status_changed_by_actor_id = $5)
+      AND ($4::uuid[] IS NULL OR parent.id = ANY($4) OR thread.id = ANY($4))
+      AND ($5::uuid[] IS NULL OR thread.thread_status_changed_by_actor_id = ANY($5))
       AND ($6::timestamptz IS NULL OR thread.created_at >= $6)
       AND ($7::timestamptz IS NULL OR thread.created_at <= $7)
-    ORDER BY rank DESC
+      -- $9 (threads only): is:dm keeps threads in DMs and groups.
+      AND ('is:dm' <> ALL($9) OR space.direct)
+    ORDER BY rank DESC, thread.created_at DESC
     LIMIT $8
 "#;
 
@@ -428,8 +654,8 @@ const TASKS_SQL: &str = r#"
     WHERE item.search_vector @@ query.q
       AND item.project_id = ANY($2)
       AND item.archived_at IS NULL
-      AND $4::uuid IS NULL
-      AND ($5::uuid IS NULL OR item.assignee_actor_id = $5)
+      AND $4::uuid[] IS NULL
+      AND ($5::uuid[] IS NULL OR item.assignee_actor_id = ANY($5))
       AND ($6::timestamptz IS NULL OR item.updated_at >= $6)
       AND ($7::timestamptz IS NULL OR item.created_at <= $7)
       AND $1::uuid IS NOT NULL
@@ -455,8 +681,8 @@ const PAGES_SQL: &str = r#"
     WHERE page.search_vector @@ query.q
       AND page.project_id = ANY($2)
       AND page.archived_at IS NULL
-      AND $4::uuid IS NULL
-      AND ($5::uuid IS NULL OR page.updated_by_actor_id = $5)
+      AND $4::uuid[] IS NULL
+      AND ($5::uuid[] IS NULL OR page.updated_by_actor_id = ANY($5))
       AND ($6::timestamptz IS NULL OR page.updated_at >= $6)
       AND ($7::timestamptz IS NULL OR page.created_at <= $7)
       AND $1::uuid IS NOT NULL
@@ -487,8 +713,8 @@ const DECISIONS_SQL: &str = r#"
       AND decision.project_id = ANY($2)
       AND (decision.source_conversation_id IS NULL
            OR conversation_visible_to(decision.source_conversation_id, $1))
-      AND ($4::uuid IS NULL OR decision.source_conversation_id = $4)
-      AND ($5::uuid IS NULL OR decision.decided_by_actor_id = $5)
+      AND ($4::uuid[] IS NULL OR decision.source_conversation_id = ANY($4))
+      AND ($5::uuid[] IS NULL OR decision.decided_by_actor_id = ANY($5))
       AND ($6::timestamptz IS NULL OR decision.created_at >= $6)
       AND ($7::timestamptz IS NULL OR decision.created_at <= $7)
     ORDER BY rank DESC
@@ -524,8 +750,8 @@ const RECORDS_SQL: &str = r#"
       AND module_part_on('collection', collection.id)
       -- A task's record (the built-in Tasks collection) is found as the task.
       AND NOT collection.acts_like_task
-      AND $4::uuid IS NULL
-      AND ($5::uuid IS NULL OR record.updated_by_actor_id = $5)
+      AND $4::uuid[] IS NULL
+      AND ($5::uuid[] IS NULL OR record.updated_by_actor_id = ANY($5))
       AND ($6::timestamptz IS NULL OR record.updated_at >= $6)
       AND ($7::timestamptz IS NULL OR record.created_at <= $7)
       AND $1::uuid IS NOT NULL
@@ -566,8 +792,8 @@ const WHITEBOARDS_SQL: &str = r#"
       AND (board.project_id = ANY($2)
            OR (board.project_id IS NULL AND board.organization_id = ANY($9)))
       AND whiteboard_visible_to(board.id, $1)
-      AND $4::uuid IS NULL
-      AND ($5::uuid IS NULL OR COALESCE(board.updated_by_actor_id, board.created_by_actor_id) = $5)
+      AND $4::uuid[] IS NULL
+      AND ($5::uuid[] IS NULL OR COALESCE(board.updated_by_actor_id, board.created_by_actor_id) = ANY($5))
       AND ($6::timestamptz IS NULL OR board.updated_at >= $6)
       AND ($7::timestamptz IS NULL OR board.created_at <= $7)
     ORDER BY rank DESC, board.updated_at DESC
@@ -594,8 +820,8 @@ const SHEETS_SQL: &str = r#"
     WHERE sheet.search_vector @@ query.q
       AND sheet.project_id = ANY($2)
       AND sheet.archived_at IS NULL
-      AND $4::uuid IS NULL
-      AND ($5::uuid IS NULL OR sheet.updated_by_actor_id = $5)
+      AND $4::uuid[] IS NULL
+      AND ($5::uuid[] IS NULL OR sheet.updated_by_actor_id = ANY($5))
       AND ($6::timestamptz IS NULL OR sheet.updated_at >= $6)
       AND ($7::timestamptz IS NULL OR sheet.created_at <= $7)
       AND $1::uuid IS NOT NULL
@@ -655,10 +881,13 @@ const FILES_SQL: &str = r#"
       -- Channels for a project), so a file never names a conversation whose
       -- module is off.
       AND (file.conversation_id IS NULL OR file.project_id = ANY($10))
-      AND ($4::uuid IS NULL OR conversation.id = $4 OR conversation.parent_channel_id = $4)
-      AND ($5::uuid IS NULL OR file.uploaded_by_actor_id = $5)
+      AND ($4::uuid[] IS NULL OR conversation.id = ANY($4) OR conversation.parent_channel_id = ANY($4))
+      AND ($5::uuid[] IS NULL OR file.uploaded_by_actor_id = ANY($5))
       AND ($6::timestamptz IS NULL OR file.created_at >= $6)
       AND ($7::timestamptz IS NULL OR file.created_at <= $7)
+      -- $11 (files only): is:thread and is:dm keep files sent there.
+      AND ('is:thread' <> ALL($11) OR conversation.kind = 'thread')
+      AND ('is:dm' <> ALL($11) OR (file.conversation_id IS NOT NULL AND space.direct))
     ORDER BY rank DESC, file.created_at DESC
     LIMIT $8
 "#;
@@ -757,14 +986,43 @@ async fn search_http(
         .split(',')
         .filter_map(SearchKind::parse)
         .collect::<Vec<_>>();
+    if query.q.chars().count() > MAX_QUERY_CHARACTERS {
+        return Err(AppError::Validation("q"));
+    }
+    let parsed = grammar::parse(&query.q);
+    if !parsed.errors.is_empty() {
+        return Err(AppError::Refused {
+            field: "q",
+            message: "A filter in the search takes other values. The filters are from:, in:, \
+                      during:, on:, before:, after:, has:, is: and kind:.",
+        });
+    }
+    let Some(resolved) = resolve(
+        &state.pool,
+        principal.actor_id,
+        &projects,
+        &parsed,
+        &kinds,
+        SearchFilter::default(),
+    )
+    .await?
+    else {
+        return Ok(Json(SearchResponse { hits: Vec::new() }));
+    };
+    if resolved.text.is_empty() && !resolved.filter.narrows() {
+        return Err(AppError::Refused {
+            field: "q",
+            message: "Add words to search for, or a filter such as from: or in:.",
+        });
+    }
     let hits = search(
         &state.pool,
         Addresses::of(&state),
         principal.actor_id,
         &projects,
-        &query.q,
-        &kinds,
-        &SearchFilter::default(),
+        &resolved.text,
+        &resolved.kinds,
+        &resolved.filter,
         query.limit.unwrap_or(30),
     )
     .await?;

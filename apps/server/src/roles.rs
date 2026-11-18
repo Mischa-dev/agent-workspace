@@ -1854,14 +1854,15 @@ pub(crate) async fn set_agent_limit(
     Ok(keys)
 }
 
-/// On arriving in a project, join the private channels their role names,
-/// when the person adding them is in that channel.
+/// On arriving in a project, join its auto-join channels, and the private
+/// channels their role names when the person adding them is in that channel.
 pub(crate) async fn apply_arrival_defaults(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     actor_id: Uuid,
     added_by: Uuid,
 ) -> Result<(), AppError> {
+    crate::conversations::join_auto_channels(transaction, project_id, actor_id).await?;
     sqlx::query(&format!(
         r#"
         INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)

@@ -252,6 +252,8 @@ pub(crate) struct ActResponse {
     outcome: &'static str,
     /// Where to open the app to see it.
     href: String,
+    /// The places that need the person now, for the app's badge.
+    badge: i64,
 }
 
 #[derive(FromRow)]
@@ -401,32 +403,7 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
             let conversation_id = notification
                 .reply_conversation_id
                 .ok_or(AppError::NotFound("notification_action"))?;
-            // The same read as opening it (C2.2), rechecked now: a
-            // conversation they can no longer read reads nothing.
-            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-            let conversation = sqlx::query_as::<_, (Uuid, i64)>(
-                r#"
-                SELECT conversation.project_id, conversation.next_entry_sequence - 1
-                FROM conversations conversation
-                WHERE conversation.id = $1
-                  AND actor_can_access_project($2, NULL, conversation.project_id)
-                  AND conversation_readable_by(conversation.id, $2)
-                "#,
-            )
-            .bind(conversation_id)
-            .bind(actor.actor_id)
-            .fetch_optional(&mut *transaction)
-            .await?
-            .ok_or(AppError::NotFound("notification_action"))?;
-            crate::read_state::mark_seen(
-                &mut transaction,
-                conversation.0,
-                conversation_id,
-                actor.actor_id,
-                conversation.1,
-            )
-            .await?;
-            transaction.commit().await?;
+            read_conversation(state, actor.actor_id, conversation_id).await?;
             "read"
         }
         NotificationAction::Reply => {
@@ -473,6 +450,9 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
                         None,
                     )
                     .await?;
+                    // C2.34: answering from the phone leaves the
+                    // conversation read, up to and including the reply.
+                    read_conversation(state, actor.actor_id, conversation_id).await?;
                     "replied"
                 }
             }
@@ -502,10 +482,49 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
         None,
     )
     .await?;
+    // The app's badge as it stands now, for the phone to show (C2.34).
+    let badge = notifications::attentions(&state.pool, actor.actor_id)
+        .await?
+        .needs_you_conversations;
     Ok(ActResponse {
         outcome,
         href: notification.href,
+        badge,
     })
+}
+
+/// The same read as opening the conversation (C2.2), rechecked now: one they
+/// can no longer read reads nothing.
+async fn read_conversation(
+    state: &AppState,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+) -> Result<(), AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let conversation = sqlx::query_as::<_, (Uuid, i64)>(
+        r#"
+        SELECT conversation.project_id, conversation.next_entry_sequence - 1
+        FROM conversations conversation
+        WHERE conversation.id = $1
+          AND actor_can_access_project($2, NULL, conversation.project_id)
+          AND conversation_readable_by(conversation.id, $2)
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(actor_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("notification_action"))?;
+    crate::read_state::mark_seen(
+        &mut transaction,
+        conversation.0,
+        conversation_id,
+        actor_id,
+        conversation.1,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
 }
 
 /// Answer a request as the token's person, with the same checks as

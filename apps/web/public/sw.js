@@ -65,9 +65,12 @@ self.addEventListener('fetch', (event) => {
   else if (url.pathname === CONFIG_URL) event.respondWith(config(event))
 })
 
-// Push: {id, kind, title, body, place, url, tag, actions, actionToken}. Every
-// push shows a notification, as browsers require; anything malformed shows a
-// plain one.
+// Push: {id, kind, title, body, place, url, tag, actions, actionToken, badge,
+// receipt}. Every push shows a notification, as browsers require; anything
+// malformed shows a plain one. `badge` is the app's badge count, set here
+// while the app is closed; `receipt` names this one push to this device, and
+// goes back (without the session cookie) when it shows and when it is
+// tapped, so the person's device list can say how many arrive.
 self.addEventListener('push', (event) => {
   event.waitUntil(showPush(event))
 })
@@ -77,6 +80,7 @@ const TOKEN_ACTIONS = ['approve', 'deny', 'reply', 'read', 'done', 'snooze']
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const data = event.notification.data || {}
+  if (data.receipt) event.waitUntil(sendReceipt(data.receipt, 'opened'))
   if (TOKEN_ACTIONS.includes(event.action) && data.token) {
     const reply = typeof event.reply === 'string' ? event.reply.trim() : ''
     // Without an inline text field (most phones), Reply opens the composer.
@@ -107,9 +111,10 @@ async function act(data, action, reply) {
       body: JSON.stringify(action === 'reply' ? { token: data.token, action, text: reply } : { token: data.token, action }),
     })
     if (response.ok) {
+      const result = await response.json().catch(() => ({}))
+      if (result && typeof result.badge === 'number') await setBadge(result.badge)
       // Marking it read needs no word back: the notification just goes.
       if (action === 'read') return undefined
-      const result = await response.json().catch(() => ({}))
       const done = result && result.outcome === 'answered' ? 'Answer sent' : DONE[action]
       return self.registration.showNotification(done, {
         body: data.title || undefined,
@@ -156,8 +161,32 @@ function pushPayload(event) {
   }
 }
 
+// The app icon's badge, where the platform has one.
+function setBadge(count) {
+  const badge = self.navigator
+  if (!badge || typeof badge.setAppBadge !== 'function') return Promise.resolve()
+  const done = count > 0 ? badge.setAppBadge(count) : badge.clearAppBadge()
+  return Promise.resolve(done).catch(() => undefined)
+}
+
+function sendReceipt(receipt, kind) {
+  return fetch('/api/v1/push-receipts', {
+    method: 'POST',
+    credentials: 'omit',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ receipt, event: kind }),
+  }).catch(() => undefined)
+}
+
 function showPush(event) {
   const payload = pushPayload(event)
+  const receipt = typeof payload.receipt === 'string' && payload.receipt ? payload.receipt : null
+  const shown = showPushNotification(payload)
+  const extras = [typeof payload.badge === 'number' ? setBadge(payload.badge) : null, receipt ? shown.then(() => sendReceipt(receipt, 'shown')) : null]
+  return Promise.all([shown, ...extras.filter(Boolean)])
+}
+
+function showPushNotification(payload) {
   const text = (value) => (typeof value === 'string' && value ? value : null)
   const listed = Array.isArray(payload.actions) ? payload.actions.filter((action) => action && typeof action === 'object') : []
   const token = text(payload.actionToken)
@@ -191,6 +220,7 @@ function showPush(event) {
       url: inAppPath(payload.url) || '/home',
       launch: launch ? inAppPath(launch.url) : null,
       token: actions.some((action) => TOKEN_ACTIONS.includes(action.action)) ? token : null,
+      receipt: typeof payload.receipt === 'string' && payload.receipt ? payload.receipt : null,
       tag,
       title,
     },

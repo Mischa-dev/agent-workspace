@@ -122,7 +122,7 @@ pub async fn followed(
           AND actor_can_access_project($2, $5, thread.project_id)
           AND ($6::uuid IS NULL OR thread.project_id = $6)
           AND (NOT $3 OR (thread.thread_outcome IS NULL
-                          AND lower(thread.thread_status) NOT IN ('decided', 'done', 'dropped')))
+                          AND lower(thread.thread_status) <> ALL($7::text[])))
         ORDER BY last_activity_at DESC, thread.id DESC
         LIMIT $4
         "#,
@@ -133,6 +133,7 @@ pub async fn followed(
     .bind(limit)
     .bind(reach.connection_id)
     .bind(reach.confined_space)
+    .bind(&crate::conversations::SETTLED_THREAD_STATUSES[..])
     .fetch_all(&mut *connection)
     .await?)
 }

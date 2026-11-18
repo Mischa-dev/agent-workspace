@@ -99,6 +99,40 @@ async fn any_emoji_and_the_workspaces_own() {
         assert_eq!(refused["outcome"], "invalid_request", "{name}: {refused}");
     }
 
+    // A workspace keeps at most so many live emoji: filled to the limit, the
+    // next add is refused.
+    let workspace = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT workspace_id FROM custom_emojis WHERE id = $1::uuid",
+    )
+    .bind(&parrot)
+    .fetch_one(world.pool())
+    .await
+    .expect("workspace");
+    sqlx::query(
+        "INSERT INTO custom_emojis (id, workspace_id, name, content_type, image, created_by_account_id) \
+         SELECT gen_random_uuid(), $1, 'filler_' || n, content_type, image, created_by_account_id \
+         FROM custom_emojis, generate_series(1, $2::int - 1) n WHERE id = $3::uuid",
+    )
+    .bind(workspace)
+    .bind(i32::try_from(agent_workspace_server::custom_emoji::MAX_EMOJI).expect("limit"))
+    .bind(&parrot)
+    .execute(world.pool())
+    .await
+    .expect("fill");
+    let full = tool(
+        app,
+        &desk.token,
+        &desk.session,
+        "custom_emoji_create",
+        json!({"name": "one_too_many", "imageBase64": PNG_BASE64, "clientRequestId": "full"}),
+    )
+    .await;
+    assert_eq!(full["outcome"], "invalid_request", "{full}");
+    sqlx::query("DELETE FROM custom_emojis WHERE name LIKE 'filler_%'")
+        .execute(world.pool())
+        .await
+        .expect("unfill");
+
     // Rook reacts with any emoji and with :partyparrot:; not with anything else.
     let react = |message: &str, emoji: &str| {
         let arguments = json!({"messageId": message, "emoji": emoji});
@@ -145,6 +179,51 @@ async fn any_emoji_and_the_workspaces_own() {
     let reactions = entry["message"]["reactions"].as_array().expect("reactions");
     assert_eq!(reactions.len(), 2, "{reactions:?}");
     let image = format!("/api/v1/custom-emoji/{parrot}");
+
+    // The name is reused for a new image. By name, a reaction takes the new
+    // one; the old one stays its own reaction, which the owner joins by its
+    // id, but only where it is already.
+    let again = tool(
+        app,
+        &desk.token,
+        &desk.session,
+        "custom_emoji_create",
+        json!({"name": "partyparrot", "imageBase64": PNG_BASE64, "clientRequestId": "parrot-2"}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    let new_parrot = again["value"]["id"].as_str().expect("id").to_owned();
+    let reacted = react(&messages[0], ":partyparrot:").await;
+    assert_eq!(reacted["outcome"], "ok", "{reacted}");
+    let join = |message: &str, emoji: &str| {
+        world.owner.browser.request(
+            "PUT",
+            &format!("/api/v1/conversations/{channel}/messages/{message}/reactions/{emoji}"),
+            None,
+            Value::Null,
+        )
+    };
+    let (status, joined) = send(app, join(&messages[0], &parrot)).await;
+    assert_eq!(status, StatusCode::OK, "{joined}");
+    let parrots = joined["reactions"]
+        .as_array()
+        .expect("reactions")
+        .iter()
+        .filter(|reaction| reaction["name"] == "partyparrot")
+        .map(|reaction| {
+            (
+                reaction["customEmojiId"].as_str().expect("id").to_owned(),
+                reaction["count"].as_i64(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        parrots,
+        vec![(parrot.clone(), Some(2)), (new_parrot.clone(), Some(1))],
+        "{joined}"
+    );
+    let (status, refused) = send(app, join(&messages[1], &parrot)).await;
+    assert!(status.is_client_error(), "{status}: {refused}");
     assert!(
         reactions
             .iter()

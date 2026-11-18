@@ -1,3 +1,6 @@
+import manifestCommands from 'virtual:modules/slash-commands'
+
+import type { OpName } from '../api/generated/operations'
 import type { IconName } from '../ui'
 
 /**
@@ -6,10 +9,11 @@ import type { IconName } from '../ui'
  * outside a conversation. Text starting with "/" that names no command here
  * is sent as an ordinary message.
  */
-export type SlashCommandName = 'remind' | 'later' | 'schedule' | 'mute' | 'unmute' | 'notify' | 'task' | 'tag' | 'launch'
+export type SlashCommandName = 'remind' | 'later' | 'schedule' | 'mute' | 'unmute' | 'notify' | 'tag' | 'launch'
 
 export type SlashCommand = {
-  name: SlashCommandName
+  /** One the app runs itself, or one a module's manifest adds (`run`). */
+  name: SlashCommandName | (string & {})
   /** What follows the name, as shown in the list. */
   usage: string
   description: string
@@ -18,7 +22,19 @@ export type SlashCommand = {
   paletteHref?: string
   /** Needs a project with tasks (not a DM or group). */
   projectOnly?: boolean
+  /** C2.24: the operation it runs, from its module's manifest. */
+  run?: { operation: OpName; args: 'text' | 'none'; field?: string; inSpace: boolean }
 }
+
+/** The commands modules add in their manifests (`slots.slash`), each running an operation. */
+const MODULE_COMMANDS: SlashCommand[] = manifestCommands.map((command) => ({
+  name: command.name,
+  usage: command.usage ?? '',
+  description: command.description,
+  icon: command.icon as IconName,
+  projectOnly: command.where === 'space',
+  run: { operation: command.operation as OpName, args: command.args, field: command.field, inSpace: command.where === 'space' },
+}))
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'remind', usage: 'me to … at 3pm', description: 'Set a reminder for yourself', icon: 'clock', paletteHref: '/later?new=reminder' },
@@ -27,9 +43,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'mute', usage: '', description: 'Stop notifications from this conversation', icon: 'circle-minus' },
   { name: 'unmute', usage: '', description: 'Hear from this conversation again', icon: 'messages' },
   { name: 'notify', usage: 'all | mentions | off', description: 'Choose what you hear from this conversation', icon: 'at-sign' },
-  { name: 'task', usage: 'title', description: 'Create a task in this project', icon: 'work', projectOnly: true },
   { name: 'tag', usage: '', description: 'Ask an agent: mention it with @', icon: 'bot' },
   { name: 'launch', usage: '', description: 'Launch agents on ready tasks', icon: 'play', projectOnly: true },
+  ...MODULE_COMMANDS,
 ]
 
 /** The commands a conversation offers. */

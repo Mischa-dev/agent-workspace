@@ -420,6 +420,7 @@ async fn insert_agent(
     .execute(&mut **transaction)
     .await
     .map_err(map_database_error)?;
+    crate::conversations::join_auto_channels(transaction, project_id, actor_id).await?;
     let (connection_id, credential) = connect(
         transaction,
         organization_id,

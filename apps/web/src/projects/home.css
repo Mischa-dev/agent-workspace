@@ -151,3 +151,10 @@
 .aw-projects__note {
   margin-top: var(--space-4);
 }
+
+/* C2.40: Home as the conversation list. */
+.aw-chat-home__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

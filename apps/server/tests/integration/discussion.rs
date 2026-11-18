@@ -411,6 +411,34 @@ async fn things_have_discussions_as_visible_as_they_are() {
     assert_eq!(muted["outcome"], "ok", "{muted}");
     drain_outbox(&world.state).await;
     assert_eq!(thing_comments_for(pool, lena.actor).await, told_before);
+
+    // Once the sheet is archived its comments take nothing new, even sent
+    // straight into the conversation instead of through comment_create.
+    sqlx::query(
+        "UPDATE sheets SET archived_at = now(), archived_by_actor_id = $2 WHERE id = $1::uuid",
+    )
+    .bind(&sheet)
+    .bind(lena.actor)
+    .execute(pool)
+    .await
+    .expect("archive the sheet");
+    let refused = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "message_send",
+        json!({"conversationId": comments, "text": "Too late", "clientRequestId": "rook-late"}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let (late,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT count(*) FROM messages WHERE conversation_id = $1::uuid AND plain_text = 'Too late'",
+    )
+    .bind(&comments)
+    .fetch_one(pool)
+    .await
+    .expect("late");
+    assert_eq!(late, 0);
 }
 
 async fn thing_comments_for(pool: &sqlx::PgPool, actor: Uuid) -> i64 {

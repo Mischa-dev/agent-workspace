@@ -109,6 +109,7 @@ function normalizeSidebarChannel(value: unknown): SidebarChannel | null {
     id: item.id,
     name: item.name,
     archivedAt: nullableString(item.archivedAt),
+    private: item.private === true,
     highestSequence: Math.max(0, integer(item.highestSequence)),
     highestSeenSequence: Math.max(0, integer(item.highestSeenSequence)),
     unread: item.unread === true,
@@ -206,6 +207,10 @@ export async function markConversationSeen(input: {
 export async function createChannel(input: {
   projectId: string
   name: string
+  /** Its members only, starting with you (C2.6). */
+  private?: boolean
+  /** A public channel: everyone in the space joins it, now and on arriving. */
+  autoJoin?: boolean
   idempotencyKey: string
 }) {
   const payload = asRecord(await requestJson<unknown>(
@@ -213,7 +218,11 @@ export async function createChannel(input: {
     {
       method: 'POST',
       idempotencyKey: input.idempotencyKey,
-      json: { name: input.name },
+      json: input.private
+        ? { name: input.name, private: true }
+        : input.autoJoin === false
+          ? { name: input.name, autoJoin: false }
+          : { name: input.name },
     },
   ))
   const conversation = asRecord(payload.conversation ?? payload.channel ?? payload)
