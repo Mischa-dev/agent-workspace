@@ -147,7 +147,9 @@ pub struct MadeIntoView {
 /// Puts on each message of `entries` (a page of `conversation`'s timeline,
 /// already read with the viewer's access) what it was made into: the tasks
 /// linked to it, which only a reader who sees tasks in the space is told
-/// of, and every other thing a system entry here says was made from it.
+/// of, the decisions recorded from it, and every other thing a system entry
+/// here says was made from it. The web names each with the reader's access
+/// and leaves out one they can't open.
 pub(crate) async fn attach_made_into<'e, E>(
     executor: E,
     conversation: Uuid,
@@ -176,13 +178,17 @@ where
             JOIN task_rows item ON item.id = link.work_item_id
             WHERE $3 AND link.target_kind = 'message' AND link.target_id = ANY($1)
             UNION ALL
+            SELECT decision.source_message_id, 'decision', decision.id, decision.created_at
+            FROM project_decisions decision
+            WHERE decision.source_message_id = ANY($1)
+            UNION ALL
             SELECT (entry.system_event->>'messageId')::uuid,
                    entry.system_event->>'thingKind',
                    (entry.system_event->>'thingId')::uuid, entry.created_at
             FROM conversation_entries entry
             WHERE entry.conversation_id = $2 AND entry.kind = 'system'
               AND entry.system_event->>'type' = 'made_into'
-              AND entry.system_event->>'thingKind' <> 'task'
+              AND entry.system_event->>'thingKind' NOT IN ('task', 'decision')
               AND (entry.system_event->>'messageId')::uuid = ANY($1)
         ) made
         ORDER BY made.created_at, made.id

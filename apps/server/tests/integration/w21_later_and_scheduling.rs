@@ -692,6 +692,22 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
     assert_eq!(status, StatusCode::OK, "{created}");
     let (_, told) = get(setup, &setup.browser, &timeline_uri).await;
     assert_eq!(made(&told).len(), 2, "{told}");
+    // A decision recorded from it says so the same way.
+    let (status, decision) = call(
+        setup,
+        &pat_browser,
+        "POST",
+        "/api/v2/ops/decision_record",
+        Some("decision-say-so"),
+        json!({"title": "Lunch is at noon", "sourceMessageId": open, "saySo": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{decision}");
+    let (_, told) = get(setup, &setup.browser, &timeline_uri).await;
+    let said = made(&told);
+    assert_eq!(said.len(), 3, "{told}");
+    assert_eq!(said[2]["thingKind"], "decision");
+    assert!(!told.to_string().contains("Lunch is at noon"), "{told}");
     // The message itself carries what it was made into, ids and kinds only.
     let chips = told["entries"]
         .as_array()
@@ -701,8 +717,13 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
         .map(|entry| entry["message"]["madeInto"].clone())
         .expect("the message");
     let chips = chips.as_array().expect("made into");
-    assert_eq!(chips.len(), 3, "{told}");
-    assert!(chips.iter().all(|chip| chip["kind"] == "task"));
+    assert_eq!(chips.len(), 4, "{told}");
+    assert_eq!(
+        chips.iter().filter(|chip| chip["kind"] == "task").count(),
+        3
+    );
+    assert_eq!(chips[3]["kind"], "decision");
+    assert_eq!(chips[3]["id"], decision["value"]["id"], "{decision}");
     assert!(
         chips
             .iter()

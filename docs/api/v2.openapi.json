@@ -21504,6 +21504,10 @@
                     "description": "Also pin the decision to its conversation.",
                     "type": "boolean"
                   },
+                  "saySo": {
+                    "description": "With sourceMessageId: also say in that conversation that you made\nthe message into this decision.",
+                    "type": "boolean"
+                  },
                   "sourceConversationId": {
                     "description": "The conversation or thread where it was decided.",
                     "maxLength": 2048,

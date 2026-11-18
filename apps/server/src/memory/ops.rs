@@ -57,6 +57,10 @@ pub struct DecisionRecordInput {
     /// Also pin the decision to its conversation.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pin: bool,
+    /// With sourceMessageId: also say in that conversation that you made
+    /// the message into this decision.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub say_so: bool,
 }
 
 impl Targeted for DecisionRecordInput {
@@ -117,6 +121,22 @@ impl Operation for DecisionRecord {
             && let Some(conversation_id) = super::decision_conversation(tx, &decision).await?
         {
             super::set_pin(tx, writer, conversation_id, "decision", id, true).await?;
+        }
+        if input.say_so
+            && let Some(message_id) = decision.source_message_id
+            && let Some(conversation_id) = super::decision_conversation(tx, &decision).await?
+        {
+            crate::conversations::system_entries::post(
+                tx,
+                conversation_id,
+                &crate::conversations::system_entries::SystemEvent::MadeInto {
+                    actor_id: viewer,
+                    thing_kind: "decision".to_owned(),
+                    thing_id: id,
+                    message_id: Some(message_id),
+                },
+            )
+            .await?;
         }
         let view = super::get_decision(&mut **tx, id, viewer)
             .await?
