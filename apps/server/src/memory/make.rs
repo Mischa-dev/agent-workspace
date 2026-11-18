@@ -230,15 +230,13 @@ async fn reach_source(
         (None, None, None) => return Ok(()),
     };
     let located =
-        crate::ops::target::locate(&mut **tx, &source, caller.account_id, Some(workspace_id))
-            .await?;
+        crate::ops::target::locate(tx, &source, caller.account_id, Some(workspace_id)).await?;
     let scope = match located.space_id {
         Some(space) => access::Target::Space(space),
         None => access::Target::Workspace(located.workspace_id),
     };
     access::check_locked(tx, caller, need, scope)
-        .await
-        .map_err(AppError::from)?
+        .await?
         .map(|_| ())
         .map_err(|_| OpError::not_found(what))
 }

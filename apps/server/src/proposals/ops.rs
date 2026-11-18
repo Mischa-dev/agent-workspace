@@ -131,7 +131,7 @@ impl Operation for ProposalList {
                         None => crate::access::Need::SEE,
                     };
                     let allowed = crate::access::check(
-                        &mut **tx,
+                        tx,
                         &caller,
                         need,
                         crate::access::Target::Space(proposal.space_id),
