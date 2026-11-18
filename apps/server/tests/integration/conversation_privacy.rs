@@ -573,6 +573,34 @@ async fn sidebar_sections_keep_to_what_you_can_see() {
         items(&section(&starred, "Launch").expect("Launch")),
         vec![ops.clone()]
     );
+    // A place is an index in the section as shown: the group at the top
+    // of Starred, then dragged below the DM.
+    for (position, order) in [
+        (0, vec![ops.clone(), dm.clone()]),
+        (1, vec![dm.clone(), ops.clone()]),
+    ] {
+        let (status, placed) = send(
+            app,
+            op(
+                lena,
+                "sidebar_item_move",
+                json!({"conversationId": ops, "starred": true, "position": position}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{placed}");
+        assert_eq!(items(&placed["value"]["sections"][0]), order, "{placed}");
+    }
+    let (status, back) = send(
+        app,
+        op(
+            lena,
+            "sidebar_item_move",
+            json!({"conversationId": ops, "sectionId": launch}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{back}");
     // The same name twice is refused, whatever its case.
     let (status, twice) = send(
         app,

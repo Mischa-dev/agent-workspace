@@ -641,10 +641,19 @@ impl Operation for SidebarItemMove {
                 .map_err(AppError::from)?;
             let position = match input.position {
                 Some(position) => {
+                    // The position is an index in the section as shown, so
+                    // the rest are numbered 0, 1, 2… again (closing the gap
+                    // the move left), skipping the one it takes.
                     sqlx::query(
                         r#"
-                        UPDATE sidebar_items SET position = position + 1
-                        WHERE section_id = $1 AND position >= $2
+                        UPDATE sidebar_items item SET position = ordered.index
+                            + CASE WHEN ordered.index >= $2 THEN 1 ELSE 0 END
+                        FROM (
+                            SELECT conversation_id,
+                                   (row_number() OVER (ORDER BY position, conversation_id) - 1)::int AS index
+                            FROM sidebar_items WHERE section_id = $1
+                        ) ordered
+                        WHERE item.section_id = $1 AND item.conversation_id = ordered.conversation_id
                         "#,
                     )
                     .bind(section)
