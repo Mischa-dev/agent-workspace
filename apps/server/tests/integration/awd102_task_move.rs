@@ -757,6 +757,49 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
     let _ = w.sub;
 }
 
+/// Review follow-up on #297: a comment naming another task (a structured
+/// reference) moves with its task's discussion; the task it names stays
+/// where it is and the reference still points at it.
+#[tokio::test]
+async fn a_comment_naming_a_task_that_stays_moves_with_its_task() {
+    let Some(setup) = setup("awd102_move_reference").await else {
+        return;
+    };
+    let app = &setup.app;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let w = world(&setup, &codex, &session).await;
+    let commented = tool(
+        app,
+        &codex,
+        &session,
+        "task_comment",
+        json!({"taskId": "SRC-1", "text": "Waits on SRC-3", "clientRequestId": "move-ref"}),
+    )
+    .await;
+    assert_eq!(commented["outcome"], "applied", "{commented}");
+    let stays = task_id(&setup, &w.src, 3).await;
+    let moved = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let reference = sqlx::query_as::<_, (String, String)>(
+        "SELECT reference.project_id::text, reference.work_item_id::text \
+         FROM message_work_item_references reference \
+         JOIN messages message ON message.id = reference.message_id \
+         WHERE message.plain_text LIKE 'Waits on%'",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("reference");
+    assert_eq!(reference, (w.dst.clone(), stays));
+}
+
 #[tokio::test]
 async fn a_move_without_a_preview_carries_what_fits_and_keeps_the_rest() {
     let Some(setup) = setup("awd102_move_legacy").await else {
