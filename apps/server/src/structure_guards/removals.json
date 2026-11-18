@@ -8,7 +8,6 @@
   },
   "account_kind_checks": {
     "auth/mod.rs": "K1.22: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "policy.rs": "K1.31: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "push/actions.rs": "K1.31: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts"
   },
   "account_kind_strings": {}

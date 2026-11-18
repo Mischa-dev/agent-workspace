@@ -438,199 +438,11 @@ pub enum MembershipScope {
     Project(Uuid),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Membership {
-    scope: MembershipScope,
-    grant: RoleGrant,
-    enabled: bool,
-}
-
-impl Membership {
-    pub const fn organization(organization_id: Uuid, grant: RoleGrant, enabled: bool) -> Self {
-        Self {
-            scope: MembershipScope::Organization(organization_id),
-            grant,
-            enabled,
-        }
-    }
-
-    pub const fn project(project_id: Uuid, grant: RoleGrant, enabled: bool) -> Self {
-        Self {
-            scope: MembershipScope::Project(project_id),
-            grant,
-            enabled,
-        }
-    }
-
-    pub const fn scope(self) -> MembershipScope {
-        self.scope
-    }
-
-    pub const fn role(self) -> MembershipRole {
-        self.grant.role
-    }
-
-    pub const fn grant(self) -> RoleGrant {
-        self.grant
-    }
-
-    pub const fn is_enabled(self) -> bool {
-        self.enabled
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProjectScope {
-    pub project_id: Uuid,
-    pub thread_id: Option<Uuid>,
-    pub run_id: Option<Uuid>,
-    pub repository_id: Option<Uuid>,
-    pub work_item_id: Option<Uuid>,
-}
-
-impl ProjectScope {
-    pub const fn project(project_id: Uuid) -> Self {
-        Self {
-            project_id,
-            thread_id: None,
-            run_id: None,
-            repository_id: None,
-            work_item_id: None,
-        }
-    }
-
-    pub const fn thread(project_id: Uuid, thread_id: Uuid) -> Self {
-        Self {
-            project_id,
-            thread_id: Some(thread_id),
-            run_id: None,
-            repository_id: None,
-            work_item_id: None,
-        }
-    }
-
-    pub const fn run(project_id: Uuid, thread_id: Uuid, run_id: Uuid, repository_id: Uuid) -> Self {
-        Self {
-            project_id,
-            thread_id: Some(thread_id),
-            run_id: Some(run_id),
-            repository_id: Some(repository_id),
-            work_item_id: None,
-        }
-    }
-
-    pub const fn work_item(project_id: Uuid, work_item_id: Uuid) -> Self {
-        Self {
-            project_id,
-            thread_id: None,
-            run_id: None,
-            repository_id: None,
-            work_item_id: Some(work_item_id),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DelegatedScope {
-    scope: ProjectScope,
-    allowed_actions: Vec<Action>,
-}
-
-impl DelegatedScope {
-    pub fn new(scope: ProjectScope, allowed_actions: impl IntoIterator<Item = Action>) -> Self {
-        let mut allowed_actions = allowed_actions.into_iter().collect::<Vec<_>>();
-        allowed_actions.sort_unstable_by_key(|action| *action as u8);
-        allowed_actions.dedup();
-
-        Self {
-            scope,
-            allowed_actions,
-        }
-    }
-
-    pub const fn scope(&self) -> ProjectScope {
-        self.scope
-    }
-
-    pub fn allows(&self, action: Action, scope: ProjectScope) -> bool {
-        self.scope == scope && self.allowed_actions.contains(&action)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Subject {
-    actor_id: Uuid,
-    actor_kind: ActorKind,
-    actor_active: bool,
-    membership: Option<Membership>,
-    delegated_scope: Option<DelegatedScope>,
-    /// What an app or agent acting for this person may do, when known
-    /// without the call's agent limits (`with_agent_limits`).
-    agent_limit: Option<PermissionSet>,
-}
-
-impl Subject {
-    pub const fn new(
-        actor_id: Uuid,
-        actor_kind: ActorKind,
-        actor_active: bool,
-        membership: Option<Membership>,
-        delegated_scope: Option<DelegatedScope>,
-    ) -> Self {
-        Self {
-            actor_id,
-            actor_kind,
-            actor_active,
-            membership,
-            delegated_scope,
-            agent_limit: None,
-        }
-    }
-
-    /// The same subject acting through an app or agent limited to `limit`.
-    #[must_use]
-    pub const fn limited_to(mut self, limit: PermissionSet) -> Self {
-        self.agent_limit = Some(limit);
-        self
-    }
-
-    pub const fn actor_id(&self) -> Uuid {
-        self.actor_id
-    }
-
-    pub const fn actor_kind(&self) -> ActorKind {
-        self.actor_kind
-    }
-
-    pub const fn is_actor_active(&self) -> bool {
-        self.actor_active
-    }
-
-    pub const fn membership(&self) -> Option<Membership> {
-        self.membership
-    }
-
-    pub const fn delegated_scope(&self) -> Option<&DelegatedScope> {
-        self.delegated_scope.as_ref()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Resource {
-    Organization { organization_id: Uuid },
-    Project(ProjectScope),
-}
-
+/// Why `work_item_commands::authorize_mutation` refused a change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DenyReason {
-    ActorDisabled,
-    MembershipMissing,
     MembershipDisabled,
-    ActionResourceMismatch,
-    MembershipScopeMismatch,
     RoleDenied,
-    DelegatedScopeMissing,
-    DelegatedScopeMismatch,
     /// The person may, but not through an app or agent.
     AgentLimit,
 }
@@ -647,612 +459,18 @@ impl Decision {
     }
 }
 
-pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decision {
-    if !subject.actor_active {
-        return Decision::Deny(DenyReason::ActorDisabled);
-    }
-
-    let Some(membership) = subject.membership else {
-        return Decision::Deny(DenyReason::MembershipMissing);
-    };
-    if !membership.enabled {
-        return Decision::Deny(DenyReason::MembershipDisabled);
-    }
-
-    let resource_scope = match (action, resource) {
-        (
-            Action::OrganizationProjectCreate
-            | Action::SettingsManage
-            | Action::RoleManage
-            | Action::HostManage
-            | Action::InvitationManage
-            | Action::MembershipView
-            | Action::MembershipManage,
-            Resource::Organization { organization_id },
-        ) => MembershipScope::Organization(organization_id),
-        (
-            Action::ProjectView
-            | Action::ProjectManage
-            | Action::InvitationManage
-            | Action::MembershipView
-            | Action::MembershipManage
-            | Action::ExternalAgentManage
-            | Action::RealtimeSubscribe
-            | Action::McpRead
-            | Action::McpWrite
-            | Action::CredentialManage
-            | Action::ExecutionProfileView
-            | Action::ExecutionProfileManage
-            | Action::NavigationRead
-            | Action::NavigationWrite
-            | Action::WorkerInvoke
-            | Action::RunInterrupt
-            | Action::RunReport
-            | Action::RequestRaise
-            | Action::ChannelCreate
-            | Action::MessageSend
-            | Action::MessageModerate
-            | Action::ConversationMembersChange
-            | Action::ReplySteer
-            | Action::ThreadCreate
-            | Action::ConversationArchive
-            | Action::ReadStateUpdate
-            | Action::MentionSearch
-            | Action::WorkItemView
-            | Action::WorkItemCreate
-            | Action::WorkItemEdit
-            | Action::WorkItemComment
-            | Action::WorkItemArchive
-            | Action::WorkflowManage
-            | Action::PageEdit
-            | Action::WhiteboardEdit
-            | Action::CollectionRecordEdit
-            | Action::CollectionBuild
-            | Action::SheetEdit
-            | Action::RepositoryView
-            | Action::RepositoryManage
-            | Action::RepositoryPublish
-            | Action::GithubIntegrationManage
-            | Action::PullRequestCreate
-            | Action::PullRequestRefresh
-            | Action::PullRequestMerge
-            | Action::SettingsManage,
-            Resource::Project(scope),
-        ) => MembershipScope::Project(scope.project_id),
-        _ => return Decision::Deny(DenyReason::ActionResourceMismatch),
-    };
-
-    if membership.scope != resource_scope {
-        return Decision::Deny(DenyReason::MembershipScopeMismatch);
-    }
-
-    let permission = action.permission();
-
-    if membership.role() == MembershipRole::Worker {
-        if !worker_action_is_delegatable(action) {
-            return Decision::Deny(DenyReason::RoleDenied);
-        }
-
-        let Some(delegated_scope) = subject.delegated_scope.as_ref() else {
-            return Decision::Deny(DenyReason::DelegatedScopeMissing);
-        };
-        let Some(project_scope) = project_scope(resource) else {
-            return Decision::Deny(DenyReason::RoleDenied);
-        };
-        if !delegated_scope.allows(action, project_scope) {
-            return Decision::Deny(DenyReason::DelegatedScopeMismatch);
-        }
-    } else if !membership.grant.permissions.contains(permission) {
-        return Decision::Deny(DenyReason::RoleDenied);
-    }
-
-    // An app or agent acting for a person: that person's permissions, cut
-    // down by their agent limit.
-    if subject.actor_kind == ActorKind::Human
-        && let Some(limit) = subject
-            .agent_limit
-            .or_else(|| current_agent_limit(subject.actor_id, membership.scope))
-        && !limit.contains(permission)
-    {
-        return Decision::Deny(DenyReason::AgentLimit);
-    }
-
-    Decision::Allow
-}
-
-/// What a run may hand its worker: reading where it runs, stopping it, and
-/// posting what its agent says in the run's own thread (`runs::say`).
-const fn worker_action_is_delegatable(action: Action) -> bool {
-    matches!(
-        action,
-        Action::ProjectView | Action::NavigationRead | Action::RunInterrupt | Action::MessageSend
-    )
-}
-
-const fn project_scope(resource: Resource) -> Option<ProjectScope> {
-    match resource {
-        Resource::Project(scope) => Some(scope),
-        Resource::Organization { .. } => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, ActorKind, Decision, DelegatedScope, DenyReason, Membership, MembershipRole,
-        PERMISSIONS, Permission, PermissionScope, PermissionSet, ProjectScope, Resource, RoleGrant,
-        Subject, authorize,
+        Action, MembershipRole, PERMISSIONS, Permission, PermissionScope, PermissionSet, RoleGrant,
     };
+    use crate::access::membership_allows;
     use uuid::Uuid;
 
-    const ORGANIZATION_ID: Uuid = Uuid::from_u128(1);
     const PROJECT_ID: Uuid = Uuid::from_u128(2);
     const OTHER_PROJECT_ID: Uuid = Uuid::from_u128(3);
-    const THREAD_ID: Uuid = Uuid::from_u128(4);
-    const OTHER_THREAD_ID: Uuid = Uuid::from_u128(5);
-    const RUN_ID: Uuid = Uuid::from_u128(6);
-    const REPOSITORY_ID: Uuid = Uuid::from_u128(7);
     const ACTOR_ID: Uuid = Uuid::from_u128(9);
     const OTHER_ACTOR_ID: Uuid = Uuid::from_u128(10);
-
-    fn project_scope() -> ProjectScope {
-        ProjectScope::run(PROJECT_ID, THREAD_ID, RUN_ID, REPOSITORY_ID)
-    }
-
-    fn project_resource(action: Action) -> Resource {
-        match action {
-            Action::OrganizationProjectCreate | Action::RoleManage | Action::HostManage => {
-                Resource::Organization {
-                    organization_id: ORGANIZATION_ID,
-                }
-            }
-            _ => Resource::Project(project_scope()),
-        }
-    }
-
-    fn membership_for(action: Action, role: MembershipRole, enabled: bool) -> Membership {
-        match action {
-            Action::OrganizationProjectCreate | Action::RoleManage | Action::HostManage => {
-                Membership::organization(ORGANIZATION_ID, RoleGrant::built_in(role), enabled)
-            }
-            _ => Membership::project(PROJECT_ID, RoleGrant::built_in(role), enabled),
-        }
-    }
-
-    fn subject(
-        kind: ActorKind,
-        action: Action,
-        role: MembershipRole,
-        actor_active: bool,
-        membership_enabled: bool,
-        delegated_scope: Option<DelegatedScope>,
-    ) -> Subject {
-        Subject::new(
-            ACTOR_ID,
-            kind,
-            actor_active,
-            Some(membership_for(action, role, membership_enabled)),
-            delegated_scope,
-        )
-    }
-
-    fn worker_delegation(action: Action, resource: Resource) -> Option<DelegatedScope> {
-        let scope = match resource {
-            Resource::Project(scope) => scope,
-            Resource::Organization { .. } => return None,
-        };
-        Some(DelegatedScope::new(scope, [action]))
-    }
-
-    /// The roles' permissions before roles became data, kept as the
-    /// reference the built-in roles must still match. Actions added since
-    /// then sit with the action they were split from.
-    #[test]
-    fn exhaustive_ordinary_role_action_matrix() {
-        for role in MembershipRole::ALL {
-            for action in Action::ALL {
-                let resource = project_resource(action);
-                let delegation = (role == MembershipRole::Worker)
-                    .then(|| worker_delegation(action, resource))
-                    .flatten();
-                let decision = authorize(
-                    &subject(ActorKind::Human, action, role, true, true, delegation),
-                    action,
-                    resource,
-                );
-                let expected = match role {
-                    MembershipRole::Owner | MembershipRole::Admin => true,
-                    MembershipRole::Member => matches!(
-                        action,
-                        Action::ProjectView
-                            | Action::RealtimeSubscribe
-                            | Action::McpRead
-                            | Action::McpWrite
-                            | Action::ExecutionProfileView
-                            | Action::ExecutionProfileManage
-                            | Action::NavigationRead
-                            | Action::NavigationWrite
-                            | Action::WorkerInvoke
-                            | Action::RepositoryPublish
-                            | Action::PullRequestCreate
-                            | Action::PullRequestRefresh
-                            | Action::RunInterrupt
-                            | Action::ChannelCreate
-                            | Action::MessageSend
-                            | Action::ThreadCreate
-                            | Action::ConversationArchive
-                            | Action::ReadStateUpdate
-                            | Action::MentionSearch
-                            | Action::WorkItemView
-                            | Action::WorkItemCreate
-                            | Action::WorkItemEdit
-                            | Action::WorkItemComment
-                            | Action::RepositoryView
-                            // Split from WorkItemEdit.
-                            | Action::WorkItemArchive
-                            | Action::PageEdit
-                            | Action::WhiteboardEdit
-                            // AWD-90: members build and fill collections.
-                            | Action::CollectionRecordEdit
-                            | Action::CollectionBuild
-                            // AWD-54: members edit sheets.
-                            | Action::SheetEdit
-                            // A1: every role reports its own runs.
-                            | Action::RunReport
-                            | Action::RequestRaise
-                            // K1.14b: steering agents in chat is a role's.
-                            | Action::ConversationMembersChange
-                            | Action::ReplySteer
-                    ),
-                    MembershipRole::Viewer => {
-                        matches!(
-                            action,
-                            Action::ProjectView
-                                | Action::RealtimeSubscribe
-                                | Action::McpRead
-                                | Action::NavigationRead
-                                | Action::NavigationWrite
-                                | Action::ReadStateUpdate
-                                | Action::WorkItemView
-                                | Action::RepositoryView
-                                | Action::RunReport
-                                | Action::RequestRaise
-                        )
-                    }
-                    MembershipRole::Worker => matches!(
-                        action,
-                        Action::ProjectView
-                            | Action::NavigationRead
-                            | Action::RunInterrupt
-                            | Action::MessageSend
-                    ),
-                };
-
-                assert_eq!(
-                    decision.is_allowed(),
-                    expected,
-                    "{role:?} performing {action:?}: {decision:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn only_owners_and_admins_moderate_messages() {
-        let action = Action::MessageModerate;
-        for role in MembershipRole::ALL {
-            let resource = project_resource(action);
-            let delegation = (role == MembershipRole::Worker)
-                .then(|| worker_delegation(action, resource))
-                .flatten();
-            let decision = authorize(
-                &subject(ActorKind::Human, action, role, true, true, delegation),
-                action,
-                resource,
-            );
-            assert_eq!(
-                decision.is_allowed(),
-                matches!(role, MembershipRole::Owner | MembershipRole::Admin),
-                "{role:?}: {decision:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn disabled_actor_denies_every_action_before_role_or_delegation() {
-        for role in MembershipRole::ALL {
-            for action in Action::ALL {
-                let resource = project_resource(action);
-                let delegation = worker_delegation(action, resource);
-                let decision = authorize(
-                    &subject(ActorKind::Human, action, role, false, true, delegation),
-                    action,
-                    resource,
-                );
-                assert_eq!(
-                    decision,
-                    Decision::Deny(DenyReason::ActorDisabled),
-                    "{role:?} performing {action:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn disabled_membership_denies_every_action_before_role_or_delegation() {
-        for role in MembershipRole::ALL {
-            for action in Action::ALL {
-                let resource = project_resource(action);
-                let delegation = worker_delegation(action, resource);
-                let decision = authorize(
-                    &subject(ActorKind::Human, action, role, true, false, delegation),
-                    action,
-                    resource,
-                );
-                assert_eq!(
-                    decision,
-                    Decision::Deny(DenyReason::MembershipDisabled),
-                    "{role:?} performing {action:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn membership_is_always_required() {
-        for actor_kind in [
-            ActorKind::Human,
-            ActorKind::ExternalAgent,
-            ActorKind::ExecutionWorker,
-            ActorKind::Integration,
-            ActorKind::System,
-        ] {
-            let subject = Subject::new(ACTOR_ID, actor_kind, true, None, None);
-
-            assert_eq!(
-                authorize(
-                    &subject,
-                    Action::ProjectView,
-                    Resource::Project(ProjectScope::project(PROJECT_ID)),
-                ),
-                Decision::Deny(DenyReason::MembershipMissing),
-                "{actor_kind:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn actor_kind_alone_never_creates_a_superuser_bypass() {
-        for actor_kind in [
-            ActorKind::Human,
-            ActorKind::ExternalAgent,
-            ActorKind::ExecutionWorker,
-            ActorKind::Integration,
-            ActorKind::System,
-        ] {
-            let viewer = subject(
-                actor_kind,
-                Action::ProjectManage,
-                MembershipRole::Viewer,
-                true,
-                true,
-                None,
-            );
-
-            assert_eq!(
-                authorize(
-                    &viewer,
-                    Action::ProjectManage,
-                    Resource::Project(ProjectScope::project(PROJECT_ID)),
-                ),
-                Decision::Deny(DenyReason::RoleDenied),
-                "{actor_kind:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn human_and_external_agent_with_the_same_role_have_identical_ordinary_authority() {
-        for role in [
-            MembershipRole::Owner,
-            MembershipRole::Admin,
-            MembershipRole::Member,
-            MembershipRole::Viewer,
-        ] {
-            for action in Action::ALL {
-                let resource = project_resource(action);
-                let human = subject(ActorKind::Human, action, role, true, true, None);
-                let external_agent =
-                    subject(ActorKind::ExternalAgent, action, role, true, true, None);
-
-                assert_eq!(
-                    authorize(&human, action, resource),
-                    authorize(&external_agent, action, resource),
-                    "{role:?} performing {action:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn worker_requires_an_explicit_delegation() {
-        let subject = subject(
-            ActorKind::ExecutionWorker,
-            Action::ProjectView,
-            MembershipRole::Worker,
-            true,
-            true,
-            None,
-        );
-
-        assert_eq!(
-            authorize(
-                &subject,
-                Action::ProjectView,
-                Resource::Project(project_scope()),
-            ),
-            Decision::Deny(DenyReason::DelegatedScopeMissing)
-        );
-    }
-
-    #[test]
-    fn worker_delegation_must_match_the_action() {
-        let scope = project_scope();
-        let subject = subject(
-            ActorKind::ExecutionWorker,
-            Action::ProjectView,
-            MembershipRole::Worker,
-            true,
-            true,
-            Some(DelegatedScope::new(scope, [Action::NavigationRead])),
-        );
-
-        assert_eq!(
-            authorize(&subject, Action::ProjectView, Resource::Project(scope),),
-            Decision::Deny(DenyReason::DelegatedScopeMismatch)
-        );
-    }
-
-    #[test]
-    fn worker_delegation_must_match_every_resource_identifier() {
-        let delegated = project_scope();
-        let subject = subject(
-            ActorKind::ExecutionWorker,
-            Action::ProjectView,
-            MembershipRole::Worker,
-            true,
-            true,
-            Some(DelegatedScope::new(delegated, [Action::ProjectView])),
-        );
-        let mismatches = [
-            ProjectScope {
-                project_id: OTHER_PROJECT_ID,
-                ..delegated
-            },
-            ProjectScope {
-                thread_id: Some(OTHER_THREAD_ID),
-                ..delegated
-            },
-            ProjectScope {
-                run_id: Some(Uuid::from_u128(11)),
-                ..delegated
-            },
-            ProjectScope {
-                repository_id: Some(Uuid::from_u128(12)),
-                ..delegated
-            },
-            ProjectScope {
-                work_item_id: Some(Uuid::from_u128(13)),
-                ..delegated
-            },
-            ProjectScope::project(PROJECT_ID),
-        ];
-
-        for mismatched in mismatches {
-            let decision = authorize(&subject, Action::ProjectView, Resource::Project(mismatched));
-            let expected = if mismatched.project_id == OTHER_PROJECT_ID {
-                Decision::Deny(DenyReason::MembershipScopeMismatch)
-            } else {
-                Decision::Deny(DenyReason::DelegatedScopeMismatch)
-            };
-            assert_eq!(decision, expected, "{mismatched:?}");
-        }
-    }
-
-    #[test]
-    fn worker_cannot_delegate_project_management_or_worker_invocation() {
-        for action in [
-            Action::OrganizationProjectCreate,
-            Action::ProjectManage,
-            Action::NavigationWrite,
-            Action::WorkerInvoke,
-        ] {
-            let resource = project_resource(action);
-            let delegation = worker_delegation(action, resource);
-            let worker = subject(
-                ActorKind::ExecutionWorker,
-                action,
-                MembershipRole::Worker,
-                true,
-                true,
-                delegation,
-            );
-
-            assert_eq!(
-                authorize(&worker, action, resource),
-                Decision::Deny(DenyReason::RoleDenied),
-                "{action:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn cross_scope_memberships_do_not_authorize() {
-        let project_member = Subject::new(
-            ACTOR_ID,
-            ActorKind::Human,
-            true,
-            Some(Membership::project(
-                PROJECT_ID,
-                RoleGrant::built_in(MembershipRole::Owner),
-                true,
-            )),
-            None,
-        );
-        assert_eq!(
-            authorize(
-                &project_member,
-                Action::OrganizationProjectCreate,
-                Resource::Organization {
-                    organization_id: ORGANIZATION_ID,
-                },
-            ),
-            Decision::Deny(DenyReason::MembershipScopeMismatch)
-        );
-
-        let organization_member = Subject::new(
-            ACTOR_ID,
-            ActorKind::Human,
-            true,
-            Some(Membership::organization(
-                ORGANIZATION_ID,
-                RoleGrant::built_in(MembershipRole::Owner),
-                true,
-            )),
-            None,
-        );
-        assert_eq!(
-            authorize(
-                &organization_member,
-                Action::ProjectView,
-                Resource::Project(ProjectScope::project(PROJECT_ID)),
-            ),
-            Decision::Deny(DenyReason::MembershipScopeMismatch)
-        );
-    }
-
-    #[test]
-    fn action_and_resource_must_be_compatible() {
-        let owner = subject(
-            ActorKind::Human,
-            Action::ProjectManage,
-            MembershipRole::Owner,
-            true,
-            true,
-            None,
-        );
-
-        assert_eq!(
-            authorize(
-                &owner,
-                Action::ProjectManage,
-                Resource::Organization {
-                    organization_id: ORGANIZATION_ID,
-                },
-            ),
-            Decision::Deny(DenyReason::ActionResourceMismatch)
-        );
-    }
 
     #[test]
     fn every_permission_is_listed_once_with_a_default_for_each_built_in_role() {
@@ -1314,169 +532,89 @@ mod tests {
 
     #[test]
     fn custom_roles_only_narrow_their_base() {
-        let resource = Resource::Project(ProjectScope::project(PROJECT_ID));
-        let holder = |grant: RoleGrant| {
-            Subject::new(
-                ACTOR_ID,
-                ActorKind::Human,
-                true,
-                Some(Membership::project(PROJECT_ID, grant, true)),
-                None,
-            )
-        };
-        let reader =
-            holder(RoleGrant::stored("member", Some(&["tasks.view"])).expect("valid in the test"));
-        assert!(authorize(&reader, Action::WorkItemView, resource).is_allowed());
+        let reader = RoleGrant::stored("member", Some(&["tasks.view"])).expect("valid in the test");
+        let allows =
+            |grant, permission| membership_allows(ACTOR_ID, PROJECT_ID, grant, true, permission);
+        assert!(allows(reader, Permission::TasksView));
         // Opening the project comes with every role.
-        assert!(authorize(&reader, Action::ProjectView, resource).is_allowed());
-        assert_eq!(
-            authorize(&reader, Action::WorkItemEdit, resource),
-            Decision::Deny(DenyReason::RoleDenied)
-        );
+        assert!(allows(reader, Action::ProjectView.permission()));
+        assert!(!allows(reader, Permission::TasksEdit));
         // Stored keys beyond the base, or unknown ones, grant nothing.
-        let viewer = holder(
-            RoleGrant::stored(
-                "viewer",
-                Some(&["tasks.edit", "settings.manage", "nonsense"]),
-            )
-            .expect("valid in the test"),
-        );
-        for action in Action::ALL {
-            let resource = project_resource(action);
-            let membership = membership_for(action, MembershipRole::Viewer, true);
-            let custom = Subject::new(
-                ACTOR_ID,
-                ActorKind::Human,
-                true,
-                Some(match membership.scope() {
-                    super::MembershipScope::Organization(id) => Membership::organization(
-                        id,
-                        RoleGrant::stored("viewer", Some(&["tasks.edit", "settings.manage"]))
-                            .expect("valid in the test"),
-                        true,
-                    ),
-                    super::MembershipScope::Project(id) => Membership::project(
-                        id,
-                        RoleGrant::stored("viewer", Some(&["tasks.edit", "settings.manage"]))
-                            .expect("valid in the test"),
-                        true,
-                    ),
-                }),
-                None,
-            );
-            let built_in = Subject::new(ACTOR_ID, ActorKind::Human, true, Some(membership), None);
-            if authorize(&custom, action, resource).is_allowed() {
-                assert!(
-                    authorize(&built_in, action, resource).is_allowed(),
-                    "{action:?}"
-                );
+        let custom = RoleGrant::stored(
+            "viewer",
+            Some(&["tasks.edit", "settings.manage", "nonsense"]),
+        )
+        .expect("valid in the test");
+        let viewer = RoleGrant::built_in(MembershipRole::Viewer);
+        for info in PERMISSIONS {
+            if allows(custom, info.permission) {
+                assert!(allows(viewer, info.permission), "{}", info.key);
             }
         }
-        assert_eq!(
-            authorize(&viewer, Action::WorkItemEdit, resource),
-            Decision::Deny(DenyReason::RoleDenied)
-        );
+        assert!(!allows(custom, Permission::TasksEdit));
         assert!(RoleGrant::stored("someone", None::<&[&str]>).is_err());
     }
 
     #[test]
-    fn agent_limits_cut_down_a_person_but_not_an_agent_with_its_own_role() {
-        let resource = Resource::Project(ProjectScope::project(PROJECT_ID));
-        let limit = PermissionSet::EMPTY
-            .with(Permission::ProjectsView)
-            .with(Permission::TasksView);
-        let person = subject(
-            ActorKind::Human,
-            Action::WorkItemEdit,
-            MembershipRole::Member,
-            true,
-            true,
-            None,
-        );
-        assert!(authorize(&person, Action::WorkItemEdit, resource).is_allowed());
-        let through_an_app = person.clone().limited_to(limit);
-        assert_eq!(
-            authorize(&through_an_app, Action::WorkItemEdit, resource),
-            Decision::Deny(DenyReason::AgentLimit)
-        );
-        assert!(authorize(&through_an_app, Action::WorkItemView, resource).is_allowed());
-        // A limit never adds what the role lacks.
-        let viewer = subject(
-            ActorKind::Human,
-            Action::WorkItemEdit,
-            MembershipRole::Viewer,
-            true,
-            true,
-            None,
-        )
-        .limited_to(PermissionSet::all());
-        assert_eq!(
-            authorize(&viewer, Action::WorkItemEdit, resource),
-            Decision::Deny(DenyReason::RoleDenied)
-        );
+    fn workers_and_disabled_memberships_hold_nothing_of_their_own() {
+        let owner = RoleGrant::built_in(MembershipRole::Owner);
+        let worker = RoleGrant::built_in(MembershipRole::Worker);
+        for info in PERMISSIONS {
+            assert!(!membership_allows(
+                ACTOR_ID,
+                PROJECT_ID,
+                owner,
+                false,
+                info.permission
+            ));
+            assert!(!membership_allows(
+                ACTOR_ID,
+                PROJECT_ID,
+                worker,
+                true,
+                info.permission
+            ));
+        }
     }
 
     #[tokio::test]
     async fn a_call_acting_for_a_person_carries_their_limits_into_every_check() {
-        let resource = Resource::Project(ProjectScope::project(PROJECT_ID));
-        let person = subject(
-            ActorKind::Human,
-            Action::WorkItemEdit,
-            MembershipRole::Member,
-            true,
-            true,
-            None,
-        );
-        let other_person = Subject::new(
-            OTHER_ACTOR_ID,
-            ActorKind::Human,
-            true,
-            Some(Membership::project(
-                PROJECT_ID,
-                RoleGrant::built_in(MembershipRole::Member),
-                true,
-            )),
-            None,
-        );
+        let member = RoleGrant::built_in(MembershipRole::Member);
+        let viewer = RoleGrant::built_in(MembershipRole::Viewer);
         let limits = super::AgentLimits {
             actor_id: ACTOR_ID,
             organizations: Default::default(),
             projects: [(
                 PROJECT_ID,
-                PermissionSet::EMPTY.with(Permission::ProjectsView),
+                PermissionSet::EMPTY
+                    .with(Permission::ProjectsView)
+                    .with(Permission::TasksView),
             )]
             .into_iter()
             .collect(),
         };
-        let (edit, view, other, elsewhere) = super::with_agent_limits(limits, async {
-            (
-                authorize(&person, Action::WorkItemEdit, resource),
-                authorize(&person, Action::ProjectView, resource),
-                authorize(&other_person, Action::WorkItemEdit, resource),
-                authorize(
-                    &Subject::new(
-                        ACTOR_ID,
-                        ActorKind::Human,
-                        true,
-                        Some(Membership::project(
-                            OTHER_PROJECT_ID,
-                            RoleGrant::built_in(MembershipRole::Member),
-                            true,
-                        )),
-                        None,
-                    ),
-                    Action::ProjectView,
-                    Resource::Project(ProjectScope::project(OTHER_PROJECT_ID)),
-                ),
-            )
-        })
-        .await;
-        assert_eq!(edit, Decision::Deny(DenyReason::AgentLimit));
-        assert!(view.is_allowed());
+        let allows = |account, space, grant, permission| {
+            membership_allows(account, space, grant, true, permission)
+        };
+        let (edit, view, limited_viewer, other, elsewhere) =
+            super::with_agent_limits(limits, async {
+                (
+                    allows(ACTOR_ID, PROJECT_ID, member, Permission::TasksEdit),
+                    allows(ACTOR_ID, PROJECT_ID, member, Permission::TasksView),
+                    allows(ACTOR_ID, PROJECT_ID, viewer, Permission::TasksEdit),
+                    allows(OTHER_ACTOR_ID, PROJECT_ID, member, Permission::TasksEdit),
+                    allows(ACTOR_ID, OTHER_PROJECT_ID, member, Permission::ProjectsView),
+                )
+            })
+            .await;
+        assert!(!edit);
+        assert!(view);
+        // A limit never adds what the role lacks.
+        assert!(!limited_viewer);
         // Only the person the call acts for is limited.
-        assert!(other.is_allowed());
-        // A project the call didn't load allows nothing.
-        assert_eq!(elsewhere, Decision::Deny(DenyReason::AgentLimit));
-        assert!(authorize(&person, Action::WorkItemEdit, resource).is_allowed());
+        assert!(other);
+        // A space the call didn't load allows nothing.
+        assert!(!elsewhere);
+        assert!(allows(ACTOR_ID, PROJECT_ID, member, Permission::TasksEdit));
     }
 }
