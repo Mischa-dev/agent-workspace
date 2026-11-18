@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 
+import { isApiError } from '../api/errors'
 import { callOp, opQuery } from '../api/ops'
 import { useAuthenticatedSession } from '../auth/session'
 import { useWorkspaceHref, useWorkspaceId } from '../app/workspace'
@@ -90,8 +91,11 @@ export default function ChatHome() {
     }),
   ].sort((left, right) => Number(right.unread) - Number(left.unread) || right.at - left.at || left.name.localeCompare(right.name))
 
-  const loading = sidebar.isPending || (Boolean(spaceId) && channels.isPending) || direct.isPending
-  const failed = sidebar.isError || channels.isError || direct.isError
+  const loading = sidebar.isPending || (Boolean(spaceId) && channels.isPending && !channels.isError) || direct.isPending
+  // Channels of the workspace's own space need the server to serve them
+  // with projects off (K4.25); until it does, the DMs show alone.
+  const channelsOff = isApiError(channels.error) && channels.error.status === 403
+  const failed = sidebar.isError || (channels.isError && !channelsOff) || direct.isError
   const canCreateChannel = Boolean(spaceId) && channels.data?.capabilities.createChannel
 
   return (

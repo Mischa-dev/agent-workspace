@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
+import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { useProjects } from '../projects/hooks'
 import { useShellPage } from '../shell/shellStore'
@@ -27,7 +28,7 @@ import {
 } from '../ui'
 import { useListKeys } from '../ui/listKeys'
 import { savedSearchName, useSavedSearches, useSetSavedSearch } from './savedSearches'
-import { describeFilter, queryFilters, withToken, withoutToken } from './searchQuery'
+import { describeFilter, parseSearchQuery, queryFilters, withToken, withoutToken } from './searchQuery'
 import '../styles/pages.css'
 
 type SearchHit = {
@@ -120,8 +121,11 @@ export function SearchPage() {
       if (projectId) search.set('projectId', projectId)
       return requestJson<{ hits: SearchHit[] }>(`/api/v1/search?${search}`)
     },
-    enabled: query.trim().length > 0,
+    // A filter typed wrong is shown on its chip, not sent.
+    enabled: query.trim().length > 0 && parseSearchQuery(query).errors.length === 0,
+    retry: (count, error) => !(isApiError(error) && error.status < 500) && count < 2,
   })
+  const wrong = parseSearchQuery(query).errors
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const next = new URLSearchParams(params)
@@ -234,6 +238,11 @@ export function SearchPage() {
           </p>
         ) : null}
         <div className="aw-search__results" ref={resultsRef}>
+          {wrong.length ? (
+            <Banner role="note" title={`${wrong.join(', ')} isn’t a filter this search knows.`} tone="warning">
+              Fix it or take it out to search. The filters are from:, in:, during:, on:, before:, after:, has:, is: and kind:.
+            </Banner>
+          ) : null}
           {results.isLoading ? <ListSkeleton label="Searching" rows={3} /> : null}
           {results.isError ? (
             <Banner onRetry={() => void results.refetch()} tone="danger" title="Search didn’t work.">
