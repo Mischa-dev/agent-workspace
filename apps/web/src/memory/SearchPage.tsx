@@ -10,6 +10,7 @@ import {
   Banner,
   Button,
   EmptyState,
+  Icon,
   ListSkeleton,
   PageHeader,
   Row,
@@ -23,6 +24,7 @@ import {
   withEllipses,
 } from '../ui'
 import { useListKeys } from '../ui/listKeys'
+import { describeFilter, queryFilters, withToken, withoutToken } from './searchQuery'
 import '../styles/pages.css'
 
 type SearchHit = {
@@ -66,6 +68,16 @@ function titleAndStatus(hit: SearchHit): { title: string; status: string | null 
   }
   return { title: hit.title, status: null }
 }
+
+/** Filters offered as one click under the box, when they aren't in the query already. */
+const QUICK_FILTERS = [
+  { token: 'from:me', label: 'From you' },
+  { token: 'is:dm', label: 'In DMs' },
+  { token: 'is:unread', label: 'Unread' },
+  { token: 'is:saved', label: 'Saved' },
+  { token: 'has:file', label: 'Has a file' },
+  { token: 'has:link', label: 'Has a link' },
+]
 
 const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 
@@ -117,6 +129,12 @@ export function SearchPage() {
   const resultsRef = useRef<HTMLDivElement>(null)
   useListKeys(resultsRef, '.aw-row__link')
   useShellPage({ mainClassName: 'aw-main--page', project: scope })
+  const filters = queryFilters(query)
+  const searchFor = (next: string) => {
+    const search = new URLSearchParams(params)
+    search.set('q', next)
+    setParams(search)
+  }
   const searchEverything = () => {
     const next = new URLSearchParams(params)
     next.delete('projectId')
@@ -133,13 +151,38 @@ export function SearchPage() {
             id="search-query"
             maxLength={200}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="theming decision, AWD-12, “exact phrase”…"
+            placeholder="theming decision, AWD-12, “exact phrase”, from:@name…"
             value={draft}
           />
           <Button disabled={!draft.trim()} icon="search" type="submit" variant="primary">
             Search
           </Button>
         </form>
+        <div className="aw-search__filters">
+          {filters.length ? (
+            <ul aria-label="Filters in this search" className="aw-search__chips">
+              {filters.map((filter) => (
+                <li className={filter.ok ? 'aw-search__chip' : 'aw-search__chip aw-search__chip--wrong'} key={filter.token}>
+                  <span title={filter.ok ? filter.token : 'This filter takes other values.'}>{describeFilter(filter)}</span>
+                  <button aria-label={`Remove filter: ${describeFilter(filter)}`} onClick={() => searchFor(withoutToken(query, filter.token))} type="button">
+                    <Icon name="x" size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {query.trim()
+            ? QUICK_FILTERS.filter((quick) => !filters.some((filter) => filter.token.toLowerCase() === quick.token)).map((quick) => (
+                <Button icon="plus" key={quick.token} onClick={() => searchFor(withToken(query, quick.token))} size="sm" variant="ghost">
+                  {quick.label}
+                </Button>
+              ))
+            : null}
+        </div>
+        <p className="aw-search__help">
+          Narrow with <code>from:@name</code>, <code>in:#channel</code>, <code>during:2026-10</code>, <code>has:link</code>, <code>is:unread</code> or{' '}
+          <code>kind:task</code>.
+        </p>
         {projectId ? (
           <p className="aw-search__scope">
             <span>
@@ -169,7 +212,7 @@ export function SearchPage() {
               icon="search"
               title="Nothing found"
             >
-              Try fewer or different words.
+              {filters.length ? 'Try fewer filters or different words.' : 'Try fewer or different words.'}
             </EmptyState>
           ) : null}
           {results.data && results.data.hits.length > 0 ? (
