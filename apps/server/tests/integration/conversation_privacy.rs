@@ -135,6 +135,21 @@ async fn non_members_see_no_private_conversation_in_any_list() {
         );
         assert_eq!(found["hits"], json!([]), "{found}");
     }
+    // C2.23: a link card reads the thing with the reader's access, so a
+    // link to any of them draws nothing for Nina, and the group's own
+    // members still get theirs.
+    for id in &hidden {
+        for kind in ["conversation", "thread", "channel"] {
+            let path = format!("/api/v1/things/{kind}/{id}");
+            let (status, card) =
+                send(app, nina.browser.request("GET", &path, None, Value::Null)).await;
+            assert_ne!(status, StatusCode::OK, "{path}: {card}");
+            assert!(!card.to_string().contains("plans"), "{path}: {card}");
+        }
+    }
+    let group_thread = &hidden[4];
+    let card = get(app, lena, &format!("/api/v1/things/thread/{group_thread}")).await;
+    assert_eq!(card["thing"]["title"], "group plans", "{card}");
 
     world.finish().await;
 }
@@ -673,6 +688,153 @@ async fn sidebar_sections_keep_to_what_you_can_see() {
         general.as_str(),
         "{listed}"
     );
+
+    world.finish().await;
+}
+
+/// C2.18: `@design` notifies the group's members who can read the
+/// conversation, and no one else; an archived group notifies nobody.
+#[tokio::test]
+async fn group_mentions_reach_only_members_who_can_read() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("nina", "member")
+        .person("omar", "member")
+        .agent("rook", "member")
+        .private_group("ops", &["lena", "mara"])
+        .build("c2_18_group_mentions")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let work = world.project("WORK");
+    let lena = &world.people["lena"];
+    let ops = world.conversations["ops"].clone();
+    let workspace =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1::uuid")
+            .bind(work)
+            .fetch_one(pool)
+            .await
+            .expect("workspace");
+
+    // Design: Mara, Nina and an agent; Old: Omar, archived.
+    let (design, old) = (Uuid::now_v7(), Uuid::now_v7());
+    for (id, handle, archived, members) in [
+        (
+            design,
+            "design",
+            false,
+            vec![
+                world.people["mara"].actor,
+                world.people["nina"].actor,
+                world.agents["rook"].actor,
+            ],
+        ),
+        (old, "old-team", true, vec![world.people["omar"].actor]),
+    ] {
+        sqlx::query(
+            "INSERT INTO account_groups (id, workspace_id, handle, name, archived_at) \
+             VALUES ($1, $2, $3, $3, CASE WHEN $4 THEN now() END)",
+        )
+        .bind(id)
+        .bind(workspace)
+        .bind(handle)
+        .bind(archived)
+        .execute(pool)
+        .await
+        .expect("group");
+        for member in members {
+            sqlx::query(
+                "INSERT INTO account_group_members (group_id, workspace_id, account_id) VALUES ($1, $2, $3)",
+            )
+            .bind(id)
+            .bind(workspace)
+            .bind(member)
+            .execute(pool)
+            .await
+            .expect("member");
+        }
+    }
+    let (status, made) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/channels"),
+            Some("c2-18-channel"),
+            json!({"name": "studio"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let studio = made["conversation"]["id"]
+        .as_str()
+        .expect("studio")
+        .to_owned();
+
+    let mentioned = |conversation: String| async move {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT recipient_actor_id FROM notifications \
+             WHERE kind = 'mention' AND conversation_id = $1::uuid ORDER BY recipient_actor_id",
+        )
+        .bind(&conversation)
+        .fetch_all(pool)
+        .await
+        .expect("mentions")
+    };
+    for (conversation, key) in [(&ops, "ops"), (&studio, "studio")] {
+        let (status, sent) = send(
+            app,
+            lena.browser.request(
+                "POST",
+                &format!("/api/v1/conversations/{conversation}/messages"),
+                Some(&format!("c2-18-{key}")),
+                json!({"content": text("@design and @old-team, a look? not @designers")}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{sent}");
+    }
+    agent_workspace_server::events::catch_up(pool)
+        .await
+        .expect("catch up");
+
+    // In the group only Mara can read it; in the channel the whole group can.
+    let mara = world.people["mara"].actor;
+    let nina = world.people["nina"].actor;
+    let omar = world.people["omar"].actor;
+    assert_eq!(mentioned(ops.clone()).await, vec![mara]);
+    let in_studio = mentioned(studio.clone()).await;
+    for member in [mara, nina] {
+        assert!(in_studio.contains(&member), "{member} in {in_studio:?}");
+    }
+    // An agent in the group gets no inbox item, the same as an agent named
+    // directly: mention notifications reach accounts with project access.
+    assert!(!in_studio.contains(&omar), "an archived group notified");
+    assert!(!in_studio.contains(&lena.actor), "the author notified");
+
+    // The list suggests it as typed after @, never the archived one.
+    let (status, listed) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            "/api/v2/ops/group_list",
+            None,
+            json!({"prefix": "@des", "members": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(
+        listed["value"]["groups"].as_array().map(Vec::len),
+        Some(1),
+        "{listed}"
+    );
+    assert_eq!(listed["value"]["groups"][0]["handle"], "design");
+    assert_eq!(listed["value"]["groups"][0]["memberCount"], 3);
 
     world.finish().await;
 }

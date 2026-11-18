@@ -31,6 +31,24 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "account_groups",
+                table: "account_groups",
+                references: &[("created_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "account_group_members",
+                table: "account_group_members",
+                references: &[
+                    ("group_id", "account_groups"),
+                    ("account_id", "actors"),
+                    ("added_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "custom_emojis",
                 table: "custom_emojis",
                 references: &[

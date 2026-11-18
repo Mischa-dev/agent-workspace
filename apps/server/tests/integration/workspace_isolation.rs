@@ -2089,6 +2089,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "sidebar_list",
     "profile_get",
     "profile_avatar_list",
+    "group_list",
     "package_export",
     "package_list",
     "package_preview",
@@ -2693,6 +2694,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         case(
             "profile_avatar_list",
             vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // C2.18: a workspace's groups list only in it.
+        case(
+            "group_list",
+            vec![json!({}), json!({"members": true})],
             vec![json!({"workspace": b.organization})],
             vec![],
         ),

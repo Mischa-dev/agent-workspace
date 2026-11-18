@@ -27,6 +27,8 @@ pub const WORKSPACE_ID: &str = "workspace_id";
 /// Workspace-owned tables and their tenant column.
 pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("account_claims", WORKSPACE_ID),
+    ("account_group_members", WORKSPACE_ID),
+    ("account_groups", WORKSPACE_ID),
     ("agent_profiles", ORGANIZATION_ID),
     ("agent_run_acknowledgements", WORKSPACE_ID),
     ("agent_schedules", WORKSPACE_ID),

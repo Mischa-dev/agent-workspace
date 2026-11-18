@@ -47,6 +47,7 @@ pub mod files;
 pub mod forwarding;
 pub mod git_runtime;
 pub mod github;
+pub mod groups;
 pub mod harness_host;
 pub mod harnesses;
 pub mod health;

@@ -678,13 +678,30 @@ async fn message_mentions(
                   )
               AND conversation_visible_to(message.conversation_id, membership.actor_id)
         ),
-        everyone_allowed AS (
-            SELECT actor_id FROM everyone
-            WHERE (SELECT count(*) FROM everyone) <= $3
-               -- Decided when it was sent or last edited, with the app's agent
-               -- limit then in force (messages.may_notify_everyone); older and
-               -- system messages fall back to the author's role.
-               OR COALESCE((SELECT may_notify_everyone FROM message), EXISTS (
+        -- C2.18: `@handle` of a group of this workspace, written as a word:
+        -- its members who can see the conversation, people and agents alike.
+        grouped AS (
+            SELECT DISTINCT member.account_id AS actor_id
+            FROM message
+            JOIN projects space ON space.id = message.project_id
+            JOIN account_groups grp
+              ON grp.workspace_id = space.organization_id AND grp.archived_at IS NULL
+            JOIN account_group_members member
+              ON member.group_id = grp.id AND member.workspace_id = grp.workspace_id
+            WHERE EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(message.content -> 'nodes') node
+                    WHERE node ->> 'type' = 'text'
+                      AND node ->> 'text' ~* ('(^|[^[:alnum:]_@])@' || grp.handle || '($|[^[:alnum:]_-])')
+                  )
+              AND conversation_visible_to(message.conversation_id, member.account_id)
+        ),
+        -- Whether the message may reach many people at once: decided when it
+        -- was sent or last edited, with the app's agent limit then in force
+        -- (messages.may_notify_everyone); older and system messages fall back
+        -- to the author's role.
+        may_reach_many AS (
+            SELECT COALESCE((SELECT may_notify_everyone FROM message), EXISTS (
                    SELECT 1
                    FROM message
                    JOIN project_memberships author
@@ -693,12 +710,25 @@ async fn message_mentions(
                     AND author.enabled
                    WHERE author.role IN ('owner', 'admin')
                      AND custom_role_allows(author.role_id, 'channels.moderate')
-               ))
+               )) AS allowed
+        ),
+        everyone_allowed AS (
+            SELECT actor_id FROM everyone
+            WHERE (SELECT count(*) FROM everyone) <= $3
+               OR (SELECT allowed FROM may_reach_many)
+        ),
+        -- A group as large as a crowd takes the same say as @everyone.
+        grouped_allowed AS (
+            SELECT actor_id FROM grouped
+            WHERE (SELECT count(*) FROM grouped) <= $3
+               OR (SELECT allowed FROM may_reach_many)
         )
         SELECT message.project_id, message.conversation_id, message.author_actor_id,
                recipient.actor_id AS recipient_actor_id
         FROM message
-        JOIN (SELECT actor_id FROM named UNION SELECT actor_id FROM everyone_allowed) recipient
+        JOIN (SELECT actor_id FROM named
+              UNION SELECT actor_id FROM everyone_allowed
+              UNION SELECT actor_id FROM grouped_allowed) recipient
           ON recipient.actor_id <> message.author_actor_id
         WHERE actor_can_access_project(recipient.actor_id, NULL, message.project_id)
           AND conversation_visible_to(message.conversation_id, recipient.actor_id)

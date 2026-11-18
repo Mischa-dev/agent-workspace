@@ -20,6 +20,7 @@
     "profile_get": "describe",
     "profile_update": "change",
     "profile_avatar_list": "query",
+    "group_list": "query",
     "custom_emoji_create": "create",
     "custom_emoji_list": "query",
     "custom_emoji_update": "change",

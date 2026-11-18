@@ -11,6 +11,8 @@ import type { ComposerSubmission } from './composerModel'
 import { ForwardedQuote } from './ForwardedQuote'
 import { ReplyQuote } from './ReplyQuote'
 import { MessageContent } from './MessageContent'
+import { parseMessageContent } from './messageContentModel'
+import { thingsLinkedIn } from '../modules/references/thingLinks'
 import { dayKey, dayLabel, eventLabel, formatFullDate, formatTime } from './timeFormat'
 import { formatDateTime } from '../ui/time'
 import type {
@@ -31,6 +33,14 @@ const PINNED_SLACK = 120
 const NEAR_TOP = 300
 
 const ProfileDialog = lazy(() => import('../profiles/ProfileDialog'))
+const LinkCards = lazy(() => import('../modules/references/LinkCards'))
+
+/** A message's own words, with its links, for finding the things it links to. */
+function linkedThings(message: ConversationMessage) {
+  const parsed = parseMessageContent(message.content)
+  const text = parsed ? parsed.nodes.map((node) => (node.type === 'text' ? node.text : ' ')).join('') : message.plainText
+  return thingsLinkedIn(text ?? '')
+}
 
 function prefersReducedMotion() {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -330,6 +340,7 @@ export function MessageRow({
   const kind = actorKind(message.author.kind)
   const removed = Boolean(message.removed)
   const edited = !removed && (message.revision > 1 || Boolean(message.editedAt))
+  const linked = removed ? [] : linkedThings(message)
   return (
     <article
       aria-label={`${message.author.displayName}, ${formatTime(entry.createdAt)}`}
@@ -407,6 +418,12 @@ export function MessageRow({
                 messageId={message.id}
                 previews={normalizeLinkPreviews(message.linkPreviews)}
               />
+            ) : null}
+            {/* C2.23: a card for each thing in this app it links to, as the reader may see it. */}
+            {linked.length ? (
+              <Suspense fallback={null}>
+                <LinkCards addresses={linked} />
+              </Suspense>
             ) : null}
           </div>
         )}

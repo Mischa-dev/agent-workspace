@@ -92,6 +92,8 @@ export type FilterWrite = { field: string; op: FieldOp; values?: string[] }
 
 export type FollowedThreadView = { id: string; lastActivityAt: string; messageCount: number; name: string; originMessageId?: string | null; outcome?: string | null; parentId: string; parentKind: string; parentName?: string | null; spaceId: string; spaceName: string; status: string; unread: boolean }
 
+export type GroupView = { description: string; handle: string; id: string; memberCount: number; memberIds?: string[] | null; name: string }
+
 export type HistoryCaps = { diff: boolean; list: boolean; restore: boolean; showVersion: boolean }
 
 export type HistoryEntry = { actor?: string | null; actorId?: string | null; at: string; changed: string[]; summary: string; version: number; via?: string | null }
@@ -379,6 +381,10 @@ export type EventListOutput = { connectionId: string; events: Array<Record<strin
 export type FormulaPreviewInput = { collection: string; field?: string | null; formula: string; record?: number | null }
 
 export type FormulaPreviewOutput = { problem?: string | null; record?: PreviewRecord | null; result?: ResultType | null; value?: unknown }
+
+export type GroupListInput = { members?: boolean; prefix?: string | null }
+
+export type GroupListOutput = { groups: GroupView[] }
 
 export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
 
@@ -768,6 +774,7 @@ export type Operations = {
   event_kind_list: { input: EventKindListInput; output: EventKindListOutput }
   event_list: { input: EventListInput; output: EventListOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
+  group_list: { input: GroupListInput; output: GroupListOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
   history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
   history_show: { input: HistoryShowInput; output: HistoryShowOutput }
