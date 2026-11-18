@@ -580,7 +580,11 @@ impl RecordSource for TasksAcross {
         builder.push_bind(self.projects.clone());
         builder.push(") AND core.project_id = ANY(");
         builder.push_bind(self.projects.clone());
-        builder.push(")");
+        // A collection switched off keeps its tasks, hidden (T1.25).
+        builder.push(
+            ") AND EXISTS (SELECT 1 FROM collections task_collection \
+             WHERE task_collection.id = record.collection_id AND task_collection.acts_like_task)",
+        );
         if let Some(collection) = self.collection {
             builder.push(" AND core.collection_id IS NOT DISTINCT FROM ");
             builder.push_bind(collection);

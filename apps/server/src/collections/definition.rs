@@ -225,6 +225,9 @@ pub struct CollectionDefinition {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub title_name: String,
+    /// Its records act like tasks (T1.25).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub acts_like_task: bool,
     pub fields: Vec<FieldWrite>,
     pub views: Vec<ViewWrite>,
 }
@@ -388,6 +391,7 @@ pub async fn describe(
         name: collection.name.clone(),
         description: collection.description.clone(),
         title_name: collection.title_name.clone(),
+        acts_like_task: collection.acts_like_task,
         fields: definitions
             .iter()
             .filter(|field| !field.archived)

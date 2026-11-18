@@ -166,6 +166,30 @@ pub async fn active_under_space(
     .await?)
 }
 
+/// Whether any task of a collection has a run that hasn't finished
+/// (switching it off waits for them).
+pub async fn active_for_collection_tasks(
+    executor: impl sqlx::PgExecutor<'_>,
+    space_id: Uuid,
+    collection_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM runs run
+            JOIN work_items task ON task.id = run.work_item_id AND task.project_id = run.space_id
+            WHERE run.space_id = $1 AND task.collection_id = $2 AND run.state = ANY($3)
+        )
+        "#,
+    )
+    .bind(space_id)
+    .bind(collection_id)
+    .bind(RunState::active_keys())
+    .fetch_one(executor)
+    .await?)
+}
+
 /// Whether a project's repository has a run that hasn't finished: a run on
 /// the built-in host working in it.
 pub async fn active_for_repository(

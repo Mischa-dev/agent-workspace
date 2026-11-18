@@ -314,13 +314,95 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
         .await;
     assert!(sneaky.is_err(), "a Bugs record deleted directly");
 
-    // The switch stays on while it has records.
+    // The switch stays on while one of its tasks is claimed (T1.25).
+    let key_of = |id: Uuid| async move {
+        sqlx::query_scalar::<_, i64>("SELECT number FROM work_items WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("number")
+    };
+    let crash_number = key_of(crash).await;
+    let claimed = call("task_claim", json!({"taskId": crash.to_string()})).await;
+    assert_eq!(claimed["outcome"], "ok", "{claimed}");
     let off = call(
         "collection_write",
         json!({"projectId": "WORK", "collection": "Bugs", "actsLikeTask": false}),
     )
     .await;
     assert_eq!(off["outcome"], "conflict", "{off}");
+    let released = call(
+        "task_release",
+        json!({"taskId": crash.to_string(), "handoff": "Switching Bugs off"}),
+    )
+    .await;
+    assert_eq!(released["outcome"], "ok", "{released}");
+
+    // Switched off, its tasks are hidden and its records are plain records.
+    let off = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Bugs", "actsLikeTask": false}),
+    )
+    .await;
+    assert_eq!(off["outcome"], "ok", "{off}");
+    let visible =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM task_rows WHERE collection_id = $1")
+            .bind(bugs)
+            .fetch_one(pool)
+            .await
+            .expect("visible");
+    assert_eq!(visible, 0, "Bugs' tasks are hidden");
+    let all = call("task_list", json!({"projectId": "WORK"})).await;
+    assert!(
+        all["value"]["tasks"]
+            .as_array()
+            .expect("tasks")
+            .iter()
+            .all(|task| task["title"] != "Crash on save"),
+        "{all}"
+    );
+    let version =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM collection_records WHERE id = $1")
+            .bind(crash)
+            .fetch_one(pool)
+            .await
+            .expect("version");
+    let renamed = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Bugs", "clientRequestId": "bugs-off-1",
+               "records": [{"record": crash.to_string(), "title": "Crash on save, again",
+                            "expectedVersion": version},
+                           {"title": "Added while off"}]}),
+    )
+    .await;
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
+
+    // On again, nothing is lost: the old tasks come back with their keys,
+    // and the record added meanwhile gets a task and a new key.
+    let on = call(
+        "collection_write",
+        json!({"projectId": "WORK", "collection": "Bugs", "actsLikeTask": true}),
+    )
+    .await;
+    assert_eq!(on["outcome"], "ok", "{on}");
+    assert_eq!(key_of(crash).await, crash_number);
+    let back = sqlx::query_as::<_, (String, i64)>(
+        "SELECT title, number FROM task_rows WHERE collection_id = $1 ORDER BY number",
+    )
+    .bind(bugs)
+    .fetch_all(pool)
+    .await
+    .expect("back");
+    assert_eq!(back.len(), 5, "{back:?}");
+    assert!(
+        back.contains(&("Crash on save, again".to_owned(), crash_number)),
+        "{back:?}"
+    );
+    let added = back
+        .iter()
+        .find(|(title, _)| title == "Added while off")
+        .expect("added");
+    assert!(back.iter().filter(|(_, number)| *number == added.1).count() == 1);
 
     // Every task still has exactly one record, and keys stay unique.
     let unmatched = sqlx::query_scalar::<_, i64>(

@@ -71,16 +71,33 @@ pub async fn refusal(
             )));
         }
     }
+    // Switched off, its records keep their tasks hidden, so switching on
+    // again loses nothing; only work in progress holds it.
     if !acts_like_task && current.acts_like_task {
-        let records = sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM collection_records WHERE collection_id = $1",
+        let claimed = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM work_item_claims claim \
+             JOIN work_items task ON task.id = claim.work_item_id \
+             WHERE task.project_id = $1 AND task.collection_id = $2 AND claim.expires_at > now())",
         )
+        .bind(current.project_id)
         .bind(current.id)
         .fetch_one(&mut *connection)
         .await?;
-        if records > 0 {
+        if claimed {
             return Ok(Some(format!(
-                "{}'s records are tasks, with their own history, so it keeps acting like a task. Archive the collection to put it away.",
+                "Someone is working on one of {}'s tasks (it is claimed). Wait for the claim to end, or release it, first.",
+                current.name
+            )));
+        }
+        if crate::runs::store::active_for_collection_tasks(
+            &mut *connection,
+            current.project_id,
+            current.id,
+        )
+        .await?
+        {
+            return Ok(Some(format!(
+                "A run is working on one of {}'s tasks. Wait for it to finish, or stop it, first.",
                 current.name
             )));
         }
@@ -103,8 +120,8 @@ pub async fn refusal(
     Ok(None)
 }
 
-/// Turns the switch on (making a task for each record, as `actor_id`) or
-/// off. `refusal` has said it may.
+/// Turns the switch on (making a task for each record that has none, as
+/// `actor_id`) or off (its tasks stay, hidden). `refusal` has said it may.
 pub async fn switch(
     connection: &mut PgConnection,
     collection_id: Uuid,
@@ -119,7 +136,11 @@ pub async fn switch(
             .await?;
     } else {
         sqlx::query(
-            "UPDATE collections SET acts_like_task = false, version = version + 1, updated_at = now() \
+            // Its records keep their task numbers; new ones follow on.
+            "UPDATE collections SET acts_like_task = false, version = version + 1, updated_at = now(), \
+                 next_number = GREATEST(next_number, \
+                     (SELECT COALESCE(max(record.number), 0) + 1 FROM collection_records record \
+                      WHERE record.collection_id = collections.id)) \
              WHERE id = $1 AND builtin IS NULL",
         )
         .bind(collection_id)
