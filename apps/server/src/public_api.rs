@@ -354,7 +354,7 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     let Some(branches) = result.get_mut("oneOf").and_then(Value::as_array_mut) else {
         return;
     };
-    for branch in branches {
+    for branch in branches.iter_mut() {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
             // A paused account's answer (A2.10) is the same for every
@@ -381,6 +381,27 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
             *branch = json!({ "$ref": format!("#/components/schemas/{key}") });
         }
     }
+    // Most results refuse in the same few ways: the list of shared refusals
+    // is shared in turn, so each result names it once.
+    let shared: Vec<Value> = branches
+        .iter()
+        .filter(|branch| branch.get("$ref").is_some())
+        .cloned()
+        .collect();
+    if shared.len() < 2 {
+        return;
+    }
+    let group = json!({ "oneOf": shared });
+    let key = (1..)
+        .map(|index| match index {
+            1 => "Refusals".to_owned(),
+            index => format!("Refusals{index}"),
+        })
+        .find(|key| components.get(key).is_none_or(|kept| *kept == group))
+        .unwrap_or_default();
+    components.entry(key.clone()).or_insert(group);
+    branches.retain(|branch| branch.get("$ref").is_none());
+    branches.push(json!({ "$ref": format!("#/components/schemas/{key}") }));
 }
 
 fn point_refs(value: &mut Value, renamed: &BTreeMap<String, String>) {
