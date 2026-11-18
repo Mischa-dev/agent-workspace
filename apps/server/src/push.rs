@@ -629,7 +629,13 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
         let (quiet, _) =
             notification_settings::quiet_hours(&mut connection, organization_id, job.recipient)
                 .await?;
-        if let Some(ends) = quiet.ends_after(Utc::now()) {
+        // Questions and approvals waiting on the person can break through
+        // quiet hours and days when they allow it (C2.14).
+        let urgent = matches!(
+            notification.kind.as_str(),
+            notifications::kind::REQUEST_RAISED | notifications::kind::RUN_WAITING
+        );
+        if let Some(ends) = quiet.ends_after_for(Utc::now(), urgent) {
             jobs::enqueue(
                 &state.pool,
                 NewJob::new(DELIVER_KIND)

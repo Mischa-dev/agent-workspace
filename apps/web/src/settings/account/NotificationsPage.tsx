@@ -342,10 +342,14 @@ function DevicesSection() {
   )
 }
 
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+
 function QuietHoursSection({ settings }: { settings: NotificationSettings }) {
   const queryClient = useQueryClient()
   const quiet = settings.quietHours
   const [enabled, setEnabled] = useState(quiet.enabled)
+  const [days, setDays] = useState(quiet.days ?? 0)
+  const [urgent, setUrgent] = useState(quiet.urgentBreaks ?? false)
   const [start, setStart] = useState(minuteToTime(quiet.start))
   const [end, setEnd] = useState(minuteToTime(quiet.end))
   const [timeZone, setTimeZone] = useState(quiet.timeZone ?? browserTimeZone())
@@ -358,6 +362,8 @@ function QuietHoursSection({ settings }: { settings: NotificationSettings }) {
       if (startMinute != null) await setPersonalSetting(organization, 'notifications.quiet_hours_start', startMinute)
       if (endMinute != null) await setPersonalSetting(organization, 'notifications.quiet_hours_end', endMinute)
       await setPersonalSetting(organization, 'notifications.time_zone', timeZone.trim() || null)
+      if (days !== (quiet.days ?? 0)) await setPersonalSetting(organization, 'notifications.quiet_days', days)
+      if (urgent !== (quiet.urgentBreaks ?? false)) await setPersonalSetting(organization, 'notifications.urgent_breaks_quiet', urgent)
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: notificationKeys.settings })
@@ -372,7 +378,7 @@ function QuietHoursSection({ settings }: { settings: NotificationSettings }) {
   }
   return (
     <Section
-      description="Hold pushes every night. They arrive when quiet hours end; the inbox still collects everything."
+      description="Hold pushes every night, and on whole days such as the weekend. They arrive when quiet hours end; the inbox still collects everything."
       id="quiet-heading"
       title="Quiet hours"
     >
@@ -386,6 +392,20 @@ function QuietHoursSection({ settings }: { settings: NotificationSettings }) {
           <TextField disabled={!enabled} error={endMinute == null ? 'Use a time such as 07:00.' : null} label="Until" onChange={(event) => setEnd(event.target.value)} type="time" value={end} />
           <TimeZoneField onChange={setTimeZone} value={timeZone} />
         </div>
+        <div aria-label="Quiet all day" className="aw-form__actions" role="group">
+          <span className="aw-field__label">Quiet all day</span>
+          {WEEKDAYS.map((day, index) => (
+            <Button aria-pressed={(days & (1 << index)) !== 0} key={day} onClick={() => setDays(days ^ (1 << index))} size="sm" variant="ghost">
+              {day}
+            </Button>
+          ))}
+        </div>
+        <Switch
+          checked={urgent}
+          description="Questions and approvals waiting on your answer still reach you in quiet hours and on quiet days. A pause holds them too."
+          label="Let urgent ones through"
+          onChange={setUrgent}
+        />
         <div className="aw-form__actions">
           <Button busy={save.isPending} type="submit" variant="primary">
             Save quiet hours

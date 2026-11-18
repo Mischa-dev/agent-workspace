@@ -233,6 +233,12 @@ export type QuietHours = {
   timeZone: string | null
   /** A pause set by hand, as an ISO time; past or absent means not paused. */
   pausedUntil?: string | null
+  /** Whole quiet days: one bit a day, Monday first (C2.14). */
+  days?: number
+  /** Questions and approvals waiting on you break through quiet hours and days. */
+  urgentBreaks?: boolean
+  /** Away until, from your status: it holds notifications like a pause. */
+  awayUntil?: string | null
 }
 
 export type NotificationSettings = {
