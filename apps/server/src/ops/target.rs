@@ -123,6 +123,12 @@ const KINDS: &[(&str, &str)] = &[
          WHERE item.id = $1 AND $2::uuid IS NOT NULL",
     ),
     (
+        "milestone",
+        "SELECT project.organization_id, project.id FROM project_milestones milestone \
+         JOIN projects project ON project.id = milestone.project_id \
+         WHERE milestone.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
         "collection",
         "SELECT project.organization_id, project.id FROM collections collection \
          JOIN projects project ON project.id = collection.project_id \
@@ -328,6 +334,7 @@ fn what_of(kind: &str) -> &'static str {
         "scheduled_message" => "That scheduled message",
         "decision" => "That decision",
         "task" => "That task",
+        "milestone" => "That milestone",
         "run" => "That run",
         "page" => "That page",
         "sheet" => "That sheet",

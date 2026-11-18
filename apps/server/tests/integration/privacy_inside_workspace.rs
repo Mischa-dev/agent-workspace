@@ -3042,6 +3042,19 @@ async fn triage_keeps_to_the_edit_and_workflow_permissions() {
     .execute(world.pool())
     .await
     .expect("viewer in the workspace space");
+    // Milestones (T1.42): a viewer can't reorder them.
+    let made = as_owner(
+        "milestone_write",
+        json!({"projectId": "TRI", "name": "Ordered", "clientRequestId": "ordered"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let refused = as_rook(
+        "milestone_reorder",
+        json!({"milestoneId": made["value"]["id"], "position": 1}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     let refused = as_rook(
         "initiative_create",
         json!({"title": "Viewer's plan", "clientRequestId": "viewer-plan"}),

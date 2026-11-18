@@ -770,6 +770,18 @@ pub(super) struct MilestoneValue {
     pub initiative: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initiative_id: Option<String>,
+    /// Its place in the space's order, 1 being first (milestone_reorder).
+    #[serde(default)]
+    pub position: i32,
+    /// Its tasks' estimates added up (canceled ones left out), and the
+    /// completed ones'.
+    #[serde(default)]
+    pub estimate_total: f64,
+    #[serde(default)]
+    pub estimate_done: f64,
+    /// The latest due date among its tasks, YYYY-MM-DD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_due_date: Option<String>,
     /// Tasks not yet finished.
     #[serde(default)]
     pub open: i64,
@@ -810,6 +822,10 @@ fn milestone_value(state: &AppState, project_id: Uuid, view: MilestoneView) -> M
         progress: view.progress,
         initiative: view.initiative,
         initiative_id: view.initiative_id.map(|id| id.to_string()),
+        position: view.position,
+        estimate_total: view.estimate_total,
+        estimate_done: view.estimate_done,
+        latest_due_date: view.latest_due_date.map(|date| date.to_string()),
         idempotent_replay: false,
     }
 }

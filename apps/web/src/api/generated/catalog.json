@@ -1309,6 +1309,22 @@
   },
   {
     "automation": true,
+    "destructive": false,
+    "emits": [
+      "milestone.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "milestone_reorder",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Reorder milestones"
+  },
+  {
+    "automation": true,
     "destructive": true,
     "emits": [
       "module.removed"

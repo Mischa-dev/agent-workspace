@@ -2082,6 +2082,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "dashboard_list",
     "whiteboard_template_list",
     "milestone_list",
+    "cycle_list",
+    "triage_rule_list",
+    "initiative_list",
     "module_list",
     "module_open",
     "my_permissions",
@@ -2379,6 +2382,15 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         by_project("milestone_list"),
+        by_project("cycle_list"),
+        by_project("triage_rule_list"),
+        // T1.26: B's initiatives never list in A.
+        case(
+            "initiative_list",
+            vec![json!({}), json!({"workspace": a.organization})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
         by_project("task_ready_list"),
         by_project("dependency_graph"),
         case(

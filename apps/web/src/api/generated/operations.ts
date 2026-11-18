@@ -164,6 +164,8 @@ export type MessageContent = { nodes: MessageNode[]; version: number }
 
 export type MessageNode = { text: string; type: "text" } | { actorId: string; type: "mention" } | { type: "work_item_ref"; workItemId: string }
 
+export type MilestonePlace = { archived: boolean; id: string; name: string; position: number; version: number }
+
 export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
 
 export type NavEntry = { icon?: string | null; label: string; target: unknown }
@@ -646,6 +648,10 @@ export type MessageUpdateInput = { content?: MessageContent | null; expectedRevi
 
 export type MessageUpdateOutput = { changed: boolean; conversationId: string; editedAt?: string | null; idempotentReplay: boolean; messageId: string; newlyMentioned?: string[]; revision: number; text: string; url: string }
 
+export type MilestoneReorderInput = { expectedVersion?: number | null; milestoneId: string; position: number }
+
+export type MilestoneReorderOutput = { milestones: MilestonePlace[] }
+
 export type ModuleArchiveInput = { moduleId: string; parts: ArchiveParts }
 
 export type ModuleArchiveOutput = { archived: boolean; archivedParts?: string | null; description: string; icon?: string | null; id: string; key: string; name: string; nav: NavView[]; on: boolean; parts: PartView[]; revision: number; spaceId?: string | null }
@@ -1033,6 +1039,7 @@ export type Operations = {
   message_schedule: { input: MessageScheduleInput; output: MessageScheduleOutput }
   message_send: { input: MessageSendInput; output: MessageSendOutput }
   message_update: { input: MessageUpdateInput; output: MessageUpdateOutput }
+  milestone_reorder: { input: MilestoneReorderInput; output: MilestoneReorderOutput }
   module_archive: { input: ModuleArchiveInput; output: ModuleArchiveOutput }
   module_create: { input: ModuleCreateInput; output: ModuleCreateOutput }
   module_open: { input: ModuleOpenInput; output: ModuleOpenOutput }

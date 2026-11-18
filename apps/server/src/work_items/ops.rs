@@ -43,7 +43,8 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<CycleList>()
         .add::<CycleSet>()
         .add::<InitiativeList>()
-        .add::<InitiativeCreate>();
+        .add::<InitiativeCreate>()
+        .add::<MilestoneReorder>();
 }
 
 /// The bookkeeping every task write shares: a keyed call is retry-safe
@@ -1433,5 +1434,112 @@ impl Operation for InitiativeCreate {
             title: record.title,
             collection_id: collection.id.to_string(),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// milestone_reorder
+
+pub struct MilestoneReorder;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MilestoneReorderInput {
+    /// The milestone to move: its ID (milestone_list).
+    pub milestone_id: IdRef,
+    /// Its new place among its space's milestones, 1 being first. A place
+    /// past the end puts it last.
+    pub position: i32,
+    /// The milestone's version you last read; a change since is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<i64>,
+}
+
+impl Targeted for MilestoneReorderInput {
+    fn target(&self) -> Target {
+        Target::thing("milestone", self.milestone_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MilestoneOrder {
+    /// The space's milestones in their new order, archived ones last.
+    pub milestones: Vec<MilestonePlace>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MilestonePlace {
+    pub id: String,
+    pub name: String,
+    pub position: i32,
+    pub version: i64,
+    pub archived: bool,
+}
+
+impl Operation for MilestoneReorder {
+    const NAME: &'static str = "milestone_reorder";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["milestone.updated"];
+    const TITLE: &'static str = "Reorder milestones";
+    const DESCRIPTION: &'static str = "Move a milestone to a new place in its space's order \
+        (1 is first); the milestones page, the timeline and milestone_list show that order.";
+
+    type Input = MilestoneReorderInput;
+    type Output = MilestoneOrder;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: MilestoneReorderInput,
+    ) -> Result<MilestoneOrder, OpError> {
+        let actor = locked_space(call).await?;
+        let tx = call.tx().await?;
+        match crate::work_item_planning::reorder_milestone(
+            tx,
+            &actor,
+            input.milestone_id.id(),
+            input.expected_version,
+            input.position,
+        )
+        .await?
+        {
+            Ok(()) => {}
+            Err(crate::work_item_planning::MilestoneRefusal::VersionConflict {
+                current_version,
+            }) => {
+                return Err(OpError::Conflict {
+                    reason: crate::ops::ConflictReason::Version { current_version },
+                    message: format!(
+                        "Someone changed this milestone first (now version {current_version}). Read it again, then retry."
+                    )
+                    .into(),
+                    current: None,
+                });
+            }
+            Err(_) => return Err(OpError::not_found("That milestone")),
+        }
+        let milestones = sqlx::query_as::<_, (uuid::Uuid, String, i32, i64, bool)>(
+            "SELECT id, name, position, version, archived_at IS NOT NULL FROM project_milestones \
+             WHERE project_id = $1 ORDER BY archived_at IS NOT NULL, position, id",
+        )
+        .bind(actor.project_id)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?
+        .into_iter()
+        .map(|(id, name, position, version, archived)| MilestonePlace {
+            id: id.to_string(),
+            name,
+            position,
+            version,
+            archived,
+        })
+        .collect();
+        call.audited_by_command();
+        Ok(MilestoneOrder { milestones })
     }
 }

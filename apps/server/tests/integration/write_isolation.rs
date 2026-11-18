@@ -36,11 +36,20 @@
 //! `every_write_route_and_write_tool_has_an_isolation_case` reads the server
 //! sources and fails until that's done.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    sync::Arc,
+};
 
 use agent_workspace_server::policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod};
 use agent_workspace_server::test_support::source::{
     routes as shared_routes, rust_files, server_src, strip_tests,
+};
+use agent_workspace_server::{
+    AppState,
+    limits::{Bucket, LimitKey, LimitSource},
+    rate_limit::RateLimiters,
+    router,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -65,6 +74,15 @@ use super::{
         upload,
     },
 };
+
+/// Every budget far beyond what the sweep spends.
+struct Unmetered;
+
+impl LimitSource for Unmetered {
+    fn limit_for(&self, _bucket: &Bucket, _key: &LimitKey<'_>) -> Option<u32> {
+        Some(1_000_000)
+    }
+}
 
 /// Every mutating route this suite calls, as `"METHOD /path"` with the path
 /// as written in the server's `.route(...)` calls.
@@ -534,6 +552,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_send",
     "message_update",
     "milestone_write",
+    "milestone_reorder",
     "module_archive",
     "module_create",
     "module_part_link",
@@ -3077,8 +3096,14 @@ async fn one_workspace_never_writes_to_another() {
         return;
     };
     let TwoWorkspaces {
-        app, pool, a, b, ..
+        pool, a, b, state, ..
     } = &fixture;
+    // Thousands of calls as A's and B's apps and agents, to prove isolation,
+    // not budgets (`hosting_limits` proves those): none runs out mid-sweep.
+    let app = &router(AppState {
+        rate_limits: RateLimiters::with_source(Arc::new(Unmetered)),
+        ..state.clone()
+    });
     let ax = more_targets(app, pool, a).await;
     let bx = more_targets(app, pool, b).await;
     let sp = spares(app, pool, a, &ax).await;
@@ -7519,6 +7544,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "milestoneId": bx.milestone, "name": "Net", "expectedVersion": version("project_milestones", bx.milestone)}),
             json!({"projectId": a.project, "milestoneId": ax.milestone, "addTasks": [b.task], "expectedVersion": version("project_milestones", ax.milestone)}),
         ]),
+        // T1.42: a milestone moves only within its own space's order.
+        mcp_case(
+            "milestone_reorder",
+            json!({"milestoneId": ax.milestone, "position": 1}),
+            vec![json!({"milestoneId": bx.milestone, "position": 1})],
+        ),
         // AI
         mcp_case(
             "ai_suggestion_decide",

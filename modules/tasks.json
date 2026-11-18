@@ -55,6 +55,7 @@
     "template_write": "change",
     "recurring_write": "change",
     "milestone_list": "query",
+    "milestone_reorder": "change",
     "milestone_write": "change",
     "dependency_graph": "query",
     "plan_import": "create"

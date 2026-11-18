@@ -442,6 +442,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 references: &[
                     ("project_id", "projects"),
                     ("created_by_actor_id", "actors"),
+                    ("initiative_id", "collection_records"),
                 ],
                 text_references: &[],
                 exclude: &[],

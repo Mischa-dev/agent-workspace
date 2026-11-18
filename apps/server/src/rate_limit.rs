@@ -655,6 +655,16 @@ impl RateLimiters {
             password_kdfs: Arc::new(Semaphore::new(CONCURRENT_PASSWORD_KDFS)),
         }
     }
+
+    /// The budgets, with their numbers from `source` (a plan, or a suite
+    /// that makes thousands of calls as one credential to prove something
+    /// other than its limits).
+    pub fn with_source(source: Arc<dyn LimitSource>) -> Self {
+        Self {
+            limits: Limits::new(source),
+            password_kdfs: Arc::new(Semaphore::new(CONCURRENT_PASSWORD_KDFS)),
+        }
+    }
 }
 
 /// The numbers the configuration sets; every other bucket keeps its own.

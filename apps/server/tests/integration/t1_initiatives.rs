@@ -152,3 +152,78 @@ async fn an_initiative_counts_only_the_spaces_its_reader_can_see() {
 
     world.finish().await;
 }
+
+/// T1.42: a space's milestones keep the order set through the tool, and
+/// each reads its roll-up.
+#[tokio::test]
+async fn milestones_keep_their_order_and_roll_up_their_tasks() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("laptop")
+        .build("t1_milestone_order")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let laptop = &world.apps["laptop"];
+    let call = |name: &'static str, arguments: Value| async move {
+        laptop.call(app, Call::Tool { name, arguments }).await.1
+    };
+    let mut ids = Vec::new();
+    for (name, date) in [
+        ("Alpha", "2026-12-01"),
+        ("Beta", "2026-12-15"),
+        ("Gamma", ""),
+    ] {
+        let made = call(
+            "milestone_write",
+            json!({"projectId": "WORK", "name": name, "targetDate": date,
+                   "clientRequestId": format!("order-{name}")}),
+        )
+        .await;
+        assert_eq!(made["outcome"], "ok", "{made}");
+        ids.push(made["value"]["id"].as_str().expect("id").to_owned());
+    }
+    for (index, (status, estimate, due)) in [
+        ("Done", 3.0, "2026-12-10"),
+        ("Ready", 2.0, "2026-12-20"),
+        ("Canceled", 8.0, "2027-01-30"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let created = call(
+            "task_create",
+            json!({"projectId": "WORK", "title": format!("Rolled {index}"), "status": status,
+                   "milestone": "Beta", "estimate": estimate, "dueDate": due,
+                   "clientRequestId": format!("rolled-{index}")}),
+        )
+        .await;
+        assert_eq!(created["outcome"], "ok", "{created}");
+    }
+    let moved = call(
+        "milestone_reorder",
+        json!({"milestoneId": ids[2], "position": 1}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let listed = call("milestone_list", json!({"projectId": "WORK"})).await;
+    let milestones = listed["value"]["milestones"]
+        .as_array()
+        .expect("milestones");
+    let names: Vec<&str> = milestones
+        .iter()
+        .map(|milestone| milestone["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(names, ["Gamma", "Alpha", "Beta"], "{listed}");
+    let beta = &milestones[2];
+    assert_eq!(beta["estimateTotal"], 5.0, "{beta}");
+    assert_eq!(beta["estimateDone"], 3.0, "{beta}");
+    assert_eq!(beta["latestDueDate"], "2026-12-20", "{beta}");
+    assert_eq!(
+        (beta["finished"].as_i64(), beta["total"].as_i64()),
+        (Some(1), Some(2))
+    );
+    world.finish().await;
+}
