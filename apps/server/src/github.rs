@@ -5310,11 +5310,16 @@ async fn ensure_github_actor(
         .await?;
         return Ok(actor_id);
     }
-    let actor_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'integration', 'active')")
-        .bind(actor_id)
-        .execute(&mut **transaction)
+    let workspace: Uuid = sqlx::query_scalar("SELECT organization_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(&mut **transaction)
         .await?;
+    let actor_id = crate::accounts::create_app(
+        transaction,
+        crate::accounts::Owner::Workspace(workspace),
+        None,
+    )
+    .await?;
     sqlx::query(
         "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle, enabled) VALUES ($1, $2, $3, 'member', 'GitHub', 'github_integration', true)",
     )

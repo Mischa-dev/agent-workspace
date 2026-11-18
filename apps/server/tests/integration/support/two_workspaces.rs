@@ -1125,8 +1125,10 @@ async fn build_workspace(
         .await
         .expect("owner");
         let account = sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO actors (id, kind, status) VALUES (gen_random_uuid(), 'integration', 'active') RETURNING id",
+            "INSERT INTO actors (id, kind, status, owner_workspace_id) \
+             VALUES (gen_random_uuid(), 'integration', 'active', $1) RETURNING id",
         )
+        .bind(organization)
         .fetch_one(pool)
         .await
         .expect("host account");

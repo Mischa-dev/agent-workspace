@@ -8,8 +8,8 @@
 //!   `Reach`).
 //! - `decide`: the pure core, with no database and no account kind.
 //! - `holding`: what a caller holds in one scope.
-//! - `compare`: old and new checks side by side while areas move (K1 §4.3).
-//! - `http`: the operators' view of recorded disagreements.
+//! - `sharing`: one thing shared with an account or by link (K1.32).
+//! - `tier`: a role's standing for ownership and granting.
 //! - `credentials`: an account's secrets: made, rotated, revoked (K1.23).
 //! - `tokens`: short-lived narrow tokens for one account (K1.24).
 //! - `manage`: the one rule for managing an agent or app account, and

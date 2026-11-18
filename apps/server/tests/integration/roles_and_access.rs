@@ -2037,11 +2037,15 @@ async fn sql_permission_helpers_hold_to_the_base_role() {
     .await
     .expect("viewer");
     let worker = Uuid::now_v7();
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
-        .bind(worker)
-        .execute(&setup.pool)
-        .await
-        .expect("worker actor");
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_workspace_id) \
+         SELECT $1, 'execution_worker', organization_id FROM projects WHERE id = $2",
+    )
+    .bind(worker)
+    .bind(project)
+    .execute(&setup.pool)
+    .await
+    .expect("worker actor");
     sqlx::query(
         "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
          VALUES ($1, $2, $3, 'worker', 'Base worker', 'base-worker')",

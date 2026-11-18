@@ -897,11 +897,15 @@ async fn insert_active_run_fixture(pool: &PgPool, project_id: Uuid, owner_actor_
     let run_id = Uuid::now_v7();
     let suffix = run_id.simple().to_string();
     let mut transaction = pool.begin().await.expect("active-run transaction");
-    sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'execution_worker')")
-        .bind(worker_actor_id)
-        .execute(&mut *transaction)
-        .await
-        .expect("insert execution Worker Actor");
+    sqlx::query(
+        "INSERT INTO actors (id, kind, owner_workspace_id) \
+         SELECT $1, 'execution_worker', organization_id FROM projects WHERE id = $2",
+    )
+    .bind(worker_actor_id)
+    .bind(project_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("insert execution Worker Actor");
     sqlx::query(
         r#"
         INSERT INTO project_memberships (
