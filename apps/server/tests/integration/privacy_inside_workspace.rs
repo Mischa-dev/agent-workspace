@@ -2827,6 +2827,45 @@ async fn channel_writes_keep_to_private_channels() {
     .await;
     assert_eq!(status, StatusCode::OK, "{seen}");
     assert_eq!(seen["value"]["tabs"][0]["title"], "Launch plan", "{seen}");
+    // Moving the last tab to the front shifts the others along.
+    let mut pages = vec![page.clone()];
+    for title in ["Budget", "Retro"] {
+        let request = lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({"title": title, "body": "Notes"}),
+        );
+        let (status, made) = send(app, request).await;
+        assert!(status.is_success(), "{made}");
+        let id = made["id"]
+            .as_str()
+            .or_else(|| made["page"]["id"].as_str())
+            .expect("page")
+            .to_owned();
+        let (status, tabs) = op(
+            &lena.browser,
+            "conversation_tab_set",
+            json!({"conversationId": open, "page": id}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{tabs}");
+        pages.push(id);
+    }
+    let (status, moved) = op(
+        &lena.browser,
+        "conversation_tab_set",
+        json!({"conversationId": open, "page": pages[2], "position": 0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    let titles: Vec<&str> = moved["value"]["tabs"]
+        .as_array()
+        .expect("tabs")
+        .iter()
+        .filter_map(|tab| tab["title"].as_str())
+        .collect();
+    assert_eq!(titles, ["Retro", "Launch plan", "Budget"], "{moved}");
     for (who, conversation) in [(&omar.browser, &secret), (&nate.browser, &open)] {
         let (status, refused) = op(
             who,

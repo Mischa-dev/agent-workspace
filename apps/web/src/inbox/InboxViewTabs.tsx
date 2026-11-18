@@ -65,13 +65,18 @@ export function InboxViewTabs({
     ]
   }
 
-  // Positions are rewritten for the two that swap, so ties can't stick.
+  // Every view is numbered again in its new order, so gaps or ties in the
+  // stored positions can't move a view that wasn't touched.
   const move = async (at: number, by: -1 | 1) => {
     const other = list[at + by]
     const saved = list[at]
     if (!other || !saved) return
-    await run({ inboxViewId: saved.id, position: at + by }, 'The view wasn’t moved')
-    await run({ inboxViewId: other.id, position: at }, 'The view wasn’t moved')
+    const order = [...list]
+    order[at] = other
+    order[at + by] = saved
+    for (const [index, view] of order.entries()) {
+      if (view.position !== index) await run({ inboxViewId: view.id, position: index }, 'The view wasn’t moved')
+    }
   }
 
   return (

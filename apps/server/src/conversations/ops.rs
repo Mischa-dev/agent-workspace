@@ -1282,6 +1282,35 @@ impl Operation for ConversationTabSet {
             .execute(&mut **tx)
             .await
             .map_err(crate::error::AppError::from)?;
+            if let Some(at) = position {
+                // Moving one tab shifts the others: number them all again
+                // with this one at `at`.
+                let mut order = sqlx::query_as::<_, (String, uuid::Uuid)>(
+                    "SELECT thing_kind, thing_id FROM conversation_tabs \
+                     WHERE conversation_id = $1 AND NOT (thing_kind = 'page' AND thing_id = $2) \
+                     ORDER BY position, added_at, thing_id",
+                )
+                .bind(conversation)
+                .bind(page)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(crate::error::AppError::from)?;
+                let at = usize::try_from(at).unwrap_or(0).min(order.len());
+                order.insert(at, ("page".to_owned(), page));
+                let (kinds, ids): (Vec<String>, Vec<uuid::Uuid>) = order.into_iter().unzip();
+                sqlx::query(
+                    "UPDATE conversation_tabs tab SET position = (ord.n - 1)::int \
+                     FROM unnest($2::text[], $3::uuid[]) WITH ORDINALITY AS ord(kind, id, n) \
+                     WHERE tab.conversation_id = $1 AND tab.thing_kind = ord.kind \
+                       AND tab.thing_id = ord.id AND tab.position <> (ord.n - 1)::int",
+                )
+                .bind(conversation)
+                .bind(&kinds)
+                .bind(&ids)
+                .execute(&mut **tx)
+                .await
+                .map_err(crate::error::AppError::from)?;
+            }
         }
         crate::conversations::system_entries::announce(tx, conversation).await?;
         let tabs = tabs_for(tx, conversation, caller).await?;
