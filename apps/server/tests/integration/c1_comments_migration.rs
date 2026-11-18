@@ -135,8 +135,20 @@ async fn comments_keep_their_words_authors_versions_and_threads_as_messages() {
                 None,
                 "Open"
             ),
+            comment(35, owner, "Posted since", 1, false),
         ]
     );
+
+    // The task's comments conversation kept the comment already in it, and
+    // the moved ones follow it without taking its place.
+    let order = sqlx::query_scalar::<_, Uuid>(
+        "SELECT message_id FROM conversation_entries WHERE conversation_id = $1 ORDER BY sequence",
+    )
+    .bind(id(70))
+    .fetch_all(&pool)
+    .await
+    .expect("entries");
+    assert_eq!(order, [id(35), id(31), id(32), id(33)]);
 
     // The edited comment keeps both versions; who resolved the thread stays.
     let versions = sqlx::query_scalar::<_, String>(
@@ -184,7 +196,7 @@ async fn comments_keep_their_words_authors_versions_and_threads_as_messages() {
         .fetch_one(&pool)
         .await
         .expect("entries");
-    assert_eq!(entries, 7);
+    assert_eq!(entries, 8);
 
     // The file and the notifications follow their comment.
     let file = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>, bool)>(
