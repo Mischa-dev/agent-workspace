@@ -4045,6 +4045,44 @@
           }
         ]
       },
+      "ShapeChannel": {
+        "additionalProperties": false,
+        "description": "A channel a shape makes.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "private": {
+            "description": "Its members only.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ShapePage": {
+        "additionalProperties": false,
+        "description": "A page a shape makes.",
+        "properties": {
+          "guide": {
+            "description": "The space's guide, which agents read before they work there.",
+            "type": "boolean"
+          },
+          "markdown": {
+            "default": "",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
       "SharedAccount": {
         "properties": {
           "account": {
@@ -4237,6 +4275,32 @@
             "type": "string"
           }
         ]
+      },
+      "SpaceShape": {
+        "additionalProperties": false,
+        "description": "A space's starting shape.",
+        "properties": {
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/ShapeChannel"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "description": "The kind of space it is for: `project`, `team`, `personal` or\n`workspace`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/ShapePage"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
       },
       "SpaceView": {
         "description": "A space as its readers see it.",
@@ -57264,6 +57328,17 @@
                   },
                   "name": {
                     "type": "string"
+                  },
+                  "shape": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/SpaceShape"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "What it starts with: channels and pages. Leave it out for its kind's\nown (a team space starts with #general and a guide page)."
                   },
                   "templateId": {
                     "description": "A project template of the workspace to start from, by id\n(project_template_list): its workflow, labels, channels, settings\nand task templates are set up in the new space.",

@@ -23,6 +23,7 @@ pub mod manage;
 pub mod members;
 pub mod ops;
 pub mod personal;
+pub mod shape;
 pub mod workspace;
 
 /// Where DMs and groups live (K4.12): not a space but the reserved direct

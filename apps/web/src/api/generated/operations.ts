@@ -232,6 +232,10 @@ export type SectionShow = "all" | "unread"
 
 export type SectionSort = "manual" | "alpha" | "recent"
 
+export type ShapeChannel = { name: string; private?: boolean }
+
+export type ShapePage = { guide?: boolean; markdown?: string; title: string }
+
 export type SharedAccount = { account: string; expiresAt?: string | null }
 
 export type SharedLink = { expiresAt?: string | null; id: string }
@@ -245,6 +249,8 @@ export type SidebarSection = { collapsed: boolean; id: string; items: SidebarIte
 export type SortWrite = { direction?: Direction; field: string }
 
 export type SpaceKind = "workspace" | "project" | "team" | "personal"
+
+export type SpaceShape = { channels?: ShapeChannel[]; kind?: string | null; pages?: ShapePage[] }
 
 export type SpaceView = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
@@ -822,7 +828,7 @@ export type SpaceArchiveInput = { expectedVersion?: number | null; spaceId: stri
 
 export type SpaceArchiveOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
-export type SpaceCreateInput = { description?: string | null; icon?: string | null; key: string; kind?: CreatableKind | null; name: string; templateId?: string | null; visibility?: SpaceVisibility | null }
+export type SpaceCreateInput = { description?: string | null; icon?: string | null; key: string; kind?: CreatableKind | null; name: string; shape?: SpaceShape | null; templateId?: string | null; visibility?: SpaceVisibility | null }
 
 export type SpaceCreateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 

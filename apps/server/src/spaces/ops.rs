@@ -479,6 +479,10 @@ pub struct SpaceCreateInput {
     /// and task templates are set up in the new space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template_id: Option<IdRef>,
+    /// What it starts with: channels and pages. Leave it out for its kind's
+    /// own (a team space starts with #general and a guide page).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<super::shape::SpaceShape>,
 }
 
 impl Targeted for SpaceCreateInput {
@@ -581,6 +585,13 @@ impl Operation for SpaceCreate {
             }
             None => None,
         };
+        // K4.20: its starting shape, its kind's own unless one is given.
+        let shape = input.shape.unwrap_or_else(|| super::shape::builtin(kind));
+        let writer = crate::memory::Writer::from(call.ctx);
+        let tx = call.tx().await?;
+        super::shape::apply(tx, writer, space_id, &shape)
+            .await
+            .map_err(refused)?;
         call.audit_target(
             "space",
             space_id,

@@ -17,11 +17,8 @@ use super::{SpaceKind, SpaceVisibility, manage};
 use crate::{
     error::AppError,
     events::{self, NewEvent, catalog},
-    memory::{self, PageInput, Writer},
+    memory::Writer,
 };
-
-/// The title of the page a personal space starts with.
-pub const NOTES_TITLE: &str = "Notes";
 
 /// What a space key may be suffixed with when the first choice is taken.
 const KEY_SUFFIXES: &str = "0123456789";
@@ -112,22 +109,12 @@ pub async fn personal(
             via_grant_id: None,
             confined_project: None,
         };
-        memory::create_page(
+        // K4.20: its starting shape, a "Notes" page.
+        super::shape::apply(
             transaction,
             writer,
             space_id,
-            &PageInput {
-                title: Some(NOTES_TITLE.to_owned()),
-                body: Some(String::new()),
-                is_guide: None,
-                is_template: None,
-                from_template_id: None,
-                skill_description: None,
-                expected_version: None,
-                restore_version: None,
-                archived: None,
-                note: None,
-            },
+            &super::shape::builtin(SpaceKind::Personal),
         )
         .await?;
         return Ok(Some(space_id));

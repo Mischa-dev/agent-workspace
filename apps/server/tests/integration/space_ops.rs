@@ -531,3 +531,103 @@ async fn concurrent_first_opens_make_one_personal_space() {
     assert_eq!(spaces, 1);
     world.finish().await;
 }
+
+/// K4.20: a team space starts with its kind's shape (#general and a guide
+/// page), a shape given to space_create is used instead, and applying a
+/// shape again makes nothing twice.
+#[tokio::test]
+async fn spaces_start_from_their_shape_once() {
+    use agent_workspace_server::{
+        memory::Writer,
+        policy::ActorKind,
+        spaces::{SpaceKind, shape},
+    };
+    let Some(world) = WorldBuilder::default().build("k420_shapes").await else {
+        return;
+    };
+    let contents = |space: String| {
+        let pool = world.pool().clone();
+        async move {
+            let channels = sqlx::query_scalar::<_, String>(
+                "SELECT name FROM conversations WHERE project_id = $1::uuid AND kind = 'channel' \
+                 ORDER BY name",
+            )
+            .bind(&space)
+            .fetch_all(&pool)
+            .await
+            .expect("channels");
+            let pages = sqlx::query_as::<_, (String, bool)>(
+                "SELECT title, is_guide FROM project_pages WHERE project_id = $1::uuid \
+                 ORDER BY title",
+            )
+            .bind(&space)
+            .fetch_all(&pool)
+            .await
+            .expect("pages");
+            (channels, pages)
+        }
+    };
+
+    let made = op(
+        &world,
+        "owner",
+        "space_create",
+        json!({"kind": "team", "key": "CREW", "name": "Crew"}),
+    )
+    .await;
+    let team = id(&made);
+    let (channels, pages) = contents(team.clone()).await;
+    assert_eq!(channels, vec!["general".to_owned()]);
+    assert_eq!(pages, vec![("Guide".to_owned(), true)]);
+    let recorded =
+        sqlx::query_scalar::<_, Option<Value>>("SELECT shape FROM projects WHERE id = $1::uuid")
+            .bind(&team)
+            .fetch_one(world.pool())
+            .await
+            .expect("shape");
+    assert_eq!(
+        recorded.as_ref().map(|shape| &shape["kind"]),
+        Some(&json!("team"))
+    );
+
+    // The same shape again: nothing new.
+    let space = Uuid::parse_str(&team).expect("space id");
+    let mut tx = agent_workspace_server::db::scoped_tx(world.pool())
+        .await
+        .expect("transaction");
+    let again = shape::apply(
+        &mut tx,
+        Writer {
+            actor_id: world.owner.actor,
+            actor_kind: ActorKind::Human,
+            via_grant_id: None,
+            confined_project: None,
+        },
+        space,
+        &shape::builtin(SpaceKind::Team),
+    )
+    .await
+    .expect("apply again");
+    tx.commit().await.expect("commit");
+    assert_eq!(again, shape::Made::default());
+    assert_eq!(contents(team).await.1.len(), 1);
+
+    // A shape of its own instead of the kind's.
+    let made = op(
+        &world,
+        "owner",
+        "space_create",
+        json!({
+            "key": "OPSX",
+            "name": "Operations",
+            "shape": {
+                "channels": [{"name": "alerts"}],
+                "pages": [{"title": "Runbook", "markdown": "# Runbook\n"}]
+            }
+        }),
+    )
+    .await;
+    let (channels, pages) = contents(id(&made)).await;
+    assert_eq!(channels, vec!["alerts".to_owned()]);
+    assert_eq!(pages, vec![("Runbook".to_owned(), false)]);
+}
