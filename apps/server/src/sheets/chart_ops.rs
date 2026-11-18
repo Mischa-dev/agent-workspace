@@ -108,7 +108,7 @@ impl Operation for SheetChartSet {
             Some(source) => {
                 if source.is_empty()
                     || source.chars().count() > 200
-                    || super::ranges::resolve(&mut **tx, sheet_id, source)
+                    || super::ranges::resolve(tx, sheet_id, source)
                         .await?
                         .is_none()
                 {
@@ -197,7 +197,7 @@ impl Operation for SheetChartSet {
                 )
             }
         };
-        let charts = charts::list(&mut **tx, sheet_id).await?;
+        let charts = charts::list(tx, sheet_id).await?;
         let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
         let workspace = call.ctx.workspace_id;
         let event = NewEvent::thing(&catalog::SHEET_CHARTS_CHANGED, space, "sheet", sheet_id)
@@ -280,11 +280,11 @@ impl Operation for SheetChartGet {
     ) -> Result<SheetChartOutput, OpError> {
         let reader = call.account_id();
         let tx = call.tx().await?;
-        let (chart, sheet_id, sheet_name) = charts::find(&mut **tx, input.chart_id.id(), reader)
+        let (chart, sheet_id, sheet_name) = charts::find(tx, input.chart_id.id(), reader)
             .await?
             .filter(|(_, sheet, _)| *sheet == input.sheet_id.id())
             .ok_or(OpError::not_found(CHART))?;
-        let figures = charts::figures(&mut **tx, &chart, sheet_id, sheet_name).await?;
+        let figures = charts::figures(tx, &chart, sheet_id, sheet_name).await?;
         let svg = (!input.without_picture)
             .then(|| charts::svg(&chart.title, &chart.style, figures.as_ref()));
         Ok(SheetChartOutput {
