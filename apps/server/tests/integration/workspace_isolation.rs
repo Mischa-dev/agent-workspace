@@ -3214,23 +3214,41 @@ pub(super) async fn mcp_post(
     session: &str,
     payload: Value,
 ) -> (StatusCode, String) {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(MCP_PATH)
-                .header(header::HOST, "127.0.0.1")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(header::ACCEPT, "application/json, text/event-stream")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header("mcp-session-id", session)
-                .header("mcp-protocol-version", "2025-06-18")
-                .body(Body::from(serde_json::to_vec(&payload).expect("JSON")))
-                .expect("MCP request"),
-        )
-        .await
-        .expect("MCP response");
+    // The sweeps make more calls with one credential than its per-minute
+    // budget holds; a refused call waits as long as it's told and goes
+    // again, as a real client would.
+    let mut attempts = 0;
+    let response = loop {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(MCP_PATH)
+                    .header(header::HOST, "127.0.0.1")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::ACCEPT, "application/json, text/event-stream")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("mcp-session-id", session)
+                    .header("mcp-protocol-version", "2025-06-18")
+                    .body(Body::from(serde_json::to_vec(&payload).expect("JSON")))
+                    .expect("MCP request"),
+            )
+            .await
+            .expect("MCP response");
+        attempts += 1;
+        if response.status() != StatusCode::TOO_MANY_REQUESTS || attempts > 3 {
+            break response;
+        }
+        let wait = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(5)
+            .clamp(1, 65);
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+    };
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 8_000_000)
         .await
