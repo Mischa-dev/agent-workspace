@@ -1454,6 +1454,37 @@ async fn comment_writes_keep_to_what_the_writer_may_see() {
     .await
     .expect("thread status");
     assert_ne!(status_now.to_lowercase(), "resolved");
+
+    // Nate's role doesn't edit pages: he keeps no file on one (C1.33); Lena
+    // does.
+    let page = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "page_write",
+        json!({"projectId": work, "title": "Plan", "body": "Ship it."}),
+    )
+    .await;
+    assert_eq!(page["outcome"], "ok", "{page}");
+    let page = string_at(&page, "/value/id");
+    let file = |name: &str| json!({"pageId": page, "name": name, "text": "notes"});
+    let (status, refused) = op(
+        &world.people["nate"].browser,
+        "page_file_upload",
+        file("nate.txt"),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "nate keeps a file: {status} {refused}"
+    );
+    let (status, kept) = op(
+        &world.people["lena"].browser,
+        "page_file_upload",
+        file("lena.txt"),
+    )
+    .await;
+    assert!(status.is_success(), "lena keeps a file: {status} {kept}");
     world.finish().await;
 }
 

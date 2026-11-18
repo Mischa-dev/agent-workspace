@@ -753,7 +753,8 @@ async fn a_page_keeps_its_own_files() {
         assert_eq!(status, expected, "{described}");
     }
 
-    // An agent in the project adds one over MCP and reads it back.
+    // An agent in the project adds one through the operation's tool and
+    // reads it back; the answer carries the block that shows it.
     let (agent, token) = create_agent(&setup.app, owner, &space, "Wren", "wren").await;
     add_member(&setup, &work, agent, "member").await;
     let session = initialize(&setup.app, &token).await.expect("MCP session");
@@ -761,11 +762,14 @@ async fn a_page_keeps_its_own_files() {
         &setup.app,
         &token,
         &session,
-        "file_upload",
-        json!({"thing": {"kind": "page", "id": page}, "name": "run.log", "text": "all green"}),
+        "page_file_upload",
+        json!({"pageId": page, "name": "run.log", "text": "all green",
+               "clientRequestId": "run-log-1"}),
     )
     .await;
     assert_eq!(added["outcome"], "ok", "{added}");
+    let embed = added["value"]["embed"].as_str().expect("embed");
+    assert!(embed.starts_with("[run.log](/files/"), "{embed}");
     let read_back = tool(
         &setup.app,
         &token,

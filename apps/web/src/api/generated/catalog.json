@@ -1424,6 +1424,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "file.attached"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "pages",
+    "name": "page_file_upload",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Keep a file on a page"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "page.updated"
     ],
     "idempotent": true,

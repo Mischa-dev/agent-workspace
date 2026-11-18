@@ -654,6 +654,10 @@ export type PackageRemoveInput = { installId: string; parts: RemoveParts }
 
 export type PackageRemoveOutput = { id: string; installedAt: string; name: string; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
 
+export type PageFileUploadInput = { contentType?: string | null; dataBase64?: string | null; name: string; pageId: string; text?: string | null }
+
+export type PageFileUploadOutput = { contentType: string; embed: string; fileId: string; name: string; size: number }
+
 export type PageMakeInput = { blocks?: string[]; messages?: string[]; move?: boolean; pageId?: string | null; spaceId?: string | null; threadId?: string | null; title?: string | null }
 
 export type PageMakeOutput = { id: string; sourceVersion?: number | null; spaceId: string; title: string; url: string }
@@ -1016,6 +1020,7 @@ export type Operations = {
   package_list: { input: PackageListInput; output: PackageListOutput }
   package_preview: { input: PackagePreviewInput; output: PackagePreviewOutput }
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
+  page_file_upload: { input: PageFileUploadInput; output: PageFileUploadOutput }
   page_make: { input: PageMakeInput; output: PageMakeOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }

@@ -488,6 +488,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "dashboard_update",
     "decision_record",
     "page_make",
+    "page_file_upload",
     "environment_write",
     "file_delete",
     "file_upload",
@@ -7398,6 +7399,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"messages": [b.message], "projectId": a.project, "clientRequestId": "net-page-make-c"}),
             json!({"messages": [a.message], "projectId": b.project, "clientRequestId": "net-page-make-d"}),
         ]),
+        // C1.33: a file kept on B's page can't come from A.
+        mcp_case(
+            "page_file_upload",
+            json!({"pageId": a.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file"}),
+            vec![json!({"pageId": b.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file-b"})],
+        ),
         mcp_case(
             "task_depend",
             json!({"taskId": a.subtask, "blockedBy": [sp.task]}),
