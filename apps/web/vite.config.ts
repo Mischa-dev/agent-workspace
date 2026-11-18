@@ -54,7 +54,11 @@ function excalidrawAssets(): Plugin {
 const SLOT_KINDS = ['pages', 'parts', 'sidebar', 'home', 'settings', 'palette', 'shortcuts', 'slash', 'setup'] as const
 const manifestsDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'modules')
 
-type Manifest = { name?: string; switchable?: boolean; slots?: Record<string, string[] | undefined> }
+// A slash command is a name, or (C2.24) a command that runs an operation.
+type SlashEntry = string | { name: string }
+type Manifest = { name?: string; switchable?: boolean; slots?: Record<string, Array<string | SlashEntry> | undefined> }
+
+const claimOf = (entry: string | SlashEntry) => (typeof entry === 'string' ? entry : entry.name)
 
 function readManifests(): Array<{ id: string; file: string; manifest: Manifest }> {
   return readdirSync(manifestsDir)
@@ -80,6 +84,13 @@ function moduleProjections(): Plugin {
       if (what === 'switchable') {
         return `export default ${JSON.stringify(manifests.filter(({ manifest }) => manifest.switchable === true).map(({ id }) => id))}`
       }
+      if (what === 'slash-commands') {
+        // The commands that run an operation, with their module (C2.24).
+        const commands = manifests.flatMap(({ id, manifest }) =>
+          (manifest.slots?.slash ?? []).flatMap((entry) => (typeof entry === 'string' ? [] : [{ ...entry, module: id }])),
+        )
+        return `export default ${JSON.stringify(commands)}`
+      }
       if (what === 'names') {
         return `export default ${JSON.stringify(Object.fromEntries(manifests.map(({ id, manifest }) => [id, manifest.name ?? id])))}`
       }
@@ -90,7 +101,7 @@ function moduleProjections(): Plugin {
       // first page carries the page and shortcut claims, so this keeps them
       // short.
       const grouped = manifests
-        .map(({ id, manifest }) => [id, manifest.slots?.[kind] ?? []] as const)
+        .map(({ id, manifest }) => [id, (manifest.slots?.[kind] ?? []).map(claimOf)] as const)
         .filter(([, patterns]) => patterns.length > 0)
       return `export default ${JSON.stringify(grouped)}.flatMap(([m, ps]) => ps.map((p) => [p, m]))`
     },

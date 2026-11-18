@@ -1,9 +1,13 @@
+import { lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { useHomeExperience } from '../experience/layout'
 import { SidebarFrame, SidebarLink, SidebarSection } from '../shell/SidebarParts'
 import { Banner, IconButton, ListSkeleton, actorKind } from '../ui'
 import { conversationTitle, useDirectOverview } from './api'
+
+const SidebarSections = lazy(() => import('../conversations/SidebarSections'))
 
 export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNavigate: () => void }) {
   const session = useAuthenticatedSession()
@@ -11,6 +15,7 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
   const navigate = useNavigate()
   const conversations = overview.data?.conversations ?? []
   const viewerId = session.user.actorId
+  const sectionsShown = useHomeExperience().shows('talk.sidebar_sections')
   return (
     <SidebarFrame
       actions={
@@ -29,6 +34,11 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
       mobileOpen={mobileOpen}
       title="Messages"
     >
+      {sectionsShown ? (
+        <Suspense fallback={null}>
+          <SidebarSections onNavigate={onNavigate} />
+        </Suspense>
+      ) : null}
       <SidebarSection label="Direct messages">
         {conversations.map((conversation) => {
           const other = conversation.members.find((member) => member.id !== viewerId)

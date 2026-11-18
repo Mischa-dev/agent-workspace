@@ -11,7 +11,7 @@ import { CLAIMS, type SlotKind } from './slots'
 // what the canonical manifests say: every claim of each kind, in module order
 // and then the manifest's own order, and nothing else.
 
-type Manifest = { name?: string; switchable?: boolean; slots?: Partial<Record<SlotKind, string[]>> }
+type Manifest = { name?: string; switchable?: boolean; slots?: Partial<Record<SlotKind, Array<string | { name: string }>>> }
 
 const manifests = Object.entries(
   import.meta.glob<Manifest>(['../../../../modules/*.json', '!../../../../modules/presets.json'], { eager: true, import: 'default' }),
@@ -22,7 +22,10 @@ const manifests = Object.entries(
 describe('module projections', () => {
   it('match the manifests, kind by kind, in a fixed order', () => {
     for (const kind of Object.keys(CLAIMS) as SlotKind[]) {
-      const expected = manifests.flatMap(({ id, manifest }) => (manifest.slots?.[kind] ?? []).map((pattern) => [pattern, id]))
+      // A slash command that runs an operation (C2.24) is claimed by its name.
+      const expected = manifests.flatMap(({ id, manifest }) =>
+        (manifest.slots?.[kind] ?? []).map((entry) => [typeof entry === 'string' ? entry : entry.name, id]),
+      )
       expect(CLAIMS[kind], kind).toEqual(expected)
     }
     // Every kind a manifest uses is projected.

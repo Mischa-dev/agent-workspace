@@ -421,3 +421,59 @@
   cursor: progress;
   opacity: 0.6;
 }
+
+/* C2.10: picking several rows. The box shows on hover, focus, or once anything is picked. */
+.aw-inbox__pick {
+  flex: none;
+  align-self: center;
+  width: 16px;
+  height: 16px;
+  margin: 0 0 0 var(--space-3);
+  accent-color: var(--accent);
+  opacity: 0;
+}
+
+.aw-inbox__row:hover .aw-inbox__pick,
+.aw-inbox__pick:focus-visible,
+.aw-inbox__pick:checked,
+.aw-inbox__list:has(.aw-inbox__pick:checked) .aw-inbox__pick {
+  opacity: 1;
+}
+
+.aw-inbox__row.is-picked {
+  background: var(--accent-soft);
+}
+
+.aw-inbox__picked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+.aw-inbox__picked-count {
+  margin-right: auto;
+  font-weight: var(--weight-semibold);
+}
+
+/* Reply in place, in the preview. */
+.aw-inbox__reply {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: end;
+  margin-bottom: var(--space-3);
+}
+
+.aw-inbox__reply .aw-field {
+  width: 100%;
+}
+
+@media (hover: none) {
+  .aw-inbox__pick {
+    opacity: 1;
+  }
+}

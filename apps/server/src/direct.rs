@@ -214,6 +214,7 @@ async fn direct_overview(
           AND me.actor_id = $2
           AND conversation.kind IN ('dm', 'group')
           AND conversation.archived_at IS NULL
+          AND NOT direct_hidden_for(conversation.id, me.actor_id)
         ORDER BY COALESCE(last_entry.created_at, conversation.created_at) DESC, conversation.id
         LIMIT $3
         "#,
@@ -250,6 +251,7 @@ async fn direct_overview(
                     thread_status: None,
                     thread_outcome: None,
                     parent_kind: None,
+                    private: false,
                 },
                 members: serde_json::from_value(row.members)
                     .map_err(|_| AppError::Internal("direct conversation members"))?,
@@ -323,9 +325,6 @@ async fn open_dm(
     ApiJson(request): ApiJson<OpenDmRequest>,
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
-    if request.actor_id == principal.actor_id {
-        return Err(AppError::Validation("DM recipient"));
-    }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let space = ensure_direct_space(&mut transaction, &Person::from(&principal)).await?;
     require(&principal, &space, Action::ChannelCreate)?;
@@ -534,8 +533,12 @@ pub(crate) struct GroupMembersChange {
     pub removed: Vec<ActorView>,
 }
 
-/// Add and remove people and agents in a group. Shared by the browser API and
-/// MCP; callers record their own audit rows.
+/// Add and remove people and agents in a group or a private channel (C2.6).
+/// Shared by the browser API and MCP; callers record their own audit rows.
+///
+/// A private channel's managers (whoever made it, to begin with) and the
+/// space's moderators change its members; any member can leave. Whoever is
+/// added must be in the channel's space already, and there's no cap.
 ///
 /// - Visibility goes through `lock_conversation_for` (`conversation_visible_to`),
 ///   which also locks the group row, so concurrent changes are serialized and
@@ -572,21 +575,25 @@ pub(crate) async fn change_group_members(
         editor.actor_id,
         editor.actor_kind,
         conversation_id,
-        if leaving_only {
-            Action::ProjectView
-        } else {
-            Action::ChannelCreate
-        },
+        Action::ProjectView,
         false,
     )
     .await?;
-    if conversation.kind != "group" {
+    let private_channel = conversation.private && conversation.kind == "channel";
+    if private_channel {
+        if !leaving_only && !manages_channel(transaction, &conversation, &editor).await? {
+            return Err(AppError::Forbidden);
+        }
+    } else if conversation.kind != "group" {
         return Err(AppError::Conflict(
             "conversation",
-            "only groups can change members",
+            "only groups and private channels change members",
         ));
-    }
-    if editor.actor_kind != ActorKind::Human && !leaving_only {
+    } else if !leaving_only
+        && !conversation.allows(editor.actor_id, editor.actor_kind, Action::ChannelCreate)?
+    {
+        return Err(AppError::NotFound("conversation"));
+    } else if editor.actor_kind != ActorKind::Human && !leaving_only {
         return Err(AppError::Forbidden);
     }
     if let Some(expected_version) = expected_version
@@ -622,9 +629,11 @@ pub(crate) async fn change_group_members(
     let added = if to_add.is_empty() {
         Vec::new()
     } else {
-        join_reachable_agents(transaction, project_id, editor.actor_id, &to_add).await?;
+        if !private_channel {
+            join_reachable_agents(transaction, project_id, editor.actor_id, &to_add).await?;
+        }
         let people = lock_people(transaction, project_id, &to_add).await?;
-        if current.len() + to_add.len() - to_remove.len() > MAX_GROUP_MEMBERS {
+        if !private_channel && current.len() + to_add.len() - to_remove.len() > MAX_GROUP_MEMBERS {
             return Err(AppError::Conflict(
                 "group members",
                 "a group can have at most 20 members",
@@ -740,6 +749,30 @@ pub(crate) async fn change_group_members(
     })
 }
 
+/// Whether `editor` changes a private channel's members: one of its
+/// managers, or someone who moderates its space.
+async fn manages_channel(
+    transaction: &mut Transaction<'_, Postgres>,
+    channel: &crate::conversations::ConversationAccessRow,
+    editor: &GroupEditor,
+) -> Result<bool, AppError> {
+    if channel.allows(editor.actor_id, editor.actor_kind, Action::MessageModerate)? {
+        return Ok(true);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM conversation_members
+            WHERE conversation_id = $1 AND actor_id = $2 AND manager
+        )
+        "#,
+    )
+    .bind(channel.id)
+    .bind(editor.actor_id)
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
 /// Everyone in a group, by name.
 async fn group_member_views(
     transaction: &mut Transaction<'_, Postgres>,
@@ -799,9 +832,8 @@ pub(crate) async fn open_dm_in(
     actor_id: Uuid,
     other_actor_id: Uuid,
 ) -> Result<(Uuid, bool), AppError> {
-    if other_actor_id == actor_id {
-        return Err(AppError::Validation("DM recipient"));
-    }
+    // A DM with yourself is your note to self (C2.32): one member, kept
+    // like any other DM.
     join_reachable_agents(transaction, project_id, actor_id, &[other_actor_id]).await?;
     lock_people(transaction, project_id, &[other_actor_id]).await?;
     // One DM per pair: the sorted pair is unique within the space, so a
@@ -1420,6 +1452,7 @@ async fn conversation_response(
             thread_status: None,
             thread_outcome: None,
             parent_kind: None,
+            private: false,
         },
         read_state: ReadStateView {
             highest_seen_sequence: seen,

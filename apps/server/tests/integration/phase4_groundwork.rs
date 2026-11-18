@@ -145,7 +145,10 @@ async fn a_pull_request_from_a_private_thread_stays_private() {
             thread["value"]["id"].as_str().expect("thread").to_owned(),
         ));
     }
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1::uuid) UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid",
+    )
         .bind(&threads[0].0)
         .execute(&setup.pool)
         .await
@@ -285,7 +288,10 @@ async fn a_moved_task_does_not_name_private_links_in_the_target_project() {
                 .expect("thread name");
         threads.push((channel_id, thread_id, thread_name));
     }
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1::uuid) UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid",
+    )
         .bind(&threads[0].0)
         .execute(&setup.pool)
         .await
@@ -644,7 +650,10 @@ async fn the_web_task_detail_hides_a_pull_request_from_a_private_thread() {
     )
     .await;
     let channel_id = channel["value"]["id"].as_str().expect("channel").to_owned();
-    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid")
+    sqlx::query(
+        // Only the members the test adds: whoever the public channel had leave it.
+        "WITH emptied AS (DELETE FROM conversation_members WHERE conversation_id = $1::uuid) UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid",
+    )
         .bind(&channel_id)
         .execute(&setup.pool)
         .await

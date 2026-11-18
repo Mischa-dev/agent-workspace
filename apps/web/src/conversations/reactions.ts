@@ -8,6 +8,13 @@ export type ReactionChoice = {
   aliases?: readonly string[]
   /** A workspace's own emoji, drawn from its image. */
   imageUrl?: string
+  /** Its id: a reaction names it by id, so a retired name reused later stays apart. */
+  customEmojiId?: string
+}
+
+/** What the server is told: a custom emoji's id, or a standard one's name. */
+export function reactionKey(choice: Pick<ReactionChoice, 'name' | 'customEmojiId'>) {
+  return choice.customEmojiId ?? choice.name
 }
 
 /**
@@ -68,11 +75,17 @@ export function searchEmoji(choices: readonly ReactionChoice[], query: string, l
  */
 export function applyReaction(
   reactions: readonly MessageReaction[],
-  choice: Pick<ReactionChoice, 'emoji' | 'name' | 'imageUrl'>,
+  choice: Pick<ReactionChoice, 'emoji' | 'name' | 'imageUrl' | 'customEmojiId'>,
   viewerId: string,
   reacted: boolean,
 ): MessageReaction[] {
-  const existing = reactions.find((reaction) => reaction.name === choice.name)
+  // A custom emoji is the same reaction only with the same id: a retired
+  // :party: and today's :party: are two.
+  const existing = reactions.find((reaction) =>
+    choice.customEmojiId || reaction.customEmojiId
+      ? reaction.customEmojiId === choice.customEmojiId
+      : reaction.name === choice.name,
+  )
   if (reacted) {
     if (existing?.byViewer) return [...reactions]
     if (existing) {
@@ -82,7 +95,15 @@ export function applyReaction(
     }
     return [
       ...reactions,
-      { emoji: choice.emoji, name: choice.name, count: 1, byViewer: true, actors: [], ...(choice.imageUrl ? { imageUrl: choice.imageUrl } : {}) },
+      {
+        emoji: choice.emoji,
+        name: choice.name,
+        count: 1,
+        byViewer: true,
+        actors: [],
+        ...(choice.imageUrl ? { imageUrl: choice.imageUrl } : {}),
+        ...(choice.customEmojiId ? { customEmojiId: choice.customEmojiId } : {}),
+      },
     ]
   }
   if (!existing?.byViewer) return [...reactions]

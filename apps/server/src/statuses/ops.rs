@@ -144,7 +144,7 @@ impl Operation for StatusSet {
         let here = call.ctx.workspace_id;
         let tx = call.tx().await?;
         let view = super::set(tx, account, setter, workspace, &status).await?;
-        super::announce(tx, account, here, input.workspace_only).await?;
+        super::announce_where_shown(tx, account, input.workspace_only.then_some(here)).await?;
         call.audit_target(
             "account",
             account,
@@ -206,7 +206,7 @@ impl Operation for StatusDelete {
         let tx = call.tx().await?;
         let cleared = super::clear(tx, account, workspace).await?;
         if cleared {
-            super::announce(tx, account, here, input.workspace_only).await?;
+            super::announce_where_shown(tx, account, input.workspace_only.then_some(here)).await?;
         }
         call.audit_target(
             "account",

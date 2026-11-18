@@ -1243,7 +1243,14 @@ pub(crate) async fn starter_contents(
         .fetch_one(&mut **transaction)
         .await?;
         if !exists {
-            crate::conversations::insert_channel(transaction, project_id, actor_id, &name).await?;
+            crate::conversations::insert_channel(
+                transaction,
+                project_id,
+                actor_id,
+                &name,
+                crate::conversations::NewChannel::EVERYONE,
+            )
+            .await?;
             made.push(format!("#{name}"));
         }
     }

@@ -2,7 +2,7 @@ import type { Query } from '@tanstack/react-query'
 
 import { aiKeys } from '../../ai/keys'
 import { queryKeys } from '../../api/queryKeys'
-import { myWork, payloadId, references, thing, type Handler } from './touches'
+import { dashboards, myWork, payloadId, references, thing, type Handler } from './touches'
 
 // Tasks' events. A changed task is patched into lists, boards and its detail
 // in place (workItemPatches.ts); these are the other places that show it.
@@ -31,6 +31,7 @@ const workItemUpdated: Handler = (event) => {
   return [
     { id: `task-timeline:${workItemId}`, filters: { queryKey: queryKeys.workItemTimeline(projectId, workItemId) } },
     myWork,
+    dashboards,
     thing('task', workItemId),
     // Its description or comments may have added or dropped a link.
     references,

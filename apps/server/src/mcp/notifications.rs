@@ -53,6 +53,9 @@ pub(crate) struct NotificationLine {
     pub read: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snoozed_until: Option<String>,
+    /// Snoozed until something new happens on it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub until_activity: bool,
     pub at: String,
     pub url: String,
 }
@@ -69,7 +72,8 @@ pub(super) struct NotificationListValue {
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct NotificationUpdateArguments {
-    /// read, unread, archive, restore, snooze or unsnooze.
+    /// read, unread, archive, restore, snooze, snooze_until_activity or
+    /// unsnooze.
     pub action: String,
     /// Notification IDs from notification_list (up to 200).
     pub ids: Option<Vec<String>>,
@@ -107,6 +111,7 @@ pub(super) fn line(state: &AppState, view: NotificationView) -> NotificationLine
         count: view.count,
         read: view.read,
         snoozed_until: view.snoozed_until,
+        until_activity: view.until_activity,
         at: view.at,
         url,
     }
@@ -220,7 +225,7 @@ pub(super) async fn notification_update(
         let Some(action) = parse::<UpdateAction>(&arguments.action) else {
             return Ok(ToolResult::invalid(
                 "action",
-                "Use read, unread, archive, restore, snooze or unsnooze.",
+                "Use read, unread, archive, restore, snooze, snooze_until_activity or unsnooze.",
             ));
         };
         let selection = match (arguments.ids, arguments.all) {

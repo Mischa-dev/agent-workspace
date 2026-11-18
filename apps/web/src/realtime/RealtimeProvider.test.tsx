@@ -88,7 +88,7 @@ describe('authenticated realtime provider', () => {
     socket.message(event)
 
     // One event, once: the message's own handler (realtime/handlers), nothing project-wide.
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(7))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(8))
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ['projects', 'rail'],
     })
