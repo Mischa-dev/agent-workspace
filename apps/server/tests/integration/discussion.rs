@@ -1062,3 +1062,93 @@ async fn asking_about_a_selection_wakes_the_agent_with_a_picture() {
     .expect("requests");
     assert_eq!(requests, 1);
 }
+
+/// A task's discussion (its comments, their threads and their files) stays
+/// with whoever sees tasks: an app whose agent limit keeps tasks from it
+/// can't list it, read it or fetch its files, though its person can.
+#[tokio::test]
+async fn task_discussions_keep_the_task_limit() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .connected_app("laptop")
+        .build("c1_4_task_discussion_limit")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let laptop = &world.apps["laptop"];
+    let call = |name: &'static str, arguments: Value| async move {
+        laptop.call(app, Call::Tool { name, arguments }).await.1
+    };
+
+    let made = call(
+        "task_create",
+        json!({"projectId": "WORK", "title": "Ship it", "clientRequestId": "limit-task"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let task = made["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
+    let upload = call(
+        "file_upload",
+        json!({"taskId": task, "forComment": true, "name": "trace.log", "text": "trace"}),
+    )
+    .await;
+    assert_eq!(upload["outcome"], "ok", "{upload}");
+    let file = upload["value"]["fileId"].as_str().expect("file").to_owned();
+    let commented = call(
+        "task_comment",
+        json!({"taskId": task, "text": "Trace attached", "clientRequestId": "limit-comment",
+               "attachmentIds": [file]}),
+    )
+    .await;
+    assert_eq!(commented["outcome"], "applied", "{commented}");
+    let listed = call(
+        "comment_list",
+        json!({"thing": {"kind": "task", "id": task}}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let conversation = listed["value"]["conversationId"]
+        .as_str()
+        .expect("comments")
+        .to_owned();
+    let read = call("conversation_read", json!({"conversationId": conversation})).await;
+    assert!(read.to_string().contains("Trace attached"), "{read}");
+    let fetched = call("file_read", json!({"fileId": file})).await;
+    assert_eq!(fetched["outcome"], "ok", "{fetched}");
+
+    // Keep tasks from the person's apps: the same reads find nothing.
+    sqlx::query(
+        "UPDATE organization_memberships SET agent_limit = $1 WHERE organization_id = $2 AND actor_id = $3",
+    )
+    .bind(vec!["projects.view", "channels.post"])
+    .bind(world.organization)
+    .bind(laptop.person)
+    .execute(world.pool())
+    .await
+    .expect("keep tasks from the apps");
+    let listed = call(
+        "comment_list",
+        json!({"thing": {"kind": "task", "id": task}}),
+    )
+    .await;
+    assert_ne!(listed["outcome"], "ok", "{listed}");
+    let read = call("conversation_read", json!({"conversationId": conversation})).await;
+    assert_ne!(read["outcome"], "ok", "{read}");
+    assert!(!read.to_string().contains("Trace attached"), "{read}");
+    let opened = call("conversation_open", json!({"conversationId": conversation})).await;
+    assert_ne!(opened["outcome"], "ok", "{opened}");
+    let fetched = call("file_read", json!({"fileId": file})).await;
+    assert_ne!(fetched["outcome"], "ok", "{fetched}");
+    let posted = call(
+        "comment_create",
+        json!({"thing": {"kind": "task", "id": task}, "text": "Still here?"}),
+    )
+    .await;
+    assert_ne!(posted["outcome"], "ok", "{posted}");
+    world.finish().await;
+}

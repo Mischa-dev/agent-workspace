@@ -251,6 +251,13 @@ pub(crate) async fn post(
 ) -> Result<PostedComment, AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (comments_id, project_id) = open_for(&mut transaction, &creator, kind, thing_id).await?;
+    // A task's discussion only while the author, and an app acting for
+    // them, still sees tasks there.
+    if crate::conversations::task_discussion_hidden(&mut transaction, creator.actor_id, comments_id)
+        .await?
+    {
+        return Err(AppError::NotFound("task"));
+    }
     let (conversation_id, expected_kind, thread_id) = match place {
         CommentPlace::Stream => (comments_id, "comments", None),
         CommentPlace::Thread(thread_id) => {
