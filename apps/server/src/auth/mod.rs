@@ -266,7 +266,7 @@ async fn login(
         WHERE lower(u.login_name) = $1
           AND u.status = 'active'
           AND a.status = 'active'
-          AND a.kind = 'human'
+          AND a.kind = 'human' -- // kind-check: mechanical (a password signs in a person)
         "#,
         )
         .bind(&login_name)
@@ -588,7 +588,7 @@ pub async fn load_authenticated_actor(
           AND s.authentication_epoch = u.authentication_epoch
           AND u.status = 'active'
           AND a.status = 'active'
-          AND a.kind = 'human'
+          AND a.kind = 'human' -- // kind-check: mechanical (a browser session signs in a person)
         "#,
         )
         .bind(token_hash.to_vec())
