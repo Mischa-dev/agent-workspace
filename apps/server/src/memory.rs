@@ -35,6 +35,7 @@ use crate::{
 pub mod make;
 pub mod ops;
 pub mod page_files;
+pub mod page_move;
 pub mod templates;
 
 pub const MAX_PAGE_TITLE: usize = 200;
@@ -149,6 +150,10 @@ pub struct PageSummary {
     pub updated_by: Option<String>,
     pub stale: bool,
     pub excerpt: String,
+    /// The page it sits inside, if any (C1.38).
+    pub parent_page_id: Option<Uuid>,
+    /// Its place among its siblings.
+    pub position: i64,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -167,8 +172,24 @@ pub struct PageView {
     pub updated_by: Option<String>,
     pub archived: bool,
     pub stale: bool,
+    /// The page it sits inside, if any (C1.38).
+    pub parent_page_id: Option<Uuid>,
     #[sqlx(skip)]
     pub revisions: Vec<RevisionSummary>,
+    /// The pages it sits inside, outermost first.
+    #[sqlx(skip)]
+    pub ancestors: Vec<PageCrumb>,
+    /// The pages inside it, in order.
+    #[sqlx(skip)]
+    pub children: Vec<PageCrumb>,
+}
+
+/// A page named in a breadcrumb or a list of children.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageCrumb {
+    pub id: Uuid,
+    pub title: String,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -379,7 +400,8 @@ pub async fn list_pages(
                page.updated_at::text AS updated_at,
                editor.display_name AS updated_by,
                page.updated_at < now() - make_interval(days => $3) AS stale,
-               left(regexp_replace(page.body, '\s+', ' ', 'g'), 240) AS excerpt
+               left(regexp_replace(page.body, '\s+', ' ', 'g'), 240) AS excerpt,
+               page.parent_page_id, page.position
         FROM project_pages page
         LEFT JOIN project_memberships editor
           ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
@@ -401,7 +423,8 @@ const PAGE_SELECT: &str = r#"
            page.created_at::text AS created_at, page.updated_at::text AS updated_at,
            editor.display_name AS updated_by,
            page.archived_at IS NOT NULL AS archived,
-           page.updated_at < now() - make_interval(days => $2) AS stale
+           page.updated_at < now() - make_interval(days => $2) AS stale,
+           page.parent_page_id
     FROM project_pages page
     LEFT JOIN project_memberships editor
       ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
@@ -447,7 +470,136 @@ pub async fn get_page(
     .bind(viewer)
     .fetch_all(crate::db::scoped(pool))
     .await?;
+    // Pages share their space's access until per-page sharing (C1.27), so
+    // the ancestors and children are the reader's to see.
+    page.ancestors = sqlx::query_as::<_, PageCrumb>(
+        r#"
+        WITH RECURSIVE up(id, parent, depth) AS (
+            SELECT id, parent_page_id, 0 FROM project_pages WHERE id = $1
+            UNION ALL
+            SELECT page.id, page.parent_page_id, up.depth + 1
+            FROM project_pages page JOIN up ON page.id = up.parent
+            WHERE up.depth < $2
+        )
+        SELECT page.id, page.title FROM up JOIN project_pages page ON page.id = up.id
+        WHERE up.depth > 0 AND page.archived_at IS NULL
+        ORDER BY up.depth DESC
+        "#,
+    )
+    .bind(page_id)
+    .bind(MAX_PAGE_DEPTH)
+    .fetch_all(crate::db::scoped(pool))
+    .await?;
+    page.children = sqlx::query_as::<_, PageCrumb>(
+        "SELECT id, title FROM project_pages \
+         WHERE parent_page_id = $1 AND archived_at IS NULL ORDER BY position, title, id",
+    )
+    .bind(page_id)
+    .fetch_all(crate::db::scoped(pool))
+    .await?;
     Ok(Some(page))
+}
+
+/// How deep pages nest inside pages.
+pub const MAX_PAGE_DEPTH: i32 = 10;
+
+/// Checks that `parent` can hold `page` (None for a page being made): an
+/// active page of the same space that isn't the page itself or inside it,
+/// and not so deep the page would pass the nesting limit.
+pub(crate) async fn check_parent(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    page_id: Option<Uuid>,
+    parent: Uuid,
+) -> Result<(), AppError> {
+    let found = sqlx::query_as::<_, (Uuid, bool)>(
+        "SELECT project_id, archived_at IS NULL FROM project_pages WHERE id = $1 FOR SHARE",
+    )
+    .bind(parent)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    match found {
+        Some((space, true)) if space == project_id => {}
+        Some((space, false)) if space == project_id => {
+            return Err(AppError::Refused {
+                field: "parentPageId",
+                message: "That page is archived. Bring it back first.",
+            });
+        }
+        _ => {
+            return Err(AppError::Refused {
+                field: "parentPageId",
+                message: "A page goes inside another page of its own space.",
+            });
+        }
+    }
+    let (inside_itself, depth) = sqlx::query_as::<_, (bool, i32)>(
+        r#"
+        WITH RECURSIVE up(id, parent, depth) AS (
+            SELECT id, parent_page_id, 1 FROM project_pages WHERE id = $1
+            UNION ALL
+            SELECT page.id, page.parent_page_id, up.depth + 1
+            FROM project_pages page JOIN up ON page.id = up.parent
+            WHERE up.depth <= $3
+        )
+        SELECT COALESCE(bool_or(id = $2), false), COALESCE(max(depth), 0) FROM up
+        "#,
+    )
+    .bind(parent)
+    .bind(page_id)
+    .bind(MAX_PAGE_DEPTH)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if inside_itself {
+        return Err(AppError::Refused {
+            field: "parentPageId",
+            message: "A page can't go inside itself or a page inside it.",
+        });
+    }
+    // How far the page's own children reach below it.
+    let below = match page_id {
+        Some(page_id) => sqlx::query_scalar::<_, Option<i32>>(
+            r#"
+                WITH RECURSIVE down(id, depth) AS (
+                    SELECT id, 0 FROM project_pages WHERE id = $1
+                    UNION ALL
+                    SELECT page.id, down.depth + 1
+                    FROM project_pages page JOIN down ON page.parent_page_id = down.id
+                    WHERE down.depth <= $2
+                )
+                SELECT max(depth) FROM down
+                "#,
+        )
+        .bind(page_id)
+        .bind(MAX_PAGE_DEPTH)
+        .fetch_one(&mut **transaction)
+        .await?
+        .unwrap_or(0),
+        None => 0,
+    };
+    if depth + below >= MAX_PAGE_DEPTH {
+        return Err(AppError::Refused {
+            field: "parentPageId",
+            message: "Pages nest up to ten deep.",
+        });
+    }
+    Ok(())
+}
+
+/// The next place at the end of a parent's children (or the top level).
+pub(crate) async fn next_position(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    parent: Option<Uuid>,
+) -> Result<i64, AppError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(max(position), 0) + 1 FROM project_pages \
+         WHERE project_id = $1 AND parent_page_id IS NOT DISTINCT FROM $2",
+    )
+    .bind(project_id)
+    .bind(parent)
+    .fetch_one(&mut **transaction)
+    .await?)
 }
 
 /// The guide page for a Project, if it has one.
@@ -478,7 +630,8 @@ pub async fn list_skills(pool: &PgPool, project_id: Uuid) -> Result<Vec<PageSumm
                page.updated_at::text AS updated_at,
                editor.display_name AS updated_by,
                page.updated_at < now() - make_interval(days => $2) AS stale,
-               left(regexp_replace(page.body, '\s+', ' ', 'g'), 240) AS excerpt
+               left(regexp_replace(page.body, '\s+', ' ', 'g'), 240) AS excerpt,
+               page.parent_page_id, page.position
         FROM project_pages page
         LEFT JOIN project_memberships editor
           ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
@@ -548,6 +701,19 @@ pub struct PageInput {
     pub archived: Option<bool>,
     /// A short note on what changed.
     pub note: Option<String>,
+    /// Put the page inside another page of its space (its id), or back at
+    /// the top (null). Left out, it stays where it is.
+    #[serde(default, deserialize_with = "present")]
+    pub parent_page_id: Option<Option<Uuid>>,
+}
+
+/// A field given as null reads as `Some(None)`, one left out as `None`.
+pub(crate) fn present<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 fn normalize_title(value: &str, max: usize) -> Result<String, AppError> {
@@ -660,13 +826,18 @@ pub async fn create_page(
     if is_guide {
         clear_guide(transaction, writer, project_id, None).await?;
     }
+    let parent = input.parent_page_id.flatten();
+    if let Some(parent) = parent {
+        check_parent(transaction, project_id, None, parent).await?;
+    }
+    let position = next_position(transaction, project_id, parent).await?;
     let page_id = Uuid::now_v7();
     sqlx::query(
         r#"
         INSERT INTO project_pages (
             id, project_id, title, body, is_guide, skill_description,
-            created_by_actor_id, updated_by_actor_id, is_template
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)
+            created_by_actor_id, updated_by_actor_id, is_template, parent_page_id, position
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10)
         "#,
     )
     .bind(page_id)
@@ -677,6 +848,8 @@ pub async fn create_page(
     .bind(&skill_description)
     .bind(writer.actor_id)
     .bind(is_template)
+    .bind(parent)
+    .bind(position)
     .execute(&mut **transaction)
     .await
     .map_err(map_page_title_conflict)?;
@@ -708,18 +881,41 @@ pub async fn update_page(
             message: "Templates start new pages; leave pageId out to make one.",
         });
     }
-    let (project_id, title, body, version, is_guide, skill_description, archived, is_template) =
-        sqlx::query_as::<_, (Uuid, String, String, i64, bool, Option<String>, bool, bool)>(
-            r#"
+    #[allow(clippy::type_complexity)]
+    let (
+        project_id,
+        title,
+        body,
+        version,
+        is_guide,
+        skill_description,
+        archived,
+        is_template,
+        parent,
+    ) = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            i64,
+            bool,
+            Option<String>,
+            bool,
+            bool,
+            Option<Uuid>,
+        ),
+    >(
+        r#"
             SELECT project_id, title, body, version, is_guide, skill_description,
-                   archived_at IS NOT NULL, is_template
+                   archived_at IS NOT NULL, is_template, parent_page_id
             FROM project_pages WHERE id = $1 FOR UPDATE
             "#,
-        )
-        .bind(page_id)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or(AppError::NotFound("page"))?;
+    )
+    .bind(page_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("page"))?;
     if let Some(expected) = input.expected_version
         && expected != version
     {
@@ -767,15 +963,33 @@ pub async fn update_page(
         .unwrap_or_else(|| skill_description.clone());
     let new_archived = input.archived.unwrap_or(archived);
     let new_template = input.is_template.unwrap_or(is_template);
+    let new_parent = input.parent_page_id.unwrap_or(parent);
     if new_title == title
         && new_body == body
         && new_guide == is_guide
         && new_skill == skill_description
         && new_archived == archived
         && new_template == is_template
+        && new_parent == parent
     {
         return Ok(project_id);
     }
+    let new_position = if new_parent == parent {
+        None
+    } else {
+        if let Some(holder) = new_parent {
+            check_parent(transaction, project_id, Some(page_id), holder).await?;
+        }
+        note.get_or_insert_with(|| {
+            if new_parent.is_some() {
+                "Moved inside another page"
+            } else {
+                "Moved to the top"
+            }
+            .to_owned()
+        });
+        Some(next_position(transaction, project_id, new_parent).await?)
+    };
     if new_template != is_template {
         note.get_or_insert_with(|| {
             if new_template {
@@ -809,7 +1023,8 @@ pub async fn update_page(
         SET title = $2, body = $3, is_guide = $4,
             archived_at = CASE WHEN $5 THEN COALESCE(archived_at, now()) ELSE NULL END,
             version = $6, updated_by_actor_id = $7, updated_at = now(),
-            skill_description = $8, is_template = $9
+            skill_description = $8, is_template = $9,
+            parent_page_id = $10, position = COALESCE($11, position)
         WHERE id = $1
         "#,
     )
@@ -822,6 +1037,8 @@ pub async fn update_page(
     .bind(writer.actor_id)
     .bind(&new_skill)
     .bind(new_template)
+    .bind(new_parent)
+    .bind(new_position)
     .execute(&mut **transaction)
     .await
     .map_err(map_page_title_conflict)?;

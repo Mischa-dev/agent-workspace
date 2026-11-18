@@ -808,3 +808,248 @@ async fn a_page_keeps_its_own_files() {
         Err(StatusCode::NOT_FOUND)
     );
 }
+
+/// C1.37: a page moved to another space keeps its versions, comments and
+/// files, and a reader of the old space who isn't in the new one loses all
+/// of them at once.
+#[tokio::test]
+async fn a_page_moves_to_another_space_with_what_it_keeps() {
+    let Some((setup, _root)) = with_data_root("c137_page_move").await else {
+        return;
+    };
+    let space = space(&setup).await;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let team = create_project(&setup, "TEAM", "Team").await;
+    let (_rook_id, rook) = add_person(&setup, &[&space, &work], "rook").await;
+    let owner = &setup.browser;
+    let (status, page) = send(
+        &setup.app,
+        owner.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({"title": "Draft", "body": "Hello"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{page}");
+    let version = page["version"].as_i64().expect("version");
+    let page = page["id"].as_str().expect("page").to_owned();
+    let (status, file) = upload(
+        &setup,
+        owner,
+        &format!("/api/v1/things/page/{page}/files?name=notes.md"),
+        "text/markdown",
+        b"# Notes",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{file}");
+    let file = file["id"].as_str().expect("file").to_owned();
+
+    let (wren, wren_token) = create_agent(&setup.app, owner, &space, "Wren", "wren").await;
+    add_member(&setup, &work, wren, "member").await;
+    add_member(&setup, &team, wren, "member").await;
+    let (kite, kite_token) = create_agent(&setup.app, owner, &space, "Kite", "kite").await;
+    add_member(&setup, &work, kite, "member").await;
+    let wren_session = initialize(&setup.app, &wren_token)
+        .await
+        .expect("MCP session");
+    let kite_session = initialize(&setup.app, &kite_token)
+        .await
+        .expect("MCP session");
+    let commented = tool(
+        &setup.app,
+        &wren_token,
+        &wren_session,
+        "comment_create",
+        json!({"thing": {"kind": "page", "id": page}, "text": "Ready to share"}),
+    )
+    .await;
+    assert_eq!(commented["outcome"], "ok", "{commented}");
+
+    // Someone who can't put pages where it goes can't move it there, and a
+    // stale version is a conflict.
+    let refused = tool(
+        &setup.app,
+        &kite_token,
+        &kite_session,
+        "page_move",
+        json!({"pageId": page, "toSpaceId": team, "expectedVersion": version}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    let stale = tool(
+        &setup.app,
+        &wren_token,
+        &wren_session,
+        "page_move",
+        json!({"pageId": page, "toSpaceId": team, "expectedVersion": version + 5}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    let moved = tool(
+        &setup.app,
+        &wren_token,
+        &wren_session,
+        "page_move",
+        json!({"pageId": page, "toSpaceId": team, "expectedVersion": version}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    assert_eq!(moved["value"]["spaceId"], team.as_str(), "{moved}");
+
+    // The old space's reader loses the page, its comments and its files.
+    for uri in [
+        format!("/api/v1/pages/{page}"),
+        format!("/api/v1/files/{file}"),
+    ] {
+        let (status, body) = send(&setup.app, rook.request("GET", &uri, None, Value::Null)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {body}");
+    }
+    assert_eq!(read(&setup, &rook, &file).await, Err(StatusCode::NOT_FOUND));
+    let lost = tool(
+        &setup.app,
+        &kite_token,
+        &kite_session,
+        "comment_list",
+        json!({"thing": {"kind": "page", "id": page}}),
+    )
+    .await;
+    assert_eq!(lost["outcome"], "not_found", "{lost}");
+
+    // Where it went, it has its versions, its comment and its file.
+    let (status, now) = send(
+        &setup.app,
+        owner.request("GET", &format!("/api/v1/pages/{page}"), None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{now}");
+    assert_eq!(now["projectId"], team.as_str(), "{now}");
+    assert!(
+        now["revisions"].as_array().expect("revisions").len() >= 2,
+        "{now}"
+    );
+    assert_eq!(
+        read(&setup, owner, &file).await.expect("owner reads"),
+        b"# Notes"
+    );
+    let comments = tool(
+        &setup.app,
+        &wren_token,
+        &wren_session,
+        "comment_list",
+        json!({"thing": {"kind": "page", "id": page}}),
+    )
+    .await;
+    assert_eq!(comments["outcome"], "ok", "{comments}");
+    assert_eq!(comments["value"]["spaceId"], team.as_str(), "{comments}");
+    assert!(
+        comments["value"]["messageCount"].as_i64() >= Some(1),
+        "{comments}"
+    );
+}
+
+/// C1.38: pages nest inside pages of their space, show the way down to
+/// them, refuse a loop, and move between spaces with the pages inside them.
+#[tokio::test]
+async fn pages_nest_and_move_with_the_pages_inside() {
+    let Some(setup) = super::mcp_admin::setup("c138_pages_inside").await else {
+        return;
+    };
+    let space = space(&setup).await;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let team = create_project(&setup, "TEAM", "Team").await;
+    let owner = &setup.browser;
+    let (wren, token) = create_agent(&setup.app, owner, &space, "Wren", "wren").await;
+    add_member(&setup, &work, wren, "member").await;
+    add_member(&setup, &team, wren, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let write = |arguments: Value| tool(&setup.app, &token, &session, "page_write", arguments);
+    let id_of = |value: &Value| value["value"]["id"].as_str().expect("page id").to_owned();
+    let handbook = write(json!({"projectId": work, "title": "Handbook", "body": "Start"})).await;
+    assert_eq!(handbook["outcome"], "ok", "{handbook}");
+    let handbook = id_of(&handbook);
+    let onboarding = write(
+        json!({"projectId": work, "title": "Onboarding", "body": "Day one",
+                                  "parentPageId": handbook}),
+    )
+    .await;
+    assert_eq!(onboarding["outcome"], "ok", "{onboarding}");
+    let onboarding = id_of(&onboarding);
+    let laptop = write(
+        json!({"projectId": work, "title": "Laptop", "body": "Setup",
+                              "parentPageId": onboarding}),
+    )
+    .await;
+    assert_eq!(laptop["outcome"], "ok", "{laptop}");
+    let laptop = id_of(&laptop);
+
+    let get = |page: &str| {
+        tool(
+            &setup.app,
+            &token,
+            &session,
+            "page_get",
+            json!({"pageId": page}),
+        )
+    };
+    let read = get(&laptop).await;
+    let inside: Vec<&str> = read["value"]["inside"]
+        .as_array()
+        .expect("inside")
+        .iter()
+        .map(|crumb| crumb["title"].as_str().expect("title"))
+        .collect();
+    assert_eq!(inside, ["Handbook", "Onboarding"], "{read}");
+    let read = get(&handbook).await;
+    assert_eq!(
+        read["value"]["pagesInside"][0]["id"],
+        onboarding.as_str(),
+        "{read}"
+    );
+
+    // A page can't go inside a page inside it.
+    let version = |value: &Value| value["value"]["version"].as_i64().expect("version");
+    let looped = write(json!({"pageId": handbook, "parentPageId": laptop,
+                              "expectedVersion": version(&read)}))
+    .await;
+    assert_eq!(looped["outcome"], "invalid_request", "{looped}");
+
+    // Back to the top, and inside again.
+    let read = get(&laptop).await;
+    let top =
+        write(json!({"pageId": laptop, "parentPageId": null, "expectedVersion": version(&read)}))
+            .await;
+    assert_eq!(top["outcome"], "ok", "{top}");
+    assert!(
+        get(&laptop).await["value"]["inside"].is_null(),
+        "laptop is at the top"
+    );
+    let read = get(&laptop).await;
+    let back = write(json!({"pageId": laptop, "parentPageId": onboarding,
+                            "expectedVersion": version(&read)}))
+    .await;
+    assert_eq!(back["outcome"], "ok", "{back}");
+
+    // The handbook moves to the team with everything inside it.
+    let read = get(&handbook).await;
+    let moved = tool(
+        &setup.app,
+        &token,
+        &session,
+        "page_move",
+        json!({"pageId": handbook, "toSpaceId": team, "expectedVersion": version(&read)}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let read = get(&laptop).await;
+    assert_eq!(read["value"]["projectId"], team.as_str(), "{read}");
+    assert_eq!(read["value"]["inside"][1]["title"], "Onboarding", "{read}");
+    let parent =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT parent_id FROM things WHERE id = $1::uuid")
+            .bind(&laptop)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("thing");
+    assert_eq!(parent.map(|id| id.to_string()), Some(onboarding.clone()));
+}

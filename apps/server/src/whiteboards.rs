@@ -17,11 +17,13 @@ pub mod elements;
 pub mod fractional;
 mod http;
 pub mod ops;
+pub mod outline;
 pub mod proposals;
 pub mod render;
 pub mod scene;
 pub mod store;
 pub mod templates;
+pub mod to_tasks;
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -625,6 +627,13 @@ pub async fn change(
         crate::discussion::follow(
             transaction,
             crate::discussion::SubjectKind::Whiteboard,
+            whiteboard_id,
+            new_project,
+        )
+        .await?;
+        crate::memory::page_move::follow_space(
+            transaction,
+            "whiteboard",
             whiteboard_id,
             new_project,
         )

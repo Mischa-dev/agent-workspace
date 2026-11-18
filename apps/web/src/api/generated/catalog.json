@@ -1453,6 +1453,22 @@
     "title": "Make a page from messages or blocks"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "page_move",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Move a page to another space"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -2410,6 +2426,22 @@
     "preview": false,
     "proposable": false,
     "title": "List whiteboard templates"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "whiteboard_to_tasks",
+    "permission": "tasks.create",
+    "preview": false,
+    "proposable": false,
+    "title": "Make tasks from a board's notes"
   },
   {
     "automation": true,

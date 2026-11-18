@@ -12,6 +12,7 @@ import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { AppShell } from '../shell/AppShell'
 import { usePageTitle } from '../shell/documentTitleModel'
+import { projectLocationHref } from '../projects/locations'
 import { useTheme } from '../theme/themeContext'
 import {
   AvatarStack,
@@ -161,6 +162,22 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   }
   const discard = () =>
     draftRef.current?.discard().catch((reason: unknown) => toastError('The board wasn’t reset', reason))
+  // A board's notes become tasks, or the board a page, in its project (C1.32).
+  const notesToTasks = (projectId: string) =>
+    callOp('whiteboard_to_tasks', { whiteboardId: whiteboard.id }, { requestId: newRequestId() })
+      .then((made) => {
+        showToast({
+          tone: 'success',
+          title: made.tasks.length === 1 ? 'Made one task' : `Made ${made.tasks.length} tasks`,
+          description: 'Each is labelled with its frame and links back here.',
+          action: { label: 'Open tasks', onSelect: () => navigate(projectLocationHref(projectId, { kind: 'work_items' })) },
+        })
+      })
+      .catch((reason: unknown) => toastError('No tasks were made', reason))
+  const toPage = (projectId: string) =>
+    callOp('page_make', { whiteboardId: whiteboard.id, spaceId: projectId }, { requestId: newRequestId() })
+      .then((made) => navigate(projectLocationHref(made.spaceId, { kind: 'page', pageId: made.id })))
+      .catch((reason: unknown) => toastError('The page wasn’t made', reason))
   const duplicate = () =>
     duplicateWhiteboard(whiteboard.id)
       .then((copy) => {
@@ -228,6 +245,12 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             { label: 'Rename', icon: 'pencil', disabled: !editable, onSelect: () => setPanel('rename') },
             { label: 'History', icon: 'clock', onSelect: () => setPanel('history') },
             { label: 'Duplicate', icon: 'copy', onSelect: () => void duplicate() },
+            ...(whiteboard.projectId && !whiteboard.deleted
+              ? [
+                  { label: 'Make tasks from notes', icon: 'checklist' as const, onSelect: () => void notesToTasks(whiteboard.projectId as string) },
+                  { label: 'Make a page from board', icon: 'list' as const, onSelect: () => void toPage(whiteboard.projectId as string) },
+                ]
+              : []),
             {
               label: whiteboard.isTemplate ? 'Stop using as a template' : 'Use as a template',
               icon: 'copy',

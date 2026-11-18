@@ -1307,6 +1307,7 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
 async fn comment_writes_keep_to_what_the_writer_may_see() {
     let Some(world) = super::support::world::WorldBuilder::default()
         .project("WORK")
+        .project("HOME")
         .person("lena", "member")
         .person("mara", "member")
         .person("omar", "member")
@@ -1485,6 +1486,55 @@ async fn comment_writes_keep_to_what_the_writer_may_see() {
     )
     .await;
     assert!(status.is_success(), "lena keeps a file: {status} {kept}");
+
+    // Nor does he move a page to another space (C1.37); Lena does.
+    let home = world.project("HOME").to_owned();
+    let version =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM project_pages WHERE id = $1::uuid")
+            .bind(&page)
+            .fetch_one(pool)
+            .await
+            .expect("page version");
+    let moving = json!({"pageId": page, "toSpaceId": home, "expectedVersion": version});
+    let (status, refused) = op(&world.people["nate"].browser, "page_move", moving.clone()).await;
+    assert!(
+        !status.is_success(),
+        "nate moves a page: {status} {refused}"
+    );
+    let (status, moved) = op(&world.people["lena"].browser, "page_move", moving).await;
+    assert!(status.is_success(), "lena moves a page: {status} {moved}");
+
+    // Nor does a role without tasks make tasks of a board's notes (C1.32).
+    let board = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "whiteboard_create",
+        json!({"projectId": work, "title": "Ideas"}),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let board = string_at(&board, "/value/whiteboard/id");
+    let drawn = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "whiteboard_edit",
+        json!({"whiteboardId": board, "operations": [
+            {"op": "add", "type": "text", "id": "idea", "x": 0, "y": 0, "text": "Try it"}]}),
+    )
+    .await;
+    assert_eq!(drawn["outcome"], "ok", "{drawn}");
+    let notes = json!({"whiteboardId": board});
+    let (status, refused) = op(
+        &world.people["nate"].browser,
+        "whiteboard_to_tasks",
+        notes.clone(),
+    )
+    .await;
+    assert!(!status.is_success(), "nate makes tasks: {status} {refused}");
+    let (status, made) = op(&world.people["lena"].browser, "whiteboard_to_tasks", notes).await;
+    assert!(status.is_success(), "lena makes tasks: {status} {made}");
     world.finish().await;
 }
 

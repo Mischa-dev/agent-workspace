@@ -1307,3 +1307,165 @@ async fn workspace_boards_and_channels_live_in_the_workspace_space() {
     .await;
     assert_eq!(detail["whiteboard"]["projectId"], Value::Null, "{detail}");
 }
+
+/// C1.32: five notes in two frames become five tasks labelled by frame,
+/// each linking back to the board, and the board becomes a page with a
+/// heading per frame and its notes as bullets. Someone who can't see the
+/// board makes neither.
+#[tokio::test]
+async fn board_notes_become_tasks_and_a_page() {
+    let Some(setup) = setup("c132_board_notes").await else {
+        return;
+    };
+    let space = space(&setup).await;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "OTH", "Other").await;
+    let owner = &setup.browser;
+    let (wren, token) = create_agent(&setup.app, owner, &space, "Wren", "wren").await;
+    add_member(&setup, &work, wren, "member").await;
+    let (kite, kite_token) = create_agent(&setup.app, owner, &space, "Kite", "kite").await;
+    add_member(&setup, &other, kite, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let kite_session = initialize(&setup.app, &kite_token)
+        .await
+        .expect("MCP session");
+    let board = tool(
+        &setup.app,
+        &token,
+        &session,
+        "whiteboard_create",
+        json!({"projectId": work, "title": "Retro"}),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let board = board["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let note = |id: &str, frame: &str, y: f64, text: &str| {
+        json!({"op": "add", "type": "rectangle", "id": id, "x": 20, "y": y, "frameId": frame,
+               "text": text, "backgroundColor": "#ffec99"})
+    };
+    let drawn = tool(
+        &setup.app,
+        &token,
+        &session,
+        "whiteboard_edit",
+        json!({"whiteboardId": board, "operations": [
+            {"op": "add", "type": "frame", "id": "went", "x": 0, "y": 0, "name": "Went well"},
+            {"op": "add", "type": "frame", "id": "fix", "x": 1000, "y": 0, "name": "To fix"},
+            note("n1", "went", 40.0, "Fast reviews"),
+            note("n2", "went", 160.0, "Clear plan"),
+            note("n3", "fix", 40.0, "Flaky tests\nThe file tests time out"),
+            note("n4", "fix", 160.0, "Slow deploys"),
+            note("n5", "fix", 280.0, "Missing docs"),
+            {"op": "connect", "id": "arrow", "from": "n1", "to": "n3", "text": "then"},
+        ]}),
+    )
+    .await;
+    assert_eq!(drawn["outcome"], "ok", "{drawn}");
+
+    // Someone outside the board's project makes no tasks of it.
+    let refused = tool(
+        &setup.app,
+        &kite_token,
+        &kite_session,
+        "whiteboard_to_tasks",
+        json!({"whiteboardId": board, "clientRequestId": "kite-retro"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    let refused = tool(
+        &setup.app,
+        &kite_token,
+        &kite_session,
+        "whiteboard_to_tasks",
+        json!({"whiteboardId": board, "spaceId": other, "clientRequestId": "kite-retro-2"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+
+    let made = tool(
+        &setup.app,
+        &token,
+        &session,
+        "whiteboard_to_tasks",
+        json!({"whiteboardId": board, "clientRequestId": "retro-tasks"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let tasks = made["value"]["tasks"].as_array().expect("tasks");
+    let titles: Vec<&str> = tasks
+        .iter()
+        .map(|task| task["title"].as_str().expect("title"))
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "Fast reviews",
+            "Clear plan",
+            "Flaky tests",
+            "Slow deploys",
+            "Missing docs"
+        ],
+        "{made}"
+    );
+    let mut created = made["value"]["createdLabels"]
+        .as_array()
+        .expect("labels")
+        .clone();
+    created.sort_by_key(|label| label.as_str().map(str::to_owned));
+    assert_eq!(created, vec![json!("To fix"), json!("Went well")], "{made}");
+    let flaky = tasks[2]["id"].as_str().expect("task");
+    let opened = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_open",
+        json!({"taskId": flaky}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let text = opened.to_string();
+    assert!(text.contains("The file tests time out"), "{opened}");
+    assert!(text.contains(&format!("/whiteboards/{board}")), "{opened}");
+    assert!(text.contains("To fix"), "{opened}");
+
+    // The board as a page.
+    let page = tool(
+        &setup.app,
+        &token,
+        &session,
+        "page_make",
+        json!({"whiteboardId": board, "clientRequestId": "retro-page"}),
+    )
+    .await;
+    assert_eq!(page["outcome"], "ok", "{page}");
+    let read = tool(
+        &setup.app,
+        &token,
+        &session,
+        "page_get",
+        json!({"pageId": page["value"]["id"]}),
+    )
+    .await;
+    let body = read["value"]["page"]["body"]
+        .as_str()
+        .or_else(|| read["value"]["body"].as_str())
+        .expect("body")
+        .to_owned();
+    assert_eq!(
+        body.trim(),
+        "## Went well\n\n- Fast reviews\n- Clear plan\n\n## To fix\n\n- Flaky tests\n  The file tests time out\n- Slow deploys\n- Missing docs",
+        "{read}"
+    );
+    let refused = tool(
+        &setup.app,
+        &kite_token,
+        &kite_session,
+        "page_make",
+        json!({"whiteboardId": board, "spaceId": other, "clientRequestId": "kite-page"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+}

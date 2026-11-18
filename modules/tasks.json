@@ -17,6 +17,7 @@
     "task_create": "create",
     "task_update": "change",
     "task_create_many": "create",
+    "whiteboard_to_tasks": "create",
     "task_update_many": "change",
     "task_archive": "change",
     "task_restore": "change",

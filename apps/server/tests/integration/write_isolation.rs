@@ -489,6 +489,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "decision_record",
     "page_make",
     "page_file_upload",
+    "page_move",
     "environment_write",
     "file_delete",
     "file_upload",
@@ -632,6 +633,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "view_update",
     "whiteboard_create",
     "whiteboard_duplicate",
+    "whiteboard_to_tasks",
     "whiteboard_update_elements",
     "whiteboard_propose",
     "whiteboard_link",
@@ -7304,6 +7306,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "title": "Net mcp copy"}),
             vec![json!({"whiteboardId": b.whiteboard, "title": "Net mcp copy"})],
         ),
+        // C1.32: B's board's notes don't become tasks in A, nor A's in B.
+        mcp_case(
+            "whiteboard_to_tasks",
+            json!({"whiteboardId": a.whiteboard, "clientRequestId": "net-board-tasks"}),
+            vec![
+                json!({"whiteboardId": b.whiteboard, "clientRequestId": "net-board-tasks-b"}),
+                json!({"whiteboardId": b.whiteboard, "spaceId": a.project, "clientRequestId": "net-board-tasks-c"}),
+                json!({"whiteboardId": a.whiteboard, "spaceId": b.project, "clientRequestId": "net-board-tasks-d"}),
+            ],
+        )
+        .without_own("A's board has no notes; notes into tasks are checked in w16_whiteboards"),
         mcp_case(
             "whiteboard_link",
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": a.subtask}),
@@ -7398,6 +7411,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"messages": [b.message], "projectId": a.project, "clientRequestId": "net-page-make-c"}),
             json!({"messages": [a.message], "projectId": b.project, "clientRequestId": "net-page-make-d"}),
+            // C1.32: nor from B's board.
+            json!({"whiteboardId": b.whiteboard, "projectId": a.project, "clientRequestId": "net-page-make-e"}),
         ]),
         // C1.33: a file kept on B's page can't come from A.
         mcp_case(
@@ -7405,6 +7420,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"pageId": a.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file"}),
             vec![json!({"pageId": b.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file-b"})],
         ),
+        // C1.37: B's page can't be moved, and A's page can't be moved into B.
+        mcp_case(
+            "page_move",
+            json!({"pageId": a.page, "toSpaceId": a.project, "expectedVersion": 1}),
+            vec![
+                json!({"pageId": b.page, "toSpaceId": a.project, "expectedVersion": version("project_pages", &b.page)}),
+                json!({"pageId": a.page, "toSpaceId": b.project, "expectedVersion": version("project_pages", &a.page)}),
+            ],
+        )
+        .without_own("moving A's page away would leave the cases after it without it; moves are checked in w20_files"),
         mcp_case(
             "task_depend",
             json!({"taskId": a.subtask, "blockedBy": [sp.task]}),

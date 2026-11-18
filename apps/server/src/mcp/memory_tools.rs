@@ -411,6 +411,29 @@ pub(super) struct PageValue {
     /// True when this answers a retry: the page the first call created.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent_replay: bool,
+    /// The pages it sits inside, outermost first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inside: Vec<PageLine>,
+    /// The pages inside it, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages_inside: Vec<PageLine>,
+}
+
+/// A page named by id and title.
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PageLine {
+    pub id: String,
+    pub title: String,
+}
+
+impl From<memory::PageCrumb> for PageLine {
+    fn from(crumb: memory::PageCrumb) -> Self {
+        Self {
+            id: crumb.id.to_string(),
+            title: crumb.title,
+        }
+    }
 }
 
 fn is_zero(value: &i64) -> bool {
@@ -511,6 +534,8 @@ pub(super) async fn page_get(
             updated_at: page.updated_at,
             stale: page.stale,
             archived: page.archived,
+            inside: page.ancestors.into_iter().map(PageLine::from).collect(),
+            pages_inside: page.children.into_iter().map(PageLine::from).collect(),
             history: page
                 .revisions
                 .into_iter()
@@ -566,6 +591,11 @@ pub(super) struct PageWriteArguments {
     pub archived: Option<bool>,
     /// A short note on what changed.
     pub note: Option<String>,
+    /// Put the page inside another page of its project (its id), or back
+    /// at the top (null). Left out, it stays where it is.
+    #[serde(default, deserialize_with = "crate::memory::present")]
+    #[schemars(with = "Option<String>")]
+    pub parent_page_id: Option<Option<String>>,
     /// Also pin the page to this conversation.
     pub pin_to_conversation_id: Option<String>,
     /// The page's comment thread that asked for this change, if one did:
@@ -623,6 +653,14 @@ pub(super) async fn page_write(
         },
         _ => None,
     };
+    let parent_page_id = match arguments.parent_page_id.as_ref() {
+        None => None,
+        Some(None) => Some(None),
+        Some(Some(value)) => match parse_id(value) {
+            Some(id) => Some(Some(id)),
+            None => return ToolResult::invalid("parentPageId", "Pass a page ID or link."),
+        },
+    };
     let retried = arguments.clone();
     let mut input = PageInput {
         title: arguments.title,
@@ -635,6 +673,7 @@ pub(super) async fn page_write(
         restore_version: arguments.restore_version,
         archived: arguments.archived,
         note: arguments.note,
+        parent_page_id,
     };
     let result = async {
         let project_id = principal.project_id;
@@ -729,11 +768,12 @@ pub(super) async fn page_write(
                 let changes_more = input.title.is_some()
                     || input.is_guide.is_some()
                     || input.skill_description.is_some()
-                    || input.archived.is_some();
+                    || input.archived.is_some()
+                    || input.parent_page_id.is_some();
                 if mode == Some(access::WriteMode::Propose) && changes_more {
                     return Ok(ToolResult::denied(
                         "You can suggest changes to this page's text, but not change its title, \
-                         guide, skill or archive state. Ask someone who edits it.",
+                         place, guide, skill or archive state. Ask someone who edits it.",
                     ));
                 }
                 if changes_text && mode == Some(access::WriteMode::Propose) {
@@ -751,7 +791,8 @@ pub(super) async fn page_write(
                     || input.skill_description.is_some()
                     || input.archived.is_some()
                     || input.body.is_some()
-                    || input.restore_version.is_some();
+                    || input.restore_version.is_some()
+                    || input.parent_page_id.is_some();
                 if more {
                     memory::update_page(&mut transaction, writer(principal), page_id, &input)
                         .await?;

@@ -28,7 +28,8 @@
     "decision_list": "query",
     "decision_record": "create",
     "page_make": "create",
-    "page_file_upload": "create"
+    "page_file_upload": "create",
+    "page_move": "change"
   },
   "routes": [
     "/api/v1/pages/*",

@@ -146,6 +146,8 @@ export type LinkArgument = { targetId: string; targetKind: string }
 
 export type LinkView = { key?: string | null; projectId: string; projectName: string; targetId: string; targetKind: string; title: string; url: string }
 
+export type MadeTask = { elementId: string; id: string; key: string; title: string }
+
 export type MeasureOp = "count" | "sum" | "average" | "min" | "max"
 
 export type MessageContent = { nodes: MessageNode[]; version: number }
@@ -658,9 +660,13 @@ export type PageFileUploadInput = { contentType?: string | null; dataBase64?: st
 
 export type PageFileUploadOutput = { contentType: string; embed: string; fileId: string; name: string; size: number }
 
-export type PageMakeInput = { blocks?: string[]; messages?: string[]; move?: boolean; pageId?: string | null; spaceId?: string | null; threadId?: string | null; title?: string | null }
+export type PageMakeInput = { blocks?: string[]; messages?: string[]; move?: boolean; pageId?: string | null; spaceId?: string | null; threadId?: string | null; title?: string | null; whiteboardId?: string | null }
 
 export type PageMakeOutput = { id: string; sourceVersion?: number | null; spaceId: string; title: string; url: string }
+
+export type PageMoveInput = { expectedVersion: number; pageId: string; parentPageId?: string | null; toSpaceId: string }
+
+export type PageMoveOutput = { id: string; spaceId: string; version: number }
 
 export type PageTemplateListInput = { spaceId: string }
 
@@ -910,6 +916,10 @@ export type WhiteboardTemplateListInput = { spaceId?: string | null }
 
 export type WhiteboardTemplateListOutput = { templates: WhiteboardTemplateView[] }
 
+export type WhiteboardToTasksInput = { elementIds?: string[]; spaceId?: string | null; whiteboardId: string }
+
+export type WhiteboardToTasksOutput = { createdLabels: string[]; tasks: MadeTask[] }
+
 export type WhiteboardUpdateInput = { deleted?: boolean | null; expectedVersion?: number | null; isTemplate?: boolean | null; projectId?: string | null; restoreRevision?: number | null; title?: string | null; whiteboardId: string; workspaceWide?: boolean | null }
 
 export type WhiteboardUpdateOutput = { edit?: EditOutcome | null; idempotentReplay?: boolean; whiteboard: WhiteboardLine }
@@ -1022,6 +1032,7 @@ export type Operations = {
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
   page_file_upload: { input: PageFileUploadInput; output: PageFileUploadOutput }
   page_make: { input: PageMakeInput; output: PageMakeOutput }
+  page_move: { input: PageMoveInput; output: PageMoveOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }
   place_search: { input: PlaceSearchInput; output: PlaceSearchOutput }
@@ -1084,6 +1095,7 @@ export type Operations = {
   whiteboard_link: { input: WhiteboardLinkInput; output: WhiteboardLinkOutput }
   whiteboard_propose: { input: WhiteboardProposeInput; output: WhiteboardProposeOutput }
   whiteboard_template_list: { input: WhiteboardTemplateListInput; output: WhiteboardTemplateListOutput }
+  whiteboard_to_tasks: { input: WhiteboardToTasksInput; output: WhiteboardToTasksOutput }
   whiteboard_update: { input: WhiteboardUpdateInput; output: WhiteboardUpdateOutput }
   whiteboard_update_elements: { input: WhiteboardUpdateElementsInput; output: WhiteboardUpdateElementsOutput }
   workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
