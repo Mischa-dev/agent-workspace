@@ -954,7 +954,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Change your notifications: read, unread, archive, restore (from the archive), snooze (until snoozeUntil, then back unread) or unsnooze. Pass ids from notification_list, or all: true to mark read or archive everything in the inbox (optionally one projectId). Only changes your own.",
+        description = "Change your notifications: read, unread, archive, restore (from the archive), snooze (until snoozeUntil, then back unread), snooze_until_activity (back unread when something new happens on it) or unsnooze. Pass ids from notification_list, or all: true to mark read or archive everything in the inbox (optionally one projectId). Only changes your own.",
         annotations(
             title = "Update notifications",
             read_only_hint = false,

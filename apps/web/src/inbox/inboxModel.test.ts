@@ -15,6 +15,8 @@ const base: InboxNotification = {
   read: false,
   archived: false,
   snoozedUntil: null,
+  untilActivity: false,
+  replyConversationId: null,
   at: '2026-10-16T08:00:00.000000Z',
   href: '/projects/p1/channels/c1',
   launchHref: null,

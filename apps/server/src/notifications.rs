@@ -229,6 +229,9 @@ pub enum UpdateAction {
     Restore,
     /// Out of the inbox until `snoozeUntil`, then back unread.
     Snooze,
+    /// Out of the inbox until something new happens on it (C2.10), then
+    /// back unread; a year at most.
+    SnoozeUntilActivity,
     Unsnooze,
 }
 
@@ -399,7 +402,12 @@ pub async fn deliver(
             detail = EXCLUDED.detail,
             repeat_count = notifications.repeat_count + 1,
             read_at = CASE WHEN $17 THEN COALESCE(notifications.read_at, now()) END,
-            surfaced_at = GREATEST(now(), COALESCE(notifications.snoozed_until, now())),
+            -- Snoozed until something new: this is it (C2.10).
+            surfaced_at = CASE WHEN notifications.wake_on_activity THEN now()
+                ELSE GREATEST(now(), COALESCE(notifications.snoozed_until, now())) END,
+            snoozed_until = CASE WHEN notifications.wake_on_activity THEN NULL
+                ELSE notifications.snoozed_until END,
+            wake_on_activity = false,
             updated_at = now()
         RETURNING id
         "#,
@@ -1701,6 +1709,8 @@ pub struct NotificationView {
     pub read: bool,
     pub archived: bool,
     pub snoozed_until: Option<String>,
+    /// Snoozed until something new happens on it (C2.10).
+    pub until_activity: bool,
     /// When it last came to the top of the inbox.
     pub at: String,
     pub created_at: String,
@@ -1719,8 +1729,9 @@ pub struct NotificationView {
     pub request: Option<crate::requests::RequestCard>,
     /// Whether it asks something of you or is for your information.
     pub attention: Attention,
-    /// The conversation a Reply from the notification posts in (mentions).
-    #[serde(skip)]
+    /// The conversation a Reply from the notification posts in (mentions,
+    /// DMs and thread replies), for replying in place (C2.10).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_conversation_id: Option<Uuid>,
     /// A reminder's saved item, which Done and Snooze change (W21).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1782,6 +1793,7 @@ struct NotificationRow {
     read: bool,
     archived: bool,
     snoozed_until: Option<String>,
+    until_activity: bool,
     at: String,
     at_micros: i64,
     created_at: String,
@@ -1832,9 +1844,10 @@ fn list_sql(view_condition: &str, extra: &str) -> String {
                actor.kind AS actor_kind,
                n.repeat_count, n.read_at IS NOT NULL AS read,
                n.archived_at IS NOT NULL AS archived,
-               CASE WHEN n.snoozed_until > now() THEN
+               CASE WHEN n.snoozed_until > now() AND NOT n.wake_on_activity THEN
                    to_char(n.snoozed_until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                END AS snoozed_until,
+               n.snoozed_until > now() AND n.wake_on_activity AS until_activity,
                to_char(n.surfaced_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at,
                (extract(epoch FROM n.surfaced_at) * 1000000)::bigint AS at_micros,
                to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
@@ -2459,6 +2472,7 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         read: row.read,
         archived: row.archived,
         snoozed_until: row.snoozed_until,
+        until_activity: row.until_activity,
         at: row.at,
         created_at: row.created_at,
         href,
@@ -2524,13 +2538,18 @@ pub async fn update(
         UpdateAction::Read => "read_at = COALESCE(n.read_at, now())",
         UpdateAction::Unread => "read_at = NULL",
         UpdateAction::Archive => {
-            "archived_at = COALESCE(n.archived_at, now()), read_at = COALESCE(n.read_at, now()), snoozed_until = NULL"
+            "archived_at = COALESCE(n.archived_at, now()), read_at = COALESCE(n.read_at, now()), snoozed_until = NULL, wake_on_activity = false"
         }
         UpdateAction::Restore => "archived_at = NULL",
         UpdateAction::Snooze => {
-            "snoozed_until = $6, surfaced_at = $6, read_at = NULL, archived_at = NULL"
+            "snoozed_until = $6, surfaced_at = $6, read_at = NULL, archived_at = NULL, wake_on_activity = false"
         }
-        UpdateAction::Unsnooze => "snoozed_until = NULL, surfaced_at = now()",
+        UpdateAction::SnoozeUntilActivity => {
+            "snoozed_until = now() + make_interval(days => 366), surfaced_at = now() + make_interval(days => 366), read_at = NULL, archived_at = NULL, wake_on_activity = true"
+        }
+        UpdateAction::Unsnooze => {
+            "snoozed_until = NULL, surfaced_at = now(), wake_on_activity = false"
+        }
     };
     let applies = match action {
         UpdateAction::Read => "n.read_at IS NULL",
@@ -2540,7 +2559,7 @@ pub async fn update(
         UpdateAction::Restore => {
             "n.archived_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM notifications open WHERE open.recipient_actor_id = n.recipient_actor_id AND open.group_key = n.group_key AND open.archived_at IS NULL)"
         }
-        UpdateAction::Snooze => {
+        UpdateAction::Snooze | UpdateAction::SnoozeUntilActivity => {
             "NOT EXISTS (SELECT 1 FROM notifications open WHERE open.recipient_actor_id = n.recipient_actor_id AND open.group_key = n.group_key AND open.archived_at IS NULL AND open.id <> n.id)"
         }
         UpdateAction::Unsnooze => "n.snoozed_until IS NOT NULL",

@@ -5,6 +5,8 @@ import { callOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { whenChoices } from '../later/when'
 import { actorKind, type ActorKind } from '../ui/identityModel'
+import type { MenuEntry } from '../ui/overlays'
+import { formatDateTime, formatTime } from '../ui/time'
 
 export const inboxKeys = {
   root: queryKeys.inbox,
@@ -19,7 +21,7 @@ export function invalidateInbox(queryClient: QueryClient) {
 
 export type InboxView = 'inbox' | 'unread' | 'snoozed' | 'archived'
 export type InboxCategory = 'all' | 'mentions' | 'threads' | 'tasks' | 'runs' | 'pull_requests' | 'usage'
-export type InboxAction = 'read' | 'unread' | 'archive' | 'restore' | 'snooze' | 'unsnooze'
+export type InboxAction = 'read' | 'unread' | 'archive' | 'restore' | 'snooze' | 'snooze_until_activity' | 'unsnooze'
 
 /** A request someone raised (a question, approval or proposal), and its answer once given. */
 export type InboxRequest = {
@@ -47,6 +49,10 @@ export type InboxNotification = {
   read: boolean
   archived: boolean
   snoozedUntil: string | null
+  /** Snoozed until something new happens on it (C2.10). */
+  untilActivity: boolean
+  /** Mentions, DMs and thread replies: the conversation a reply in place goes to. */
+  replyConversationId: string | null
   at: string
   href: string
   /** Capacity alerts: the ready tasks that could use the capacity. */
@@ -149,6 +155,8 @@ export function normalizeNotification(value: unknown): InboxNotification | null 
     read: record.read === true,
     archived: record.archived === true,
     snoozedUntil: text(record.snoozedUntil),
+    untilActivity: record.untilActivity === true,
+    replyConversationId: text(record.replyConversationId),
     at,
     href: safeHref(text(record.href) ?? '', projectId),
     launchHref: inAppPath(text(record.launchHref)),
@@ -220,6 +228,7 @@ export function applyUpdate(
     case 'restore':
       return view === 'archived' ? null : { ...notification, archived: false }
     case 'snooze':
+    case 'snooze_until_activity':
       return view === 'snoozed' ? notification : null
     case 'unsnooze':
       return view === 'snoozed' ? null : notification
@@ -370,5 +379,29 @@ export function sectionsByNeed(notifications: InboxNotification[]): InboxSection
   return [
     { key: 'needs', title: 'Needs you', groups: groupBySubject(needs), items: needs },
     { key: 'fyi', title: 'FYI', groups: groupBySubject(fyi), items: fyi },
+  ]
+}
+
+/** A time on the snooze menu: the clock for today or tomorrow, the date after that. */
+function snoozeHint(until: Date, now = new Date()) {
+  const days = Math.round((new Date(until).setHours(0, 0, 0, 0) - new Date(now).setHours(0, 0, 0, 0)) / 86_400_000)
+  return days <= 1 ? formatTime(until.toISOString()) : formatDateTime(until.toISOString(), now)
+}
+
+/** When a snooze ends: a time, or the next time something happens on it (C2.10). */
+export type SnoozeTarget = Date | 'activity'
+
+/** The snooze menu's choices, for one notification or a selection. */
+export function snoozeMenu(onSnooze: (until: SnoozeTarget) => void): MenuEntry[] {
+  return [
+    { heading: 'Snooze until' },
+    ...snoozeChoices().map((choice) => ({
+      // The quick choices already say their time; "Later today" gets it added.
+      label: choice.id === 'later' ? `${choice.label} · ${snoozeHint(choice.until)}` : choice.label,
+      icon: 'clock' as const,
+      // The time is read again when it's picked, so a menu left open stays right.
+      onSelect: () => onSnooze(snoozeChoices().find((fresh) => fresh.id === choice.id)?.until ?? choice.until),
+    })),
+    { label: 'Something new happens', icon: 'activity' as const, onSelect: () => onSnooze('activity') },
   ]
 }
