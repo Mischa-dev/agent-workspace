@@ -89,22 +89,7 @@ pub(crate) async fn ensure_subject_takes_messages(
     conversation_id: Uuid,
     sender: Uuid,
 ) -> Result<(), AppError> {
-    let subject = sqlx::query_as::<_, (String, Uuid)>(
-        r#"
-        -- visibility: the sender holds the conversation, checked by the send
-        SELECT COALESCE(parent.subject_kind, conversation.subject_kind),
-               COALESCE(parent.subject_id, conversation.subject_id)
-        FROM conversations conversation
-        LEFT JOIN conversations parent
-          ON parent.id = conversation.parent_channel_id AND parent.kind = 'comments'
-        WHERE conversation.id = $1
-          AND COALESCE(parent.subject_id, conversation.subject_id) IS NOT NULL
-          AND (conversation.kind = 'comments' OR parent.id IS NOT NULL)
-        "#,
-    )
-    .bind(conversation_id)
-    .fetch_optional(&mut *connection)
-    .await?;
+    let subject = subject_of_conversation(connection, conversation_id).await?;
     let Some((kind, thing_id)) = subject else {
         return Ok(());
     };
@@ -120,6 +105,30 @@ pub(crate) async fn ensure_subject_takes_messages(
         return Err(AppError::Conflict(kind.as_str(), "archived"));
     }
     Ok(())
+}
+
+/// The thing a comments conversation (or a thread in one) is about: its
+/// kind and id; `None` for any other conversation. Ids only.
+pub(crate) async fn subject_of_conversation(
+    connection: &mut PgConnection,
+    conversation_id: Uuid,
+) -> Result<Option<(String, Uuid)>, AppError> {
+    Ok(sqlx::query_as::<_, (String, Uuid)>(
+        r#"
+        -- visibility: the caller wrote to or holds the conversation, checked
+        SELECT COALESCE(parent.subject_kind, conversation.subject_kind),
+               COALESCE(parent.subject_id, conversation.subject_id)
+        FROM conversations conversation
+        LEFT JOIN conversations parent
+          ON parent.id = conversation.parent_channel_id AND parent.kind = 'comments'
+        WHERE conversation.id = $1
+          AND COALESCE(parent.subject_id, conversation.subject_id) IS NOT NULL
+          AND (conversation.kind = 'comments' OR parent.id IS NOT NULL)
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_optional(&mut *connection)
+    .await?)
 }
 
 /// The thing's comments conversation and its project, made if it doesn't

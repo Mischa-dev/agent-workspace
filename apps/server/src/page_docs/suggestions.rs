@@ -437,6 +437,7 @@ pub async fn create(
         });
         notify(transaction, &notification).await?;
     }
+    crate::proposals::announce_fact(transaction, id, false).await?;
     discussion_updated(transaction, page.project_id, page_id).await?;
     Ok(id)
 }

@@ -581,6 +581,19 @@ pub async fn undo(
     .bind(undo_id)
     .execute(&mut **transaction)
     .await?;
+    crate::events::emit(
+        transaction,
+        crate::events::NewEvent::thing(
+            &crate::events::catalog::CHANGE_UNDONE,
+            space_id,
+            &kind,
+            thing_id,
+        )
+        .actor(writer.actor_id)
+        .version(version)
+        .payload(json!({"changeSetId": id, "undoneBy": undo_id})),
+    )
+    .await?;
     Ok(Ok(Undid {
         change_set_id: undo_id,
         version,

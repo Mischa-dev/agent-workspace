@@ -345,7 +345,7 @@ pub async fn stage(
         .as_ref()
         .map(|(_, changes, _)| changes.iter().map(String::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
-    super::emit(
+    let staged = super::emit(
         connection,
         NewEvent {
             id: event_id,
@@ -362,7 +362,26 @@ pub async fn stage(
             legacy_type: Some(payload.event_type()),
         },
     )
-    .await
+    .await?;
+    // A message in a thing's comments is also a comment on that thing
+    // (C1.28), heard by the comments' readers: rules can ask about it.
+    if let P::MessageCreated(p) = payload
+        && let Some((kind, thing_id)) =
+            crate::discussion::subject_of_conversation(connection, p.conversation_id).await?
+    {
+        super::emit(
+            connection,
+            NewEvent::thing(&catalog::COMMENT_CREATED, project_id, &kind, thing_id)
+                .audience(Audience::ConversationOf(p.conversation_id))
+                .actor(p.author_actor_id)
+                .payload(json!({
+                    "conversationId": p.conversation_id,
+                    "messageId": p.message_id,
+                })),
+        )
+        .await?;
+    }
+    Ok(staged)
 }
 
 /// What this transaction did to a task, from the activity it wrote: the

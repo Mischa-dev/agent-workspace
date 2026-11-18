@@ -56,6 +56,8 @@ const TRIGGERS: { kind: TriggerKind; label: string }[] = [
   { kind: 'page_changed', label: 'A page changes' },
   { kind: 'sheet_changed', label: 'A sheet changes' },
   { kind: 'whiteboard_changed', label: 'A whiteboard changes' },
+  { kind: 'comment_posted', label: 'Someone comments' },
+  { kind: 'proposal_made', label: 'Someone proposes a change' },
   { kind: 'schedule', label: 'On a schedule' },
   {
     kind: 'capacity_window',
@@ -77,7 +79,9 @@ const isRecordTrigger = (trigger: Trigger) =>
   trigger.kind === 'record_changed' ||
   trigger.kind === 'page_changed' ||
   trigger.kind === 'sheet_changed' ||
-  trigger.kind === 'whiteboard_changed'
+  trigger.kind === 'whiteboard_changed' ||
+  trigger.kind === 'comment_posted' ||
+  trigger.kind === 'proposal_made'
 const RECORD_ACTIONS: readonly RuleActionKind[] = ['notify', 'post_message', 'ask_agent']
 
 function defaultTrigger(kind: TriggerKind): Trigger {
@@ -91,6 +95,9 @@ function defaultTrigger(kind: TriggerKind): Trigger {
       return { kind, sheetId: null }
     case 'whiteboard_changed':
       return { kind, whiteboardId: null }
+    case 'comment_posted':
+    case 'proposal_made':
+      return { kind, thingKind: null, thingId: null }
     case 'run_finished':
       return { kind, outcomes: ['failed'] }
     case 'message_posted':
@@ -370,6 +377,38 @@ function TriggerFields({
   trigger: Trigger
 }) {
   switch (trigger.kind) {
+    case 'comment_posted':
+    case 'proposal_made': {
+      const kinds: [string, string][] =
+        trigger.kind === 'comment_posted'
+          ? [
+              ['task', 'Tasks'],
+              ['page', 'Pages'],
+              ['sheet', 'Sheets'],
+              ['whiteboard', 'Whiteboards'],
+              ['record', 'Records'],
+            ]
+          : [
+              ['page', 'Pages'],
+              ['sheet', 'Sheets'],
+              ['whiteboard', 'Whiteboards'],
+            ]
+      return (
+        <SelectField
+          id="rule-trigger-thing-kind"
+          label="On"
+          onChange={(event) => onChange({ ...trigger, thingKind: (event.target.value || null) as never, thingId: null })}
+          value={trigger.thingKind ?? ''}
+        >
+          <option value="">Anything</option>
+          {kinds.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </SelectField>
+      )
+    }
     case 'page_changed':
     case 'sheet_changed':
     case 'whiteboard_changed': {

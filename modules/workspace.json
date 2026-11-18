@@ -118,12 +118,12 @@
   ],
   "events": {
     "emits": ["file.attached", "file.removed", "account.status_changed", "account.profile_changed", "custom_emoji.changed",
-      "saved_searches.changed", "workspace.lifecycle_changed"],
+      "saved_searches.changed", "workspace.lifecycle_changed", "proposal.created", "proposal.decided"],
     "listens": []
   },
   "notifications": ["thing_update"],
   "search": ["files"],
-  "automations": { "triggers": [], "actions": [] },
+  "automations": { "triggers": ["proposal_made"], "actions": [] },
   "things": [],
   "links": [],
   "embeds": [],

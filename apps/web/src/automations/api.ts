@@ -40,6 +40,9 @@ export type Trigger =
   | { kind: 'page_changed'; pageId?: string | null }
   | { kind: 'sheet_changed'; sheetId?: string | null }
   | { kind: 'whiteboard_changed'; whiteboardId?: string | null }
+  /** A comment on a thing, or a proposed change to one: on any thing, things of one kind, or one thing. */
+  | { kind: 'comment_posted'; thingKind?: CommentedKind | null; thingId?: string | null }
+  | { kind: 'proposal_made'; thingKind?: 'page' | 'sheet' | 'whiteboard' | null; thingId?: string | null }
   | {
       kind: 'schedule'
       frequency: 'daily' | 'weekly' | 'monthly'
@@ -56,6 +59,9 @@ export type Trigger =
     }
 
 export type TriggerKind = Trigger['kind']
+
+/** The kinds of thing people comment on. */
+export type CommentedKind = 'task' | 'page' | 'sheet' | 'whiteboard' | 'record'
 
 export type Conditions = {
   viewId?: string | null
