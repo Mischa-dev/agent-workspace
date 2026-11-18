@@ -248,6 +248,49 @@ pub(crate) async fn resolved(pool: &sqlx::PgPool) -> Result<Option<Tenancy>, sql
     }))
 }
 
+/// Widens the transaction in hand, and the rest of the work in hand, to a
+/// workspace it is making (for `owner`), so the new workspace's own rows
+/// (its roles, plan and the owner's membership) are inside the scope as
+/// they go in: a member's scope gains it, a workspace or anonymous scope
+/// becomes the owner's member scope over both, and a server-wide one stays.
+pub async fn widen_to_new_workspace(
+    connection: &mut sqlx::PgConnection,
+    workspace: Uuid,
+    owner: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        SELECT set_config('app.tenancy', CASE split_part(current, ':', 1)
+            WHEN 's' THEN current
+            WHEN 'm' THEN current
+                || CASE WHEN split_part(current, '|', 2) = '' THEN '' ELSE ',' END
+                || $1::text
+            WHEN 'w' THEN 'm:' || $2::text || '|' || split_part(current, '|', 2) || ',' || $1::text
+            ELSE 'm:' || $2::text || '|' || $1::text
+        END, true)
+        FROM (SELECT coalesce(current_setting('app.tenancy', true), '') AS current) setting
+        "#,
+    )
+    .bind(workspace)
+    .bind(owner)
+    .execute(&mut *connection)
+    .await?;
+    let _ = TENANCY.try_with(|cell| {
+        let mut tenancy = cell
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Tenancy::Member {
+            workspaces: Some(workspaces),
+            ..
+        } = &mut *tenancy
+            && !workspaces.contains(&workspace)
+        {
+            workspaces.push(workspace);
+        }
+    });
+    Ok(())
+}
+
 /// Middleware: every request runs in its own scope, anonymous until
 /// authentication names the account ([`signed_in`]). The request's log
 /// lines carry the kind of scope it ended with and the account (an id,

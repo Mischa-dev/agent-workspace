@@ -140,6 +140,7 @@ pub async fn create(
         None => super::slug::readable_for_new(connection, name).await?,
     };
     let id = input.id.unwrap_or_else(Uuid::now_v7);
+    crate::tenancy::widen_to_new_workspace(connection, id, owner).await?;
     let inserted = sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)")
         .bind(id)
         .bind(name)
