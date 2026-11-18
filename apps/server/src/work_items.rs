@@ -85,6 +85,7 @@ mod custom_fields;
 pub mod cycles;
 pub(crate) mod import_parse;
 pub(crate) mod imports;
+pub mod initiatives;
 pub(crate) mod list;
 mod moves;
 pub(crate) mod ops;

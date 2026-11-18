@@ -41,7 +41,9 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<TriageRuleList>()
         .add::<TriageRuleWrite>()
         .add::<CycleList>()
-        .add::<CycleSet>();
+        .add::<CycleSet>()
+        .add::<InitiativeList>()
+        .add::<InitiativeCreate>();
 }
 
 /// The bookkeeping every task write shares: a keyed call is retry-safe
@@ -1225,6 +1227,211 @@ impl Operation for CycleSet {
         Ok(CyclesOutput {
             settings: super::cycles::settings(tx, actor.project_id).await?,
             cycles: super::cycles::list(tx, actor.project_id, today).await?,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// initiative_list, initiative_create
+
+pub struct InitiativeList;
+
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InitiativeListInput {
+    /// true lists archived initiatives too, after the others.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_archived: bool,
+}
+
+impl Targeted for InitiativeListInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+/// Whether the caller may do `need` in the workspace's own space; Err when
+/// they can't see it at all.
+async fn in_workspace_space(
+    call: &mut OpCall<'_>,
+    space: uuid::Uuid,
+    need: crate::access::Need,
+) -> Result<bool, OpError> {
+    let caller = call.ctx.caller.clone();
+    let tx = call.tx().await?;
+    match crate::access::check(tx, &caller, need, crate::access::Target::Space(space)).await? {
+        Ok(_) => Ok(true),
+        Err(crate::access::Denied::NotFound) => Err(OpError::not_found("That workspace")),
+        Err(_) => Ok(false),
+    }
+}
+
+impl Operation for InitiativeList {
+    const NAME: &'static str = "initiative_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List initiatives";
+    const DESCRIPTION: &'static str = "The workspace's initiatives: work that spans spaces, \
+        each a record of the workspace's Initiatives collection (change one with record_write \
+        there) with its milestones in the spaces you can see and their task counts. Put a \
+        milestone in one with milestone_write's initiative; make one with initiative_create.";
+
+    type Input = InitiativeListInput;
+    type Output = super::initiatives::Initiatives;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: InitiativeListInput,
+    ) -> Result<super::initiatives::Initiatives, OpError> {
+        let workspace = call.ctx.workspace_id;
+        let caller = call.ctx.caller.clone();
+        let space = {
+            let tx = call.tx().await?;
+            crate::spaces::workspace::find(tx, workspace).await?
+        };
+        if let Some(space) = space {
+            in_workspace_space(call, space, crate::access::Need::SEE).await?;
+        }
+        let tx = call.tx().await?;
+        Ok(super::initiatives::list(tx, workspace, &caller, input.include_archived).await?)
+    }
+}
+
+pub struct InitiativeCreate;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InitiativeCreateInput {
+    /// Its name.
+    pub title: String,
+    /// Values by field name: Owner (a person), Status (Planned, Active, Done
+    /// or Canceled), Target date (YYYY-MM-DD), Health (On track, At risk or
+    /// Off track), or any field added to the Initiatives collection.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Targeted for InitiativeCreateInput {
+    fn target(&self) -> Target {
+        Target::Workspace(None)
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitiativeCreateOutput {
+    pub id: String,
+    pub number: i64,
+    pub title: String,
+    /// The Initiatives collection it is a record of.
+    pub collection_id: String,
+}
+
+impl Operation for InitiativeCreate {
+    const NAME: &'static str = "initiative_create";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["record.created"];
+    const TITLE: &'static str = "Create an initiative";
+    const DESCRIPTION: &'static str = "Start an initiative: work that spans spaces, followed \
+        through its milestones. It is a record of the workspace's Initiatives collection \
+        (made with Owner, Status, Target date and Health fields the first time), so it is \
+        changed with record_write there. Add milestones with milestone_write's initiative.";
+
+    type Input = InitiativeCreateInput;
+    type Output = InitiativeCreateOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: InitiativeCreateInput,
+    ) -> Result<InitiativeCreateOutput, OpError> {
+        use crate::{access::Need, collections::records};
+        let title = input.title.trim().to_owned();
+        if title.is_empty() || title.chars().count() > 300 {
+            return Err(OpError::invalid(
+                "title",
+                "Name the initiative in 1 to 300 characters.",
+            ));
+        }
+        let workspace = call.ctx.workspace_id;
+        let actor = call.account_id();
+        let space = {
+            let tx = call.tx().await?;
+            crate::spaces::workspace::ensure(tx, workspace).await?
+        };
+        let made = {
+            let tx = call.tx().await?;
+            super::initiatives::find(tx, workspace).await?.is_some()
+        };
+        let denied = |message: &'static str, permission: Perm| OpError::Denied {
+            reason: crate::ops::DenyReason::Role { permission },
+            message: message.into(),
+        };
+        if !in_workspace_space(call, space, Need::permission(Perm::CollectionsEdit)).await? {
+            return Err(denied(
+                "Your role in the workspace can't add initiatives.",
+                Perm::CollectionsEdit,
+            ));
+        }
+        let may_build =
+            in_workspace_space(call, space, Need::permission(Perm::CollectionsBuild)).await?;
+        if !made && !may_build {
+            return Err(denied(
+                "The workspace has no Initiatives collection yet, and your role can't make one.",
+                Perm::CollectionsBuild,
+            ));
+        }
+        let tx = call.tx().await?;
+        let (space, collection) = super::initiatives::ensure(tx, workspace, actor).await?;
+        let project_key =
+            sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+                .bind(space)
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(crate::error::AppError::from)?;
+        let definitions =
+            crate::collections::field_definitions(tx, space, collection.id, true).await?;
+        let written = records::write(
+            tx,
+            space,
+            &collection,
+            crate::work_item_fields::Writer {
+                actor_id: actor,
+                project_key: &project_key,
+            },
+            may_build,
+            &definitions,
+            "fields",
+            &[records::RecordInput {
+                record: None,
+                title: Some(title),
+                values: input.fields.into_iter().collect(),
+                archived: None,
+                expected_version: None,
+            }],
+        )
+        .await?
+        .map_err(|problem| OpError::Invalid {
+            field: problem.field.into(),
+            message: problem.message.into(),
+        })?;
+        let record = written
+            .into_iter()
+            .next()
+            .ok_or(OpError::Unavailable)?
+            .record()
+            .clone();
+        crate::outbox::enqueue_collection_updated(tx, space, collection.id, &[record.id]).await?;
+        call.audit_target("record", record.id, json!({"initiative": true}));
+        Ok(InitiativeCreateOutput {
+            id: record.id.to_string(),
+            number: record.number,
+            title: record.title,
+            collection_id: collection.id.to_string(),
         })
     }
 }

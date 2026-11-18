@@ -3024,5 +3024,35 @@ async fn triage_keeps_to_the_edit_and_workflow_permissions() {
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     let planned = as_owner("task_update", planned).await;
     assert_eq!(planned["outcome"], "ok", "{planned}");
+
+    // Initiatives (T1.26) are records of the workspace's own space: a
+    // viewer there reads them and starts none.
+    let started = as_owner(
+        "initiative_create",
+        json!({"title": "Owner's plan", "clientRequestId": "owner-plan"}),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{started}");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'viewer', role_id = NULL \
+         WHERE actor_id = $1 \
+           AND project_id = (SELECT project_id FROM collections WHERE role = 'initiatives')",
+    )
+    .bind(rook.actor)
+    .execute(world.pool())
+    .await
+    .expect("viewer in the workspace space");
+    let refused = as_rook(
+        "initiative_create",
+        json!({"title": "Viewer's plan", "clientRequestId": "viewer-plan"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let listed = as_rook("initiative_list", json!({})).await;
+    assert_eq!(
+        listed["value"]["initiatives"].as_array().map(Vec::len),
+        Some(1),
+        "{listed}"
+    );
     world.finish().await;
 }

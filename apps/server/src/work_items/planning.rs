@@ -898,6 +898,9 @@ pub(super) struct UpdateMilestoneRequest {
     #[serde(default, deserialize_with = "super::deserialize_optional_field")]
     target_date: Option<Option<String>>,
     archived: Option<bool>,
+    /// The initiative record it is part of; null takes it out.
+    #[serde(default, deserialize_with = "super::deserialize_optional_field")]
+    initiative_id: Option<Option<Uuid>>,
 }
 
 pub(super) async fn update_milestone(
@@ -929,6 +932,7 @@ pub(super) async fn update_milestone(
             .map(|date| parse_task_date(date.as_deref(), "targetDate"))
             .transpose()?,
         archived: request.archived,
+        initiative: request.initiative_id,
     };
     let mut write = begin!(
         start_write(
@@ -963,6 +967,12 @@ pub(super) async fn update_milestone(
         }
         Err(MilestoneRefusal::NameTaken) => {
             return Ok(invalid("name", "Another milestone already has that name."));
+        }
+        Err(MilestoneRefusal::InitiativeNotFound) => {
+            return Ok(invalid(
+                "initiativeId",
+                "That isn't an initiative of this workspace.",
+            ));
         }
     }
     let view = milestone_view(&mut write, project_id, milestone_id).await?;

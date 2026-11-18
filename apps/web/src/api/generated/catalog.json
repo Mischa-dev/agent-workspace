@@ -1079,6 +1079,36 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "record.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "initiative_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Create an initiative"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "initiative_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List initiatives"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "invite_link.created"
     ],
     "idempotent": true,

@@ -18,6 +18,8 @@
     "task_update": "change",
     "cycle_list": "query",
     "cycle_set": "change",
+    "initiative_create": "create",
+    "initiative_list": "query",
     "triage_decide": "change",
     "triage_enable": "change",
     "triage_rule_list": "query",

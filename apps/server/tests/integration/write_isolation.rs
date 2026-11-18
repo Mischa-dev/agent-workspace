@@ -639,6 +639,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "triage_enable",
     "triage_rule_set",
     "cycle_set",
+    "initiative_create",
     "workspace_template_apply",
     "workspace_template_save",
     "project_template_write",
@@ -6269,6 +6270,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         ),
         // C2.13: keywords are the caller's own, in the workspace called; a
         // workspace the caller isn't in takes none.
+        // T1.26: an initiative goes in the workspace called.
+        mcp_case(
+            "initiative_create",
+            json!({"title": "Net initiative", "clientRequestId": "net-initiative"}),
+            vec![json!({"workspace": b.organization, "title": "Net initiative", "clientRequestId": "net-initiative-b"})],
+        ),
         mcp_case(
             "notification_keyword_set",
             json!({"keywords": ["net launch"]}),

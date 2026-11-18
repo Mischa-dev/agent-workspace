@@ -877,6 +877,8 @@ pub async fn update_locked_work_item(
             crate::collections::task_like::workflow_of(transaction, actor.project_id, collection_id)
                 .await?
             && !statuses.contains(&status_id)
+            && crate::work_items::triage::triage_status(transaction, actor.project_id).await?
+                != Some(status_id)
         {
             return Err(STATUS_NOT_USED);
         }
@@ -2777,7 +2779,8 @@ async fn task_collection(
 }
 
 /// An enabled status among `allowed` (all when None): `preferred` if it is
-/// one, else the default if it is one, else the first by position.
+/// one (or the space's triage status, which comes before any collection's
+/// workflow), else the default if it is one, else the first by position.
 async fn select_status_in(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -2787,7 +2790,9 @@ async fn select_status_in(
     sqlx::query_scalar(
         r#"
         SELECT id FROM work_item_statuses
-        WHERE project_id = $1 AND enabled AND ($2::uuid[] IS NULL OR id = ANY($2))
+        WHERE project_id = $1 AND enabled
+          AND ($2::uuid[] IS NULL OR id = ANY($2)
+               OR (id = $3 AND semantic_category = 'triage'))
         ORDER BY id = $3 IS TRUE DESC, is_default DESC, position
         LIMIT 1
         "#,

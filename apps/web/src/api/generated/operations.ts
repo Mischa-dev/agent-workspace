@@ -126,6 +126,12 @@ export type InboxFilter = { category?: Category; spaces?: string[]; view?: View 
 
 export type InboxViewItem = { density: Density; filter: InboxFilter; id: string; name: string; position: number }
 
+export type Initiative = { archived: boolean; completed: number; fields: InitiativeField[]; id: string; milestones: InitiativeMilestone[]; number: number; scope: number; title: string; version: number }
+
+export type InitiativeField = { name: string; type: string; value: unknown }
+
+export type InitiativeMilestone = { archived: boolean; completed: number; id: string; name: string; scope: number; spaceId: string; spaceKey: string; spaceName: string; targetDate?: string | null }
+
 export type InlineAutomation = { collection?: string | null; rule: unknown }
 
 export type InlineCollection = { description?: string | null; fields?: FieldWrite[]; name: string; titleName?: string | null; views?: ViewWrite[] }
@@ -580,6 +586,14 @@ export type InboxViewSetInput = { delete?: boolean | null; density?: Density | n
 
 export type InboxViewSetOutput = { views: InboxViewItem[] }
 
+export type InitiativeCreateInput = { fields?: Record<string, unknown>; title: string }
+
+export type InitiativeCreateOutput = { collectionId: string; id: string; number: number; title: string }
+
+export type InitiativeListInput = { includeArchived?: boolean }
+
+export type InitiativeListOutput = { collectionId?: string | null; initiatives: Initiative[]; spaceId?: string | null }
+
 export type InviteLinkCreateInput = { expiresInDays?: number | null; maxUses?: number | null; roleId?: string | null; space?: string | null }
 
 export type InviteLinkCreateOutput = { link: InviteLinkView; token?: string | null; url?: string | null }
@@ -1004,6 +1018,8 @@ export type Operations = {
   host_unlink: { input: HostUnlinkInput; output: HostUnlinkOutput }
   inbox_view_list: { input: InboxViewListInput; output: InboxViewListOutput }
   inbox_view_set: { input: InboxViewSetInput; output: InboxViewSetOutput }
+  initiative_create: { input: InitiativeCreateInput; output: InitiativeCreateOutput }
+  initiative_list: { input: InitiativeListInput; output: InitiativeListOutput }
   invite_link_create: { input: InviteLinkCreateInput; output: InviteLinkCreateOutput }
   invite_link_list: { input: InviteLinkListInput; output: InviteLinkListOutput }
   invite_link_revoke: { input: InviteLinkRevokeInput; output: InviteLinkRevokeOutput }

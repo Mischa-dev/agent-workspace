@@ -1178,6 +1178,9 @@ pub struct MilestoneView {
     /// Past its target date with tasks still open.
     pub overdue: bool,
     pub version: i64,
+    /// The initiative it is part of (T1.26), and that initiative's name.
+    pub initiative_id: Option<Uuid>,
+    pub initiative: Option<String>,
 }
 
 pub const MILESTONE_SELECT: &str = r#"
@@ -1194,7 +1197,9 @@ pub const MILESTONE_SELECT: &str = r#"
            COALESCE(milestone.target_date < current_date
                AND count(item.id) FILTER (WHERE status.semantic_category NOT IN ('completed', 'canceled')) > 0,
                false) AS overdue,
-           milestone.version
+           milestone.version, milestone.initiative_id,
+           (SELECT initiative.title FROM collection_records initiative
+            WHERE initiative.id = milestone.initiative_id) AS initiative
     FROM project_milestones milestone
     LEFT JOIN task_rows item
       ON item.project_id = milestone.project_id AND item.milestone_id = milestone.id
@@ -1248,13 +1253,20 @@ pub struct MilestoneChange {
     pub description: Option<String>,
     pub target_date: Option<Option<NaiveDate>>,
     pub archived: Option<bool>,
+    /// The initiative record it is part of (T1.26); `Some(None)` takes it
+    /// out.
+    pub initiative: Option<Option<Uuid>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MilestoneRefusal {
     NotFound,
-    VersionConflict { current_version: i64 },
+    VersionConflict {
+        current_version: i64,
+    },
     NameTaken,
+    /// Not an active initiative of the milestone's workspace.
+    InitiativeNotFound,
 }
 
 pub fn normalize_milestone_name(value: &str) -> Option<String> {
@@ -1351,6 +1363,24 @@ pub async fn update_milestone(
             current_version: version,
         }));
     }
+    if let Some(Some(initiative)) = change.initiative {
+        let found = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM collection_records record \
+             JOIN collections collection ON collection.id = record.collection_id \
+             JOIN projects home ON home.id = collection.project_id \
+             JOIN projects here ON here.id = $2 \
+             WHERE record.id = $1 AND collection.role = 'initiatives' \
+               AND record.archived_at IS NULL \
+               AND home.organization_id = here.organization_id)",
+        )
+        .bind(initiative)
+        .bind(actor.project_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if !found {
+            return Ok(Err(MilestoneRefusal::InitiativeNotFound));
+        }
+    }
     let updated = sqlx::query(
         r#"
         UPDATE project_milestones
@@ -1360,6 +1390,7 @@ pub async fn update_milestone(
             archived_at = CASE WHEN $7::boolean IS NULL THEN archived_at
                                WHEN $7 THEN COALESCE(archived_at, now())
                                ELSE NULL END,
+            initiative_id = CASE WHEN $8 THEN $9 ELSE initiative_id END,
             version = version + 1, updated_at = now()
         WHERE id = $1 AND project_id = $2
         "#,
@@ -1371,6 +1402,8 @@ pub async fn update_milestone(
     .bind(change.target_date.is_some())
     .bind(change.target_date.flatten())
     .bind(change.archived)
+    .bind(change.initiative.is_some())
+    .bind(change.initiative.flatten())
     .execute(&mut **transaction)
     .await;
     if let Err(error) = updated {
@@ -1393,6 +1426,7 @@ pub async fn update_milestone(
             "renamed": change.name.is_some(),
             "targetDate": change.target_date.is_some(),
             "archived": change.archived,
+            "initiative": change.initiative.is_some(),
         }),
     )
     .await?;
