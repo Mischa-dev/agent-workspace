@@ -63,36 +63,7 @@ const ROTATION_LOCK: (i32, i32) = (470127786, 2);
 // ---------------------------------------------------------------------------
 // Values
 
-/// A secret's plaintext. Its `Debug` is redacted, it isn't `Serialize`, and
-/// its memory is wiped when dropped.
-pub struct SecretValue(Zeroizing<String>);
-
-impl SecretValue {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(Zeroizing::new(value.into()))
-    }
-
-    /// The plaintext, for the one call that needs it.
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-
-    /// The last four characters people see, or nothing for short values
-    /// (where four characters would give too much away).
-    fn last_four(&self) -> String {
-        let count = self.0.chars().count();
-        if count < 12 {
-            return String::new();
-        }
-        self.0.chars().skip(count - 4).collect()
-    }
-}
-
-impl fmt::Debug for SecretValue {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("SecretValue([REDACTED])")
-    }
-}
+pub use agent_workspace_redaction::SecretValue;
 
 // ---------------------------------------------------------------------------
 // Master keys

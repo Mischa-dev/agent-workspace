@@ -435,6 +435,24 @@ impl fmt::Debug for GitHubConfig {
 }
 
 impl AppConfig {
+    /// What the built-in host runs with.
+    pub fn harness(&self) -> agent_workspace_builtin_host::HarnessConfig {
+        agent_workspace_builtin_host::HarnessConfig {
+            data_root: self.data_root.clone(),
+            codex_binary: self.codex_binary.clone(),
+            codex_host_concurrency_limit: self.codex_host_concurrency_limit,
+            codex_max_line_bytes: self.codex_max_line_bytes,
+            codex_max_stderr_bytes: self.codex_max_stderr_bytes,
+            codex_max_buffered_events: self.codex_max_buffered_events,
+            codex_request_timeout: self.codex_request_timeout,
+            codex_shutdown_timeout: self.codex_shutdown_timeout,
+            codex_cloud_poll_interval: self.codex_cloud_poll_interval,
+            claude_binary: self.claude_binary.clone(),
+            anthropic_api_url: self.anthropic_api_url.clone(),
+            demo_executor: self.demo_executor,
+        }
+    }
+
     pub fn load() -> Result<Self, ConfigError> {
         let initial_environment = std::env::var(format!("{PREFIX}ENV"))
             .unwrap_or_else(|_| "development".to_owned())

@@ -170,7 +170,8 @@ raising a number.
    comment.
 8. **Nobody's stack is hard-coded.** No provider, model, harness, code host,
    machine, path or person by name in core code, tool descriptions or copy,
-   outside `provider/`, `ai/providers/` and adapter manifests. Read display
+   outside `provider/`, `ai/providers/`, the built-in host's adapters
+   (`crates/builtin-host/src/harness/`) and adapter manifests. Read display
    names from manifests.
 9. **Every new write is an operation with an agent tool, a `clientRequestId`
    if it creates something, and an isolation case** in both

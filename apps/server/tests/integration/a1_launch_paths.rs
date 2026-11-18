@@ -811,5 +811,104 @@ async fn every_route_gives_one_run_with_the_same_cause_and_title() {
             .await
             .expect("tag run");
     assert_eq!((account, run_state.as_str()), (fixer, "starting"));
+
+    // What Fixer's host says in the thread is Fixer's answer: posted as
+    // Fixer, in the answer thread a channel tag gets, answering the tag.
+    let offered = host.poll().await;
+    let start = offered
+        .iter()
+        .find(|command| command["runId"] == run.to_string().as_str())
+        .unwrap_or_else(|| panic!("no start for the tag run: {offered:?}"));
+    let (status, fetched) = host.fetch(&start["commandId"]).await;
+    assert!(status.is_success(), "{fetched}");
+    let token = fetched["workspaceCredential"]["token"]
+        .as_str()
+        .expect("credential")
+        .to_owned();
+    let (status, acked) = host
+        .ack(
+            &start["commandId"],
+            json!({"outcome": "accepted", "hostRunRef": "tag-1"}),
+        )
+        .await;
+    assert!(status.is_success(), "{acked}");
+    let session = super::support::app::initialize(app, &token)
+        .await
+        .expect("run credential MCP");
+    let said = super::support::app::tool(
+        app,
+        &token,
+        &session,
+        "run_activity",
+        json!({"runId": run, "activities": [
+            {"id": "note", "kind": "text_message", "payload": {"text": "Looking."}},
+            {"id": "answer", "kind": "text_message",
+             "payload": {"text": "Fixed: the login test waited on a timer.", "inThread": true}}]}),
+    )
+    .await;
+    assert_eq!(said["outcome"], "ok", "{said}");
+    for _ in 0..2 {
+        jobs::run_due(
+            &world.state,
+            &jobs::default_registry(),
+            &jobs::WorkerOptions {
+                concurrency: 1,
+                poll_interval: Duration::from_millis(20),
+                lease: Duration::from_secs(30),
+                worker_id: "a1-launch-paths".to_owned(),
+            },
+        )
+        .await
+        .expect("run the say job");
+    }
+    let (status, answer, thread) = sqlx::query_as::<_, (String, Option<Uuid>, Option<Uuid>)>(
+        "SELECT status, reply_message_id, thread_id FROM reply_requests WHERE agent_actor_id = $1",
+    )
+    .bind(fixer)
+    .fetch_one(pool)
+    .await
+    .expect("tag request");
+    let jobs_said = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT state, last_error FROM background_jobs WHERE kind = 'runs.say'",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("say jobs");
+    assert_eq!(status, "replied", "{jobs_said:?}");
+    let thread = thread.expect("a channel tag is answered in a thread");
+    let (author, text, conversation) = sqlx::query_as::<_, (Uuid, String, Uuid)>(
+        "SELECT author_actor_id, plain_text, conversation_id FROM messages WHERE id = $1",
+    )
+    .bind(answer.expect("answered by a message"))
+    .fetch_one(pool)
+    .await
+    .expect("answer");
+    assert_eq!(
+        (author, text.as_str(), conversation),
+        (fixer, "Fixed: the login test waited on a timer.", thread)
+    );
+    // Only what was said for the thread is posted.
+    let posted =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM messages WHERE author_actor_id = $1")
+            .bind(fixer)
+            .fetch_one(pool)
+            .await
+            .expect("posted");
+    assert_eq!(posted, 1);
+    // Once posted, the words live in the message alone: the run's log keeps
+    // which message they became, so removing it leaves nothing behind.
+    let (logged, summary) = sqlx::query_as::<_, (serde_json::Value, String)>(
+        "SELECT payload, summary FROM run_activities WHERE run_id = $1 AND client_id = 'answer'",
+    )
+    .bind(run)
+    .fetch_one(pool)
+    .await
+    .expect("said activity");
+    assert!(!logged.to_string().contains("login test"), "{logged}");
+    assert!(!summary.contains("login test"), "{summary}");
+    assert_eq!(
+        logged["messageId"],
+        json!(answer.expect("answered").to_string())
+    );
     world.finish().await;
 }

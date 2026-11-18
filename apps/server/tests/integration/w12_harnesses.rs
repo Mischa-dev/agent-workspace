@@ -604,6 +604,23 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     .await;
     assert_eq!(no_dirs.0, StatusCode::UNPROCESSABLE_ENTITY, "{}", no_dirs.1);
     assert_eq!(no_dirs.2["error"]["code"], "invalid_harness");
+    // An Agent Client Protocol agent runs a program here too.
+    let acp_no_dirs = send(
+        &application,
+        owner,
+        "POST",
+        &harnesses,
+        "owner-acp-harness",
+        json!({"name": "Mine", "transport": "acp", "command": ["/bin/true"], "manifest": {"models": []}}),
+    )
+    .await;
+    assert_eq!(
+        acp_no_dirs.0,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        acp_no_dirs.1
+    );
+    assert_eq!(acp_no_dirs.2["error"]["code"], "invalid_harness");
     let listed = send_get(&application, owner, &harnesses).await;
     assert_eq!(listed.0, StatusCode::OK, "{}", listed.1);
     assert_eq!(listed.2["commandsAllowed"], false);

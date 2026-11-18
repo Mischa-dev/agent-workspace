@@ -3810,7 +3810,7 @@
             ]
           },
           "payload": {
-            "description": "A JSON object, by kind: run_finished {outcome: done, failed or\ncancelled}; text_message and reasoning {text}; tool_call {toolCallRef,\ntool, status, ...}, the same toolCallRef for every report of one call;\nplan {items: [{title, status}]}, the whole list each time; interrupt\n{request: {kind: question or approval, title, detail?, options?:\n[{id, label, style?}], allowText?, audience?: {accounts, roles},\nclientRequestId?, expiresInSeconds?}}, which opens a request, or\n{requestId}; interrupt_resolved {requestId}; gap {reason}. At most\n48 KiB; secrets are removed."
+            "description": "A JSON object, by kind: run_finished {outcome: done, failed or\ncancelled}; text_message and reasoning {text}, and a text_message\nwith inThread: true is also posted in the run's thread as its agent\n(answering the reply request it was launched from); tool_call {toolCallRef,\ntool, status, ...}, the same toolCallRef for every report of one call;\nplan {items: [{title, status}]}, the whole list each time; interrupt\n{request: {kind: question or approval, title, detail?, options?:\n[{id, label, style?}], allowText?, audience?: {accounts, roles},\nclientRequestId?, expiresInSeconds?}}, which opens a request, or\n{requestId}; interrupt_resolved {requestId}; gap {reason}. At most\n48 KiB; secrets are removed."
           },
           "stepRef": {
             "description": "The step it belongs to, your own name for it.",

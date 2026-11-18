@@ -18,7 +18,7 @@ fn described<T: std::fmt::Debug>(result: &Result<T, ClientError>) -> String {
     match result {
         Ok(value) => format!("{value:?}"),
         Err(ClientError::Refused(status, body)) => format!("{status} {body}"),
-        Err(ClientError::Http(error)) => error.to_string(),
+        Err(ClientError::Http(error)) => error.clone(),
     }
 }
 

@@ -1,18 +1,21 @@
 # Harness guide
 
 A harness is the program that does an agent's work: Codex, Claude Code, or
-one of your own. There are three ways to plug one into Agent Workspace:
+one of your own. There are four ways to plug one into Agent Workspace:
 
 1. **A command-line harness.** The server runs your program once per turn in
    the run's worktree, and the two talk in JSON lines. This is the quickest
    way to try a harness on the host.
-2. **A connected runner.** Your program runs wherever you like, gets wakeups,
+2. **An Agent Client Protocol agent.** Any agent that speaks the Agent
+   Client Protocol (ACP) over stdio runs on the host as it would in an
+   editor that supports ACP.
+3. **A connected runner.** Your program runs wherever you like, gets wakeups,
    and answers with the MCP reply tools. The TypeScript and Python SDKs do
    the protocol for you.
-3. **A built-in adapter.** A Rust module in the server, like the Codex and
+4. **A built-in adapter.** A Rust module in the server, like the Codex and
    Claude Code adapters.
 
-A command-line harness or a connected runner shows in Settings, the Launch
+A command-line harness, an ACP agent or a connected runner shows in Settings, the Launch
 dialog and agent profiles once you register it with a manifest (see
 [The manifest](#the-manifest)).
 
@@ -119,7 +122,39 @@ server.
 A process that exits without a `done` line fails the turn. stderr is
 discarded, so send anything people should see as `log` lines.
 
-## 2. A connected runner
+## 2. An Agent Client Protocol agent
+
+Register it in **Settings > Workspace > Harnesses** with **Agent Client
+Protocol** as how it runs. The program, its arguments, the secrets it reads
+and the manifest work exactly as for a command-line harness, including the
+allowed directories.
+
+For each run the host starts the program once in the run's worktree and is
+its ACP client (protocol version 1):
+
+- It sends `initialize`, offering no file system or terminal of its own, so
+  the agent works in the worktree with its own tools. Requests the client
+  doesn't offer are answered `Method not found`.
+- Each thread is an ACP session (`session/new`). A follow-up run in the same
+  thread loads the session when the agent offers `loadSession`, and starts
+  a new one otherwise.
+- A turn is one `session/prompt` with the run's prompt. `agent_message_chunk`
+  updates become the agent's reply, `agent_thought_chunk` updates its notes,
+  tool calls its steps (`execute` as commands, `edit`, `delete` and `move` as
+  file changes, the rest as named tools) and `plan` updates the run's plan.
+- `session/request_permission` becomes an approval in the thread. Allow
+  picks the agent's allow-once option and Deny its reject-once option; an
+  "always" option is never chosen, since people answer each request.
+- The prompt's stop reason ends the turn: `end_turn`, `max_tokens` and
+  `max_turn_requests` complete it, anything else fails it. Stop sends
+  `session/cancel` and waits a few seconds before ending the program.
+
+Secrets arrive on file descriptor 3, as for a command-line harness. Most
+ACP agents read their key from an environment variable, so wrap the agent
+in a small script inside the allowed directory that reads descriptor 3 and
+sets the variable before starting it.
+
+## 3. A connected runner
 
 A connected runner is an agent on the Agents page with a runner attached:
 Agent Workspace sends it signed wakeups, and it answers through the MCP reply
@@ -162,7 +197,7 @@ Settings: model=my-model-large reasoning=high speed=fast
 
 The SDKs take that line off the prompt and hand it over as `settings`.
 
-## 3. A built-in adapter
+## 4. A built-in adapter
 
 A built-in adapter lives in `apps/server/src/provider/` and implements two
 traits from `provider/adapter.rs`:

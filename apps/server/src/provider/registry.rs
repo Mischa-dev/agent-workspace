@@ -7,7 +7,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -27,30 +27,7 @@ use super::{
 };
 use crate::config::AppConfig;
 
-#[derive(Default)]
-pub struct ShutdownSignal {
-    shutting_down: AtomicBool,
-    notify: Notify,
-}
-
-impl ShutdownSignal {
-    pub fn is_shutting_down(&self) -> bool {
-        self.shutting_down.load(Ordering::Acquire)
-    }
-
-    pub fn request(&self) {
-        self.shutting_down.store(true, Ordering::Release);
-        self.notify.notify_waiters();
-    }
-
-    pub async fn requested(&self) {
-        let notified = self.notify.notified();
-        if self.is_shutting_down() {
-            return;
-        }
-        notified.await;
-    }
-}
+pub use agent_workspace_builtin_host::harness::shutdown::ShutdownSignal;
 
 /// The harness adapters the server can run agents on. The name is kept from
 /// when it only supervised Codex processes.
@@ -132,6 +109,7 @@ const CONTROL_SLOT_RETRY: std::time::Duration = std::time::Duration::from_millis
 
 impl SupervisorRegistry {
     pub fn new(config: &AppConfig) -> Result<Self, HarnessError> {
+        let config = &config.harness();
         let shutdown = Arc::new(ShutdownSignal::default());
         let host = HostCell::default();
         let mut adapters: BTreeMap<String, Arc<dyn HarnessAdapter>> = BTreeMap::new();

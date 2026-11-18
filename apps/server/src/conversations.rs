@@ -33,8 +33,8 @@ use crate::{
         NewOutboxEvent, OutboxConversationKind, OutboxEventPayload, ReadStateUpdatedPayload,
     },
     policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
+        Action, ActorKind, Decision, DelegatedScope, Membership, ProjectScope, Resource, RoleGrant,
+        Subject, authorize,
     },
     reactions::{self, ReactionView},
     replies::{self, ReplyRequestView},
@@ -1696,6 +1696,7 @@ async fn send_direct_message(
             actor_kind: principal.actor_kind.clone(),
             mcp_credential: None,
             via_grant_id: None,
+            run_id: None,
         },
         conversation_id,
         None,
@@ -1729,6 +1730,7 @@ async fn send_message(
             actor_kind: principal.actor_kind.clone(),
             mcp_credential: None,
             via_grant_id: None,
+            run_id: None,
         },
         conversation_id,
         Some(expected_kind),
@@ -1752,6 +1754,9 @@ pub(crate) struct MessageCommandActor {
     pub(crate) mcp_credential: Option<MessageMcpCredential>,
     /// The connected app a person is sending through, if any.
     pub(crate) via_grant_id: Option<Uuid>,
+    /// Sent as a run's agent, in the run's space (`runs::say`): the run is
+    /// the proof, and a worker gets message sending delegated for it.
+    pub(crate) run_id: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1810,6 +1815,9 @@ pub(crate) struct AppendExtras {
     /// The client chose the idempotency key (`clientRequestId`): it goes
     /// out on `message.created` as `clientMessageId` (A2.12).
     pub(crate) client_keyed: bool,
+    /// The run whose agent said it (a host reporting a `text_message` for
+    /// the thread, `runs::say`): the message links to the run.
+    pub(crate) agent_run_id: Option<Uuid>,
 }
 
 /// `append_message_command` with files the sender uploaded to this
@@ -1984,9 +1992,9 @@ pub(crate) async fn append_message_command_with(
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
             content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id,
-            reply_to_message_id, may_notify_everyone
+            reply_to_message_id, may_notify_everyone, agent_run_id
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11)
         "#,
     )
     .bind(message_id)
@@ -1999,6 +2007,7 @@ pub(crate) async fn append_message_command_with(
     .bind(extras.forwarded_message_id)
     .bind(extras.reply_to_message_id)
     .bind(notify_everyone)
+    .bind(extras.agent_run_id)
     .execute(&mut *transaction)
     .await?;
     insert_message_projections(
@@ -2453,8 +2462,10 @@ pub(crate) async fn lock_message_conversation(
     } else {
         None
     };
-    let row = sqlx::query_as::<_, ConversationAccessRow>(
-        r#"
+    // A run's worker has no workspace membership of its own: sent as a
+    // run, the workspace membership is optional, and a disabled one still
+    // refuses.
+    let access_sql = r#"
         SELECT conversation.id, conversation.project_id, conversation.kind,
                conversation.parent_channel_id, conversation.origin_message_id,
                conversation.name, conversation.version,
@@ -2497,26 +2508,54 @@ pub(crate) async fn lock_message_conversation(
           AND (
               -- Browser authentication, including the loopback-only development
               -- principal, was validated before entering this command path.
-              ($4::uuid IS NULL AND actor.kind = 'human')
+              ($4::uuid IS NULL AND $5::uuid IS NULL AND actor.kind = 'human')
               OR
               ($4::uuid = conversation.project_id AND actor.kind = 'external_agent')
+              OR
+              -- A run's agent, in the run's space (`runs::say`).
+              ($4::uuid IS NULL AND $5::uuid = conversation.project_id)
           )
         FOR UPDATE OF conversation
         FOR SHARE OF project, actor, organization_membership, membership
-        "#,
-    )
-    .bind(conversation_id)
-    .bind(actor.actor_id)
-    .bind(&actor.actor_kind)
-    .bind(mcp_project_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AppError::NotFound("conversation"))?;
+        "#;
+    let access_sql = if actor.run_id.is_some() {
+        access_sql
+            .replace(
+                "        JOIN organization_memberships organization_membership\n",
+                "        LEFT JOIN organization_memberships organization_membership\n",
+            )
+            .replace(
+                "        FOR UPDATE OF conversation\n        FOR SHARE OF project, actor, organization_membership, membership",
+                "          AND NOT EXISTS (SELECT 1 FROM organization_memberships disabled\n                          WHERE disabled.organization_id = project.organization_id\n                            AND disabled.actor_id = $2 AND NOT disabled.enabled)\n        FOR UPDATE OF conversation\n        FOR SHARE OF project, actor, membership",
+            )
+    } else {
+        access_sql.to_owned()
+    };
+    let run_space = match actor.run_id {
+        Some(run_id) => {
+            crate::runs::store::space_of_own(&mut **transaction, actor.actor_id, run_id).await?
+        }
+        None => None,
+    };
+    let row = sqlx::query_as::<_, ConversationAccessRow>(&access_sql)
+        .bind(conversation_id)
+        .bind(actor.actor_id)
+        .bind(&actor.actor_kind)
+        .bind(mcp_project_id)
+        .bind(run_space)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("conversation"))?;
     let scope = if row.kind == "thread" {
         ProjectScope::thread(row.project_id, row.id)
     } else {
         ProjectScope::project(row.project_id)
     };
+    // A run hands its worker what it says in the run's space; any other
+    // account sends by its role.
+    let delegated = actor
+        .run_id
+        .map(|_| DelegatedScope::new(scope, [Action::MessageSend]));
     let subject = Subject::new(
         actor.actor_id,
         parse_actor_kind(&actor.actor_kind)?,
@@ -2529,7 +2568,7 @@ pub(crate) async fn lock_message_conversation(
             )?,
             row.membership_enabled,
         )),
-        None,
+        delegated,
     );
     if !matches!(
         authorize(&subject, action, Resource::Project(scope)),

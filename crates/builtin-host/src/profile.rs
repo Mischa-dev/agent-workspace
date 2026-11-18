@@ -10,7 +10,7 @@ use rustix::{
     io::Errno,
 };
 
-use crate::{error::AppError, git_runtime::absolute_runtime_path};
+use crate::{error::RuntimeError, git::absolute_runtime_path};
 
 #[cfg(unix)]
 const PRIVATE_DIRECTORY_MODE: Mode = Mode::RUSR.union(Mode::WUSR).union(Mode::XUSR);
@@ -18,11 +18,11 @@ const PRIVATE_DIRECTORY_MODE: Mode = Mode::RUSR.union(Mode::WUSR).union(Mode::XU
 pub fn resolve_path_within_data_root(
     configured_data_root: &Path,
     candidate: &Path,
-) -> Result<PathBuf, AppError> {
+) -> Result<PathBuf, RuntimeError> {
     let data_root = normalize_absolute(&absolute_runtime_path(configured_data_root)?)?;
     let candidate = normalize_absolute(&absolute_runtime_path(candidate)?)?;
     if candidate == data_root || !candidate.starts_with(&data_root) {
-        return Err(AppError::Invalid("runtime path escapes the data root"));
+        return Err(RuntimeError::Invalid("runtime path escapes the data root"));
     }
     Ok(candidate)
 }
@@ -35,54 +35,54 @@ pub fn prepare_private_profile_directory(
     configured_data_root: &Path,
     configured_root: &Path,
     profile_key: &str,
-) -> Result<PathBuf, AppError> {
+) -> Result<PathBuf, RuntimeError> {
     validate_profile_key(profile_key)?;
     let normalized_data_root = normalize_absolute(&absolute_runtime_path(configured_data_root)?)?;
     let normalized_root = resolve_path_within_data_root(configured_data_root, configured_root)?;
     let relative_profile_root = normalized_root
         .strip_prefix(&normalized_data_root)
-        .map_err(|_| AppError::Invalid("account home root escapes the data root"))?;
+        .map_err(|_| RuntimeError::Invalid("account home root escapes the data root"))?;
     if relative_profile_root.as_os_str().is_empty() {
-        return Err(AppError::Invalid(
+        return Err(RuntimeError::Invalid(
             "account home root must be beneath the data root",
         ));
     }
 
     let data_parent = normalized_data_root
         .parent()
-        .ok_or(AppError::Invalid("unsafe data root"))?;
+        .ok_or(RuntimeError::Invalid("unsafe data root"))?;
     let (anchor_path, relative_data_root) =
         existing_anchor_and_suffix(data_parent, &normalized_data_root)?;
     let canonical_anchor = anchor_path
         .canonicalize()
-        .map_err(|_| AppError::Internal("canonicalize account home ancestor"))?;
+        .map_err(|_| RuntimeError::Internal("canonicalize account home ancestor"))?;
     let mut directory = open_directory(&canonical_anchor)?;
     let mut canonical_data_root = canonical_anchor;
 
     for component in relative_data_root.components() {
         let Component::Normal(name) = component else {
-            return Err(AppError::Invalid("unsafe data root"));
+            return Err(RuntimeError::Invalid("unsafe data root"));
         };
         directory = create_or_open_child(&directory, name)?;
         canonical_data_root.push(name);
     }
     fchmod(&directory, PRIVATE_DIRECTORY_MODE)
-        .map_err(|_| AppError::Internal("protect application data root"))?;
+        .map_err(|_| RuntimeError::Internal("protect application data root"))?;
 
     let mut canonical_root = canonical_data_root;
     for component in relative_profile_root.components() {
         let Component::Normal(name) = component else {
-            return Err(AppError::Invalid("unsafe account home root"));
+            return Err(RuntimeError::Invalid("unsafe account home root"));
         };
         directory = create_or_open_child(&directory, name)?;
         canonical_root.push(name);
     }
     fchmod(&directory, PRIVATE_DIRECTORY_MODE)
-        .map_err(|_| AppError::Internal("protect account home root"))?;
+        .map_err(|_| RuntimeError::Internal("protect account home root"))?;
 
     let profile = create_or_open_child(&directory, OsStr::new(profile_key))?;
     fchmod(&profile, PRIVATE_DIRECTORY_MODE)
-        .map_err(|_| AppError::Internal("protect account home"))?;
+        .map_err(|_| RuntimeError::Internal("protect account home"))?;
     let profile_path = canonical_root.join(profile_key);
 
     // The final path check catches a rename/substitution that occurred while
@@ -91,9 +91,9 @@ pub fn prepare_private_profile_directory(
     // principal is granted concurrent write access to the containing root.
     let canonical_profile = profile_path
         .canonicalize()
-        .map_err(|_| AppError::Internal("canonicalize account home"))?;
+        .map_err(|_| RuntimeError::Internal("canonicalize account home"))?;
     if canonical_profile != profile_path {
-        return Err(AppError::Invalid("unsafe account home path"));
+        return Err(RuntimeError::Invalid("unsafe account home path"));
     }
 
     Ok(profile_path)
@@ -106,7 +106,7 @@ pub fn remove_private_profile_directory(
     configured_data_root: &Path,
     configured_root: &Path,
     home: &Path,
-) -> Result<(), AppError> {
+) -> Result<(), RuntimeError> {
     let root = resolve_path_within_data_root(configured_data_root, configured_root)?;
     let Ok(root) = root.canonicalize() else {
         return Ok(());
@@ -114,18 +114,18 @@ pub fn remove_private_profile_directory(
     let key = home
         .file_name()
         .and_then(OsStr::to_str)
-        .ok_or(AppError::Invalid("unsafe account home path"))?;
+        .ok_or(RuntimeError::Invalid("unsafe account home path"))?;
     validate_profile_key(key)?;
     if home.parent() != Some(root.as_path()) {
-        return Err(AppError::Invalid("unsafe account home path"));
+        return Err(RuntimeError::Invalid("unsafe account home path"));
     }
     match std::fs::symlink_metadata(home) {
         Ok(metadata) if metadata.is_dir() => {
-            std::fs::remove_dir_all(home).map_err(|_| AppError::Internal("remove account home"))
+            std::fs::remove_dir_all(home).map_err(|_| RuntimeError::Internal("remove account home"))
         }
-        Ok(_) => Err(AppError::Invalid("unsafe account home path")),
+        Ok(_) => Err(RuntimeError::Invalid("unsafe account home path")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(AppError::Internal("inspect account home")),
+        Err(_) => Err(RuntimeError::Internal("inspect account home")),
     }
 }
 
@@ -134,27 +134,27 @@ pub fn prepare_private_profile_directory(
     _configured_data_root: &Path,
     _configured_root: &Path,
     _profile_key: &str,
-) -> Result<PathBuf, AppError> {
-    Err(AppError::Internal(
+) -> Result<PathBuf, RuntimeError> {
+    Err(RuntimeError::Internal(
         "private account homes require a Unix host",
     ))
 }
 
-fn validate_profile_key(profile_key: &str) -> Result<(), AppError> {
+fn validate_profile_key(profile_key: &str) -> Result<(), RuntimeError> {
     if profile_key.is_empty()
         || profile_key.len() > 64
         || !profile_key
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
     {
-        return Err(AppError::Invalid("unsafe account home key"));
+        return Err(RuntimeError::Invalid("unsafe account home key"));
     }
     Ok(())
 }
 
-fn normalize_absolute(path: &Path) -> Result<PathBuf, AppError> {
+fn normalize_absolute(path: &Path) -> Result<PathBuf, RuntimeError> {
     if !path.is_absolute() {
-        return Err(AppError::Invalid("account home root must be absolute"));
+        return Err(RuntimeError::Invalid("account home root must be absolute"));
     }
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -164,7 +164,7 @@ fn normalize_absolute(path: &Path) -> Result<PathBuf, AppError> {
             Component::CurDir => {}
             Component::ParentDir => {
                 if !normalized.pop() {
-                    return Err(AppError::Invalid("unsafe account home root"));
+                    return Err(RuntimeError::Invalid("unsafe account home root"));
                 }
             }
             Component::Normal(value) => normalized.push(value),
@@ -176,35 +176,35 @@ fn normalize_absolute(path: &Path) -> Result<PathBuf, AppError> {
 fn existing_anchor_and_suffix<'a>(
     root_parent: &'a Path,
     normalized_root: &'a Path,
-) -> Result<(PathBuf, PathBuf), AppError> {
+) -> Result<(PathBuf, PathBuf), RuntimeError> {
     let mut anchor = root_parent.to_path_buf();
     while !anchor.exists() {
         if !anchor.pop() {
-            return Err(AppError::Invalid("unsafe account home root"));
+            return Err(RuntimeError::Invalid("unsafe account home root"));
         }
     }
     let suffix = normalized_root
         .strip_prefix(&anchor)
-        .map_err(|_| AppError::Invalid("unsafe account home root"))?
+        .map_err(|_| RuntimeError::Invalid("unsafe account home root"))?
         .to_path_buf();
     Ok((anchor, suffix))
 }
 
 #[cfg(unix)]
-fn open_directory(path: &Path) -> Result<OwnedFd, AppError> {
+fn open_directory(path: &Path) -> Result<OwnedFd, RuntimeError> {
     open(
         path,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
-    .map_err(|_| AppError::Invalid("unsafe account home ancestor"))
+    .map_err(|_| RuntimeError::Invalid("unsafe account home ancestor"))
 }
 
 #[cfg(unix)]
-fn create_or_open_child(parent: &OwnedFd, name: &OsStr) -> Result<OwnedFd, AppError> {
+fn create_or_open_child(parent: &OwnedFd, name: &OsStr) -> Result<OwnedFd, RuntimeError> {
     match mkdirat(parent, name, PRIVATE_DIRECTORY_MODE) {
         Ok(()) | Err(Errno::EXIST) => {}
-        Err(_) => return Err(AppError::Internal("create account home directory")),
+        Err(_) => return Err(RuntimeError::Internal("create account home directory")),
     }
     openat(
         parent,
@@ -212,7 +212,7 @@ fn create_or_open_child(parent: &OwnedFd, name: &OsStr) -> Result<OwnedFd, AppEr
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
-    .map_err(|_| AppError::Invalid("unsafe account home directory"))
+    .map_err(|_| RuntimeError::Invalid("unsafe account home directory"))
 }
 
 #[cfg(all(test, unix))]

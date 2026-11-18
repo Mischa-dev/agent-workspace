@@ -58,6 +58,8 @@ pub struct Batch {
     /// recipient in what was read; a read resumes from it once the recipient
     /// is resumed.
     pub held: Option<i64>,
+    /// The fingerprint of the pauses that held them.
+    pub paused: u64,
 }
 
 #[derive(FromRow)]
@@ -162,6 +164,7 @@ pub async fn read_batch(
     } else {
         crate::statuses::paused_in(&mut *connection, scope.recipient).await?
     };
+    batch.paused = super::cursor::paused_fingerprint(&paused);
     for (index, row) in rows.into_iter().enumerate() {
         let before = batch.next;
         batch.next = row.event.position;

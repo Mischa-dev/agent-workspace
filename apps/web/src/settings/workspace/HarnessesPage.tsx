@@ -52,7 +52,7 @@ export default function HarnessesPage({ workspace }: SettingsPageProps) {
       {data && !data.commandsAllowed ? <CommandsOffNote /> : null}
       {data && !data.canManage ? <Banner tone="info">Only workspace owners and admins can register or change harnesses.</Banner> : null}
       {data ? (
-        <Section description="A command runs on this server for each turn. A connected runner is an agent that does the work wherever it runs." title="Registered">
+        <Section description="A command runs on this server for each turn; an Agent Client Protocol agent runs here for each run. A connected runner is an agent that does the work wherever it runs." title="Registered">
           {data.harnesses.length === 0 ? (
             <EmptyState
               action={data.canManage ? <Button onClick={() => setEditing('new')}>Register a harness</Button> : undefined}
@@ -135,7 +135,11 @@ function HarnessRow({
       }
       meta={
         <span className="aw-harnesses__meta">
-          <span>{harness.transport === 'runner' ? `Hands off to ${harness.runnerName ?? 'a runner'}` : 'Command on this server'}</span>
+          <span>{harness.transport === 'runner'
+              ? `Hands off to ${harness.runnerName ?? 'a runner'}`
+              : harness.transport === 'acp'
+                ? 'Agent Client Protocol on this server'
+                : 'Command on this server'}</span>
           <span>{countLabel(models, 'model')}</span>
           {harness.resolved ? null : <span>The manifest no longer loads</span>}
         </span>

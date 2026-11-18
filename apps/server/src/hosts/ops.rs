@@ -194,7 +194,7 @@ impl Operation for HostLink {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "agents";
     const PERMISSION: Option<Perm> = None;
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Link an A2A agent";
     const DESCRIPTION: &'static str = "Link an agent that speaks the A2A protocol, by its Agent \
         Card's address, as a host you own (owner person) or the workspace's (owner workspace, \
@@ -214,9 +214,32 @@ impl Operation for HostLink {
             HostOwnerChoice::Person => Owner::Account(caller),
             HostOwnerChoice::Workspace => Owner::Workspace(workspace),
         };
-        // The card is read before anything is written: no transaction
-        // waits on the network.
+        // The card is read before any transaction opens, the request id's
+        // reservation included: nothing waits on the network holding a
+        // connection (rule 14). The request id is kept here, after it.
         let card = super::a2a::fetch_card(call.state, &input.card_url).await?;
+        let key = call
+            .ctx
+            .request_id
+            .as_deref()
+            .and_then(|key| crate::idempotency::IdempotencyKey::parse(key).ok());
+        let mut reservation = None;
+        if let Some(key) = key {
+            call.key_honoured();
+            let scope = format!("op.host_link.{}", workspace.simple());
+            let hash = crate::idempotency::RequestHash::for_value(&input)
+                .map_err(|_| OpError::Unavailable)?;
+            let tx = call.tx().await?;
+            match crate::idempotency::reserve(tx, caller, &scope, &key, hash).await? {
+                crate::idempotency::IdempotencyOutcome::Replay(replay) => {
+                    call.mark_replayed(true);
+                    return Ok(replay.decode::<HostView>()?);
+                }
+                crate::idempotency::IdempotencyOutcome::Reserved(reserved) => {
+                    reservation = Some(reserved);
+                }
+            }
+        }
         let state = call.state;
         let tx = call.tx().await?;
         let host = super::a2a::link(
@@ -236,6 +259,10 @@ impl Operation for HostLink {
             }
             None => super::a2a::view(tx, caller, &host).await?,
         };
+        if let Some(reservation) = reservation {
+            crate::idempotency::complete(tx, &reservation, axum::http::StatusCode::OK, &view)
+                .await?;
+        }
         call.audit_target("host", host.id, json!({ "connection": "a2a" }));
         Ok(view)
     }

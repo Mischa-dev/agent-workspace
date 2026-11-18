@@ -1403,16 +1403,37 @@ async fn a_paused_agent_waits_and_an_unanswered_ask_shows() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let page = read(&world, rook, Some(&held_at)).await;
-    assert_eq!(of_type(&page, "reply.cancelled").len(), 1, "{page}");
+    let cancelled = of_type(&page, "reply.cancelled");
+    assert_eq!(cancelled.len(), 1, "{page}");
     assert!(of_type(&page, "reply.requested").is_empty(), "held: {page}");
-    let held_at = page["nextCursor"].clone();
+    // A reader that goes on from the event's own cursor (as a stream does)
+    // keeps what is held too.
+    let held_at = cancelled[0]["cursor"].clone();
     let again = read(&world, rook, Some(&held_at)).await;
     assert!(
-        again["events"].as_array().expect("events").is_empty(),
+        of_type(&again, "reply.cancelled").is_empty(),
         "not again: {again}"
     );
 
-    // Resumed, what it missed arrives.
+    // Paused in another workspace as well, and resumed only here: what
+    // was held here arrives, though it stays paused there.
+    let elsewhere = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Elsewhere', $2)")
+        .bind(elsewhere)
+        .bind(format!("elsewhere-{}", elsewhere.simple()))
+        .execute(world.pool())
+        .await
+        .expect("another workspace");
+    sqlx::query(
+        "INSERT INTO account_statuses (id, account_id, workspace_id, set_by, paused_at) \
+         VALUES ($1, $2, $3, 'workspace', now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(rook.actor)
+    .bind(elsewhere)
+    .execute(world.pool())
+    .await
+    .expect("paused elsewhere");
     owner_op(&world, "agent_resume", json!({"account": rook.actor})).await;
     let page = read(&world, rook, Some(&held_at)).await;
     assert_eq!(of_type(&page, "reply.requested").len(), 1, "{page}");

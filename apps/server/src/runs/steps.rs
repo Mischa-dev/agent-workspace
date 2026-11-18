@@ -27,7 +27,7 @@ fn activity_kind(step: &str, payload: &Value) -> &'static str {
         "approval_requested" | "question_requested" => "interrupt",
         "approval_resolved" | "question_resolved" => "interrupt_resolved",
         "run_completed" | "run_failed" | "run_interrupted" => "run_finished",
-        "agent_note" => "text_message",
+        "agent_note" | "agent_reply" => "text_message",
         _ => "custom",
     }
 }
@@ -119,9 +119,12 @@ pub async fn record(
     .bind(&client_id)
     .bind(kind)
     .bind(&summary)
-    .bind(payload)
+    .bind(&payload)
     .fetch_optional(&mut **transaction)
     .await?;
+    if inserted.is_some() && super::say::is_said_in_thread(kind, &payload) {
+        super::say::enqueue_for(transaction, run_id, &client_id).await?;
+    }
     Ok(inserted)
 }
 

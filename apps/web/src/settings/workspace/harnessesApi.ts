@@ -1,6 +1,6 @@
 import { requestJson } from '../../api/client'
 
-export type HarnessTransport = 'command' | 'runner'
+export type HarnessTransport = 'command' | 'acp' | 'runner'
 
 export type CustomHarness = {
   id: string

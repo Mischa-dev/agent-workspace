@@ -5,34 +5,26 @@ use sqlx::{FromRow, Postgres, Transaction};
 use tokio::time::sleep;
 use uuid::Uuid;
 
+use std::sync::Arc;
+
 use crate::{
     AppState,
-    domain::{RunState, allocate_conversation_sequence},
+    domain::RunState,
     error::AppError,
     git_runtime::worktree_is_dirty,
+    hosts::builtin::report::{self, RunReports},
     message_content::{MessageContentError, PlainTextMessageBuffer, ValidatedMessageContent},
-    outbox,
     realtime::RealtimeEvent,
 };
 
-pub mod adapter;
 pub mod catalog;
 pub mod ceremonies;
-pub(crate) mod claude_cloud;
-pub(crate) mod claude_code;
-mod codex_app_server;
-pub(crate) mod codex_cloud;
-pub(crate) mod command_line;
-#[cfg(test)]
-mod contract_tests;
-pub mod demo;
-pub mod host;
-mod line_process;
-pub mod manifest;
 pub(crate) mod registry;
-pub mod run_config;
-pub(crate) mod secret_fd;
-mod slots;
+
+pub use agent_workspace_builtin_host::harness::{
+    acp, adapter, claude_cloud, claude_code, codex_app_server, codex_cloud, command_line, demo,
+    host, manifest, run_config, secret_fd,
+};
 
 pub use adapter::{
     AccountHandle, AccountSummary, HarnessError, HarnessSession, LoginKind, LoginStart,
@@ -197,7 +189,6 @@ async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, 
         .bind(&value)
         .execute(&mut *transaction)
         .await?;
-    crate::runs::builtin::settings_chosen(&mut *transaction, run_id, &value).await?;
     transaction.commit().await?;
     run_config(state, run_id).await
 }
@@ -205,8 +196,10 @@ async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, 
 const SLOT_RELEASE_WAIT: Duration = Duration::from_secs(10);
 const SLOT_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
+#[allow(clippy::too_many_arguments)]
 pub async fn start_run(
     state: &AppState,
+    reports: Arc<RunReports>,
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
@@ -360,25 +353,25 @@ pub async fn start_run(
             "provider turn binding is no longer available",
         ));
     }
-    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
-    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
-        .await?;
+    crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Working, None).await?;
     transaction.commit().await?;
-    // A turn people can watch elsewhere (a cloud task) becomes the thread's
-    // agent session (A3).
-    if let Err(error) = crate::agent_sessions::record_run_turn(
-        state,
-        run_id,
-        &turn_id,
-        provider.turn_link(&turn_id).as_deref(),
-    )
-    .await
+    reports.moved("working", None).await?;
+    // A turn people can watch elsewhere (a cloud task) is the run's address
+    // there, and the thread's agent session (A3).
+    if let Some(link) = provider.turn_link(&turn_id)
+        && let Err(error) = reports
+            .update(
+                json!({"externalUrl": link}),
+                &format!("link-{}", run_id.simple()),
+            )
+            .await
     {
-        tracing::warn!(error_category = error.log_category(), %run_id, "agent session not recorded");
+        tracing::warn!(error_category = error.log_category(), %run_id, "run address not reported");
     }
 
     spawn_drive(
         state,
+        reports,
         provider,
         project_id,
         run_id,
@@ -393,8 +386,10 @@ pub async fn start_run(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_drive(
     state: &AppState,
+    reports: Arc<RunReports>,
     provider: Box<dyn HarnessSession>,
     project_id: Uuid,
     run_id: Uuid,
@@ -406,6 +401,7 @@ fn spawn_drive(
     tokio::spawn(async move {
         if let Err(error) = drive_turn(
             background_state.clone(),
+            Arc::clone(&reports),
             provider,
             project_id,
             run_id,
@@ -422,9 +418,8 @@ fn spawn_drive(
             );
             fail_run_reliably(
                 &background_state,
-                project_id,
+                &reports,
                 run_id,
-                conversation_id,
                 "The agent's turn failed. The worktree was preserved.",
             )
             .await;
@@ -485,14 +480,15 @@ pub(crate) async fn follow_recovered_run(
     {
         return Ok(false);
     }
+    let reports = Arc::new(RunReports::open(state, run_id).await?);
     // Following took a while: take the run back only while the host is ours.
     let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
-    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
-    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
-        .await?;
+    crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Working, None).await?;
     transaction.commit().await?;
+    reports.moved("working", None).await?;
     spawn_drive(
         state,
+        reports,
         provider,
         project_id,
         run_id,
@@ -699,20 +695,18 @@ pub(crate) async fn complete_recovered_run(
     .bind(run_id)
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
+    let reports = RunReports::open(state, run_id).await?;
     let mut transaction = crate::recovery::fenced_tx(&state.pool, fence).await?;
-    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Working, None).await?;
-    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
-        .await?;
+    crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Working, None).await?;
     transaction.commit().await?;
     if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {
         return Err(AppError::LeaseLost);
     }
+    let _ = (project_id, conversation_id);
     complete_run(
         state,
-        project_id,
+        &reports,
         run_id,
-        conversation_id,
-        Uuid::now_v7(),
         message,
         Some(RecoveryCompletion {
             previous_state,
@@ -732,6 +726,7 @@ struct RecoveryCompletion<'a> {
 #[allow(clippy::too_many_arguments)]
 async fn drive_turn(
     state: AppState,
+    reports: Arc<RunReports>,
     mut provider: Box<dyn HarnessSession>,
     project_id: Uuid,
     run_id: Uuid,
@@ -765,10 +760,9 @@ async fn drive_turn(
                 match event {
                     HarnessEvent::Request(request) => handle_provider_request(
                         &state,
+                        &reports,
                         &mut provider,
-                        project_id,
                         run_id,
-                        conversation_id,
                         request,
                         &lease_lost,
                     ).await?,
@@ -792,18 +786,18 @@ async fn drive_turn(
                     }
                     HarnessEvent::ItemStarted(event)
                         if event.kind == ItemKind::CommandExecution => {
-                        record_step(&state, project_id, run_id, conversation_id, &event, "command_started", true).await?;
+                        record_step(&reports, &event, "command_started", true).await?;
                     }
                     HarnessEvent::ItemCompleted(event)
                         if event.kind == ItemKind::CommandExecution => {
-                        record_step(&state, project_id, run_id, conversation_id, &event, "command_completed", true).await?;
+                        record_step(&reports, &event, "command_completed", true).await?;
                     }
                     HarnessEvent::ItemCompleted(event) if event.kind == ItemKind::FileChange => {
-                        record_step(&state, project_id, run_id, conversation_id, &event, "file_change", true).await?;
+                        record_step(&reports, &event, "file_change", true).await?;
                     }
                     HarnessEvent::ItemCompleted(event)
                         if event.kind == ItemKind::Other && event.detail.tool.is_some() => {
-                        record_step(&state, project_id, run_id, conversation_id, &event, "tool_used", false).await?;
+                        record_step(&reports, &event, "tool_used", false).await?;
                     }
                     HarnessEvent::TurnCompleted { completed } => {
                         if !completed {
@@ -814,10 +808,8 @@ async fn drive_turn(
                         }
                         complete_run(
                             &state,
-                            project_id,
+                            &reports,
                             run_id,
-                            conversation_id,
-                            message_stream_id,
                             message.as_str(),
                             None,
                         ).await?;
@@ -835,20 +827,25 @@ async fn drive_turn(
                     HarnessEvent::Note(text) => {
                         if !text.trim().is_empty() {
                             let key = format!("note:{}", Uuid::now_v7());
-                            persist_event(
-                                &state,
-                                project_id,
-                                run_id,
-                                conversation_id,
-                                SignificantProviderEvent {
-                                    key: &key,
-                                    kind: "agent_note",
-                                    summary: &crate::run_log::cap(&crate::run_log::redact(text.trim()), 160),
-                                    payload: crate::run_log::note_payload(&text),
-                                    in_thread: false,
-                                },
+                            reports.step(
+                                &key,
+                                "agent_note",
+                                &crate::run_log::cap(&crate::run_log::redact(text.trim()), 160),
+                                crate::run_log::note_payload(&text),
+                                false,
                             ).await?;
                         }
+                    }
+                    HarnessEvent::Plan(items) => {
+                        let items = items
+                            .iter()
+                            .map(|item| json!({
+                                "title": crate::run_log::cap(&crate::run_log::redact(&item.title), 500),
+                                "status": item.status,
+                            }))
+                            .collect::<Vec<_>>();
+                        let key = format!("plan:{}", Uuid::now_v7());
+                        reports.step(&key, "plan", "The plan.", json!({ "items": items }), false).await?;
                     }
                     HarnessEvent::ItemStarted(_)
                     | HarnessEvent::ItemCompleted(_)
@@ -867,9 +864,8 @@ async fn drive_turn(
                     provider.shutdown().await;
                     fail_run(
                         &state,
-                        project_id,
+                        &reports,
                         run_id,
-                        conversation_id,
                         "The account this run used was signed out. Its worktree was kept.",
                     ).await?;
                     return Ok(());
@@ -915,10 +911,9 @@ async fn stop_wake(state: &AppState) {
 
 async fn handle_provider_request(
     state: &AppState,
+    reports: &RunReports,
     provider: &mut Box<dyn HarnessSession>,
-    project_id: Uuid,
     run_id: Uuid,
-    conversation_id: Uuid,
     request: HarnessRequest,
     lease_lost: &tokio_util::sync::CancellationToken,
 ) -> Result<(), AppError> {
@@ -931,60 +926,33 @@ async fn handle_provider_request(
             })?;
         return Ok(());
     }
-    let ask = match request.kind {
-        RequestKind::Question => crate::hosts::builtin::requests::Ask::Question,
-        RequestKind::Approval => crate::hosts::builtin::requests::Ask::Approval,
-        RequestKind::Unsupported => unreachable!("unsupported requests return above"),
-    };
-    let kind = if ask == crate::hosts::builtin::requests::Ask::Question {
-        "question"
-    } else {
-        "approval"
-    };
-    let provider_request_id = request.durable_id.clone();
-    let summary = request.summary.clone();
+    let approval = request.kind == RequestKind::Approval;
     let options = request
         .options
         .iter()
         .map(|option| (option.id.clone(), option.label.clone()))
         .collect::<Vec<_>>();
-    // A1.14: the ask is a request of the run; whoever may answer it is told.
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let raised = crate::hosts::builtin::requests::raise(
-        &mut transaction,
-        run_id,
-        &provider_request_id,
-        ask,
-        &summary,
+    // A1.14, A1.16: the ask is an `interrupt` the run reports, which opens
+    // a request; whoever may answer it is told.
+    let asked = crate::hosts::builtin::requests::interrupt(
+        &request.durable_id,
+        if approval {
+            crate::hosts::builtin::requests::Ask::Approval
+        } else {
+            crate::hosts::builtin::requests::Ask::Question
+        },
+        &request.summary,
         &options,
-    )
-    .await?;
-    if raised.created {
-        crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Blocked, None)
-            .await?;
-        let event_id = crate::runs::steps::record(
-            &mut transaction,
-            run_id,
-            &format!("provider:{kind}:requested:{provider_request_id}"),
-            if kind == "question" {
-                "question_requested"
-            } else {
-                "approval_requested"
-            },
-            &summary,
-            json!({"request_id": raised.request_id}),
-        )
-        .await?
-        .ok_or(AppError::Internal("new approval event was not inserted"))?;
-        crate::runs::steps::show_in_thread(&mut transaction, conversation_id, event_id).await?;
-        outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
-            .await?;
-    }
+    );
+    // Raised first: a run shown blocked always has what it waits on.
+    let request_id = reports.raise(asked).await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Blocked, None).await?;
     transaction.commit().await?;
 
-    // The answer arrives as a wake from whichever server took it (the
-    // control channel); the one-second check is the safety net when no
-    // wake comes (a lost notification, or no listener at all).
+    // The answer comes to the host as an `answer` command; the driver reads
+    // it with the run's credential. The wake on the control channel is the
+    // prompt; the one-second check is the safety net.
     let cluster = state.supervisors.cluster();
     loop {
         let woken = async {
@@ -1008,16 +976,23 @@ async fn handle_provider_request(
             provider.shutdown().await;
             fail_run(
                 state,
-                project_id,
+                reports,
                 run_id,
-                conversation_id,
                 "The account this run used was signed out. Its worktree was kept.",
             )
             .await?;
             return Ok(());
         }
-        use crate::hosts::builtin::requests::{Outcome, claim_delivery, outcome};
-        let answer = match outcome(&state.pool, raised.request_id).await? {
+        use crate::hosts::builtin::requests::Outcome;
+        let stopped = crate::runs::builtin::state_of(crate::db::scoped(&state.pool), run_id)
+            .await?
+            .is_none_or(|state| state == RunState::Interrupted);
+        let outcome = if stopped {
+            Outcome::Interrupted
+        } else {
+            reports.outcome(request_id).await?
+        };
+        let answer = match outcome {
             Outcome::Waiting => continue,
             Outcome::Interrupted => {
                 provider
@@ -1032,9 +1007,19 @@ async fn handle_provider_request(
             Outcome::Deny => HarnessAnswer::Deny,
             Outcome::Text(text) => HarnessAnswer::Text(text),
         };
-        // Passed on once, however many turns wait on it.
-        if !claim_delivery(&state.pool, raised.request_id).await? {
-            return Ok(());
+        // An approval denied, or a request nobody answered, stops the run.
+        if matches!(answer, HarnessAnswer::Deny) {
+            crate::hosts::builtin::driver::stop_unanswered(state, reports, run_id, approval)
+                .await?;
+        } else {
+            crate::hosts::builtin::driver::go_on(state, reports, run_id).await?;
+            if crate::runs::builtin::state_of(crate::db::scoped(&state.pool), run_id)
+                .await?
+                .is_none_or(|state| state.is_terminal())
+            {
+                let _ = provider.answer(request, HarnessAnswer::Deny).await;
+                return Ok(());
+            }
         }
         provider
             .answer(request, answer)
@@ -1046,10 +1031,8 @@ async fn handle_provider_request(
 
 async fn complete_run(
     state: &AppState,
-    project_id: Uuid,
+    reports: &RunReports,
     run_id: Uuid,
-    conversation_id: Uuid,
-    worker_message_id: Uuid,
     message: &str,
     recovery: Option<RecoveryCompletion<'_>>,
 ) -> Result<(), AppError> {
@@ -1073,16 +1056,45 @@ async fn complete_run(
     .await
     .map_err(|_| AppError::Internal("join worktree inspection task"))??;
 
-    let worker_actor_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT ew.actor_id FROM agent_runs ar
-        JOIN execution_workers ew ON ew.id = ar.execution_worker_id
-        WHERE ar.id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(crate::db::scoped(&state.pool))
-    .await?;
+    // What the agent said goes to the thread like any host's answer (a
+    // `text_message` for the thread, posted by `runs::say`), and the run
+    // finishes, all in one report.
+    let mut activities = Vec::new();
+    if let Some(validated_message) = validated_message {
+        let (_, plain_text, _) = validated_message.into_parts();
+        activities.push(report::activity(
+            "provider:reply",
+            "agent_reply",
+            "The agent's answer.",
+            json!({"text": plain_text, "inThread": true}),
+            false,
+        ));
+    }
+    if let Some(recovery) = &recovery {
+        activities.push(report::activity(
+            "startup-recovery:completed",
+            "recovery",
+            "Service restarted during a run. Provider history proved that the turn completed, so the durable run was reconciled as completed.",
+            json!({
+                "previous_state": recovery.previous_state,
+                "result": "completed",
+                "provider_resumed": true,
+                "worktree_preserved": true,
+                "worktree_state": recovery.worktree_state,
+                "dirty": recovery.dirty
+            }),
+            true,
+        ));
+    }
+    activities.push(report::activity(
+        "provider:run:completed",
+        "run_completed",
+        "The agent's turn completed.",
+        json!({}),
+        true,
+    ));
+    reports.activities(activities).await?;
+
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     sqlx::query(
         r#"
@@ -1101,71 +1113,7 @@ async fn complete_run(
     .bind(dirty)
     .execute(&mut *transaction)
     .await?;
-    if let Some(validated_message) = validated_message {
-        let (content, plain_text, mentioned_actor_ids) = validated_message.into_parts();
-        debug_assert!(mentioned_actor_ids.is_empty());
-        let content = serde_json::to_value(content)
-            .map_err(|_| AppError::Internal("serialize provider Worker Message"))?;
-        sqlx::query(
-            r#"
-            INSERT INTO messages (
-                id, project_id, conversation_id, author_actor_id,
-                content_version, content, plain_text, agent_run_id
-            )
-            VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
-            ON CONFLICT (agent_run_id) WHERE agent_run_id IS NOT NULL DO NOTHING
-            "#,
-        )
-        .bind(worker_message_id)
-        .bind(project_id)
-        .bind(conversation_id)
-        .bind(worker_actor_id)
-        .bind(content)
-        .bind(plain_text)
-        .bind(run_id)
-        .execute(&mut *transaction)
-        .await?;
-        let persisted_message_id = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM messages WHERE agent_run_id = $1 -- visibility: the run's own reply",
-        )
-        .bind(run_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        let existing_entry = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM conversation_entries WHERE message_id = $1)",
-        )
-        .bind(persisted_message_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !existing_entry {
-            let sequence =
-                allocate_conversation_sequence(&mut transaction, conversation_id).await?;
-            sqlx::query(
-                r#"
-                INSERT INTO conversation_entries (
-                    id, conversation_id, sequence, kind, message_id
-                )
-                VALUES ($1, $2, $3, 'message', $4)
-                "#,
-            )
-            .bind(Uuid::now_v7())
-            .bind(conversation_id)
-            .bind(sequence)
-            .bind(persisted_message_id)
-            .execute(&mut *transaction)
-            .await?;
-            outbox::enqueue_message_created(
-                &mut transaction,
-                project_id,
-                conversation_id,
-                persisted_message_id,
-                sequence,
-                worker_actor_id,
-            )
-            .await?;
-        }
-    }
-    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Completed, None).await?;
+    crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Completed, None).await?;
     sqlx::query(
         r#"
         UPDATE repository_workspaces rw
@@ -1178,63 +1126,14 @@ async fn complete_run(
     .execute(&mut *transaction)
     .await?;
     idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
-    let event_id = crate::runs::steps::record(
-        &mut transaction,
-        run_id,
-        "provider:run:completed",
-        "run_completed",
-        "The agent's turn completed.",
-        json!({}),
-    )
-    .await?;
-    if let Some(event_id) = event_id {
-        crate::runs::steps::show_in_thread(&mut transaction, conversation_id, event_id).await?;
-    }
-    if let Some(recovery) = recovery {
-        let recovery_event = crate::runs::steps::record(
-            &mut transaction,
-            run_id,
-            "startup-recovery:completed",
-            "recovery",
-            "Service restarted during a run. Provider history proved that the turn completed, so the durable run was reconciled as completed.",
-            json!({
-                "previous_state": recovery.previous_state,
-                "result": "completed",
-                "provider_resumed": true,
-                "worktree_preserved": true,
-                "worktree_state": recovery.worktree_state,
-                "dirty": recovery.dirty
-            }),
-        )
-        .await?;
-        if let Some(recovery_event) = recovery_event {
-            crate::runs::steps::show_in_thread(&mut transaction, conversation_id, recovery_event)
-                .await?;
-        }
-    }
-    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
-        .await?;
     transaction.commit().await?;
     Ok(())
 }
 
-struct SignificantProviderEvent<'a> {
-    key: &'a str,
-    kind: &'a str,
-    summary: &'a str,
-    payload: Value,
-    /// Whether the step also shows in the thread; notes and minor tools
-    /// show only on the run page.
-    in_thread: bool,
-}
-
-/// Stores one step of a run with its redacted detail, and the tests its
+/// Reports one step of a run with its redacted detail, and the tests its
 /// output reported as a step of their own.
 async fn record_step(
-    state: &AppState,
-    project_id: Uuid,
-    run_id: Uuid,
-    conversation_id: Uuid,
+    reports: &RunReports,
     item: &crate::provider::adapter::HarnessItem,
     kind: &str,
     in_thread: bool,
@@ -1242,20 +1141,9 @@ async fn record_step(
     let payload = crate::run_log::item_payload(item);
     let summary = crate::run_log::step_summary(kind, &item.detail);
     let tests = payload.get("tests").cloned();
-    persist_event(
-        state,
-        project_id,
-        run_id,
-        conversation_id,
-        SignificantProviderEvent {
-            key: &item.key,
-            kind,
-            summary: &summary,
-            payload,
-            in_thread,
-        },
-    )
-    .await?;
+    let mut steps = vec![report::activity(
+        &item.key, kind, &summary, payload, in_thread,
+    )];
     if let (Some(tests), "command_completed") = (tests, kind) {
         let passed = tests["passed"].as_u64().unwrap_or(0);
         let failed = tests["failed"].as_u64().unwrap_or(0);
@@ -1264,51 +1152,15 @@ async fn record_step(
         } else {
             format!("Tests failed: {failed} of {}", passed + failed)
         };
-        let key = format!("{}:tests", item.key);
-        persist_event(
-            state,
-            project_id,
-            run_id,
-            conversation_id,
-            SignificantProviderEvent {
-                key: &key,
-                kind: "test_result",
-                summary: &summary,
-                payload: json!({ "tests": tests, "command": item.detail.command.as_deref().map(|command| crate::run_log::cap(&crate::run_log::redact(command), 2_000)) }),
-                in_thread: false,
-            },
-        )
-        .await?;
+        steps.push(report::activity(
+            &format!("{}:tests", item.key),
+            "test_result",
+            &summary,
+            json!({ "tests": tests, "command": item.detail.command.as_deref().map(|command| crate::run_log::cap(&crate::run_log::redact(command), 2_000)) }),
+            false,
+        ));
     }
-    Ok(())
-}
-
-async fn persist_event(
-    state: &AppState,
-    project_id: Uuid,
-    run_id: Uuid,
-    conversation_id: Uuid,
-    event: SignificantProviderEvent<'_>,
-) -> Result<(), AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    if let Some(event_id) = crate::runs::steps::record(
-        &mut transaction,
-        run_id,
-        event.key,
-        event.kind,
-        event.summary,
-        event.payload,
-    )
-    .await?
-    {
-        if event.in_thread {
-            crate::runs::steps::show_in_thread(&mut transaction, conversation_id, event_id).await?;
-        }
-        outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
-            .await?;
-    }
-    transaction.commit().await?;
-    Ok(())
+    reports.activities(steps).await
 }
 
 /// Attempts at failing a run whose turn failed before leaving it to
@@ -1323,14 +1175,13 @@ const FAIL_RUN_FIRST_RETRY: Duration = Duration::from_millis(500);
 /// hands. Nothing is dropped silently.
 async fn fail_run_reliably(
     state: &AppState,
-    project_id: Uuid,
+    reports: &RunReports,
     run_id: Uuid,
-    conversation_id: Uuid,
     reason: &'static str,
 ) {
     let mut wait = FAIL_RUN_FIRST_RETRY;
     for attempt in 1..=FAIL_RUN_ATTEMPTS {
-        match fail_run(state, project_id, run_id, conversation_id, reason).await {
+        match fail_run(state, reports, run_id, reason).await {
             Ok(()) => return,
             Err(error) => {
                 tracing::error!(
@@ -1352,12 +1203,13 @@ async fn fail_run_reliably(
     );
 }
 
-async fn fail_run(
+/// The run failed: its record hears why (shown in its thread), then the
+/// host's own rows are put away.
+pub(crate) async fn fail_run(
     state: &AppState,
-    project_id: Uuid,
+    reports: &RunReports,
     run_id: Uuid,
-    conversation_id: Uuid,
-    reason: &'static str,
+    reason: &str,
 ) -> Result<(), AppError> {
     let current = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
         .bind(run_id)
@@ -1369,8 +1221,12 @@ async fn fail_run(
     ) {
         return Ok(());
     }
+    reports
+        .note("provider:run:failed", "run_failed", reason, true)
+        .await?;
+    reports.moved("failed", Some(reason)).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    crate::hosts::builtin::transition(&mut transaction, run_id, RunState::Failed, Some(reason))
+    crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Failed, Some(reason))
         .await?;
     sqlx::query(
         r#"
@@ -1384,20 +1240,6 @@ async fn fail_run(
     .execute(&mut *transaction)
     .await?;
     idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
-    let event_id = crate::runs::steps::record(
-        &mut transaction,
-        run_id,
-        "provider:run:failed",
-        "run_failed",
-        reason,
-        json!({}),
-    )
-    .await?;
-    if let Some(event_id) = event_id {
-        crate::runs::steps::show_in_thread(&mut transaction, conversation_id, event_id).await?;
-    }
-    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
-        .await?;
     transaction.commit().await?;
     Ok(())
 }
