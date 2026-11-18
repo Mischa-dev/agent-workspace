@@ -2,8 +2,9 @@ import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { BrandMark } from '../auth/AuthLayout'
-import { Banner, Button, Checkbox, SelectField, TextArea, TextField } from '../ui'
-import { fetchForm, FormProblem, MIN_RENDER_AGE_MS, missing, sendAnswers, type Answers, type PublicField, type PublicForm } from './formModel'
+import { Banner, Button, TextField } from '../ui'
+import { fetchForm, FormProblem, MIN_RENDER_AGE_MS, missing, sendAnswers, type Answers, type PublicForm } from './formModel'
+import { Questions } from './Questions'
 import './forms.css'
 
 type Loaded = { state: 'loading' } | { state: 'ready'; form: PublicForm } | { state: 'gone'; message: string }
@@ -129,9 +130,7 @@ export function FormPage() {
           onChange={(event) => set('title', event.target.value)}
           value={typeof answers.title === 'string' ? answers.title : ''}
         />
-        {form.fields.map((field) => (
-          <FieldInput field={field} key={field.id} onChange={(value) => set(field.id, value)} value={answers[field.id]} />
-        ))}
+        <Questions answers={answers} fields={form.fields} onChange={set} />
         {form.honeypot ? (
           <div aria-hidden="true" className="aw-pform__trap">
             <label>
@@ -172,68 +171,6 @@ function FormShell({ children }: { children: React.ReactNode }) {
       </p>
     </main>
   )
-}
-
-function FieldInput({
-  field,
-  onChange,
-  value,
-}: {
-  field: PublicField
-  onChange: (value: Answers[string]) => void
-  value: Answers[string] | undefined
-}) {
-  const label = field.required ? `${field.name} (required)` : field.name
-  const hint = field.description || undefined
-  const text = typeof value === 'string' ? value : ''
-  switch (field.type) {
-    case 'text':
-    case 'long_text':
-      return (
-        <TextArea hint={hint} label={label} maxLength={10000} onChange={(event) => onChange(event.target.value)} rows={field.type === 'long_text' ? 6 : 3} value={text} />
-      )
-    case 'email':
-      return <TextField hint={hint} inputMode="email" label={label} onChange={(event) => onChange(event.target.value)} type="email" value={text} />
-    case 'phone':
-      return <TextField hint={hint} inputMode="tel" label={label} onChange={(event) => onChange(event.target.value)} type="tel" value={text} />
-    case 'number':
-      return <TextField hint={hint} inputMode="decimal" label={label} onChange={(event) => onChange(event.target.value)} type="number" value={text} />
-    case 'date':
-      return <TextField hint={hint} label={label} onChange={(event) => onChange(event.target.value)} type="date" value={text} />
-    case 'url':
-      return <TextField hint={hint} label={label} onChange={(event) => onChange(event.target.value)} placeholder="https://" type="url" value={text} />
-    case 'single_choice':
-    case 'status':
-      return (
-        <SelectField hint={hint} label={label} onChange={(event) => onChange(event.target.value)} value={text}>
-          <option value="">Choose…</option>
-          {field.options.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.name}
-            </option>
-          ))}
-        </SelectField>
-      )
-    case 'multiple_choice': {
-      const picked = Array.isArray(value) ? value : []
-      return (
-        <fieldset className="aw-pform__group">
-          <legend className="aw-pform__legend">{label}</legend>
-          {hint ? <p className="aw-pform__hint">{hint}</p> : null}
-          {field.options.map((option) => (
-            <Checkbox
-              checked={picked.includes(option.id)}
-              key={option.id}
-              label={option.name}
-              onChange={(checked) => onChange(checked ? [...picked, option.id] : picked.filter((id) => id !== option.id))}
-            />
-          ))}
-        </fieldset>
-      )
-    }
-    case 'checkbox':
-      return <Checkbox checked={value === true} description={hint} label={field.name} onChange={(checked) => onChange(checked)} />
-  }
 }
 
 // The app loads it lazily, as its default.

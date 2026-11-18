@@ -104,8 +104,9 @@ const LINK_SELECT: &str = r#"
            to_char(link.last_report_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_report_at,
            link.version,
            to_char(link.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
-           link.collection_id, collection.name AS collection_name, link.form
+           link.collection_id, collection.name AS collection_name, form.definition AS form
     FROM bug_report_links link
+    LEFT JOIN forms form ON form.id = link.form_id
     LEFT JOIN users owner ON owner.actor_id = link.owner_actor_id
     LEFT JOIN collections collection
       ON collection.project_id = link.project_id AND collection.id = link.collection_id
@@ -508,11 +509,28 @@ pub(crate) async fn insert_link(
     }
     let link_id = Uuid::now_v7();
     let token = new_token();
+    // A public form is its own definition (T1.28), under the link's id.
+    if let Some((collection_id, form)) = &form {
+        crate::forms::insert(
+            transaction,
+            crate::forms::NewForm {
+                id: link_id,
+                workspace_id: organization_id,
+                space_id: project_id,
+                collection_id: *collection_id,
+                name,
+                audience: collection_forms::Audience::Public,
+                definition: form,
+                actor_id: caller.actor_id,
+            },
+        )
+        .await?;
+    }
     sqlx::query(
         r#"
         INSERT INTO bug_report_links (
             id, organization_id, project_id, owner_actor_id, name, token_digest, token_hint,
-            collection_id, form
+            collection_id, form_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
     )
@@ -524,12 +542,7 @@ pub(crate) async fn insert_link(
     .bind(digest(&token))
     .bind(hint(&token))
     .bind(form.as_ref().map(|(collection_id, _)| *collection_id))
-    .bind(
-        form.as_ref()
-            .map(|(_, form)| serde_json::to_value(form))
-            .transpose()
-            .map_err(|_| AppError::Internal("serialize form"))?,
-    )
+    .bind(form.as_ref().map(|_| link_id))
     .execute(&mut **transaction)
     .await?;
     events::audit(
@@ -607,7 +620,6 @@ pub(crate) async fn update(
             answers_on_day = CASE WHEN $3::text = 'active' AND state <> 'active'
                                   THEN 0 ELSE answers_on_day END,
             owner_actor_id = $4,
-            form = coalesce($5, form),
             version = version + 1, updated_at = now()
         WHERE id = $1
         "#,
@@ -616,9 +628,20 @@ pub(crate) async fn update(
     .bind(&name)
     .bind(new_state)
     .bind(owner)
-    .bind(&form)
     .execute(&mut *transaction)
     .await?;
+    if form.is_some() || name.is_some() {
+        sqlx::query(
+            "UPDATE forms SET definition = coalesce($2, definition), name = coalesce($3, name), \
+                    version = version + 1, updated_at = now() \
+             WHERE id = (SELECT form_id FROM bug_report_links WHERE id = $1)",
+        )
+        .bind(link_id)
+        .bind(&form)
+        .bind(&name)
+        .execute(&mut *transaction)
+        .await?;
+    }
     events::audit(
         &mut *transaction,
         caller,
@@ -682,6 +705,14 @@ pub(crate) async fn delete(
 ) -> Result<(), AppError> {
     let row = manageable(&state.pool, caller, link_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    // Its form outlives the link, archived (T1.28).
+    sqlx::query(
+        "UPDATE forms SET archived_at = coalesce(archived_at, now()), updated_at = now() \
+         WHERE id = (SELECT form_id FROM bug_report_links WHERE id = $1)",
+    )
+    .bind(link_id)
+    .execute(&mut *transaction)
+    .await?;
     sqlx::query("DELETE FROM bug_report_links WHERE id = $1")
         .bind(link_id)
         .execute(&mut *transaction)
@@ -987,7 +1018,9 @@ async fn receive(
                 WHERE item_type.project_id = link.project_id AND item_type.enabled
                   AND lower(item_type.name) = 'bug'
                 LIMIT 1) AS bug_type,
-               link.collection_id, link.form, link.render_key,
+               link.collection_id,
+               (SELECT form.definition FROM forms form WHERE form.id = link.form_id) AS form,
+               link.render_key,
                module_part_on('form', link.id) AS module_on
         FROM bug_report_links link
         WHERE link.token_digest = $1
@@ -1454,8 +1487,9 @@ async fn read_form(state: &AppState, token: &str) -> Result<Response, AppError> 
             bool,
         ),
     >(
-        "SELECT id, project_id, name, state, collection_id, form, render_key, \
-         module_part_on('form', id) FROM bug_report_links WHERE token_digest = $1",
+        "SELECT link.id, link.project_id, link.name, link.state, link.collection_id, \
+         (SELECT form.definition FROM forms form WHERE form.id = link.form_id), link.render_key, \
+         module_part_on('form', link.id) FROM bug_report_links link WHERE link.token_digest = $1",
     )
     .bind(&token_digest)
     .fetch_optional(crate::db::scoped(&state.pool))

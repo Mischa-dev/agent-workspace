@@ -2751,6 +2751,37 @@ async fn channel_writes_keep_to_private_channels() {
         made_from,
         vec![Some(Uuid::parse_str(&shown).expect("shown"))]
     );
+    // T1.28: an internal form is answered by those who may add records, as
+    // themselves; a read-only role neither answers nor changes it.
+    let (status, form) = op(
+        &lena.browser,
+        "form_create",
+        json!({"collection": collection, "name": "Intake"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{form}");
+    let form = form["value"]["id"].as_str().expect("form").to_owned();
+    let (status, answered) = op(
+        &omar.browser,
+        "form_answer_send",
+        json!({"form": form, "answers": {"title": "From Omar"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+    for (name, input) in [
+        (
+            "form_answer_send",
+            json!({"form": form, "answers": {"title": "From Nate"}}),
+        ),
+        ("form_update", json!({"form": form, "name": "Nate's"})),
+        (
+            "form_create",
+            json!({"collection": collection, "name": "Nate's own"}),
+        ),
+    ] {
+        let (status, refused) = op(&nate.browser, name, input).await;
+        assert!(!status.is_success(), "{name}: {refused}");
+    }
     let request = lena.browser.request(
         "GET",
         &format!("/api/v1/conversations/{open}/timeline"),

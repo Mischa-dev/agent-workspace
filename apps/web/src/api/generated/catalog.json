@@ -879,6 +879,82 @@
     "title": "Link to a file"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "record.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "form_answer_send",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Answer a form"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "form_create",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Create a form"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "form_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get a form"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "form_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List forms"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "form_update",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a form"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],

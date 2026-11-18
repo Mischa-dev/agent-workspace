@@ -26,6 +26,8 @@ export type AgentUsageLine = { accountId: string; cachedInputTokens: number; con
 
 export type ArchiveParts = "archive" | "keep"
 
+export type Audience = "public" | "internal"
+
 export type AudienceInput = { accounts?: string[]; roles?: string[] }
 
 export type AvatarLine = { accountId: string; url: string }
@@ -109,6 +111,16 @@ export type Figures = { collectionName: string; groups: FigureGroup[]; measure?:
 export type FilterWrite = { field: string; op: FieldOp; values?: string[] }
 
 export type FollowedThreadView = { id: string; lastActivityAt: string; messageCount: number; name: string; originMessageId?: string | null; outcome?: string | null; parentId: string; parentKind: string; parentName?: string | null; spaceId: string; spaceName: string; status: string; unread: boolean }
+
+export type FormConfig = { dailyLimit?: number | null; fields?: FormField[]; intro?: string; sections?: FormSection[]; sets?: FormSet[]; thanks?: string }
+
+export type FormField = { field: string; required?: boolean; showIf?: ShowIf | null }
+
+export type FormSection = { before: string; description?: string; title: string }
+
+export type FormSet = { field: string; value: unknown }
+
+export type FormSummary = { archived?: boolean; audience: Audience; collectionId: string; collectionName: string; id: string; linkId?: string | null; name: string; questions: number; version: number }
 
 export type GroupView = { description: string; handle: string; id: string; memberCount: number; memberIds?: string[] | null; name: string }
 
@@ -208,6 +220,12 @@ export type PressedStep = { operation: string; value: unknown }
 
 export type PreviewRecord = { number: number; title: string }
 
+export type PublicField = { description?: string; id: string; name: string; options?: PublicOption[]; required: boolean; section?: PublicSection | null; showIf?: ShowIf | null; type: string }
+
+export type PublicOption = { color: string; id: string; name: string }
+
+export type PublicSection = { description?: string; title: string }
+
 export type Publisher = { name: string; url?: string | null }
 
 export type PullRequest = { baseRef: string; checksState: string; draft: boolean; headRef: string; id: string; mergedAt?: string | null; number: number; repository: string; repositoryId: string; reviewState: string; spaceId: string; state: string; title: string; updatedAt: string; url: string }
@@ -267,6 +285,8 @@ export type SectionSort = "manual" | "alpha" | "recent"
 export type Settings = { enabled: boolean; lengthDays: number; rollOver: boolean; startsOnWeekday: number; upcoming: number; version: number }
 
 export type SharedSpace = { id: string; name: string }
+
+export type ShowIf = { field: string; isOneOf?: string[] }
 
 export type SidebarItem = { conversationId: string; hidden: boolean; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
 
@@ -543,6 +563,26 @@ export type EventListOutput = { connectionId: string; events: Array<Record<strin
 export type FileLinkGetInput = { fileId: string }
 
 export type FileLinkGetOutput = { contentType: string; expiresAt: string; name: string; size: number; url: string }
+
+export type FormAnswerSendInput = { answers: Record<string, unknown>; form: string }
+
+export type FormAnswerSendOutput = { collectionId: string; number: number; recordId: string; thanks?: string; title: string }
+
+export type FormCreateInput = { collection: string; definition?: unknown; name: string }
+
+export type FormCreateOutput = { archived?: boolean; audience: Audience; canAnswer: boolean; canBuild: boolean; collectionId: string; collectionName: string; definition: FormConfig; id: string; linkId?: string | null; name: string; questions: PublicField[]; titleName: string; version: number }
+
+export type FormGetInput = { form: string }
+
+export type FormGetOutput = { archived?: boolean; audience: Audience; canAnswer: boolean; canBuild: boolean; collectionId: string; collectionName: string; definition: FormConfig; id: string; linkId?: string | null; name: string; questions: PublicField[]; titleName: string; version: number }
+
+export type FormListInput = { collection?: string | null; includeArchived?: boolean; spaceId: string }
+
+export type FormListOutput = { forms: FormSummary[] }
+
+export type FormUpdateInput = { archived?: boolean | null; definition?: unknown; expectedVersion?: number | null; form: string; name?: string | null }
+
+export type FormUpdateOutput = { archived?: boolean; audience: Audience; canAnswer: boolean; canBuild: boolean; collectionId: string; collectionName: string; definition: FormConfig; id: string; linkId?: string | null; name: string; questions: PublicField[]; titleName: string; version: number }
 
 export type FormulaPreviewInput = { collection: string; field?: string | null; formula: string; record?: number | null }
 
@@ -1031,6 +1071,11 @@ export type Operations = {
   event_kind_list: { input: EventKindListInput; output: EventKindListOutput }
   event_list: { input: EventListInput; output: EventListOutput }
   file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }
+  form_answer_send: { input: FormAnswerSendInput; output: FormAnswerSendOutput }
+  form_create: { input: FormCreateInput; output: FormCreateOutput }
+  form_get: { input: FormGetInput; output: FormGetOutput }
+  form_list: { input: FormListInput; output: FormListOutput }
+  form_update: { input: FormUpdateInput; output: FormUpdateOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
   group_list: { input: GroupListInput; output: GroupListOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }

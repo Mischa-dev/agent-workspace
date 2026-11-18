@@ -1201,6 +1201,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "forms",
+                table: "forms",
+                references: &[
+                    ("space_id", "projects"),
+                    ("collection_id", "collections"),
+                    ("created_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "collection_view_defaults",
                 table: "collection_view_defaults",
                 references: &[

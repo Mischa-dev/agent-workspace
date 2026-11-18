@@ -195,6 +195,11 @@ const KINDS: &[(&str, &str)] = &[
          WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2)",
     ),
     (
+        "form",
+        "SELECT form.workspace_id, form.space_id FROM forms form \
+         WHERE form.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    (
         "record",
         "SELECT project.organization_id, project.id FROM collection_records record \
          JOIN projects project ON project.id = record.project_id \
@@ -339,6 +344,7 @@ fn what_of(kind: &str) -> &'static str {
         "page" => "That page",
         "sheet" => "That sheet",
         "record" => "That record",
+        "form" => "That form",
         "module" => "That module",
         "package_install" => "That install",
         "whiteboard" => "That whiteboard",

@@ -527,6 +527,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "collection_write",
     "record_write",
     "record_create",
+    "form_create",
+    "form_update",
+    "form_answer_send",
     "conversation_tab_set",
     "button_press",
     "sheet_write",
@@ -7084,6 +7087,26 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"collection": a.collection, "title": "Net made", "fromMessageId": b.message}),
             json!({"collection": a.collection, "title": "Net made", "fields": {"Tester": b.rook}}),
         ]),
+        // T1.28: forms only on, and answered in, the caller's own space.
+        mcp_case(
+            "form_create",
+            json!({"collection": a.collection, "name": "Net form made",
+                   "clientRequestId": "net-form"}),
+            vec![json!({"collection": b.collection, "name": "Net form made",
+                        "clientRequestId": "net-form-b"})],
+        ),
+        mcp_case(
+            "form_update",
+            json!({"form": a.form, "name": "Net form renamed"}),
+            vec![json!({"form": b.form, "name": "Net form renamed"})],
+        ),
+        mcp_case(
+            "form_answer_send",
+            json!({"form": a.form, "answers": {"title": "Net answer"},
+                   "clientRequestId": "net-answer"}),
+            vec![json!({"form": b.form, "answers": {"title": "Net answer"},
+                        "clientRequestId": "net-answer-b"})],
+        ),
         mcp_case(
             "button_press",
             json!({"collection": a.collection, "field": a.collection_button, "record": "#1"}),

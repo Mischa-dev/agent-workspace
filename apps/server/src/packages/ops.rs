@@ -788,6 +788,7 @@ impl Operation for PackageInstall {
                         questions.push(crate::collection_forms::FormField {
                             field: found.id,
                             required: asked["required"].as_bool().unwrap_or(false),
+                            show_if: None,
                         });
                     }
                     let form = crate::collection_forms::FormConfig {
@@ -795,6 +796,7 @@ impl Operation for PackageInstall {
                         fields: questions,
                         thanks: body["thanks"].as_str().unwrap_or("").to_owned(),
                         daily_limit: None,
+                        ..Default::default()
                     };
                     let form = crate::bug_reports::checked_form_in(tx, space, collection_id, &form)
                         .await?

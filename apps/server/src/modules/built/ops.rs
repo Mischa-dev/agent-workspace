@@ -518,6 +518,7 @@ impl Operation for ModuleCreate {
                     questions.push(crate::collection_forms::FormField {
                         field: found.id,
                         required: wanted.required,
+                        show_if: None,
                     });
                 }
                 let form = crate::collection_forms::FormConfig {
@@ -525,6 +526,7 @@ impl Operation for ModuleCreate {
                     fields: questions,
                     thanks: inline.thanks.clone(),
                     daily_limit: None,
+                    ..Default::default()
                 };
                 let form =
                     match crate::bug_reports::checked_form_in(tx, space, collection_id, &form)

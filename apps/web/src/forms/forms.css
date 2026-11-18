@@ -99,3 +99,22 @@
   height: 1px;
   overflow: hidden;
 }
+
+/* T1.28: a question, and the section heading it may start. */
+.aw-pform__question {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.aw-pform__section {
+  display: grid;
+  gap: var(--space-1);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-pform__section-title {
+  margin: 0;
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+}

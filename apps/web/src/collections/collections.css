@@ -724,6 +724,7 @@ button.aw-collection__chiptext:hover,
 
 .aw-cforms__field {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -734,6 +735,20 @@ button.aw-collection__chiptext:hover,
 
 .aw-cforms__field:hover {
   background: var(--content-hover);
+}
+
+/* T1.28: when an asked question shows, and the heading it starts. */
+.aw-cforms__logic {
+  display: grid;
+  flex-basis: 100%;
+  gap: var(--space-2);
+  padding: 0 0 var(--space-2) var(--space-6);
+}
+
+.aw-cforms__values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
 }
 
 .aw-cforms__confirm {

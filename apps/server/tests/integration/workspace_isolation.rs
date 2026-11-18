@@ -2086,6 +2086,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "triage_rule_list",
     "initiative_list",
     "project_status_get",
+    "form_list",
+    "form_get",
     "module_list",
     "module_open",
     "my_permissions",
@@ -2386,6 +2388,14 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("cycle_list"),
         by_project("triage_rule_list"),
         by_project("project_status_get"),
+        // T1.28: B's forms neither list nor open in A.
+        by_project("form_list"),
+        case(
+            "form_get",
+            vec![json!({"form": a.form})],
+            vec![json!({"form": b.form})],
+            vec![],
+        ),
         // T1.26: B's initiatives never list in A.
         case(
             "initiative_list",

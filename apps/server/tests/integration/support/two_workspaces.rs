@@ -98,6 +98,8 @@ pub(crate) struct World {
     pub(crate) collection_view: Uuid,
     /// A shared dashboard (T1.32) with a tile over `collection_view`.
     pub(crate) dashboard: Uuid,
+    /// An internal form (T1.28) on `collection`.
+    pub(crate) form: Uuid,
     pub(crate) record: Uuid,
     /// A sheet (AWD-54) with a header, a value and a formula.
     pub(crate) sheet: Uuid,
@@ -789,6 +791,16 @@ async fn build_workspace(
     )
     .await;
     let dashboard = Uuid::parse_str(&string_at(&dashboard, "/value/id")).expect("dashboard id");
+    let form = call(
+        "form_create",
+        json!({
+            "collection": collection.to_string(),
+            "name": format!("Intake{m}"),
+            "clientRequestId": "form-1",
+        }),
+    )
+    .await;
+    let form = Uuid::parse_str(&string_at(&form, "/value/id")).expect("form id");
 
     // Sheets (AWD-54): a header row, a value and a formula over it.
     let sheet = call(
@@ -1804,6 +1816,7 @@ async fn build_workspace(
         collection_button,
         collection_view,
         dashboard,
+        form,
         record,
         sheet,
         file,
