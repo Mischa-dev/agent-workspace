@@ -193,6 +193,10 @@ export function milestone(value: unknown): Milestone {
     version: number(entry.version),
     initiativeId: string(entry.initiativeId) || null,
     initiative: string(entry.initiative) || null,
+    position: number(entry.position),
+    estimateTotal: number(entry.estimateTotal),
+    estimateDone: number(entry.estimateDone),
+    latestDueDate: date(entry.latestDueDate),
   }
 }
 

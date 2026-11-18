@@ -363,6 +363,13 @@ export type Milestone = {
   /** The initiative it is part of (T1.26), and its name. */
   initiativeId: string | null
   initiative: string | null
+  /** Its place among the project's milestones, 1 being first (T1.42). */
+  position: number
+  /** Its tasks' estimates, and those of its completed tasks, leaving out canceled ones. */
+  estimateTotal: number
+  estimateDone: number
+  /** The latest due date among its tasks, leaving out canceled ones. */
+  latestDueDate: string | null
 }
 
 export type BulkChanges = {

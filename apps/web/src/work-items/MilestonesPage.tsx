@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
-import { opQuery } from '../api/ops'
+import { opQuery, useOp } from '../api/ops'
 import { useWorkspaceId } from '../app/workspace'
 import { useProjectExperience } from '../experience/layout'
 
@@ -12,12 +12,14 @@ import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
 import { useShellPage } from '../shell/shellStore'
 import { WorkTabs } from '../shell/ProjectTabs'
-import { Banner, Button, Dialog, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, SelectField, TextArea, TextField, countLabel, describeError, showToast } from '../ui'
+import { Banner, Button, Dialog, EmptyState, ErrorState, IconButton, ListSkeleton, PageHeader, SegmentedControl, SelectField, TextArea, TextField, countLabel, describeError, showToast } from '../ui'
 import { DatePicker, formatDateLabel } from '../ui/pickers'
+import { formatEstimate } from './historyFormat'
+import { useWorkItemWorkflow } from './hooks'
 import { workItemsHref } from './links'
-import { useCreateMilestone, useMilestoneList, useUpdateMilestone } from './planningHooks'
+import { useCreateMilestone, useInvalidateWorkItems, useMilestoneList, useUpdateMilestone } from './planningHooks'
 import { TaskGlyph } from './TaskGlyph'
-import type { Milestone } from './types'
+import type { EstimateUnit, Milestone } from './types'
 import './work.css'
 import '../styles/work.css'
 
@@ -39,6 +41,10 @@ export function MilestonesPage() {
   const project = useProject(projectId)
   const milestones = useMilestoneList(projectId, true)
   const update = useUpdateMilestone()
+  const workflow = useWorkItemWorkflow(projectId)
+  const invalidate = useInvalidateWorkItems()
+  const workspaceId = useWorkspaceId() ?? undefined
+  const reorder = useOp('milestone_reorder', { workspaceId })
   const [shown, setShown] = useState<Shown>('open')
   const [editing, setEditing] = useState<Milestone | 'new' | null>(null)
 
@@ -75,6 +81,17 @@ export function MilestonesPage() {
       },
     )
   }
+  // Open milestones come first in the project's order, so a row's place in
+  // the open list is its place among all of them.
+  const move = (milestone: Milestone, to: number) => {
+    reorder.mutate(
+      { milestoneId: milestone.id, position: to + 1, expectedVersion: milestone.version },
+      {
+        onError: (error) => showToast({ title: `${milestone.name} didn’t move`, description: saveMessage(error), tone: 'danger' }),
+        onSettled: () => void invalidate(projectId),
+      },
+    )
+  }
   const newMilestone = readOnly ? null : (
     <Button icon="plus" onClick={() => setEditing('new')} variant="primary">
       New milestone
@@ -107,13 +124,22 @@ export function MilestonesPage() {
         ) : null}
         {visible.length ? (
           <ul aria-label="Milestones" className="aw-milestones__list">
-            {visible.map((milestone) => (
+            {visible.map((milestone, index) => (
               <MilestoneRow
                 busy={update.isPending && update.variables?.milestoneId === milestone.id}
+                estimateUnit={workflow.data?.estimateUnit ?? 'points'}
                 key={milestone.id}
                 milestone={milestone}
                 onArchive={(archived) => setArchived(milestone, archived)}
                 onEdit={() => setEditing(milestone)}
+                onMove={
+                  milestone.archived || reorder.isPending
+                    ? undefined
+                    : {
+                        up: index > 0 ? () => move(milestone, index - 1) : undefined,
+                        down: index < visible.length - 1 ? () => move(milestone, index + 1) : undefined,
+                      }
+                }
                 projectId={projectId}
                 readOnly={readOnly}
               />
@@ -130,19 +156,24 @@ export function MilestonesPage() {
 
 function MilestoneRow({
   busy,
+  estimateUnit,
   milestone,
   onArchive,
   onEdit,
+  onMove,
   projectId,
   readOnly,
 }: {
   busy: boolean
+  estimateUnit: EstimateUnit
   milestone: Milestone
   onArchive: (archived: boolean) => void
   onEdit: () => void
+  onMove?: { up?: () => void; down?: () => void }
   projectId: string
   readOnly: boolean
 }) {
+  const lateTasks = Boolean(milestone.targetDate && milestone.latestDueDate && milestone.latestDueDate > milestone.targetDate)
   const percent = Math.round(Math.min(1, Math.max(0, milestone.progress)) * 100)
   const href = milestoneHref(projectId, milestone.id)
   return (
@@ -172,6 +203,17 @@ function MilestoneRow({
             )}
             {milestone.overdue ? <strong className="aw-milestone__overdue"> Overdue</strong> : null}
           </span>
+          {milestone.estimateTotal > 0 ? (
+            <span className="aw-milestone__date">
+              {formatEstimate(milestone.estimateDone, estimateUnit)} of {formatEstimate(milestone.estimateTotal, estimateUnit)} done
+            </span>
+          ) : null}
+          {milestone.latestDueDate ? (
+            <span className={['aw-milestone__date', lateTasks ? 'is-late' : ''].filter(Boolean).join(' ')}>
+              Last task due {formatDateLabel(milestone.latestDueDate)}
+              {lateTasks ? ', after the target date' : ''}
+            </span>
+          ) : null}
           {milestone.initiative ? <span className="aw-milestone__date">Part of {milestone.initiative}</span> : null}
           {milestone.total ? (
             <Link className="aw-milestone__tasks" to={href}>
@@ -182,6 +224,12 @@ function MilestoneRow({
       </div>
       {readOnly ? null : (
         <div className="aw-milestone__actions">
+          {onMove ? (
+            <>
+              <IconButton disabled={!onMove.up} icon="arrow-up" label={`Move ${milestone.name} up`} onClick={onMove.up} size="sm" />
+              <IconButton disabled={!onMove.down} icon="arrow-down" label={`Move ${milestone.name} down`} onClick={onMove.down} size="sm" />
+            </>
+          ) : null}
           <Button onClick={onEdit} size="sm" variant="ghost">
             Edit
           </Button>

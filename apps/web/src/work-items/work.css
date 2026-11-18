@@ -2044,7 +2044,8 @@ span.aw-taskstart__fix {
   color: var(--content-fg-muted);
 }
 
-.aw-milestone__overdue {
+.aw-milestone__overdue,
+.aw-milestone__date.is-late {
   color: var(--danger);
 }
 
