@@ -173,6 +173,21 @@ impl<C: Consumer> Runner<C> {
             });
         };
         let limit = if one_by_one { 1 } else { BATCH };
+        // A consumer of some types only moves past the rest too: the log's
+        // head, read before the batch (the counter and the events it counts
+        // commit together), is a position every event up to it is visible
+        // at. Without it, a cursor behind thousands of other events reads
+        // them all again on every poll.
+        let head = match self.consumer.types() {
+            Some(_) => Some(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT next_position - 1 FROM event_position_counter",
+                )
+                .fetch_one(&mut *transaction)
+                .await?,
+            ),
+            None => None,
+        };
         let batch = read(
             &mut transaction,
             &EventFilter {
@@ -183,14 +198,20 @@ impl<C: Consumer> Runner<C> {
             limit,
         )
         .await?;
+        // A short batch held every matching event up to the head.
+        let passed = head.filter(|_| batch.len() < usize::try_from(limit).unwrap_or(usize::MAX));
         let Some(last) = batch.last().map(|event| event.position) else {
+            if let Some(head) = passed.filter(|head| *head > cursor) {
+                advance(&mut transaction, self.consumer.name(), head).await?;
+            }
             transaction.commit().await?;
             self.batch_failures = 0;
             return Ok(Round::default());
         };
         match self.consumer.handle(&mut transaction, &batch).await {
             Ok(()) => {
-                advance(&mut transaction, self.consumer.name(), last).await?;
+                let to = passed.map_or(last, |head| head.max(last));
+                advance(&mut transaction, self.consumer.name(), to).await?;
                 transaction.commit().await?;
                 self.event_failures.remove(&last);
                 self.passed(last);
