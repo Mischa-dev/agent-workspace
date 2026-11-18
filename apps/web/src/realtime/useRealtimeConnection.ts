@@ -380,7 +380,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
             // standings, blocks and the DM list again.
             void queryClient.invalidateQueries({
               predicate: (query) =>
-                query.queryKey[0] === 'op' && (query.queryKey[2] === 'dm_standing_get' || query.queryKey[2] === 'account_block_list'),
+                query.queryKey[0] === 'op' &&
+                (query.queryKey[2] === 'dm_standing_get' || query.queryKey[2] === 'account_block_list' || query.queryKey[2] === 'sidebar_list'),
             })
             void queryClient.invalidateQueries({ queryKey: queryKeys.direct })
             return
@@ -389,6 +390,13 @@ export function useRealtimeConnection(): RealtimeContextValue {
             // Your saved searches changed on another device.
             void queryClient.invalidateQueries({
               predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'saved_search_list',
+            })
+            return
+          }
+          if (envelope.type === 'inbox_views.changed') {
+            // Your saved inbox views changed on another device.
+            void queryClient.invalidateQueries({
+              predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'inbox_view_list',
             })
             return
           }

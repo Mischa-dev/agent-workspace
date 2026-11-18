@@ -8,7 +8,7 @@ import type { ConversationMessage } from '../conversations/types'
 import { conversationTitle, useDirectOverview } from '../direct/api'
 import { useProjectExperience } from '../experience/layout'
 import { useProjects } from '../projects/hooks'
-import { Banner, Button, Dialog, SelectField, TextArea, TextField, describeError, plainPreview, showToast } from '../ui'
+import { Banner, Button, Checkbox, Dialog, SelectField, TextArea, TextField, describeError, plainPreview, showToast } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import { forwardMessage } from './api'
 import '../styles/conversation.css'
@@ -175,6 +175,7 @@ export function MessageTaskDialog({
   }))
   const [title, setTitle] = useState(initial.title)
   const [description, setDescription] = useState(initial.description)
+  const [saySo, setSaySo] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [key] = useState(createIdempotencyKey)
@@ -191,6 +192,7 @@ export function MessageTaskDialog({
         description,
         priority: 'no_priority',
         sourceMessageId: message.id,
+        saySo,
         idempotencyKey: key,
       })
       onClose()
@@ -228,6 +230,7 @@ export function MessageTaskDialog({
     >
       <TextField data-autofocus label="Title" maxLength={240} onChange={(event) => setTitle(event.target.value)} required value={title} />
       <TextArea label="Description" maxLength={100000} onChange={(event) => setDescription(event.target.value)} rows={5} value={description} />
+      <Checkbox checked={saySo} label="Say so in the conversation" onChange={setSaySo} />
       {error ? <Banner tone="danger">{error}</Banner> : null}
     </Dialog>
   )

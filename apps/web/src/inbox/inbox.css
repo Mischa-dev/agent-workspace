@@ -8,6 +8,42 @@
   margin-bottom: var(--space-5);
 }
 
+/* Saved views (C2.11): a row of tabs above the filters. */
+.aw-inbox__views {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-inbox__view-tab {
+  display: inline-flex;
+  align-items: center;
+}
+
+.aw-btn.aw-inbox__view {
+  color: var(--content-fg-muted);
+}
+
+.aw-btn.aw-inbox__view[aria-pressed='true'] {
+  color: var(--content-fg);
+  font-weight: var(--weight-semibold);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* A compact view: one line per row, no preview. */
+.aw-inbox[data-density='compact'] .aw-inbox__row-main {
+  min-height: 0;
+  padding-block: var(--space-1-5);
+}
+
+.aw-inbox[data-density='compact'] .aw-inbox__row-preview {
+  display: none;
+}
+
 .aw-inbox__chips {
   display: flex;
   flex-wrap: wrap;
@@ -357,6 +393,7 @@
 
   .aw-inbox[data-detail-open='true'] .aw-inbox__list,
   .aw-inbox[data-detail-open='true'] .aw-inbox__filters,
+  .aw-inbox[data-detail-open='true'] .aw-inbox__views,
   .aw-inbox[data-detail-open='true'] .aw-pagehead {
     display: none;
   }
@@ -476,4 +513,24 @@
   .aw-inbox__pick {
     opacity: 1;
   }
+}
+
+/* C2.31: a row follows a finger sideways; past the threshold it shows what
+   letting go does. Vertical moves still scroll the list. */
+@media (pointer: coarse) {
+  .aw-inbox__row {
+    touch-action: pan-y;
+  }
+}
+
+.aw-inbox__row[data-swipe] {
+  transition: none;
+}
+
+.aw-inbox__row[data-swipe='left'] {
+  box-shadow: inset -4px 0 0 var(--danger);
+}
+
+.aw-inbox__row[data-swipe='right'] {
+  box-shadow: inset 4px 0 0 var(--accent);
 }

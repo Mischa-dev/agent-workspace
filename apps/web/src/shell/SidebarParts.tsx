@@ -210,6 +210,7 @@ export function SidebarLink({
   meta,
   nested = false,
   onNavigate,
+  onIntent,
   row,
   to,
   unread = false,
@@ -229,6 +230,8 @@ export function SidebarLink({
   meta?: string
   nested?: boolean
   onNavigate?: () => void
+  /** A pointer rests on it or it takes focus: a chance to fetch what it opens (C2.29). */
+  onIntent?: () => void
   /** Props for the row itself, such as dragging it to a new place. */
   row?: LiHTMLAttributes<HTMLLIElement>
   to: string
@@ -258,11 +261,11 @@ export function SidebarLink({
     <li data-attention={dataAttention} {...row}>
       {/* NavLink only marks its own path current, so a row that holds other pages marks itself. */}
       {active === undefined ? (
-        <NavLink className={({ isActive }) => rowClass(isActive)} end={end} onClick={onNavigate} to={to}>
+        <NavLink className={({ isActive }) => rowClass(isActive)} end={end} onClick={onNavigate} onFocus={onIntent} onPointerEnter={onIntent} to={to}>
           {content}
         </NavLink>
       ) : (
-        <Link aria-current={active ? 'page' : undefined} className={rowClass(active)} onClick={onNavigate} to={to}>
+        <Link aria-current={active ? 'page' : undefined} className={rowClass(active)} onClick={onNavigate} onFocus={onIntent} onPointerEnter={onIntent} to={to}>
           {content}
         </Link>
       )}

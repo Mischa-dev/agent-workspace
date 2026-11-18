@@ -2,6 +2,7 @@
 pub mod channel_ops;
 pub mod ops;
 pub mod sidebar_ops;
+pub mod system_entries;
 
 use std::{
     cmp::Reverse,
@@ -387,6 +388,9 @@ pub struct MessageView {
     /// it done (W21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved: Option<SavedMark>,
+    /// What this message was made into (C2.20), for the reader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub made_into: Vec<system_entries::MadeIntoView>,
 }
 
 /// The viewer's own saved-for-later mark on a message.
@@ -470,6 +474,19 @@ pub struct TimelineEntryView {
     pub created_at: String,
     pub message: Option<MessageView>,
     pub worker_event: Option<WorkerEventView>,
+    /// What a system entry says (C2.20), with its actor's name here; the
+    /// thing's title is read with the reader's access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<SystemEntryView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemEntryView {
+    #[serde(flatten)]
+    pub event: system_entries::SystemEvent,
+    /// The actor's name in this space, if they're still in it.
+    pub actor_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -687,6 +704,10 @@ struct TimelineEntryRow {
     event_kind: Option<String>,
     event_summary: Option<String>,
     event_created_at: Option<String>,
+    #[sqlx(default)]
+    system_event: Option<serde_json::Value>,
+    #[sqlx(default)]
+    system_actor_name: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -2159,6 +2180,7 @@ pub(crate) async fn append_message_command_with(
         forwarded: None,
         reply_to,
         saved: None,
+        made_into: Vec::new(),
     };
     let body = MessageAppendResponse {
         conversation_id: conversation.id,
@@ -2170,6 +2192,7 @@ pub(crate) async fn append_message_command_with(
             created_at: result.entry_created_at,
             message: Some(message),
             worker_event: None,
+            system: None,
         },
     };
     if let Some(reply) = reply {
@@ -2654,10 +2677,15 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
             event.agent_run_id,
             event.kind AS event_kind,
             event.summary AS event_summary,
-            event.created_at::text AS event_created_at
+            event.created_at::text AS event_created_at,
+            entry.system_event,
+            system_membership.display_name AS system_actor_name
         FROM conversation_entries entry
         LEFT JOIN messages message ON message.id = entry.message_id
         LEFT JOIN actors author ON author.id = message.author_actor_id
+        LEFT JOIN project_memberships system_membership
+          ON system_membership.project_id = $2
+         AND system_membership.actor_id = (entry.system_event->>'actorId')::uuid
         LEFT JOIN project_memberships author_membership
           ON author_membership.project_id = $2
          AND author_membership.actor_id = message.author_actor_id
@@ -2836,6 +2864,8 @@ async fn conversation_timeline(
         hide_entry_work_item_details(&mut entries);
     }
     crate::later::attach_saved(&state.pool, &mut entries, principal.actor_id).await?;
+    system_entries::attach_made_into(&state.pool, conversation.id, &mut entries, sees_tasks)
+        .await?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
     let mut linked_work_items: Vec<ConversationWorkItemReferenceView> =
         if conversation.kind == "thread" {
@@ -4594,6 +4624,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                     .reply_to_message_id
                     .map(crate::forwarding::ForwardedView::unread),
                 saved: None,
+                made_into: Vec::new(),
             })
         }
         None => None,
@@ -4614,6 +4645,14 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
         }),
         None => None,
     };
+    // An entry whose event this server doesn't know shows as a bare line.
+    let system = row
+        .system_event
+        .and_then(|value| serde_json::from_value::<system_entries::SystemEvent>(value).ok())
+        .map(|event| SystemEntryView {
+            event,
+            actor_name: row.system_actor_name,
+        });
     Ok(TimelineEntryView {
         id: row.id,
         sequence: row.sequence,
@@ -4621,6 +4660,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
         created_at: row.created_at,
         message,
         worker_event,
+        system,
     })
 }
 

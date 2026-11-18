@@ -523,6 +523,20 @@
   {
     "automation": false,
     "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "conversation_file_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List a conversation's files"
+  },
+  {
+    "automation": false,
+    "destructive": false,
     "emits": [
       "conversation.read"
     ],
@@ -549,6 +563,50 @@
     "preview": false,
     "proposable": false,
     "title": "List members"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "conversation_tab_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List a channel's tabs"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "pages",
+    "name": "conversation_tab_set",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Set a channel's page tab"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "conversation_task_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List a conversation's tasks"
   },
   {
     "automation": true,
@@ -956,6 +1014,36 @@
     "preview": false,
     "proposable": false,
     "title": "Unlink a host"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "inbox",
+    "name": "inbox_view_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List saved inbox views"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "inbox_views.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "inbox",
+    "name": "inbox_view_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save an inbox view"
   },
   {
     "automation": true,
@@ -1476,6 +1564,22 @@
     "preview": false,
     "proposable": false,
     "title": "Update profile"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "record.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "record_create",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Create a record"
   },
   {
     "automation": true,
