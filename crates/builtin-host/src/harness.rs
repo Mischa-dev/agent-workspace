@@ -14,6 +14,7 @@ pub mod demo;
 pub mod host;
 pub mod line_process;
 pub mod manifest;
+pub mod registry;
 pub mod run_config;
 pub mod secret_fd;
 pub mod shutdown;

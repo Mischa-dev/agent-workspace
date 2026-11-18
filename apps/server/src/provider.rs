@@ -896,16 +896,9 @@ async fn drive_turn(
 /// Wait until a stopped run should be looked at: a wake on the control
 /// channel, or a second at most.
 async fn stop_wake(state: &AppState) {
-    let cluster = state.supervisors.cluster();
-    let woken = async {
-        match &cluster {
-            Some(cluster) => cluster.released().await,
-            None => std::future::pending().await,
-        }
-    };
     tokio::select! {
         () = sleep(Duration::from_secs(1)) => {}
-        () = woken => {}
+        () = state.supervisors.lease_released() => {}
     }
 }
 
@@ -953,17 +946,10 @@ async fn handle_provider_request(
     // The answer comes to the host as an `answer` command; the driver reads
     // it with the run's credential. The wake on the control channel is the
     // prompt; the one-second check is the safety net.
-    let cluster = state.supervisors.cluster();
     loop {
-        let woken = async {
-            match &cluster {
-                Some(cluster) => cluster.released().await,
-                None => std::future::pending().await,
-            }
-        };
         tokio::select! {
             () = sleep(Duration::from_secs(1)) => {}
-            () = woken => {}
+            () = state.supervisors.lease_released() => {}
             () = lease_lost.cancelled() => {}
         }
         if state.supervisors.is_shutting_down() || lease_lost.is_cancelled() {
