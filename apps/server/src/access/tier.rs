@@ -32,7 +32,13 @@ pub fn stored_high(stored: &str) -> bool {
 
 /// A built-in role's key, which no custom role may take.
 pub fn reserved(key: &str) -> bool {
-    of(key).is_some() || key == "guest"
+    of(key).is_some() || guest(key)
+}
+
+/// The guest starting role's key (K1.27): someone who sees only the spaces
+/// they're added to.
+pub fn guest(key: &str) -> bool {
+    key == "guest"
 }
 
 /// The stored key of the owner tier, for SQL that counts owners.

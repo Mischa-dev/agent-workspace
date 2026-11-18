@@ -119,6 +119,11 @@ pub enum Permission {
     WorkspaceDelete,
     // K1.19: reading the workspace's audit log.
     SettingsAudit,
+    // K1.27: groups, and chat's keys of K1 §3.3.
+    MembersGroups,
+    ChannelsBrowse,
+    ChannelsCreatePrivate,
+    ChannelsMentionEveryone,
 }
 
 /// Where a permission is checked: in a project (by the role someone has
@@ -204,7 +209,7 @@ const MANAGERS: [bool; 4] = [true, true, false, false];
 const OWNERS: [bool; 4] = [true, false, false, false];
 
 /// Every permission, in the order the Roles page shows them.
-pub const PERMISSIONS: [PermissionInfo; 69] = [
+pub const PERMISSIONS: [PermissionInfo; 73] = [
     on(
         "space",
         Level::See,
@@ -399,11 +404,38 @@ pub const PERMISSIONS: [PermissionInfo; 69] = [
         WORKERS,
     ),
     permission(
+        Permission::ChannelsCreatePrivate,
+        "channels.create_private",
+        "channels",
+        "Create private channels",
+        "Start channels only their members can find and read.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
+        Permission::ChannelsBrowse,
+        "channels.browse",
+        "channels",
+        "Browse channels",
+        "List the open channels of a project they haven't joined.",
+        PermissionScope::Project,
+        WORKERS,
+    ),
+    permission(
         Permission::ChannelsModerate,
         "channels.moderate",
         "channels",
         "Moderate",
         "Remove anyone's messages and comments.",
+        PermissionScope::Project,
+        MANAGERS,
+    ),
+    permission(
+        Permission::ChannelsMentionEveryone,
+        "channels.mention_everyone",
+        "channels",
+        "Notify everyone",
+        "Reach everyone in a large conversation with @everyone or @here.",
         PermissionScope::Project,
         MANAGERS,
     ),
@@ -883,6 +915,15 @@ pub const PERMISSIONS: [PermissionInfo; 69] = [
         "Change roles and remove people",
         "Give people roles they hold themselves, and remove or bring people back.",
         PermissionScope::Both,
+        MANAGERS,
+    ),
+    permission(
+        Permission::MembersGroups,
+        "members.groups",
+        "members",
+        "Manage groups",
+        "Make, change and archive groups, and choose who is in them.",
+        PermissionScope::Workspace,
         MANAGERS,
     ),
     permission(

@@ -8,7 +8,7 @@
   "switchable": true,
   "needs": ["messages"],
   "worksWith": ["tasks", "runs"],
-  "permissions": ["channels.post", "channels.create", "channels.moderate", "conversations.see", "conversations.members", "replies.steer"],
+  "permissions": ["channels.post", "channels.create", "channels.create_private", "channels.browse", "channels.moderate", "channels.mention_everyone", "conversations.see", "conversations.members", "replies.steer"],
   "tools": {
     "channel_create": "create",
     "channel_list": "query",

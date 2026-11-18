@@ -659,6 +659,12 @@ pub static ACCOUNT_REF_CHANGED: EventType = signal(
     None,
     "Which agent elsewhere an agent account is changed, or a rebind waits",
 );
+pub static GROUP_CHANGED: EventType = fact(
+    "group.changed",
+    "workspace",
+    None,
+    "A group was made, changed, archived or brought back, or its members changed",
+);
 pub static THING_SHARE_CHANGED: EventType = signal(
     "thing.share_changed",
     "pages",
@@ -752,6 +758,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &ACCOUNT_MANAGERS_CHANGED,
         &ACCOUNT_REF_CHANGED,
         &THING_SHARE_CHANGED,
+        &GROUP_CHANGED,
     ];
     CATALOG
 }

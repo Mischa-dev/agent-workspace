@@ -3,6 +3,7 @@ import { PERMISSION_KEYS, type PermissionKey } from '../settings/workspace/roles
 const MANAGING: readonly PermissionKey[] = [
   'projects.manage',
   'members.manage',
+  'members.groups',
   'roles.manage',
   'settings.manage',
   'settings.audit',
@@ -10,6 +11,7 @@ const MANAGING: readonly PermissionKey[] = [
   'modules.build',
   'agents.manage_any',
   'channels.moderate',
+  'channels.mention_everyone',
   'hosts.manage',
   'code.manage',
   'webhooks.manage',

@@ -745,7 +745,7 @@ async fn message_mentions(
                      ON author.project_id = message.project_id
                     AND author.actor_id = message.author_actor_id
                     AND author.enabled
-                   WHERE role_allows(author.role, author.role_id, 'channels.moderate')
+                   WHERE role_allows(author.role, author.role_id, 'channels.mention_everyone')
                )) AS allowed
         ),
         everyone_allowed AS (

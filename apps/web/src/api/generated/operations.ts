@@ -526,9 +526,29 @@ export type FormulaPreviewInput = { collection: string; field?: string | null; f
 
 export type FormulaPreviewOutput = { problem?: string | null; record?: PreviewRecord | null; result?: ResultType | null; value?: unknown }
 
+export type GroupArchiveInput = { group: string }
+
+export type GroupArchiveOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
+export type GroupCreateInput = { description?: string | null; handle: string; members?: string[]; name: string }
+
+export type GroupCreateOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
 export type GroupListInput = { members?: boolean; prefix?: string | null }
 
 export type GroupListOutput = { groups: GroupView[] }
+
+export type GroupMembersSetInput = { add?: string[]; group: string; remove?: string[] }
+
+export type GroupMembersSetOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
+export type GroupRestoreInput = { group: string }
+
+export type GroupRestoreOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
+
+export type GroupUpdateInput = { description?: string | null; expectedVersion?: number | null; group: string; handle?: string | null; name?: string | null }
+
+export type GroupUpdateOutput = { archived: boolean; description: string; handle: string; id: string; memberIds: string[]; name: string; version: number }
 
 export type HistoryListInput = { before?: number | null; limit?: number | null; thing: string }
 
@@ -802,29 +822,37 @@ export type SpaceCreateInput = { description?: string | null; icon?: string | nu
 
 export type SpaceCreateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
+export type SpaceGroupAddInput = { group: string; role?: string | null; spaceId: string }
+
+export type SpaceGroupAddOutput = { groupId: string; handle: string; role: string; roleId: string; seats: number; spaceId: string }
+
+export type SpaceGroupRemoveInput = { group: string; spaceId: string }
+
+export type SpaceGroupRemoveOutput = { groupId: string; removed: boolean; spaceId: string }
+
 export type SpaceJoinInput = { spaceId: string }
 
-export type SpaceJoinOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+export type SpaceJoinOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
 
 export type SpaceLeaveInput = { spaceId: string }
 
-export type SpaceLeaveOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+export type SpaceLeaveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
 
 export type SpaceListInput = { includeArchived?: boolean; kinds?: SpaceKind[] | null }
 
 export type SpaceListOutput = { spaces: SpaceView[] }
 
-export type SpaceMemberAddInput = { account: string; role?: string | null; spaceId: string }
+export type SpaceMemberAddInput = { account: string; expiresAt?: string | null; role?: string | null; spaceId: string }
 
-export type SpaceMemberAddOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+export type SpaceMemberAddOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
 
 export type SpaceMemberRemoveInput = { account: string; expectedVersion?: number | null; spaceId: string }
 
-export type SpaceMemberRemoveOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+export type SpaceMemberRemoveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
 
-export type SpaceMemberUpdateInput = { account: string; expectedVersion?: number | null; role: string; spaceId: string }
+export type SpaceMemberUpdateInput = { account: string; expectedVersion?: number | null; expiresAt?: string | null; role: string; spaceId: string }
 
-export type SpaceMemberUpdateOutput = { accountId: string; active: boolean; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number }
+export type SpaceMemberUpdateOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
 
 export type SpaceOpenInput = { spaceId: string }
 
@@ -958,6 +986,10 @@ export type WorkspaceDeleteCancelInput = Record<string, never>
 
 export type WorkspaceDeleteCancelOutput = { deleteAfter?: string | null; lifecycle: Lifecycle; ownedAccounts: number }
 
+export type WorkspaceMemberUpdateInput = { account: string; expiresAt: string }
+
+export type WorkspaceMemberUpdateOutput = { accountId: string; active: boolean; expiresAt?: string | null; version: number }
+
 export type Operations = {
   account_block_list: { input: AccountBlockListInput; output: AccountBlockListOutput }
   account_block_set: { input: AccountBlockSetInput; output: AccountBlockSetOutput }
@@ -1020,7 +1052,12 @@ export type Operations = {
   event_list: { input: EventListInput; output: EventListOutput }
   file_link_get: { input: FileLinkGetInput; output: FileLinkGetOutput }
   formula_preview: { input: FormulaPreviewInput; output: FormulaPreviewOutput }
+  group_archive: { input: GroupArchiveInput; output: GroupArchiveOutput }
+  group_create: { input: GroupCreateInput; output: GroupCreateOutput }
   group_list: { input: GroupListInput; output: GroupListOutput }
+  group_members_set: { input: GroupMembersSetInput; output: GroupMembersSetOutput }
+  group_restore: { input: GroupRestoreInput; output: GroupRestoreOutput }
+  group_update: { input: GroupUpdateInput; output: GroupUpdateOutput }
   history_list: { input: HistoryListInput; output: HistoryListOutput }
   history_restore: { input: HistoryRestoreInput; output: HistoryRestoreOutput }
   history_show: { input: HistoryShowInput; output: HistoryShowOutput }
@@ -1089,6 +1126,8 @@ export type Operations = {
   sidebar_section_set: { input: SidebarSectionSetInput; output: SidebarSectionSetOutput }
   space_archive: { input: SpaceArchiveInput; output: SpaceArchiveOutput }
   space_create: { input: SpaceCreateInput; output: SpaceCreateOutput }
+  space_group_add: { input: SpaceGroupAddInput; output: SpaceGroupAddOutput }
+  space_group_remove: { input: SpaceGroupRemoveInput; output: SpaceGroupRemoveOutput }
   space_join: { input: SpaceJoinInput; output: SpaceJoinOutput }
   space_leave: { input: SpaceLeaveInput; output: SpaceLeaveOutput }
   space_list: { input: SpaceListInput; output: SpaceListOutput }
@@ -1128,6 +1167,7 @@ export type Operations = {
   whiteboard_update_elements: { input: WhiteboardUpdateElementsInput; output: WhiteboardUpdateElementsOutput }
   workspace_delete: { input: WorkspaceDeleteInput; output: WorkspaceDeleteOutput }
   workspace_delete_cancel: { input: WorkspaceDeleteCancelInput; output: WorkspaceDeleteCancelOutput }
+  workspace_member_update: { input: WorkspaceMemberUpdateInput; output: WorkspaceMemberUpdateOutput }
 }
 
 export type OpName = keyof Operations

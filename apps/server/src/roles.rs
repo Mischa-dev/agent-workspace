@@ -589,9 +589,8 @@ async fn role_rows(
     organization_id: Uuid,
 ) -> Result<Vec<RoleRow>, AppError> {
     Ok(sqlx::query_as::<_, RoleRow>(&format!(
-        // The hidden worker role (K1.10) is nobody's to see or give; the
-        // guest role's screens and grants come with K1.27.
-        "{ROLE_SELECT} WHERE role.organization_id = $1 AND role.tier NOT IN ('worker', 'guest') {ROLE_ORDER}"
+        // The hidden worker role (K1.10) is nobody's to see or give.
+        "{ROLE_SELECT} WHERE role.organization_id = $1 AND role.tier <> 'worker' {ROLE_ORDER}"
     ))
     .bind(organization_id)
     .fetch_all(&mut *connection)
@@ -605,7 +604,7 @@ async fn role_row(
 ) -> Result<RoleRow, AppError> {
     sqlx::query_as::<_, RoleRow>(&format!(
         "{ROLE_SELECT} WHERE role.organization_id = $1 AND role.id = $2 \
-         AND role.tier NOT IN ('worker', 'guest')"
+         AND role.tier <> 'worker'"
     ))
     .bind(organization_id)
     .bind(role_id)
@@ -624,7 +623,7 @@ pub(crate) async fn find_role(
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT id FROM workspace_roles
-        WHERE organization_id = $1 AND tier NOT IN ('worker', 'guest')
+        WHERE organization_id = $1 AND tier <> 'worker'
           AND (id::text = $2 OR key = lower($2) OR lower(name) = lower($2))
         ORDER BY built_in DESC
         LIMIT 1
@@ -1541,7 +1540,8 @@ pub(crate) async fn assign(
                 message: "Make someone an owner with Transfer ownership.",
             });
         }
-        (true, MembershipRole::Viewer) => {
+        // A guest (K1.27) sees only the spaces they're added to.
+        (true, MembershipRole::Viewer) if !crate::access::tier::guest(&role.key) => {
             return Err(AppError::Refused {
                 field: "roleId",
                 message: "Viewer is for projects. For the whole workspace, use a role based on Viewer, such as Read only.",

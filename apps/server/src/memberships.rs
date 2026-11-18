@@ -291,6 +291,10 @@ pub(crate) async fn change_member(
     let next_role = next_role.as_str();
     authorize_target(&access, &target, next_role)?;
     let next_enabled = enabled.unwrap_or(target.enabled);
+    let via_group = group_seat(transaction, project_id, actor_id).await?;
+    if via_group && target.enabled && !next_enabled {
+        return Err(THROUGH_A_GROUP);
+    }
     // Bringing someone back hands their role out again, so it has to be
     // within what the caller holds, as a role change is.
     if next_role != target.role
@@ -382,8 +386,21 @@ pub(crate) async fn change_member(
         current_version: target.version,
     })?;
 
+    if via_group {
+        // A role given to someone in through a group makes the seat theirs.
+        sqlx::query(
+            "UPDATE project_memberships SET via_group = false \
+             WHERE project_id = $1 AND actor_id = $2",
+        )
+        .bind(project_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
     if target.enabled && !next_enabled {
         revoke_project_credentials(transaction, project_id, actor_id).await?;
+        // A group they're in may still give them the space (K1.27).
+        sync_group_seat(transaction, project_id, actor_id).await?;
     }
     enqueue_typed(
         transaction,
@@ -400,6 +417,78 @@ pub(crate) async fn change_member(
         before: target,
         updated: Some(updated),
     })
+}
+
+pub mod expiry;
+
+/// Turns off a space membership whose time has passed (K1.27), as removing
+/// someone does; a group they're in may still give them the space.
+pub(crate) async fn expire_member(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    let version = sqlx::query_scalar::<_, i64>(
+        "UPDATE project_memberships \
+         SET enabled = false, disabled_at = now(), disabled_by_actor_id = NULL, \
+             version = version + 1, updated_at = now() \
+         WHERE project_id = $1 AND actor_id = $2 RETURNING version",
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    revoke_project_credentials(transaction, project_id, actor_id).await?;
+    sync_group_seat(transaction, project_id, actor_id).await?;
+    enqueue_typed(
+        transaction,
+        project_id,
+        OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
+            project_id,
+            actor_id,
+            version,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Refused when someone in a space through a group (K1.27) is removed or
+/// leaves: the group's grant is what gives them the space.
+const THROUGH_A_GROUP: AppError = AppError::Conflict(
+    "project_membership",
+    "they're in this space through a group: take them out of the group, or the group out of the space",
+);
+
+/// Whether `actor_id`'s seat in `project_id` is a group's (K1.27).
+async fn group_seat(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT via_group FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or(false))
+}
+
+/// Brings `actor_id`'s group seat in `project_id` in step with the group
+/// grants there (`space_group_seat_sync`).
+pub(crate) async fn sync_group_seat(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query("SELECT space_group_seat_sync($1, $2)")
+        .bind(project_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
 }
 
 /// Refuses a project role that would give someone a permission the caller
@@ -1015,6 +1104,18 @@ pub(crate) async fn add_member(
         FOR SHARE OF om, a
     "#).bind(project_id).bind(actor_id).fetch_optional(&mut **tx).await?
         .ok_or(AppError::NotFound("workspace member"))?;
+    // Someone in through a group gets a seat of their own (K1.27).
+    sqlx::query(
+        "UPDATE project_memberships SET via_group = false, role = $3, role_id = $4, \
+         version = version + 1, updated_at = now() \
+         WHERE project_id = $1 AND actor_id = $2 AND via_group AND enabled",
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .bind(role)
+    .bind(role_id)
+    .execute(&mut **tx)
+    .await?;
     let inserted = sqlx::query(r#"
         INSERT INTO project_memberships (id, project_id, actor_id, role, role_id, display_name, handle, invited_by_actor_id)
         VALUES ($1,$2,$3,$4,$8,$5,$6,$7) ON CONFLICT (project_id, actor_id) DO NOTHING
@@ -1176,8 +1277,9 @@ pub(crate) async fn leave(
             message: "Only a project or team space can be left; everyone in the workspace is in its own space.",
         });
     }
-    let Some((role, enabled)) = sqlx::query_as::<_, (String, bool)>(
-        "SELECT role, enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2 FOR UPDATE",
+    let Some((role, enabled, via_group)) = sqlx::query_as::<_, (String, bool, bool)>(
+        "SELECT role, enabled, via_group FROM project_memberships \
+         WHERE project_id = $1 AND actor_id = $2 FOR UPDATE",
     )
     .bind(space)
     .bind(account)
@@ -1188,6 +1290,9 @@ pub(crate) async fn leave(
     };
     if !enabled {
         return Ok(SelfChange::Unchanged);
+    }
+    if via_group {
+        return Err(THROUGH_A_GROUP);
     }
     let owner = crate::policy::MembershipRole::Owner.key();
     // The owner tier, by its stored key: a space keeps one.
@@ -1222,6 +1327,7 @@ pub(crate) async fn leave(
     .fetch_one(&mut **tx)
     .await?;
     revoke_project_credentials(tx, space, account).await?;
+    sync_group_seat(tx, space, account).await?;
     enqueue_typed(
         tx,
         space,

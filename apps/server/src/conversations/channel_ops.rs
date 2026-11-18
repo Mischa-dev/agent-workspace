@@ -215,7 +215,7 @@ impl Operation for ChannelBrowse {
     const TITLE: &'static str = "Browse channels";
     const DESCRIPTION: &'static str = "List a project's channels you can see, joined or not, \
         with their topics and member counts: every public channel, and the private ones you're \
-        in. Join one with channel_join.";
+        in. Without \"browse channels\", only the ones you're in. Join one with channel_join.";
 
     type Input = ChannelBrowseInput;
     type Output = BrowsedChannels;
@@ -230,7 +230,17 @@ impl Operation for ChannelBrowse {
             .query
             .map(|query| query.trim().to_owned())
             .filter(|query| !query.is_empty());
+        let who = call.ctx.caller.clone();
         let tx = call.tx().await?;
+        // Without "browse channels" (K1.27), only the ones you're in.
+        let browses = access::check(
+            tx,
+            &who,
+            Need::permission(Perm::ChannelsBrowse),
+            AccessTarget::Space(space),
+        )
+        .await?
+        .is_ok();
         let channels = sqlx::query_as::<_, BrowsedChannel>(
             r#"
             SELECT channel.id, channel.name, channel.topic,
@@ -245,6 +255,9 @@ impl Operation for ChannelBrowse {
               AND channel.kind = 'channel'
               AND channel.archived_at IS NULL
               AND conversation_visible_to(channel.id, $2)
+              AND ($5 OR EXISTS (SELECT 1 FROM conversation_members member
+                                 WHERE member.conversation_id = channel.id
+                                   AND member.actor_id = $2))
               AND ($3::text IS NULL
                    OR strpos(lower(channel.name), lower($3)) > 0
                    OR strpos(lower(COALESCE(channel.topic, '')), lower($3)) > 0)
@@ -256,6 +269,7 @@ impl Operation for ChannelBrowse {
         .bind(caller)
         .bind(query)
         .bind(MAX_BROWSED)
+        .bind(browses)
         .fetch_all(&mut **tx)
         .await
         .map_err(AppError::from)?;

@@ -1142,6 +1142,11 @@ pub(crate) async fn insert_channel(
     name: &str,
     channel: NewChannel,
 ) -> Result<Uuid, AppError> {
+    if channel.private
+        && !may_create_private(&mut **transaction, creator_actor_id, project_id).await?
+    {
+        return Err(AppError::Forbidden);
+    }
     let conversation_id = Uuid::now_v7();
     let auto_join = channel.auto_join && !channel.private;
     let inserted = sqlx::query(
@@ -4332,10 +4337,41 @@ where
     .await?)
 }
 
+/// Whether `creator` may start a private channel in `project_id` (K1.27):
+/// a role that holds "create private channels", and, while an app acts for
+/// them, whose agent limit keeps it too.
+async fn may_create_private<'e, E>(
+    executor: E,
+    creator: Uuid,
+    project_id: Uuid,
+) -> Result<bool, AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let need = crate::policy::Permission::ChannelsCreatePrivate;
+    if crate::access::limit_hides(creator, project_id, need) {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM project_memberships
+            WHERE project_id = $1 AND actor_id = $2 AND enabled
+              AND role_allows(role, role_id, $3)
+        )
+        "#,
+    )
+    .bind(project_id)
+    .bind(creator)
+    .bind(need.key())
+    .fetch_one(executor)
+    .await?)
+}
+
 /// Whether a message `author` sends or edits now may notify everyone in a
 /// large conversation (`@everyone` past the small-audience allowance): a
-/// role that holds "moderate channels" (owners and admins), and, while an app
-/// acts for them, whose agent limit keeps it too. Stored on the message
+/// role that holds "notify everyone" (owners and admins by default), and,
+/// while an app acts for them, whose agent limit keeps it too. Stored on the message
 /// (`may_notify_everyone`), since the notifications are worked out later.
 pub(crate) async fn may_notify_everyone<'e, E>(
     executor: E,
@@ -4345,12 +4381,10 @@ pub(crate) async fn may_notify_everyone<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    let need = crate::policy::Permission::ChannelsModerate;
+    let need = crate::policy::Permission::ChannelsMentionEveryone;
     if crate::access::limit_hides(author, project_id, need) {
         return Ok(false);
     }
-    // "Moderate" is held by owners and admins only (its catalogue default),
-    // so holding it is the tier as well.
     Ok(sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (

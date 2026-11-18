@@ -2052,6 +2052,8 @@ pub(super) async fn people_search(
                   ON theirs.organization_id = mine.organization_id AND theirs.enabled
                 CROSS JOIN LATERAL account_profile(theirs.actor_id, mine.organization_id) profile
                 WHERE direct_scope_id() = ANY($1) AND mine.actor_id = $4 AND mine.enabled
+                  -- The workspace's directory: not for a guest (K1.27).
+                  AND role_allows(mine.role, mine.role_id, 'directory.view')
             )
             SELECT actor.id,
                    min(known.display_name) AS name,

@@ -746,7 +746,7 @@ async fn lock_member(
 /// Take someone out of the workspace and every project in it, and revoke
 /// what they could use there. Refuses when they're the only owner of a
 /// project, which would leave it without one.
-async fn remove_from_workspace(
+pub(crate) async fn remove_from_workspace(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
     actor_id: Uuid,

@@ -26,6 +26,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("mcp_credential_id", "account_credentials"),
                     ("mcp_oauth_grant_id", "mcp_oauth_grants"),
                     ("external_agent_connection_id", "external_agent_connections"),
+                    ("requested_by_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -51,6 +52,18 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("group_id", "account_groups"),
                     ("account_id", "actors"),
                     ("added_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "role_grants",
+                table: "role_grants",
+                references: &[
+                    ("space_id", "projects"),
+                    ("group_id", "account_groups"),
+                    ("role_id", "workspace_roles"),
+                    ("granted_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1096,7 +1109,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
         ],
-        not_exported: &[],
+        not_exported: &[(
+            "thing_grants",
+            "who else may see one page, and its share links (a link is a credential); shared again after import",
+        )],
     },
     ExportDecl {
         module: "collections",

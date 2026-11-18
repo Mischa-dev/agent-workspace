@@ -2874,3 +2874,280 @@ async fn channel_writes_keep_to_private_channels() {
 
     world.finish().await;
 }
+
+/// K1.27: a group given a role in a space gives its members that space,
+/// and taking someone out of the group takes it away; a guest sees only
+/// the spaces they're added to (not open ones, the workspace's own or the
+/// directory), and a membership whose time passes is turned off by the job.
+#[tokio::test]
+async fn groups_give_spaces_and_guests_see_only_theirs() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("TEAM")
+        .project("OPEN")
+        .person("lena", "member")
+        .person("gus", "member")
+        .build("privacy_groups_guests")
+        .await
+    else {
+        return;
+    };
+    let team = world.project("TEAM").to_owned();
+    let open = world.project("OPEN").to_owned();
+    let team_id = team.parse::<Uuid>().expect("team");
+    let lena = &world.people["lena"];
+    let gus = &world.people["gus"];
+    sqlx::query(
+        "DELETE FROM project_memberships WHERE project_id = ANY($1) AND actor_id = ANY($2)",
+    )
+    .bind(vec![team_id, open.parse::<Uuid>().expect("open")])
+    .bind(vec![lena.actor, gus.actor])
+    .execute(world.pool())
+    .await
+    .expect("lena and gus start in neither");
+    sqlx::query("UPDATE projects SET visibility = 'workspace' WHERE id = $1::uuid")
+        .bind(&open)
+        .execute(world.pool())
+        .await
+        .expect("OPEN is open to the workspace");
+    let op = |browser: &Browser, name: &str, key: &str, body: Value| {
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(key),
+            body,
+        )
+    };
+    let opens = |browser: &Browser, space: &str, key: &str| {
+        op(browser, "space_open", key, json!({"spaceId": space}))
+    };
+
+    let (_, before) = send(&world.app, opens(&lena.browser, &team, "lena-1")).await;
+    assert_ne!(before["outcome"], "ok", "not in TEAM yet: {before}");
+    // Making a group is "manage groups": an owner's, not a member's.
+    let (_, refused) = send(
+        &world.app,
+        op(
+            &lena.browser,
+            "group_create",
+            "lena-group",
+            json!({"handle": "mine", "name": "Mine"}),
+        ),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let (_, group) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "group_create",
+            "owner-group",
+            json!({"handle": "design", "name": "Design", "members": [lena.actor]}),
+        ),
+    )
+    .await;
+    assert_eq!(group["outcome"], "ok", "{group}");
+    let (_, taken) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "group_create",
+            "owner-group-2",
+            json!({"handle": "lena", "name": "Lena"}),
+        ),
+    )
+    .await;
+    assert_eq!(taken["outcome"], "conflict", "a person's handle: {taken}");
+    let (_, granted) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "space_group_add",
+            "owner-grant",
+            json!({"spaceId": team, "group": "@design", "role": "member"}),
+        ),
+    )
+    .await;
+    assert_eq!(granted["outcome"], "ok", "{granted}");
+    assert_eq!(granted["value"]["seats"], 1, "{granted}");
+    let (_, opened) = send(&world.app, opens(&lena.browser, &team, "lena-2")).await;
+    assert_eq!(
+        opened["outcome"], "ok",
+        "the group gives Lena TEAM: {opened}"
+    );
+    // She's in through the group: removing her alone is refused.
+    let (_, removal) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "space_member_remove",
+            "owner-remove",
+            json!({"spaceId": team, "account": lena.actor}),
+        ),
+    )
+    .await;
+    assert_eq!(removal["outcome"], "conflict", "{removal}");
+    let (_, out) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "group_members_set",
+            "owner-out",
+            json!({"group": "design", "remove": [lena.actor]}),
+        ),
+    )
+    .await;
+    assert_eq!(out["outcome"], "ok", "{out}");
+    let (_, after) = send(&world.app, opens(&lena.browser, &team, "lena-3")).await;
+    assert_ne!(
+        after["outcome"], "ok",
+        "out of the group, out of TEAM: {after}"
+    );
+    // Back in, then the group taken out of the space.
+    let (_, back) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "group_members_set",
+            "owner-back",
+            json!({"group": "design", "add": ["@lena"]}),
+        ),
+    )
+    .await;
+    assert_eq!(back["outcome"], "ok", "{back}");
+    let (_, reopened) = send(&world.app, opens(&lena.browser, &team, "lena-4")).await;
+    assert_eq!(reopened["outcome"], "ok", "{reopened}");
+    let (_, ungranted) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "space_group_remove",
+            "owner-ungrant",
+            json!({"spaceId": team, "group": "design"}),
+        ),
+    )
+    .await;
+    assert_eq!(ungranted["value"]["removed"], true, "{ungranted}");
+    let (_, gone) = send(&world.app, opens(&lena.browser, &team, "lena-5")).await;
+    assert_ne!(gone["outcome"], "ok", "{gone}");
+
+    // Gus becomes a guest: the open space, the workspace's own and the
+    // directory are closed to him.
+    let (_, gus_opens) = send(&world.app, opens(&gus.browser, &open, "gus-1")).await;
+    assert_eq!(
+        gus_opens["outcome"], "ok",
+        "a member reads an open space: {gus_opens}"
+    );
+    sqlx::query(
+        "UPDATE organization_memberships SET role_id = \
+           (SELECT id FROM workspace_roles WHERE organization_id = $1 AND key = 'guest') \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(gus.actor)
+    .execute(world.pool())
+    .await
+    .expect("gus is a guest");
+    let workspace_space = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM projects WHERE organization_id = $1 AND kind = 'workspace'",
+    )
+    .bind(world.organization)
+    .fetch_one(world.pool())
+    .await
+    .expect("workspace space")
+    .to_string();
+    for (space, key) in [(&open, "gus-2"), (&workspace_space, "gus-3")] {
+        let (_, closed) = send(&world.app, opens(&gus.browser, space, key)).await;
+        assert_ne!(closed["outcome"], "ok", "a guest: {closed}");
+    }
+    let (status, members) = send(
+        &world.app,
+        gus.browser.request(
+            "GET",
+            &format!("/api/v1/organizations/{}/members", world.organization),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{members}");
+    assert_eq!(
+        members["members"].as_array().map(Vec::len),
+        Some(1),
+        "a guest sees only themselves: {members}"
+    );
+    let (_, listed) = send(
+        &world.app,
+        op(&gus.browser, "space_list", "gus-4", json!({})),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(
+        !listed.to_string().contains(&open) && !listed.to_string().contains(&workspace_space),
+        "{listed}"
+    );
+
+    // Added to TEAM for a while, he reads it until his time passes.
+    let soon = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let (_, added) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "space_member_add",
+            "owner-add-gus",
+            json!({"spaceId": team, "account": gus.actor, "expiresAt": soon}),
+        ),
+    )
+    .await;
+    assert_eq!(added["outcome"], "ok", "{added}");
+    assert!(added["value"]["expiresAt"].is_string(), "{added}");
+    let (_, reads) = send(&world.app, opens(&gus.browser, &team, "gus-5")).await;
+    assert_eq!(reads["outcome"], "ok", "{reads}");
+    let (_, until) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "workspace_member_update",
+            "owner-expire-gus",
+            json!({"account": "@gus", "expiresAt": soon}),
+        ),
+    )
+    .await;
+    assert_eq!(until["outcome"], "ok", "{until}");
+    sqlx::query(
+        "UPDATE project_memberships SET expires_at = now() - interval '1 minute' \
+         WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(team_id)
+    .bind(gus.actor)
+    .execute(world.pool())
+    .await
+    .expect("his time in TEAM passes");
+    agent_workspace_server::memberships::expiry::expire_due(world.pool(), 10)
+        .await
+        .expect("expire");
+    let (_, expired) = send(&world.app, opens(&gus.browser, &team, "gus-6")).await;
+    assert_ne!(expired["outcome"], "ok", "{expired}");
+    sqlx::query(
+        "UPDATE organization_memberships SET expires_at = now() - interval '1 minute' \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(gus.actor)
+    .execute(world.pool())
+    .await
+    .expect("his time in the workspace passes");
+    agent_workspace_server::memberships::expiry::expire_due(world.pool(), 10)
+        .await
+        .expect("expire");
+    let enabled = sqlx::query_scalar::<_, bool>(
+        "SELECT enabled FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(world.organization)
+    .bind(gus.actor)
+    .fetch_one(world.pool())
+    .await
+    .expect("membership");
+    assert!(!enabled, "an expired workspace membership is turned off");
+
+    world.finish().await;
+}

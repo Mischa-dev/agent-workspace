@@ -465,6 +465,12 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "agent_ref_decide",
     "agent_ref_remove",
     "agent_ref_update",
+    "group_archive",
+    "group_create",
+    "group_members_set",
+    "group_restore",
+    "group_update",
+    "workspace_member_update",
     "ai_analyze",
     "ai_suggestion_decide",
     "ai_summarize",
@@ -592,6 +598,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "space_member_add",
     "space_member_remove",
     "space_member_update",
+    "space_group_add",
+    "space_group_remove",
     "space_restore",
     "space_update",
     "thing_link_create",
@@ -1304,6 +1312,8 @@ struct Targets {
     /// A custom role with everything a member has (AWD-74), so whoever is
     /// given it can still do what other cases need.
     custom_role: Uuid,
+    /// A group with the owner in it (K1.27).
+    group: Uuid,
     /// An invitation link with the custom role (K4.26).
     invite_link: Uuid,
     /// A template the workspace saved (AWD-76).
@@ -1731,6 +1741,23 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .fetch_one(pool)
     .await
     .expect("custom role");
+    let group = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO account_groups (id, workspace_id, handle, name) \
+         VALUES (gen_random_uuid(), $1, 'net-group', 'Net group') RETURNING id",
+    )
+    .bind(organization)
+    .fetch_one(pool)
+    .await
+    .expect("group");
+    sqlx::query(
+        "INSERT INTO account_group_members (group_id, workspace_id, account_id) VALUES ($1, $2, $3)",
+    )
+    .bind(group)
+    .bind(organization)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .expect("group member");
     let invite_link = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO invite_tokens (
@@ -1918,6 +1945,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         questions,
         reported_runs,
         custom_role,
+        group,
         invite_link,
         workspace_template,
         sessions,
@@ -7785,6 +7813,56 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "launch_cancel",
             json!({"launchId": sp.launch}),
             vec![json!({"launchId": bx.launch})],
+        ),
+        // K1.27: groups and their roles in spaces. B's groups, spaces and
+        // people aren't A's.
+        mcp_case(
+            "group_create",
+            json!({"handle": "net-made", "name": "Net made"}),
+            vec![],
+        )
+        .rejecting(vec![json!({"handle": "net-made-b", "name": "Net made b", "members": [bx.wren]})]),
+        mcp_case(
+            "group_update",
+            json!({"group": ax.group, "name": "Net renamed"}),
+            vec![json!({"group": bx.group, "name": "Net renamed b"})],
+        ),
+        mcp_case(
+            "group_members_set",
+            json!({"group": ax.group, "add": ["@wren"]}),
+            vec![json!({"group": bx.group, "add": ["@wren"]})],
+        )
+        .rejecting(vec![json!({"group": ax.group, "add": [bx.wren]})]),
+        mcp_case(
+            "space_group_add",
+            json!({"spaceId": a.project, "group": ax.group, "role": "member"}),
+            vec![
+                json!({"spaceId": b.project, "group": ax.group, "role": "member"}),
+                json!({"spaceId": a.project, "group": bx.group, "role": "member"}),
+            ],
+        ),
+        mcp_case(
+            "space_group_remove",
+            json!({"spaceId": a.project, "group": ax.group}),
+            vec![
+                json!({"spaceId": b.project, "group": bx.group}),
+                json!({"spaceId": a.project, "group": bx.group}),
+            ],
+        ),
+        mcp_case(
+            "group_archive",
+            json!({"group": ax.group}),
+            vec![json!({"group": bx.group})],
+        ),
+        mcp_case(
+            "group_restore",
+            json!({"group": ax.group}),
+            vec![json!({"group": bx.group})],
+        ),
+        mcp_case(
+            "workspace_member_update",
+            json!({"account": "@wren", "expiresAt": "2099-01-01T00:00:00Z"}),
+            vec![json!({"account": bx.wren, "expiresAt": "2099-01-01T00:00:00Z"})],
         ),
         // K4.8: space members, last: removing @wren from A's project would
         // take them from the cases above. B's spaces and B's people aren't A's.

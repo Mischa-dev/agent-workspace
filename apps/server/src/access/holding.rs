@@ -130,6 +130,28 @@ async fn within_requester_held(
     .await?)
 }
 
+/// The permissions of each role a group of `account` holds in `space`.
+async fn group_grants(
+    connection: &mut PgConnection,
+    account: Uuid,
+    space: Uuid,
+) -> Result<Vec<Vec<String>>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Vec<String>>>(
+        "SELECT workspace_role_permissions(grant_row.role_id) FROM role_grants grant_row \
+         JOIN account_groups grp ON grp.id = grant_row.group_id AND grp.archived_at IS NULL \
+         JOIN account_group_members member \
+           ON member.group_id = grant_row.group_id AND member.account_id = $1 \
+         WHERE grant_row.space_id = $2",
+    )
+    .bind(account)
+    .bind(space)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .flatten()
+    .collect())
+}
+
 async fn load_with(
     connection: &mut PgConnection,
     caller: &Caller,
@@ -226,6 +248,15 @@ async fn load_with(
     } else {
         grant.permissions()
     };
+    // K1.27: and whatever the roles given to their groups in this space
+    // allow.
+    if let Scope::Space(space) = scope
+        && grant.role() != MembershipRole::Worker
+    {
+        for keys in group_grants(connection, caller.account_id, space).await? {
+            permissions = permissions.union(PermissionSet::from_keys(&keys));
+        }
+    }
     // A credential confined to one space acts at workspace level only
     // within what it holds in that space, and never with a permission that
     // reaches the whole workspace (members, roles, new spaces).

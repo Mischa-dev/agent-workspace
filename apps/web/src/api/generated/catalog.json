@@ -931,6 +931,39 @@
     "title": "Preview a formula"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "group.changed",
+      "space.member.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "group_archive",
+    "permission": "members.groups",
+    "preview": false,
+    "proposable": false,
+    "title": "Archive a group"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "group.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "group_create",
+    "permission": "members.groups",
+    "preview": false,
+    "proposable": false,
+    "title": "Make a group"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -943,6 +976,56 @@
     "preview": false,
     "proposable": false,
     "title": "List groups"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "group.changed",
+      "space.member.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "group_members_set",
+    "permission": "members.groups",
+    "preview": false,
+    "proposable": false,
+    "title": "Change who is in a group"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "group.changed",
+      "space.member.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "group_restore",
+    "permission": "members.groups",
+    "preview": false,
+    "proposable": false,
+    "title": "Bring back a group"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "group.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "group_update",
+    "permission": "members.groups",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a group"
   },
   {
     "automation": false,
@@ -1999,6 +2082,38 @@
     "kind": "change",
     "long": false,
     "module": "workspace",
+    "name": "space_group_add",
+    "permission": "members.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Give a group a role in a space"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "space.member.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "space_group_remove",
+    "permission": "members.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Take a group out of a space"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "space.member.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
     "name": "space_join",
     "permission": null,
     "preview": false,
@@ -2601,5 +2716,21 @@
     "preview": false,
     "proposable": false,
     "title": "Keep workspace"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.profile_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_member_update",
+    "permission": "members.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "Change someone's workspace membership"
   }
 ]

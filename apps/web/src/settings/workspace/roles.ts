@@ -76,6 +76,11 @@ export const PERMISSION_KEYS = [
   'modules.manage',
   'workspace.delete',
   'settings.audit',
+  // K1.27: groups, and chat's keys.
+  'members.groups',
+  'channels.browse',
+  'channels.create_private',
+  'channels.mention_everyone',
 ] as const
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number]
