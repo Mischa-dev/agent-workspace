@@ -535,6 +535,18 @@ pub(crate) async fn recurring_write(
     principal: &McpPrincipal,
     arguments: RecurringWriteArguments,
 ) -> ToolResult<RecurringWriteValue> {
+    recurring_write_in(state, None, principal, arguments).await
+}
+
+/// `recurring_write`, in `outer` when given (an operation's transaction,
+/// which commits the schedule with the call's request id); otherwise in a
+/// transaction of its own.
+pub(crate) async fn recurring_write_in(
+    state: &AppState,
+    outer: Option<&mut sqlx::Transaction<'static, sqlx::Postgres>>,
+    principal: &McpPrincipal,
+    arguments: RecurringWriteArguments,
+) -> ToolResult<RecurringWriteValue> {
     if !principal.can_write() {
         return ToolResult::read_only();
     }
@@ -597,9 +609,14 @@ pub(crate) async fn recurring_write(
         _ => {}
     }
     let project_id = principal.project_id;
+    let mut own = None;
+    let mut commit = false;
     let result = async {
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        match check_access_for(&mut transaction, principal, Action::WorkItemCreate).await? {
+        let transaction: &mut sqlx::Transaction<'static, sqlx::Postgres> = match outer {
+            Some(transaction) => transaction,
+            None => own.insert(crate::db::scoped_tx(&state.pool).await?),
+        };
+        match check_access_for(&mut *transaction, principal, Action::WorkItemCreate).await? {
             WriteAccess::Allowed => {}
             WriteAccess::ReadOnly => return Ok(ToolResult::read_only()),
             WriteAccess::NotFound => return Ok(ToolResult::not_found("That project")),
@@ -614,7 +631,7 @@ pub(crate) async fn recurring_write(
         }
         let current = match recurring_id {
             None => None,
-            Some(id) => match templates::list_recurring(&mut transaction, project_id)
+            Some(id) => match templates::list_recurring(&mut *transaction, project_id)
                 .await?
                 .into_iter()
                 .find(|row| row.id == id)
@@ -626,7 +643,7 @@ pub(crate) async fn recurring_write(
         let actor = command_actor(principal, project_id);
         if let (Some(current), true) = (&current, arguments.delete == Some(true)) {
             let outcome = templates::delete_recurring_in(
-                &mut transaction,
+                &mut *transaction,
                 &actor,
                 project_id,
                 current.id,
@@ -636,7 +653,7 @@ pub(crate) async fn recurring_write(
             if let Err(refusal) = recurring_outcome(outcome) {
                 return Ok(refusal);
             }
-            transaction.commit().await?;
+            commit = true;
             return Ok(ToolResult::ok(RecurringWriteValue {
                 recurring: None,
                 created: false,
@@ -646,7 +663,7 @@ pub(crate) async fn recurring_write(
         let assignee = match arguments.assignee.as_deref() {
             None => None,
             Some(value) => {
-                match resolve_assignee(&mut transaction, principal, project_id, value).await? {
+                match resolve_assignee(&mut *transaction, principal, project_id, value).await? {
                     Ok(actor) => Some(actor),
                     Err(problem) => return Ok(ToolResult::invalid("assignee", problem.message())),
                 }
@@ -704,7 +721,7 @@ pub(crate) async fn recurring_write(
         let (outcome, created) = match &current {
             None => {
                 let Some(template_id) = find_template(
-                    &mut transaction,
+                    &mut *transaction,
                     project_id,
                     arguments.template.as_deref().unwrap_or_default(),
                 )
@@ -713,7 +730,7 @@ pub(crate) async fn recurring_write(
                     return Ok(ToolResult::not_found("That template (see template_list)"));
                 };
                 let outcome = templates::create_recurring_in(
-                    &mut transaction,
+                    &mut *transaction,
                     &actor,
                     project_id,
                     principal.actor_id,
@@ -729,7 +746,7 @@ pub(crate) async fn recurring_write(
             }
             Some(current) => {
                 let outcome = templates::change_recurring_in(
-                    &mut transaction,
+                    &mut *transaction,
                     &actor,
                     project_id,
                     current.id,
@@ -754,7 +771,7 @@ pub(crate) async fn recurring_write(
             Ok(view) => view,
             Err(refusal) => return Ok(refusal),
         };
-        transaction.commit().await?;
+        commit = true;
         Ok::<_, AppError>(ToolResult::ok(RecurringWriteValue {
             recurring: Some(to_value(view)?),
             created,
@@ -762,7 +779,18 @@ pub(crate) async fn recurring_write(
         }))
     }
     .await;
-    result.unwrap_or_else(|error| ToolResult::from_error(error, "recurring_write"))
+    match result {
+        Ok(answer) => {
+            if commit
+                && let Some(own) = own
+                && let Err(error) = own.commit().await
+            {
+                return ToolResult::from_error(error.into(), "recurring_write");
+            }
+            answer
+        }
+        Err(error) => ToolResult::from_error(error, "recurring_write"),
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]

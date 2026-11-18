@@ -565,8 +565,9 @@ async fn long_calls_finish_as_tasks_any_server_can_answer() {
         "{refused}"
     );
 
-    // The same person's other app didn't start it: not found.
-    let other_app = connect_app(app, &setup.browser, "Another app", "full").await;
+    // The same person's read-only app can't make tasks, so it doesn't read
+    // the batch's answer either.
+    let other_app = connect_app(app, &setup.browser, "Read-only app", "read").await;
     let (_, _, refused) = post(
         app,
         &other_app,

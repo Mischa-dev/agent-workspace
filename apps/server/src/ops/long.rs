@@ -409,23 +409,21 @@ struct TaskRow {
     updated_at: DateTime<Utc>,
     workspace_id: Uuid,
     space_id: Option<Uuid>,
-    caller: Value,
 }
 
-/// `reader`'s task `id`, or `None` for anyone else's or a missing one. A
-/// task belongs to the credential that started it, held as it was then (its
-/// connection, the space it is held to, an app's delegation, a run), and its
-/// result is shown only while that credential may still run the operation
-/// where it ran: someone who left the space no longer reads its export.
+/// `reader`'s task `id`, or `None` for anyone else's or a missing one. Its
+/// result is shown only while the reader, through the credential it calls
+/// with now (its reach, the space it is held to, an app's delegation), may
+/// still run the operation where it ran: someone who left the space, or a
+/// read-only app of theirs, doesn't read a batch's or an export's answer.
 pub async fn read(
     state: &AppState,
     reader: &Caller,
-    edge: &Edge,
     id: Uuid,
 ) -> Result<Option<KeptTask>, AppError> {
     let Some(row) = sqlx::query_as::<_, TaskRow>(
         r#"
-        SELECT id, op, status, result, created_at, updated_at, workspace_id, space_id, caller
+        SELECT id, op, status, result, created_at, updated_at, workspace_id, space_id
         FROM operation_tasks
         WHERE id = $1 AND account_id = $2
         "#,
@@ -437,21 +435,6 @@ pub async fn read(
     else {
         return Ok(None);
     };
-    let Ok(kept) = serde_json::from_value::<KeptCaller>(row.caller) else {
-        return Ok(None);
-    };
-    let (credential_id, oauth_grant_id) = credential_of(edge);
-    let same_credential = kept.credential_id == credential_id
-        && kept.oauth_grant_id == oauth_grant_id
-        && kept.connection_id == reader.connection_id
-        && kept.confined_space == reader.confined_space
-        && kept.via_grant_id == reader.via_grant_id
-        && kept.delegated == reader.limits.is_some()
-        && kept.run_id == reader.run_id
-        && kept.for_run == reader.for_run;
-    if !same_credential {
-        return Ok(None);
-    }
     let target = match row.space_id {
         Some(space) => Target::Space(space),
         None => Target::Workspace(Some(row.workspace_id)),
@@ -482,10 +465,9 @@ pub async fn read(
 pub async fn cancel(
     state: &AppState,
     reader: &Caller,
-    edge: &Edge,
     id: Uuid,
 ) -> Result<Option<KeptTask>, AppError> {
-    if read(state, reader, edge, id).await?.is_none() {
+    if read(state, reader, id).await?.is_none() {
         return Ok(None);
     }
     sqlx::query(
@@ -499,7 +481,7 @@ pub async fn cancel(
     .bind(reader.account_id)
     .execute(crate::db::scoped(&state.pool))
     .await?;
-    read(state, reader, edge, id).await
+    read(state, reader, id).await
 }
 
 impl KeptTask {
@@ -600,7 +582,7 @@ impl Operation for JobGet {
 
     async fn run(call: &mut OpCall<'_>, input: JobGetInput) -> Result<JobValue, OpError> {
         let id = parse_id(&input.job_id).ok_or(OpError::not_found("That job"))?;
-        let task = read(call.state, &call.ctx.caller, &call.ctx.edge, id)
+        let task = read(call.state, &call.ctx.caller, id)
             .await
             .map_err(|error| OpError::logged(Self::NAME, &error))?
             .ok_or(OpError::not_found("That job"))?;
