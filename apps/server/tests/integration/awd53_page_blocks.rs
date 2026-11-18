@@ -364,9 +364,8 @@ async fn a_page_made_from_messages_or_moved_blocks() {
     .await;
     assert_eq!(elsewhere["outcome"], "ok", "{elsewhere}");
     let elsewhere = elsewhere["value"]["id"].as_str().expect("page").to_owned();
-    let first_block = call("page_blocks", json!({"pageId": elsewhere})).await["value"]["blocks"][0]
-        ["id"]
-        .clone();
+    let first_block =
+        call("page_blocks", json!({"pageId": elsewhere})).await["value"]["blocks"][0]["id"].clone();
     let owner = sqlx::query_scalar::<_, uuid::Uuid>(
         "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
     )
