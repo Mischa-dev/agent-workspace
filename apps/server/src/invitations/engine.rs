@@ -272,6 +272,9 @@ pub async fn join_workspace_space(
         .ok_or(AppError::Internal(
             "admitted account is not a workspace member",
         ))?;
+    // Arriving, they join the workspace's auto-join channels (C2.7), as
+    // they would a project's.
+    crate::conversations::join_auto_channels(transaction, space, account_id).await?;
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )

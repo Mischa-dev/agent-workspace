@@ -419,6 +419,7 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
         "the MCP transport: every tool behind it that writes has a case in mcp_cases",
     ),
     ("POST /api/v1/notification-actions", CAPABILITY),
+    ("POST /api/v1/push-receipts", CAPABILITY),
     ("POST /api/v1/account-claims/accept", CAPABILITY),
     ("POST /api/v1/invite-links/accept-existing", CAPABILITY),
     ("POST /api/v1/invite-links/accept-new", CAPABILITY),
@@ -466,6 +467,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "automation_write",
     "bug_report_link_write",
     "channel_create",
+    "channel_join",
+    "channel_leave",
+    "channel_update",
     "connection_create",
     "connection_redeliver",
     "connection_remove",
@@ -577,6 +581,12 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "scheduled_message_update",
     "session_bind",
     "settings_set",
+    "sidebar_item_move",
+    "sidebar_section_set",
+    "saved_search_set",
+    "profile_update",
+    "account_block_set",
+    "dm_request_respond",
     "status_delete",
     "status_set",
     "task_claim",
@@ -6243,6 +6253,47 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"keywords": ["net launch"]}),
             vec![json!({"workspace": b.organization, "keywords": ["net launch"]})],
         ),
+        // C2.9: sidebar sections are the caller's own, in the workspace
+        // called; B's conversations never go in them.
+        mcp_case(
+            "sidebar_section_set",
+            json!({"name": "Net section"}),
+            vec![json!({"workspace": b.organization, "name": "Net section"})],
+        ),
+        mcp_case(
+            "sidebar_item_move",
+            json!({"conversationId": a.channel, "starred": true}),
+            vec![json!({"conversationId": b.channel, "starred": true})],
+        ),
+        // C2.26: saved searches are kept per workspace; B's never change from A.
+        mcp_case(
+            "saved_search_set",
+            json!({"name": "Net search", "query": "net"}),
+            vec![json!({"workspace": b.organization, "name": "Net search", "query": "net"})],
+        ),
+        // C2.39: only someone in the workspace called can be blocked, and a
+        // request in B's DM is never A's to answer.
+        mcp_case(
+            "account_block_set",
+            json!({"account": a.agent, "blocked": false}),
+            vec![
+                json!({"account": b.agent, "blocked": true}),
+                json!({"workspace": b.organization, "account": b.agent, "blocked": true}),
+            ],
+        ),
+        mcp_case(
+            "dm_request_respond",
+            json!({"conversationId": a.dm, "accept": true}),
+            vec![json!({"conversationId": b.dm, "accept": true})],
+        )
+        .without_own("A's DM holds no request; dm_requests_and_blocks.rs answers one"),
+        // C2.17: an agent's profile is set by those who manage it; B's
+        // agent isn't A's to change.
+        mcp_case(
+            "profile_update",
+            json!({"title": "Net title", "account": a.agent}),
+            vec![json!({"title": "Net title", "account": b.agent})],
+        ),
         // H1.24: deleting a workspace, or keeping it, only ever acts on the
         // caller's own. A's own call would stop every later case here;
         // workspace_lifecycle.rs runs it.
@@ -6550,6 +6601,21 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "channel_create",
             json!({"projectId": a.project, "name": "net-mcp"}),
             vec![json!({"projectId": b.project, "name": "net-mcp"})],
+        ),
+        mcp_case(
+            "channel_join",
+            json!({"channelId": a.channel}),
+            vec![json!({"channelId": b.channel})],
+        ),
+        mcp_case(
+            "channel_update",
+            json!({"channelId": a.channel, "topic": "Net topic"}),
+            vec![json!({"channelId": b.channel, "topic": "Net topic"})],
+        ),
+        mcp_case(
+            "channel_leave",
+            json!({"channelId": sp.channel}),
+            vec![json!({"channelId": b.channel})],
         ),
         mcp_case(
             "conversation_update",

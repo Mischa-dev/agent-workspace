@@ -6,6 +6,36 @@
     "idempotent": false,
     "kind": "query",
     "long": false,
+    "module": "messages",
+    "name": "account_block_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List blocked accounts"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "dm_rules.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "account_block_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Block or unblock"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
     "module": "agents",
     "name": "account_joinable_list",
     "permission": "members.invite",
@@ -245,6 +275,82 @@
     "title": "Press a button"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "channels",
+    "name": "channel_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Channel details"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "channel_join",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Join channel"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "channel_leave",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Leave channel"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "channels",
+    "name": "channel_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Browse channels"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "conversation.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "channels",
+    "name": "channel_update",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Change channel"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -431,6 +537,20 @@
     "title": "Mark read"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "conversation_member_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List members"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -601,6 +721,36 @@
   {
     "automation": false,
     "destructive": false,
+    "emits": [
+      "dm_rules.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "dm_request_respond",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Answer a message request"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "messages",
+    "name": "dm_standing_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get DM standing"
+  },
+  {
+    "automation": false,
+    "destructive": false,
     "emits": [],
     "idempotent": false,
     "kind": "query",
@@ -653,6 +803,20 @@
     "preview": false,
     "proposable": false,
     "title": "Preview a formula"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "group_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List groups"
   },
   {
     "automation": false,
@@ -1256,6 +1420,64 @@
     "title": "Add a person who hasn't signed in yet"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "place_search",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Jump to a place"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "profile_avatar_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List avatars"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "profile_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get profile"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "account.profile_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "profile_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Update profile"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1472,6 +1694,36 @@
     "title": "Report usage"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "saved_search_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List saved searches"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "saved_searches.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "saved_search_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save a search"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1532,6 +1784,52 @@
     "preview": false,
     "proposable": false,
     "title": "Change scheduled message"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "sidebar.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "sidebar_item_move",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Move in sidebar"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "sidebar_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List sidebar sections"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "sidebar.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "sidebar_section_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Set sidebar section"
   },
   {
     "automation": true,

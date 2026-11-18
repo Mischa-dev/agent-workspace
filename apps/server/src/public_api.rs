@@ -498,7 +498,7 @@ pub(crate) fn document() -> Value {
             .unwrap_or_else(|| name.replace('_', " "));
         let mut input = hoist(&name, &tool.input_schema, &mut components);
         share_arguments(&mut input, &mut components);
-        let output = tool
+        let (result, output) = tool
             .output_schema
             .as_ref()
             .map(|schema| {
@@ -518,28 +518,25 @@ pub(crate) fn document() -> Value {
                         key
                     }
                 };
-                json!({ "$ref": format!("#/components/schemas/{key}") })
+                let reference = json!({ "$ref": format!("#/components/schemas/{key}") });
+                (key, reference)
             })
-            .unwrap_or_else(|| json!({ "type": "object" }));
+            .unwrap_or_else(|| ("Result".to_owned(), json!({ "type": "object" })));
+        // The result, and a refusal (the same result with its `outcome`),
+        // are one response that 200 and the refusing statuses point at,
+        // shared by every operation with that result, so the document stays
+        // small as tools are added. The introduction says what each status
+        // means.
+        refusals.entry(result.clone()).or_insert_with(|| {
+            json!({
+                "description": "The result, or a refusal: see its `outcome`.",
+                "content": { "application/json": { "schema": output } },
+            })
+        });
         let mut responses = Map::new();
         responses.insert(
             "200".to_owned(),
-            json!({
-                "description": "The result. Its `outcome` says whether it worked.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
-        );
-        // A refusal is the operation's own result with its `outcome`: one
-        // response per operation that its refusing statuses point at, so the
-        // document stays small as tools are added. The introduction says
-        // what each status means.
-        let refused = format!("{}Refused", pascal(&name));
-        refusals.insert(
-            refused.clone(),
-            json!({
-                "description": "Refused: the status and the result's `outcome` and `message` say why.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
+            json!({ "$ref": format!("#/components/responses/{result}") }),
         );
         // The refusing statuses (403, 404, 409, 422, 503) share it through
         // the 4XX and 5XX ranges; the statuses every operation answers the
@@ -557,7 +554,7 @@ pub(crate) fn document() -> Value {
         for range in ["4XX", "5XX"] {
             responses.insert(
                 range.to_owned(),
-                json!({ "$ref": format!("#/components/responses/{refused}") }),
+                json!({ "$ref": format!("#/components/responses/{result}") }),
             );
         }
         paths.insert(

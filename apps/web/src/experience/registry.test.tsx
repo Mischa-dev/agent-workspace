@@ -186,9 +186,11 @@ describe('layout registry', () => {
     // belongs to no project or workspace layout, and a collection's tabs are
     // its own saved views, made by people, not parts of the app. A new
     // sidebar or tab bar takes part in layouts: gate its entries on parts,
-    // test it here, and add it to this list.
+    // test it here, and add it to this list. Your own sidebar sections
+    // show only where a sidebar above shows talk.sidebar_sections.
     expect(users).toEqual([
       'collections/CollectionPage.tsx',
+      'conversations/SidebarSections.tsx',
       'direct/DirectSidebar.tsx',
       'shell/HomeSidebar.tsx',
       'shell/ProjectSidebar.tsx',

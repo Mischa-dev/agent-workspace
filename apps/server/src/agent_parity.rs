@@ -815,6 +815,11 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/push-receipts",
+            Plumbing("a push notification saying it showed or was tapped"),
+        ),
+        (
+            Post,
             "/api/v1/usage/accounts/{account_id}/refresh",
             Person("a person's own provider account"),
         ),

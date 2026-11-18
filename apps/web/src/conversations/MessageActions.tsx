@@ -10,7 +10,7 @@ import { MessageEditor, RemoveMessageDialog } from './MessageEditing'
 import { MessageHistoryDialog } from './MessageHistoryDialog'
 import { useMessageMemory } from './MessageMemory'
 import { MessageReactions, QuickReactions, ReactionPicker } from './Reactions'
-import { applyReaction, type ReactionChoice } from './reactions'
+import { applyReaction, reactionKey, type ReactionChoice } from './reactions'
 import { MessageKeys } from './MessageKeys'
 import { useMessageLater } from './useMessageLater'
 import { useProject } from '../projects/hooks'
@@ -169,13 +169,17 @@ export function useMessageActions({
 
   // Show the change at once, then what the server says; on failure, put the
   // reactions back, say so, and refetch.
-  const react = (message: ConversationMessage, choice: Pick<ReactionChoice, 'emoji' | 'name'>, reacted: boolean) => {
+  const react = (
+    message: ConversationMessage,
+    choice: Pick<ReactionChoice, 'emoji' | 'name' | 'imageUrl' | 'customEmojiId'>,
+    reacted: boolean,
+  ) => {
     const before = message.reactions ?? []
     const request = (reactionRequests.current.get(message.id) ?? 0) + 1
     reactionRequests.current.set(message.id, request)
     const latest = () => reactionRequests.current.get(message.id) === request
     showReactions(message.id, applyReaction(before, choice, viewerId, reacted))
-    void setMessageReaction({ conversationId, messageId: message.id, name: choice.name, reacted })
+    void setMessageReaction({ conversationId, messageId: message.id, name: reactionKey(choice), reacted })
       .then((result) => {
         if (latest()) showReactions(message.id, result.reactions)
       })

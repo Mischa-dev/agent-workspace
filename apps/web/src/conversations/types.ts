@@ -171,6 +171,8 @@ export type ConversationTimelinePage = {
     name: string
     archivedAt: string | null
     version: number
+    /** A private channel, or a thread in one: only its members see it (C2.6). */
+    private?: boolean
     /** Threads: where it stands, such as Open or Decided. */
     threadStatus: string | null
     threadOutcome: string | null
@@ -265,6 +267,8 @@ export type SidebarChannel = {
   id: string
   name: string
   archivedAt: string | null
+  /** Only its members see it (C2.6). */
+  private?: boolean
   highestSequence: number
   highestSeenSequence: number
   unread: boolean

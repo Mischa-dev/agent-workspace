@@ -18,7 +18,7 @@ use axum::{
     http::HeaderMap,
     routing::{get, put},
 };
-use chrono::{DateTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgConnection, PgPool};
 use uuid::Uuid;
@@ -241,7 +241,7 @@ pub async fn decide(
 // ---------------------------------------------------------------------------
 // Quiet hours
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuietHours {
     pub enabled: bool,
@@ -249,33 +249,95 @@ pub struct QuietHours {
     pub start: i64,
     pub end: i64,
     pub time_zone: Option<String>,
+    /// Whole quiet days on the local calendar (C2.14): one bit a day,
+    /// Monday first (bit 0), Sunday last (bit 6).
+    pub days: u8,
+    /// Questions and approvals waiting on the person break through quiet
+    /// hours and days (not a pause).
+    pub urgent_breaks: bool,
     /// Notifications paused by hand until then ("Pause for an hour"). Read
     /// with `paused_at`; a time in the past means not paused.
     pub paused_until: Option<DateTime<Utc>>,
+    /// "Away until" from the person's status (C2.14): it holds pushes and
+    /// emails the way a pause does.
+    pub away_until: Option<DateTime<Utc>>,
 }
 
 impl QuietHours {
-    /// When the pause ends, if one is on at `now`.
+    /// When the pause (or being away) ends, if one is on at `now`.
     pub fn paused_at(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        self.paused_until.filter(|until| *until > now)
+        self.paused_until
+            .into_iter()
+            .chain(self.away_until)
+            .filter(|until| *until > now)
+            .max()
     }
 
-    /// When pushes may go out again, if `now` is inside a pause or quiet
-    /// hours. A pause that ends inside quiet hours waits for them too.
+    /// When pushes may go out again, if `now` is inside a pause, quiet hours
+    /// or a quiet day. A pause that ends inside quiet hours waits for them
+    /// too.
     pub fn ends_after(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let paused = self.paused_at(now);
         self.scheduled_end_after(paused.unwrap_or(now)).or(paused)
     }
 
+    /// The same for one notification: one that's `urgent` (waiting on the
+    /// person's answer) waits only for a pause when they let it through.
+    pub fn ends_after_for(&self, now: DateTime<Utc>, urgent: bool) -> Option<DateTime<Utc>> {
+        if urgent && self.urgent_breaks {
+            self.paused_at(now)
+        } else {
+            self.ends_after(now)
+        }
+    }
+
+    fn zone(&self) -> chrono_tz::Tz {
+        self.time_zone
+            .as_deref()
+            .and_then(crate::usage::schedule::parse_time_zone)
+            .unwrap_or(chrono_tz::UTC)
+    }
+
+    /// Quiet days and quiet hours back to back (a quiet Sunday, then the
+    /// night until Monday 07:00) end when the last of them does.
     fn scheduled_end_after(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let mut at = now;
+        // A week of quiet days and a night, at most; all seven days quiet
+        // means pushes wait a week at a time.
+        for _ in 0..9 {
+            let next = self
+                .quiet_day_end_after(at)
+                .or_else(|| self.hours_end_after(at));
+            match next {
+                Some(next) if next > at => at = next,
+                _ => break,
+            }
+        }
+        (at > now).then_some(at)
+    }
+
+    /// The next local midnight, if `now` falls on a quiet day.
+    fn quiet_day_end_after(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let zone = self.zone();
+        let local = now.with_timezone(&zone);
+        if self.days & (1 << local.weekday().num_days_from_monday()) == 0 {
+            return None;
+        }
+        let naive = local.date_naive().succ_opt()?.and_hms_opt(0, 0, 0)?;
+        zone.from_local_datetime(&naive)
+            .earliest()
+            .or_else(|| {
+                zone.from_local_datetime(&(naive + chrono::Duration::hours(1)))
+                    .earliest()
+            })
+            .map(|ends| ends.with_timezone(&Utc))
+    }
+
+    fn hours_end_after(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         if !self.enabled || self.start == self.end {
             return None;
         }
-        let zone = self
-            .time_zone
-            .as_deref()
-            .and_then(crate::usage::schedule::parse_time_zone)
-            .unwrap_or(chrono_tz::UTC);
+        let zone = self.zone();
         let local = now.with_timezone(&zone);
         let minute = i64::from(local.hour() * 60 + local.minute());
         let inside = if self.start < self.end {
@@ -353,6 +415,19 @@ pub async fn quiet_hours(
     organization_id: Uuid,
     actor_id: Uuid,
 ) -> Result<(QuietHours, String), AppError> {
+    // Away until a time, on the account's own status or this workspace's.
+    let away_until = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
+        r#"
+        SELECT max(away_until) FROM account_statuses
+        WHERE account_id = $1 AND (workspace_id IS NULL OR workspace_id = $2)
+          AND away_until > now()
+          AND (clear_at IS NULL OR clear_at > now())
+        "#,
+    )
+    .bind(actor_id)
+    .bind(organization_id)
+    .fetch_one(&mut *connection)
+    .await?;
     let effective = settings::resolve(
         connection,
         SettingsContext {
@@ -373,10 +448,18 @@ pub async fn quiet_hours(
                 .value::<i64>("notifications.quiet_hours_end")
                 .unwrap_or(7 * 60),
             time_zone: effective.string("notifications.time_zone"),
+            days: effective
+                .value::<i64>("notifications.quiet_days")
+                .and_then(|days| u8::try_from(days & 0x7f).ok())
+                .unwrap_or(0),
+            urgent_breaks: effective
+                .bool("notifications.urgent_breaks_quiet")
+                .unwrap_or(false),
             paused_until: effective
                 .value::<i64>("notifications.paused_until")
                 .filter(|seconds| *seconds > 0)
                 .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
+            away_until,
         },
         effective
             .string("notifications.digest")
@@ -952,6 +1035,7 @@ mod tests {
             end: 7 * 60,
             time_zone: Some("Europe/Berlin".to_owned()),
             paused_until: None,
+            ..QuietHours::default()
         };
         // 23:30 in Berlin (CEST, UTC+2) is 21:30 UTC.
         let late = Utc.with_ymd_and_hms(2026, 10, 16, 21, 30, 0).unwrap();
@@ -976,6 +1060,7 @@ mod tests {
             end: 7 * 60,
             time_zone: Some("Europe/Berlin".to_owned()),
             paused_until: None,
+            ..QuietHours::default()
         };
         // Berlin leaves summer time on 2026-10-25 at 03:00. 23:30 CEST on
         // the 24th is 21:30 UTC; 07:00 CET on the 25th is 06:00 UTC.
@@ -996,6 +1081,7 @@ mod tests {
             end: 7 * 60,
             time_zone: None,
             paused_until: Some(in_an_hour),
+            ..QuietHours::default()
         };
         assert_eq!(paused.paused_at(noon), Some(in_an_hour));
         assert_eq!(paused.ends_after(noon), Some(in_an_hour));
@@ -1012,5 +1098,82 @@ mod tests {
             late_pause.ends_after(noon),
             Some(Utc.with_ymd_and_hms(2026, 10, 17, 7, 0, 0).unwrap())
         );
+    }
+
+    #[test]
+    fn quiet_days_hold_pushes_to_the_next_day_and_its_quiet_hours() {
+        // Saturday and Sunday quiet, and nights from 22:00 to 07:00 in Berlin.
+        let quiet = QuietHours {
+            enabled: true,
+            start: 22 * 60,
+            end: 7 * 60,
+            time_zone: Some("Europe/Berlin".to_owned()),
+            days: (1 << 5) | (1 << 6),
+            ..QuietHours::default()
+        };
+        // Saturday 2026-10-17, noon in Berlin (10:00 UTC): held through
+        // Sunday, then Monday's quiet hours, until 07:00 on Monday the 19th
+        // (still summer time, so 05:00 UTC).
+        let saturday = Utc.with_ymd_and_hms(2026, 10, 17, 10, 0, 0).unwrap();
+        assert_eq!(
+            quiet.ends_after(saturday),
+            Some(Utc.with_ymd_and_hms(2026, 10, 19, 5, 0, 0).unwrap())
+        );
+        // A weekday at noon goes out at once.
+        let friday = Utc.with_ymd_and_hms(2026, 10, 16, 10, 0, 0).unwrap();
+        assert_eq!(quiet.ends_after(friday), None);
+        // Quiet days without quiet hours end at midnight.
+        let days_only = QuietHours {
+            enabled: false,
+            ..quiet.clone()
+        };
+        assert_eq!(
+            days_only.ends_after(saturday),
+            Some(Utc.with_ymd_and_hms(2026, 10, 18, 22, 0, 0).unwrap())
+        );
+        // Every day quiet: a week at most, never forever.
+        let always = QuietHours {
+            days: 0x7f,
+            ..days_only
+        };
+        assert!(always.ends_after(saturday).is_some());
+    }
+
+    #[test]
+    fn being_away_holds_like_a_pause_and_urgent_breaks_only_quiet_hours() {
+        let noon = Utc.with_ymd_and_hms(2026, 10, 16, 10, 0, 0).unwrap();
+        let monday = Utc.with_ymd_and_hms(2026, 10, 19, 8, 0, 0).unwrap();
+        let away = QuietHours {
+            away_until: Some(monday),
+            urgent_breaks: true,
+            ..QuietHours::default()
+        };
+        assert_eq!(away.paused_at(noon), Some(monday));
+        assert_eq!(away.ends_after(noon), Some(monday));
+        // Being away holds even what's urgent, like a pause.
+        assert_eq!(away.ends_after_for(noon, true), Some(monday));
+        // A pause past being away holds until the later of the two.
+        let later = Utc.with_ymd_and_hms(2026, 10, 20, 8, 0, 0).unwrap();
+        let both = QuietHours {
+            paused_until: Some(later),
+            ..away.clone()
+        };
+        assert_eq!(both.paused_at(noon), Some(later));
+        // Quiet hours let urgent through when allowed, and only then.
+        let night = Utc.with_ymd_and_hms(2026, 10, 16, 23, 0, 0).unwrap();
+        let quiet = QuietHours {
+            enabled: true,
+            start: 22 * 60,
+            end: 7 * 60,
+            urgent_breaks: true,
+            ..QuietHours::default()
+        };
+        assert_eq!(quiet.ends_after_for(night, true), None);
+        let held = QuietHours {
+            urgent_breaks: false,
+            ..quiet.clone()
+        };
+        assert!(held.ends_after_for(night, true).is_some());
+        assert!(quiet.ends_after_for(night, false).is_some());
     }
 }

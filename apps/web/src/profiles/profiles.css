@@ -1,0 +1,103 @@
+/* Profiles (C2.17): the card opened from a name, and Account › Profile's "About you". */
+
+.aw-person {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.aw-person__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.aw-person__who {
+  display: grid;
+  gap: var(--space-half);
+  min-width: 0;
+}
+
+.aw-person__name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--t-ui-strong);
+  overflow-wrap: anywhere;
+}
+
+.aw-person__title {
+  font: var(--t-ui);
+  color: var(--content-fg-muted);
+}
+
+.aw-person .aw-dl {
+  border: 0;
+  background: none;
+}
+
+.aw-person .aw-dl__row {
+  padding: var(--space-2) 0;
+}
+
+.aw-person__spaces h3 {
+  margin: 0 0 var(--space-2);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-person__spaces ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-person__spaces a {
+  display: inline-block;
+  padding: var(--space-half) var(--space-2);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-full);
+  font: var(--t-small);
+  color: inherit;
+  text-decoration: none;
+}
+
+.aw-person__spaces a:hover {
+  background: var(--content-hover);
+}
+
+.aw-profile-form {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 440px;
+}
+
+.aw-profile-form__picture {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+
+.aw-profile-form__picture > .aw-avatar {
+  grid-row: span 2;
+}
+
+.aw-profile-form__picture p {
+  margin: 0;
+}
+
+.aw-msg__author-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.aw-msg__author-button:hover {
+  text-decoration: underline;
+}

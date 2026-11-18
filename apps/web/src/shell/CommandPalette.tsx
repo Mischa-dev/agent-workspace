@@ -25,6 +25,7 @@ import { useTheme } from '../theme/themeContext'
 import { Avatar, Button, Dialog, countLabel, isMac, showToast, type CommandItem } from '../ui'
 import { CommandMenu } from '../ui/commandMenu'
 import { SLASH_COMMANDS } from '../later/slashCommands'
+import { usePlaceSearch, useSavedSearches } from '../memory/savedSearches'
 import { searchWorkItemReferences } from '../work-items/api'
 import { createTaskHref } from '../work-items/links'
 import { BOARD_SHORTCUTS, LIST_SHORTCUTS } from '../work-items/shortcutKeys'
@@ -112,6 +113,11 @@ export function CommandPalette() {
   const tasks = useTaskResults(state.open === 'commands' ? query : '', current)
   // The rail lists the first 100 Projects; the server finds the rest by name.
   const projectSearch = useProjectSearch(state.open === 'commands' ? query : '')
+  // C2.26: places anywhere in the workspace by name, and your saved searches.
+  const settledQuery = useSettled(query.trim())
+  const placeSearch = usePlaceSearch(settledQuery, state.open === 'commands')
+  const places = settledQuery === query.trim() ? placeSearch.data?.hits : undefined
+  const savedSearches = useSavedSearches(state.open === 'commands')
   // Open with the requested text each time; forget it on close.
   const [openedWith, setOpenedWith] = useState<string | null>(null)
   if (state.open === 'commands' && openedWith === null) {
@@ -184,6 +190,53 @@ export function CommandPalette() {
     // The task page resolves Projects beyond the rail's first 100 and says when a key isn't found.
     if (typedKey && !(tasks.data ?? []).some((task) => task.key === typedKey.key)) {
       list.push({ id: `k:${typedKey.key}`, group: 'Tasks', label: `Open ${typedKey.key}`, icon: 'checklist', matched: true, onSelect: go(`/${typedKey.key}`) })
+    }
+
+    // Places found by name across the workspace, the ones you opened lately first.
+    if (places?.length) {
+      const recent = readRecentPlaces(session.user.actorId).map((place) => place.path)
+      const rank = (path: string | null | undefined) => {
+        const at = path ? recent.indexOf(legacyPathOf(path)) : -1
+        return at < 0 ? recent.length : at
+      }
+      const listed = new Set(list.map((item) => item.id))
+      const people = new Set((direct.data?.people ?? []).map((person) => person.id))
+      const ordered = places.map((hit, index) => ({ hit, index })).sort((left, right) => rank(left.hit.path) - rank(right.hit.path) || left.index - right.index)
+      for (const { hit } of ordered) {
+        if (listed.has(`c:${hit.id}`) || listed.has(`w:${hit.id}`) || (hit.kind === 'person' && people.has(hit.id))) continue
+        const path = hit.path
+        if (hit.kind === 'person') {
+          list.push({
+            id: `j:${hit.id}`,
+            group: 'Jump to',
+            label: `Message ${hit.title}`,
+            hint: hit.detail ?? undefined,
+            mark: <Avatar name={hit.title} seed={hit.id} size={20} />,
+            matched: true,
+            onSelect: () => {
+              void openDm(hit.id)
+                .then((conversationId) => navigate(`/messages/${encodeURIComponent(conversationId)}`))
+                .catch((reason: unknown) =>
+                  showToast({ tone: 'danger', title: `The conversation with ${hit.title} didn’t open`, description: reason instanceof Error ? reason.message : 'Try again.' }),
+                )
+            },
+          })
+        } else if (path) {
+          list.push({ id: `j:${hit.id}`, group: 'Jump to', label: hit.title, hint: hit.detail ?? undefined, icon: placeIcon(path), matched: true, onSelect: go(path), ...destination(path, queryClient, homeId) })
+        }
+      }
+    }
+
+    for (const saved of savedSearches.data?.searches ?? []) {
+      list.push({
+        id: `ss:${saved.id}`,
+        group: 'Saved searches',
+        label: saved.name,
+        hint: saved.name === saved.query ? undefined : saved.query,
+        icon: 'search',
+        keywords: [saved.query],
+        onSelect: go(`/search?${new URLSearchParams({ q: saved.query })}`),
+      })
     }
 
     // The menu matches names; messages, pages and decisions are a full search away.
@@ -411,7 +464,7 @@ export function CommandPalette() {
       })
     }
     return list
-  }, [current, direct.data, homeId, location.pathname, navigate, toWorkspace, notificationPause, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
+  }, [current, direct.data, homeId, location.pathname, navigate, toWorkspace, notificationPause, places, projectSearch.data, projects, query, queryClient, savedSearches.data, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
 
   // AWD-75: an entry follows the module of where it leads, there: in another
   // project, that project's modules off (from the projects lists, so no

@@ -617,6 +617,62 @@ async fn push_devices_stay_encrypted_follow_settings_and_lose_access_with_the_pr
         0
     );
 
+    // C2.34: a push's receipt, sent back by the service worker without a
+    // session, marks that push shown and opened, and the device list counts
+    // them; an unknown receipt changes nothing and says so to nobody.
+    let device_id = device["id"]
+        .as_str()
+        .expect("id")
+        .parse::<Uuid>()
+        .expect("device id");
+    sqlx::query(
+        r#"
+        INSERT INTO push_receipts (receipt_hash, workspace_id, subscription_id, notification_id)
+        SELECT sha256(convert_to('cmVjZWlwdC1mb3ItbWFyYQ', 'UTF8')), $2, $1, id
+        FROM notifications WHERE recipient_actor_id = $3 LIMIT 1
+        "#,
+    )
+    .bind(device_id)
+    .bind(organization)
+    .bind(mara_id)
+    .execute(&setup.pool)
+    .await
+    .expect("receipt");
+    let receipt = |token: &'static str, event: &'static str| {
+        super::agent_interface::send(
+            &setup.app,
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/v1/push-receipts")
+                .header("origin", "http://127.0.0.1:3100")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&json!({"receipt": token, "event": event})).expect("body"),
+                ))
+                .expect("request"),
+        )
+    };
+    for (token, event) in [
+        ("cmVjZWlwdC1mb3ItbWFyYQ", "shown"),
+        ("cmVjZWlwdC1mb3ItbWFyYQ", "opened"),
+        ("bm90LWEtcmVjZWlwdA", "opened"),
+    ] {
+        let (status, body) = receipt(token, event).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    }
+    let (_, devices) = get(setup, &mara, "/api/v1/push/subscriptions").await;
+    let mine = &devices["devices"][0];
+    assert_eq!(mine["transport"], "web_push", "{devices}");
+    assert_eq!(
+        (
+            &mine["recentSent"],
+            &mine["recentShown"],
+            &mine["recentOpened"]
+        ),
+        (&json!(1), &json!(1), &json!(1)),
+        "{devices}"
+    );
+
     // Removing the device removes its stored endpoint too.
     let (status, body) = call(
         setup,
