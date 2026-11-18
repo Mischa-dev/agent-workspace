@@ -367,6 +367,26 @@ pub struct PlanWindow {
     pub limit_reached: bool,
 }
 
+/// `POST /api/v1/host/runs`: a run the host started itself (a schedule or
+/// trigger on its side) for one of its bound agents. Adopted once: the same
+/// `hostRunRef` finds the same run.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdoptRun {
+    pub host_agent_ref: String,
+    pub host_run_ref: String,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdoptedRun {
+    pub run_id: Uuid,
+    /// The run's start, already accepted: fetch it for the run's credential.
+    pub command_id: Uuid,
+    pub created: bool,
+}
+
 /// The three things a host tells the server about one of its agents.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -457,13 +477,13 @@ pub fn new_push_secret(random: [u8; 32]) -> String {
 
 mod client;
 mod model;
-pub use model::{
-    MAX_MESSAGES as MAX_MODEL_MESSAGES, MAX_TOOLS as MAX_MODEL_TOOLS, ModelMessage, ModelPart,
-    ModelReply, ModelRole, ModelStop, ModelTool, ModelTurn,
-};
 pub use client::{
     ClientError, HostClient, HttpRequest, HttpResponse, ReqwestTransport, RunReporter, Transport,
     TransportFuture,
+};
+pub use model::{
+    MAX_MESSAGES as MAX_MODEL_MESSAGES, MAX_TOOLS as MAX_MODEL_TOOLS, ModelMessage, ModelPart,
+    ModelReply, ModelRole, ModelStop, ModelTool, ModelTurn,
 };
 
 #[cfg(test)]

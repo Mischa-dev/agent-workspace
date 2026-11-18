@@ -1328,6 +1328,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/host/commands/{command_id}/ack",
         HostCredential
     ),
+    boundary_route!("hosts/routes", Post, "/api/v1/host/runs", HostCredential),
     boundary_route!(
         "hosts/routes",
         Post,

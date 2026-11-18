@@ -40,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/host/windows", post(windows_route))
         .route("/api/v1/host/notices", post(notice_route))
         .route("/api/v1/host/agents/register", post(register_route))
+        .route("/api/v1/host/runs", post(adopt_route))
         .route("/api/v1/host/runs/{run_id}/model", post(model_route))
         .route("/api/v1/host/commands", get(commands_route))
         .route("/api/v1/host/commands/{command_id}", get(command_route))
@@ -209,6 +210,22 @@ async fn windows_route(
 ) -> Result<Json<super::windows::WindowsStored>, HostError> {
     let host = host_caller(&state, &headers).await?;
     Ok(Json(super::windows::report(&state, &host, request).await?))
+}
+
+/// A2.26: a run the host started itself, adopted once.
+async fn adopt_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<super::adopt::AdoptRequest>,
+) -> Result<(StatusCode, Json<super::adopt::Adopted>), HostError> {
+    let host = host_caller(&state, &headers).await?;
+    let adopted = super::adopt::adopt(&state, &host, request).await?;
+    let status = if adopted.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(adopted)))
 }
 
 /// A1.25: one model turn for the built-in assistant's run, by the run's

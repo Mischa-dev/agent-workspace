@@ -285,6 +285,17 @@ impl HostClient {
         .await
     }
 
+    /// Adopt a run this host started itself (A2.26); fetch the returned
+    /// command for the run's credential.
+    pub async fn adopt_run(&self, run: &crate::AdoptRun) -> Result<crate::AdoptedRun, ClientError> {
+        self.call(
+            "POST",
+            "/api/v1/host/runs".to_owned(),
+            Some(json_body(run)?),
+        )
+        .await
+    }
+
     pub async fn notice(&self, notice: &Notice) -> Result<Value, ClientError> {
         self.call(
             "POST",
@@ -395,7 +406,10 @@ impl RunReporter {
 
     /// A1.25: one model turn through the server's model gateway, with the
     /// workspace's model and key; the server records its tokens on the run.
-    pub async fn model_turn(&self, turn: &crate::ModelTurn) -> Result<crate::ModelReply, ClientError> {
+    pub async fn model_turn(
+        &self,
+        turn: &crate::ModelTurn,
+    ) -> Result<crate::ModelReply, ClientError> {
         let response = self
             .send_as_agent(
                 "POST",
