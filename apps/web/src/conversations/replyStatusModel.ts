@@ -23,6 +23,7 @@ export function describeReplyRequest(request: ReplyRequest, now = Date.now()) {
     }
     case 'pending': {
       if (request.followsRequestId) return `${name} will pick this up after what it’s working on`
+      if (request.unresponsiveAt) return `${name} hasn’t picked this up`
       if (!request.agentLastSeenAt) return `Waiting for ${name} to connect`
       const seen = Date.parse(request.agentLastSeenAt)
       if (Number.isNaN(seen) || now - seen < RECENTLY_SEEN_MS) return `Waiting for ${name} to reply`

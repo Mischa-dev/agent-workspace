@@ -1,3 +1,4 @@
+import { callOp } from '../api/ops'
 import { requestJson } from '../api/client'
 
 export type ExternalAgentRole = 'member' | 'viewer'
@@ -40,8 +41,17 @@ export type OneTimeCredential = {
   expiresAt: string
 }
 
-/** The apps a setup link writes its steps for. */
-export type SetupApp = 'claude_code' | 'codex' | 'other'
+/** An app a setup link writes its steps for: a recipe's id. */
+export type SetupApp = string
+
+/** A client an agent can run in, from the agent plugin's recipes. */
+export type SetupRecipe = { id: string; title: string }
+
+/** The apps the server has setup steps for, in its order. */
+export async function listSetupRecipes(): Promise<SetupRecipe[]> {
+  const value = await callOp('agent_recipe_list', {})
+  return value.recipes
+}
 
 /** A one-time link that hands an agent its token, with the steps for its app. */
 export type SetupLink = {

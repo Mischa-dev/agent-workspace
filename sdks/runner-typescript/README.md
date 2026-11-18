@@ -1,13 +1,16 @@
 # @agent-workspace/runner
 
-A runner SDK for Agent Workspace in TypeScript, with no dependencies. It does
-the protocol in [docs/agent-runner.md](../../docs/agent-runner.md) for you:
-checks the wakeup's signature, claims the request, gives your code the
-prompt and a few calls to answer with, stops your work when a person presses
-Stop, and hands follow-ups to the work already running in their thread.
+A runner SDK for Agent Workspace in TypeScript, with no dependencies. It
+hears reply requests on the event log (a stream, long-poll, or signed pushes
+to your address), claims each one, gives your code the prompt and a few calls
+to answer with, stops your work when a person presses Stop, and hands
+follow-ups to the work already running in their thread.
 
-Node 22.18 or later runs `src/index.ts` as is. `npm run build` writes a plain
-JavaScript copy to `dist/index.js` for older setups.
+Underneath is `WorkspaceChannel`, the reference channel adapter: everything a
+chat integration needs, for when you want more than reply requests.
+
+Node 22.18 or later runs `src/*.ts` as is. `npm run build` writes a plain
+JavaScript copy to `dist/` for older setups.
 
 ## Use
 
@@ -32,11 +35,16 @@ const runner = new Runner({
 runner.listen(8787) // POST /wake on 127.0.0.1; put your https proxy in front
 ```
 
-Without a public URL, poll instead of listening:
+Without a public address, read the stream instead of listening. It falls back
+to long-polling where something on the way cuts streams, and picks up
+requests already waiting first:
 
 ```ts
-await runner.poll({ intervalMs: 30_000 })
+await runner.connect({ signal })
 ```
+
+Give `cursorFile` to keep your place across restarts yourself; without one
+the server keeps it for the connection.
 
 ## What a request gives you
 
@@ -52,7 +60,7 @@ await runner.poll({ intervalMs: 30_000 })
 | `reply(text)` | The final answer. Closes the request. |
 | `pass(reason?)` | Nothing to add (optional requests only). |
 | `release(reason)` | You can't do it; people see the reason. |
-| `bindSession(ref, { url?, state? })` | Names your session so the thread links to it and later wakeups carry it. |
+| `bindSession(ref, { url?, state? })` | Names your session so the thread links to it and later claims carry it. |
 | `runId` | The run a launch opened for this request, or `null`. The reply calls already move it. |
 | `step(title)` | One step of the work on the run (nothing without one). |
 | `result(kind, url, title?)` | Something the run produced, such as a `pull_request` (nothing without a run). |
@@ -63,15 +71,49 @@ Calls that the server refuses throw `ToolError` with the `outcome` (such as
 `conflict` after Stop); `error.retryable` is true for
 `temporarily_unavailable`.
 
+## The channel
+
+```ts
+import { McpClient, WorkspaceChannel, fileCursor } from '@agent-workspace/runner'
+
+const channel = new WorkspaceChannel({
+  origin: 'https://workspace.example',
+  token,
+  tools: new McpClient({ url: 'https://workspace.example/api/v1/mcp', token }),
+  cursor: fileCursor('.workspace-cursor'),
+  onState: (state) => console.log(state), // connecting, streaming, polling, offline, closed
+})
+channel.on('message.mentioned', async (event) => {
+  // Events carry ids only: read the text live with your own access.
+  const conversationId = String(event.data.conversationId)
+  await channel.send(conversationId, 'On it', { clientMessageId: `ack-${event.id}` })
+})
+channel.on('agent.*', (event) => console.log('paused or resumed:', event.type))
+await channel.connect({ signal })
+```
+
+| | |
+|---|---|
+| `on(type, handler)` | A type, a family (`reply.*`) or every event (`*`). Each event reaches its handlers once, then the cursor moves past it. |
+| `connect({ signal })` | Reads until the signal aborts. A refused credential throws `ChannelRefused`. |
+| `pollOnce(signal?, waitSeconds?)` | One page, for your own loop. |
+| `receivePush(secret, headers, body)` | A signed push to your address: answers `{ status }` and handles the event. |
+| `send(conversationId, text, options?)` | A message; with `reply: { requestId, generation }` the answer to a reply request. `clientMessageId` comes back on `message.created`. |
+| `edit`, `delete`, `react`, `typing` | `message_edit`, `message_delete`, `message_react`, and `reply_progress` for the working line. |
+| `download(fileId)`, `upload(...)` | Files through a short-lived link, and into a conversation. |
+
+`verifyPush({ secret, headers, body })` checks Standard Webhooks signatures
+(and the older `x-workspace-signature`), against several secrets during a
+rotation. A push to an older `typed_v1` connection comes back as an event
+like any other. The tests run against `sdks/fixtures/delivery`.
+
 ## Lower-level pieces
 
-- `verifyWakeup({ secret, headers, body })` and `signWakeup(secret, timestamp, body)`.
-- `DeliveryDeduper` for delivery IDs.
 - `McpClient({ url, token }).callTool(name, args)`: streamable HTTP with JSON
   or SSE answers.
 - `ReplyTools`: `inboxList`, `claim`, `sessionBind`, `progress`, `send`,
-  `pass`, `release`.
-- `parseSettings(text)` and `stripLeadingMentions(text)`.
+  `pass`, `release`, and the run reports.
+- `Deduper` for event ids; `parseSettings(text)` and `stripLeadingMentions(text)`.
 
 ## Secrets
 

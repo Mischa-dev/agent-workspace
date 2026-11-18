@@ -1,112 +1,24 @@
-// The runner side of Agent Workspace's agent runner contract
-// (docs/agent-runner.md): verify a wakeup, claim the request, bind your
-// session, report progress, post interim and final replies, and stop when a
-// person presses Stop. No dependencies; Node 22 or later.
+// The runner side of Agent Workspace's agent contract: hear reply requests
+// on the event log (a stream, long-poll or signed pushes, through
+// `WorkspaceChannel`), claim them, bind your session, report progress, post
+// interim and final replies, and stop when a person presses Stop. No
+// dependencies; Node 22 or later.
 
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
-import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
+import { createHash } from 'node:crypto'
+import { createServer, type Server } from 'node:http'
 
-// ---------------------------------------------------------------------------
-// Wakeups
+import {
+  ToolError,
+  WorkspaceChannel,
+  fileCursor,
+  replyRequestId,
+  unwrap,
+  type CursorStore,
+  type HeaderBag,
+  type WorkspaceEvent,
+} from './channel.ts'
 
-/** `ping` is a test wakeup from the Agents page: answer it and do nothing else. */
-export type WakeupEvent = 'reply.requested' | 'reply.followup' | 'reply.cancelled' | 'inbox.available' | 'ping'
-
-export type Wakeup = {
-  event: WakeupEvent
-  deliveryId: string
-  agentId: string
-  replyRequestId: string
-  projectId?: string
-  conversationId?: string
-  threadId?: string | null
-  messageId?: string
-  generation?: number
-  followsRequestId?: string | null
-  sessionRef?: string | null
-  sessionHarness?: string | null
-}
-
-export class WakeupError extends Error {
-  readonly status: number
-  constructor(message: string, status = 401) {
-    super(message)
-    this.name = 'WakeupError'
-    this.status = status
-  }
-}
-
-/** Five minutes, as docs/agent-runner.md asks. */
-export const WAKEUP_TOLERANCE_SECONDS = 300
-
-type HeaderBag = IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>
-
-function header(headers: HeaderBag, name: string): string | undefined {
-  if (typeof (headers as Headers).get === 'function') return (headers as Headers).get(name) ?? undefined
-  const value = (headers as Record<string, string | string[] | undefined>)[name.toLowerCase()]
-  return Array.isArray(value) ? value[0] : value
-}
-
-/** The signature Agent Workspace puts on a wakeup: `sha256=` and the hex HMAC of `"{timestamp}.{body}"`. */
-export function signWakeup(secret: string, timestamp: string, body: string): string {
-  return `sha256=${createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`
-}
-
-/**
- * Checks a wakeup's signature (in constant time) and age, and parses it.
- * Throws `WakeupError` for anything that isn't a genuine, fresh wakeup.
- */
-export function verifyWakeup(options: {
-  secret: string
-  headers: HeaderBag
-  body: string
-  /** Unix seconds; defaults to now. */
-  now?: number
-  toleranceSeconds?: number
-}): Wakeup {
-  const timestamp = header(options.headers, 'x-workspace-timestamp')
-  const signature = header(options.headers, 'x-workspace-signature')
-  if (!timestamp || !signature || !/^\d{1,12}$/.test(timestamp)) throw new WakeupError('missing signature')
-  const now = options.now ?? Math.floor(Date.now() / 1000)
-  if (Math.abs(now - Number(timestamp)) > (options.toleranceSeconds ?? WAKEUP_TOLERANCE_SECONDS)) {
-    throw new WakeupError('stale wakeup')
-  }
-  const expected = Buffer.from(signWakeup(options.secret, timestamp, options.body))
-  const given = Buffer.from(signature)
-  if (expected.length !== given.length || !timingSafeEqual(expected, given)) throw new WakeupError('bad signature')
-  let wakeup: Wakeup
-  try {
-    wakeup = JSON.parse(options.body) as Wakeup
-  } catch {
-    throw new WakeupError('body is not JSON', 400)
-  }
-  if (typeof wakeup?.event !== 'string' || typeof wakeup.deliveryId !== 'string') {
-    throw new WakeupError('not a wakeup', 400)
-  }
-  const delivery = header(options.headers, 'x-workspace-delivery')
-  if (delivery && delivery !== wakeup.deliveryId) throw new WakeupError('delivery mismatch', 400)
-  return wakeup
-}
-
-/** Remembers recent delivery IDs, so a retried wakeup is handled once. */
-export class DeliveryDeduper {
-  private readonly seen = new Map<string, true>()
-  private readonly limit: number
-  constructor(limit = 10_000) {
-    this.limit = limit
-  }
-
-  /** True the first time an ID is seen. */
-  first(deliveryId: string): boolean {
-    if (this.seen.has(deliveryId)) return false
-    this.seen.set(deliveryId, true)
-    if (this.seen.size > this.limit) {
-      const oldest = this.seen.keys().next().value
-      if (oldest !== undefined) this.seen.delete(oldest)
-    }
-    return true
-  }
-}
+export * from './channel.ts'
 
 // ---------------------------------------------------------------------------
 // MCP over streamable HTTP
@@ -117,23 +29,6 @@ export class McpError extends Error {
     super(message)
     this.name = 'McpError'
     this.code = code
-  }
-}
-
-/** A reply tool answered with something other than `ok`. */
-export class ToolError extends Error {
-  readonly outcome: string
-  readonly field?: string
-  constructor(outcome: string, detail: { message?: string; field?: string; retryCategory?: string }) {
-    super(detail.message ?? (detail.field ? `invalid ${detail.field}` : outcome))
-    this.name = 'ToolError'
-    this.outcome = outcome
-    this.field = detail.field
-  }
-
-  /** `temporarily_unavailable`: worth retrying with backoff. */
-  get retryable() {
-    return this.outcome === 'temporarily_unavailable'
   }
 }
 
@@ -306,12 +201,6 @@ export type RunActivity = {
 
 export type RunResult = { kind: string; url?: string; title?: string; branch?: string; number?: number }
 
-function unwrap<T>(payload: unknown): T {
-  const result = payload as { outcome?: string; value?: T; message?: string; field?: string; retryCategory?: string }
-  if (result?.outcome === 'ok') return result.value as T
-  throw new ToolError(result?.outcome ?? 'invalid_response', result ?? {})
-}
-
 /** The agent's reply tools, by their MCP names and arguments. */
 export class ReplyTools {
   readonly mcp: McpClient
@@ -448,8 +337,14 @@ export type RequestContext = {
 export type RunnerOptions = {
   mcpUrl: string
   token: string
+  /** The server; defaults to the MCP address's origin. */
+  origin?: string
+  /** The signing secret of the connection's webhook, to take pushes (`receive`, `listen`). */
   webhookSecret?: string
-  /** What your runner is, such as `claude_code` or `custom`, for session_bind. */
+  /** Where to keep the event cursor between restarts; without one the server keeps it. */
+  cursorFile?: string
+  cursor?: CursorStore
+  /** What your runner is, such as `custom`, for session_bind. */
   harness: string
   onRequest: (context: RequestContext) => Promise<void>
   fetch?: typeof fetch
@@ -458,44 +353,67 @@ export type RunnerOptions = {
 
 type Active = { context: RequestContext; controller: AbortController; listeners: ((followup: RequestContext) => void)[]; queued: RequestContext[] }
 
+/** A reply request to handle: from an event, or found by `inbox_list`. */
+export type Asked = { requestId: string; cancelled?: boolean; followsRequestId?: string | null; sessionRef?: string | null }
+
+/** What a `reply.*` event asks of the runner, or null for any other event. */
+export function asked(event: WorkspaceEvent): Asked | null {
+  if (!event.type.startsWith('reply.')) return null
+  const requestId = replyRequestId(event)
+  if (!requestId) return null
+  const data = event.data ?? {}
+  return {
+    requestId,
+    cancelled: event.type === 'reply.cancelled',
+    followsRequestId: typeof data.followsRequestId === 'string' ? data.followsRequestId : null,
+    sessionRef: typeof data.sessionRef === 'string' ? data.sessionRef : null,
+  }
+}
+
 export class Runner {
   readonly tools: ReplyTools
+  readonly channel: WorkspaceChannel
   private readonly options: RunnerOptions
-  private readonly deduper = new DeliveryDeduper()
   private readonly active = new Map<string, Active>()
   /** Follow-ups already handed to the work running in their thread. */
   private readonly handedOff = new Set<string>()
 
   constructor(options: RunnerOptions) {
     this.options = options
-    this.tools = new ReplyTools(new McpClient({ url: options.mcpUrl, token: options.token, fetch: options.fetch }))
+    const mcp = new McpClient({ url: options.mcpUrl, token: options.token, fetch: options.fetch })
+    this.tools = new ReplyTools(mcp)
+    this.channel = new WorkspaceChannel({
+      origin: options.origin ?? new URL(options.mcpUrl).origin,
+      token: options.token,
+      tools: mcp,
+      cursor: options.cursor ?? (options.cursorFile ? fileCursor(options.cursorFile) : undefined),
+      fetch: options.fetch,
+      onError: options.onError,
+    })
+    this.channel.on('reply.*', (event) => {
+      const ask = asked(event)
+      // Not awaited: the work runs while the channel reads on.
+      if (ask) void this.dispatch(ask).catch((error) => this.report(error))
+    })
   }
 
-  /** Verifies and handles one wakeup. Answer the HTTP request with `status` right away. */
+  /** Checks and handles one push. Answer the HTTP request with `status` right away. */
   receive(headers: HeaderBag, body: string): { status: number } {
     if (!this.options.webhookSecret) return { status: 500 }
-    let wakeup: Wakeup
-    try {
-      wakeup = verifyWakeup({ secret: this.options.webhookSecret, headers, body })
-    } catch (error) {
-      return { status: error instanceof WakeupError ? error.status : 400 }
-    }
-    if (wakeup.event === 'ping') return { status: 204 }
-    if (this.deduper.first(wakeup.deliveryId)) void this.dispatch(wakeup).catch((error) => this.report(error))
-    return { status: 204 }
+    return { status: this.channel.receivePush(this.options.webhookSecret, headers, body).status }
   }
 
-  /** Handles a wakeup that is already verified (or a request found by polling). */
-  async dispatch(wakeup: Pick<Wakeup, 'event' | 'replyRequestId'> & Partial<Wakeup>): Promise<void> {
-    if (wakeup.event === 'reply.cancelled') {
-      this.active.get(wakeup.replyRequestId)?.controller.abort(new Error('stopped by a person'))
+  /** Handles one reply request; resolves when its work is done. */
+  async dispatch(ask: Asked): Promise<void> {
+    if (ask.cancelled) {
+      this.active.get(ask.requestId)?.controller.abort(new Error('stopped by a person'))
       return
     }
-    if (this.active.has(wakeup.replyRequestId) || this.handedOff.has(wakeup.replyRequestId)) return
-    const claim = await this.tools.claim(wakeup.replyRequestId)
-    const follows = claim.request.followsRequestId ?? wakeup.followsRequestId
+    if (this.active.has(ask.requestId) || this.handedOff.has(ask.requestId)) return
+    const claim = await this.tools.claim(ask.requestId)
+    const follows = claim.request.followsRequestId ?? ask.followsRequestId
     const parent = follows ? this.active.get(follows) : undefined
-    const context = this.context(claim, wakeup.sessionRef ?? claim.session?.externalRef ?? null)
+    const context = this.context(claim, ask.sessionRef ?? claim.session?.externalRef ?? null)
     if (parent) {
       // A follow-up joins the work already running in its thread.
       this.handedOff.add(claim.request.requestId)
@@ -597,23 +515,22 @@ export class Runner {
     return server
   }
 
-  /** Without a public URL: polls `inbox_list` until the signal aborts. */
-  async poll(options: { intervalMs?: number; signal?: AbortSignal } = {}): Promise<void> {
-    const interval = options.intervalMs ?? 30_000
-    while (!options.signal?.aborted) {
-      try {
-        for (const item of await this.tools.inboxList()) {
-          // Claimed ones too: after a restart, claiming again picks them up.
-          if (!['pending', 'claimed'].includes(item.status) || this.active.has(item.requestId)) continue
-          void this.dispatch({ event: item.followsRequestId ? 'reply.followup' : 'reply.requested', replyRequestId: item.requestId }).catch((error) =>
-            this.report(error),
-          )
-        }
-      } catch (error) {
-        this.report(error)
+  /**
+   * Without a public address: reads the event stream (or long-polls) until
+   * the signal aborts. Requests already waiting are picked up first, so a
+   * restart misses nothing.
+   */
+  async connect(options: { signal?: AbortSignal } = {}): Promise<void> {
+    try {
+      for (const item of await this.tools.inboxList()) {
+        // Claimed ones too: after a restart, claiming again picks them up.
+        if (!['pending', 'claimed'].includes(item.status)) continue
+        void this.dispatch({ requestId: item.requestId, followsRequestId: item.followsRequestId }).catch((error) => this.report(error))
       }
-      await new Promise((resolve) => setTimeout(resolve, interval))
+    } catch (error) {
+      this.report(error)
     }
+    await this.channel.connect(options)
   }
 
   private report(error: unknown) {

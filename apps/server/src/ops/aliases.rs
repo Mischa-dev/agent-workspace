@@ -151,7 +151,6 @@ pub const ALIASES: &[Alias] = &[
     written!("milestone_write", "milestoneId" => "milestone_create", "milestone_update"),
     written!("template_write", "templateId" => "template_create", "template_update"),
     written!("automation_write", "ruleId" => "automation_create", "automation_update"),
-    written!("webhook_write", "webhookId" => "webhook_create", "webhook_update"),
     written!("environment_write", "environmentId" => "environment_create", "environment_update"),
     written!("bug_report_link_write", "linkId" => "bug_report_link_create", "bug_report_link_update"),
     // K2.12: whiteboard_edit answered in the envelope already.

@@ -225,6 +225,12 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The statuses an operation's own refusal answers with (its `outcome`
+/// says which), rather than the shared error body.
+fn refuses(status: &str) -> bool {
+    matches!(status, "403" | "404" | "409" | "422" | "503")
+}
+
 /// Moves a schema's `$defs` into `components.schemas` and points its
 /// references there. A definition keeps its own name when every tool that
 /// has one defines it the same way (shared message content, a thread's
@@ -351,6 +357,9 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     for branch in branches {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
+            // A paused account's answer (A2.10) is the same for every
+            // operation: shared too.
+            Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
             Some("ok") => continue,
             Some(outcome) => format!("Refusal{}", pascal(outcome)),
             // The operation layer's own refusals, one branch listing them
@@ -532,28 +541,24 @@ pub(crate) fn document() -> Value {
                 "content": { "application/json": { "schema": output.clone() } },
             }),
         );
+        // The refusing statuses (403, 404, 409, 422, 503) share it through
+        // the 4XX and 5XX ranges; the statuses every operation answers the
+        // same way are named, which takes precedence over a range.
         for (status, _) in ERROR_STATUSES {
-            // The refusing 4xx statuses (403, 404, 409, 422) share one
-            // "4XX" entry; 401, 413 and 429 are more specific, so they win
-            // over it. One entry instead of four keeps the document small
-            // as operations are added.
-            let (key, response) = match *status {
-                "403" | "404" | "409" | "422" => (
-                    "4XX".to_owned(),
-                    json!({ "$ref": format!("#/components/responses/{refused}") }),
-                ),
-                "503" => (
-                    (*status).to_owned(),
-                    json!({ "$ref": format!("#/components/responses/{refused}") }),
-                ),
+            if !refuses(status) {
                 // The same for every operation, so referenced rather than
-                // repeated.
-                _ => (
+                // repeated, which keeps the document small as tools are added.
+                responses.insert(
                     (*status).to_owned(),
                     json!({ "$ref": format!("#/components/responses/Error{status}") }),
-                ),
-            };
-            responses.insert(key, response);
+                );
+            }
+        }
+        for range in ["4XX", "5XX"] {
+            responses.insert(
+                range.to_owned(),
+                json!({ "$ref": format!("#/components/responses/{refused}") }),
+            );
         }
         paths.insert(
             format!("/{name}"),
@@ -596,7 +601,7 @@ pub(crate) fn document() -> Value {
             "schemas": components,
             "responses": ERROR_STATUSES
                 .iter()
-                .filter(|(status, _)| !matches!(*status, "403" | "404" | "409" | "422" | "503"))
+                .filter(|(status, _)| !refuses(status))
                 .map(|(status, description)| {
                     (
                         format!("Error{status}"),

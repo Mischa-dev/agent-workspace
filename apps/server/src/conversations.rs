@@ -1684,6 +1684,9 @@ pub(crate) struct AppendExtras {
     /// The message in the same conversation it replies to (AWD-70). Checked
     /// here, inside the send, against the conversation the sender may post in.
     pub(crate) reply_to_message_id: Option<Uuid>,
+    /// The client chose the idempotency key (`clientRequestId`): it goes
+    /// out on `message.created` as `clientMessageId` (A2.12).
+    pub(crate) client_keyed: bool,
 }
 
 /// `append_message_command` with files the sender uploaded to this
@@ -1928,6 +1931,9 @@ pub(crate) async fn append_message_command_with(
             message_id,
             sequence,
             author_actor_id: actor.actor_id,
+            client_message_id: extras
+                .client_keyed
+                .then(|| idempotency_key.as_str().to_owned()),
         }),
     )
     .await?;

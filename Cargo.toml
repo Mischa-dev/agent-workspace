@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "apps/server",
+  "connectors/agent-os",
   "crates/delivery-contract",
   "crates/host-conformance",
   "crates/host-protocol",

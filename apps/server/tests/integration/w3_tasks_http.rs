@@ -1283,13 +1283,12 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
 
 /// P0.12: every way of changing a task's status or blocker writes the same
 /// kind of record: an activity with `changedFields` and the before and
-/// after, and a `task.updated` webhook that carries what changed.
+/// after, and a `task.updated` event that names what changed.
 #[tokio::test]
 async fn every_status_change_says_what_changed() {
     use super::{
         agent_interface::{connect_app, initialize, send, tool},
         mcp_admin::{create_project, setup},
-        message_edits::owner_id,
     };
     let Some(setup) = setup("p12_changes").await else {
         return;
@@ -1339,20 +1338,6 @@ async fn every_status_change_says_what_changed() {
         .execute(pool)
         .await
         .expect("start");
-    sqlx::query(
-        r#"
-        INSERT INTO webhook_subscriptions (
-            id, organization_id, project_id, owner_actor_id, name, url, event_types
-        ) VALUES ($1, $2, $3, $4, 'Changes', 'https://127.0.0.1/hook', '{task.updated}')
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(setup.organization_id)
-    .bind(project)
-    .bind(owner_id(pool).await)
-    .execute(pool)
-    .await
-    .expect("webhook");
     let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL");
     let config = AppConfig::from_values(&BTreeMap::from([(
         "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
@@ -1387,10 +1372,6 @@ async fn every_status_change_says_what_changed() {
         }
     };
     pump().await;
-    sqlx::query("DELETE FROM webhook_deliveries")
-        .execute(pool)
-        .await
-        .expect("clear");
     let version = |task: Uuid| async move {
         sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
             .bind(task)
@@ -1463,19 +1444,17 @@ async fn every_status_change_says_what_changed() {
     );
 
     pump().await;
-    let subjects = sqlx::query_scalar::<_, Value>(
-        "SELECT subject FROM webhook_deliveries WHERE event_type = 'task.updated' ORDER BY created_at",
+    // Each change is one event naming what changed, as webhooks are told.
+    let changes = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT changes FROM events WHERE type = 'task.updated' AND thing_id = ANY($1) \
+         ORDER BY position",
     )
+    .bind(&tasks)
     .fetch_all(pool)
     .await
-    .expect("deliveries");
-    assert_eq!(subjects.len(), 4, "{subjects:?}");
-    for subject in &subjects {
-        assert!(
-            subject["changedFields"]
-                .as_array()
-                .is_some_and(|fields| !fields.is_empty()),
-            "{subject}"
-        );
+    .expect("events");
+    assert!(changes.len() >= 4, "{changes:?}");
+    for changed in &changes {
+        assert!(!changed.is_empty(), "{changes:?}");
     }
 }

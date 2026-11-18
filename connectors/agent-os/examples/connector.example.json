@@ -1,0 +1,19 @@
+{
+  "workspaceOrigin": "https://workspace.example",
+  "stateDir": "/var/lib/aw-agentos-connector",
+  "hostName": "Agent OS",
+  "agentos": {
+    "context": "<your Agent OS context>",
+    "command": ["agentos", "controller", "call"],
+    "timeoutSeconds": 45
+  },
+  "agents": {
+    "<reference the agent is bound with>": {
+      "agentosId": "<the agent's id in Agent OS>",
+      "name": "<what it is called>"
+    }
+  },
+  "pollSeconds": 8,
+  "taskDeadlineSeconds": 3600,
+  "maxReplyCharacters": 19500
+}

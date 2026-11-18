@@ -7,6 +7,7 @@ pub mod accounts;
 pub mod addresses;
 pub mod agent_docs;
 pub mod agent_parity;
+pub mod agent_plugin;
 pub mod agent_profiles;
 pub mod agent_sessions;
 pub mod agent_setup_links;

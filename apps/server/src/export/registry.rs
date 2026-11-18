@@ -219,6 +219,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
+                "account_join_requests",
+                "a pending ask to let an outside account in; asked again after import",
+            ),
+            (
                 "invite_tokens",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
@@ -1286,19 +1290,8 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 text_references: &[],
                 exclude: &[],
             },
-            KindDecl {
-                kind: "webhook_subscriptions",
-                table: "webhook_subscriptions",
-                references: &[
-                    ("project_id", "projects"),
-                    ("owner_actor_id", "actors"),
-                    ("via_oauth_grant_id", "mcp_oauth_grants"),
-                ],
-                text_references: &[],
-                exclude: &["secret_id"],
-            },
         ],
-        not_exported: &[("webhook_deliveries", "a delivery log")],
+        not_exported: &[],
     },
     ExportDecl {
         module: "suggestions",
@@ -1709,11 +1702,11 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("requested_by_actor_id", "actors"),
                     ("environment_id", "project_environments"),
                     ("provider_account_id", "provider_accounts"),
-                    ("agent_run_id", "runs"),
                     ("run_id", "runs"),
                     ("cancelled_by_actor_id", "actors"),
                     ("agent_profile_id", "agent_profiles"),
                     ("handoff_message_id", "messages"),
+                    ("agent_account_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1743,6 +1736,14 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "git_worktrees",
                 "a machine or session on this server; set up again after import",
+            ),
+            (
+                "agent_proposals",
+                "a host's pending offer of an agent; the host proposes it again after import",
+            ),
+            (
+                "host_a2a_tasks",
+                "an outside agent's task for a run in flight; a run that moves ends rather than resumes",
             ),
             (
                 "host_commands",

@@ -1237,6 +1237,64 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
     .await
     .expect("events");
     assert_eq!(events, vec![Some(ada)]);
+
+    // A2.10: a member who doesn't manage rook can't pause or resume it.
+    // A2.18: nor add it to a workspace (she manages no agent and may not
+    // invite).
+    for (name, key) in [
+        ("agent_pause", "lena-pause"),
+        ("agent_resume", "lena-resume"),
+        ("account_workspace_add", "lena-add"),
+    ] {
+        let (status, body) = send(
+            &world.app,
+            world.people["lena"].browser.request(
+                "POST",
+                &format!("/api/v2/w/{}/ops/{name}", world.organization),
+                Some(key),
+                json!({ "account": rook }),
+            ),
+        )
+        .await;
+        assert_ne!(body["outcome"], "ok", "lena runs {name}: {status} {body}");
+    }
+    // A2.19: nor run a host's action for it, or approve an agent a host
+    // proposed (she can't add agents). agent_register.rs covers both with a
+    // real host.
+    for (name, input) in [
+        (
+            "agent_action_run",
+            json!({"account": rook, "actionId": "pause"}),
+        ),
+        (
+            "agent_offer_start",
+            json!({"host": Uuid::now_v7(), "offerId": "new"}),
+        ),
+        (
+            "agent_register_decide",
+            json!({"proposal": Uuid::now_v7(), "decision": "approve"}),
+        ),
+    ] {
+        let (status, body) = send(
+            &world.app,
+            world.people["lena"].browser.request(
+                "POST",
+                &format!("/api/v2/w/{}/ops/{name}", world.organization),
+                Some(&format!("lena-{name}")),
+                input,
+            ),
+        )
+        .await;
+        assert_ne!(body["outcome"], "ok", "lena runs {name}: {status} {body}");
+    }
+    let paused = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM account_statuses WHERE account_id = $1 AND paused_at IS NOT NULL",
+    )
+    .bind(rook)
+    .fetch_one(world.pool())
+    .await
+    .expect("pauses");
+    assert_eq!(paused, 0);
     world.finish().await;
 }
 
@@ -2484,8 +2542,9 @@ async fn follow_ups_are_their_accounts_own() {
 }
 
 /// A2: an account's delivery connections are its own and its managers'.
-/// Another member can't add one for an agent, change, re-key or remove its
-/// connection, or list them; the owner, who manages every agent, can.
+/// Another member can't add one for an agent, change, re-key, test or remove
+/// its connection, list them or read and resend its deliveries; the owner,
+/// who manages every agent, can.
 #[tokio::test]
 async fn only_an_account_and_its_managers_touch_its_connections() {
     let Some(world) = super::support::world::WorldBuilder::default()
@@ -2539,6 +2598,22 @@ async fn only_an_account_and_its_managers_touch_its_connections() {
             json!({ "connectionId": connection }),
         ),
         ("connection_list", "l-5", json!({ "account": rook })),
+        // A2.6: its delivery log, a test ping and a redelivery too.
+        (
+            "connection_delivery_list",
+            "l-6",
+            json!({ "connectionId": connection }),
+        ),
+        (
+            "connection_test",
+            "l-7",
+            json!({ "connectionId": connection }),
+        ),
+        (
+            "connection_redeliver",
+            "l-8",
+            json!({ "connectionId": connection, "eventPosition": 1 }),
+        ),
     ] {
         let (status, body) =
             send(&world.app, lena.request("POST", &op(name), Some(key), body)).await;
