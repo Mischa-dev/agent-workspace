@@ -29,9 +29,27 @@ export type SheetTab = {
   frozenRows: number
   /** Widths in pixels by column number, for columns not at the default. */
   columnWidths: Record<number, number>
+  /** Its conditional formats, the first that applies winning. */
+  conditionalFormats: ConditionalRule[]
   /** The last row and column holding something (0 when empty). */
   rows: number
   columns: number
+}
+
+/** A conditional format: cells, when it applies, and how they look then (C1.17). */
+export type ConditionalRule = {
+  range: string
+  when: string
+  value?: string | number
+  value2?: string | number
+  text?: string
+  formula?: string
+  rank?: number
+  percent?: boolean
+  low?: string
+  high?: string
+  mid?: string
+  style?: Pick<CellStyle, 'bold' | 'italic' | 'underline' | 'strike' | 'color' | 'fill'>
 }
 
 export type CellKind = 'empty' | 'number' | 'text' | 'boolean' | 'error'
@@ -61,6 +79,8 @@ export type SheetCell = {
   style?: CellStyle
   /** The value as its number format shows it, such as `10%`. */
   display?: string
+  /** How it looks once its tab's conditional formats apply, when that differs. */
+  conditional?: CellStyle
 }
 
 /** A change to how cells look; text fields take '' to go back to plain. */
@@ -115,6 +135,10 @@ export type SheetChange =
   | { type: 'freezeRows'; tab: string; rows: number }
   | { type: 'columnWidth'; tab: string; column: number; width: number | null }
   | { type: 'format'; tab: string; rows: [number, number]; columns: [number, number]; look: LookChange }
+  /** Sorts a block's rows by its columns (`[column, descending]`, most important first); formulas follow the rows. */
+  | { type: 'sort'; tab: string; rows: [number, number]; columns: [number, number]; by: [number, boolean][] }
+  /** Replaces a tab's conditional formats. */
+  | { type: 'conditionalFormats'; tab: string; rules: ConditionalRule[] }
 
 export type ChangedCell = {
   tab: string
@@ -126,6 +150,7 @@ export type ChangedCell = {
   format?: string
   style?: CellStyle
   display?: string
+  conditional?: CellStyle
 }
 
 export type ChangeResult = {
@@ -162,6 +187,7 @@ const asLook = (raw: Wire) => ({
   ...(typeof raw.format === 'string' && raw.format ? { format: raw.format } : {}),
   ...(asStyle(raw.style) ? { style: asStyle(raw.style) } : {}),
   ...(typeof raw.display === 'string' ? { display: raw.display } : {}),
+  ...(raw.conditional && typeof raw.conditional === 'object' ? { conditional: asStyle(raw.conditional) ?? {} } : {}),
 })
 const asValue = (value: unknown): SheetCell['value'] =>
   typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) ? value : null
@@ -194,6 +220,7 @@ function normalizeTab(value: unknown): SheetTab {
     structureRevision: asNumber(raw.structureRevision, 1),
     frozenRows: asNumber(raw.frozenRows, 1),
     columnWidths: widths,
+    conditionalFormats: asArray(raw.conditionalFormats).filter((rule): rule is ConditionalRule => typeof asRecord(rule).range === 'string' && typeof asRecord(rule).when === 'string'),
     rows: asNumber(raw.rows),
     columns: asNumber(raw.columns),
   }

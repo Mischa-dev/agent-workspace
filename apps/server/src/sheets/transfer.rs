@@ -149,6 +149,7 @@ fn read_csv(text: &str, tab_name: &str) -> Result<TabInput, String> {
         name: tab_name.to_owned(),
         cells,
         looks: Vec::new(),
+        rules: Vec::new(),
     })
 }
 
@@ -273,8 +274,13 @@ pub fn changes_for(first_tab: &str, tabs: &[TabInput]) -> Vec<Change> {
     changes
 }
 
-/// A tab's stored cells as inputs and looks, for an .xlsx export.
-pub fn input_of(name: &str, cells: &[&StoredCell]) -> TabInput {
+/// A tab's stored cells as inputs and looks, and its conditional formats,
+/// for an .xlsx export.
+pub fn input_of(
+    name: &str,
+    cells: &[&StoredCell],
+    rules: Vec<super::conditional::ConditionalRule>,
+) -> TabInput {
     TabInput {
         name: name.to_owned(),
         cells: cells
@@ -287,6 +293,7 @@ pub fn input_of(name: &str, cells: &[&StoredCell]) -> TabInput {
             .map(|cell| (cell.row_number, cell.column_number, cell.look()))
             .filter(|(_, _, look)| !look.is_plain())
             .collect(),
+        rules,
     }
 }
 
@@ -332,16 +339,19 @@ mod tests {
                     name: "Q1  Sales".to_owned(),
                     cells: vec![(1, 1, "5".to_owned())],
                     looks: Vec::new(),
+                    rules: Vec::new(),
                 },
                 TabInput {
                     name: "Total".to_owned(),
                     cells: vec![(1, 1, "='Q1  Sales'!A1*2".to_owned())],
                     looks: Vec::new(),
+                    rules: Vec::new(),
                 },
                 TabInput {
                     name: "~import 0".to_owned(),
                     cells: vec![(1, 1, "x".to_owned())],
                     looks: Vec::new(),
+                    rules: Vec::new(),
                 },
             ])
             .expect("written");
@@ -387,16 +397,19 @@ mod tests {
                 name: "Plan".to_owned(),
                 cells: vec![],
                 looks: Vec::new(),
+                rules: Vec::new(),
             },
             TabInput {
                 name: "plan".to_owned(),
                 cells: vec![],
                 looks: Vec::new(),
+                rules: Vec::new(),
             },
             TabInput {
                 name: "   ".to_owned(),
                 cells: vec![],
                 looks: Vec::new(),
+                rules: Vec::new(),
             },
         ])
         .expect("named");
@@ -412,6 +425,7 @@ mod tests {
                 name: "T".to_owned(),
                 cells: vec![(1, 201, "x".to_owned())],
                 looks: Vec::new(),
+                rules: Vec::new(),
             }])
             .is_err()
         );
@@ -450,6 +464,7 @@ mod tests {
             format: None,
             style: None,
             display: None,
+            conditional: None,
         };
         let cells = [
             cell(1, 1, "Name", "text", serde_json::json!("Name")),
@@ -467,7 +482,9 @@ mod tests {
             String::from_utf8(csv_of(&refs).expect("csv")).expect("utf8"),
             "Name,\n,0.25\n\"say, \"\"hi\"\"\",\n"
         );
-        let xlsx = IronCalc.to_xlsx(&[input_of("Data", &refs)]).expect("xlsx");
+        let xlsx = IronCalc
+            .to_xlsx(&[input_of("Data", &refs, Vec::new())])
+            .expect("xlsx");
         let back = read(&IronCalc, Format::Xlsx, &xlsx, "T").expect("read");
         assert!(back[0].cells.contains(&(2, 2, "=1/4".to_owned())));
     }

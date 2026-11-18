@@ -33,9 +33,11 @@ import {
 import { usePhoneWidth } from '../ui/useCoarsePointer'
 import { changeSheet, sheetExportHref, sheetKeys, updateSheet, useSheet, type LookChange, type SheetBody, type SheetChange, type SheetTab } from './api'
 import { SheetDetailsDialog, TabNameDialog } from './SheetDialogs'
-import { SheetGrid, type GridEdit } from './SheetGrid'
+import { SheetGrid, type GridEdit, type GridShown } from './SheetGrid'
+import { SheetFind, SheetRulesDialog, SheetViewDialog } from './SheetTools'
+import { deleteSheetView, useSheetViews, viewSpec, type SheetView } from './sheetViews'
 import { commentedCells, selectionAnchor, threadAt, type SheetAnchor } from './sheetComments'
-import { bounds, cards, cellKey, cellMap, cellName, extent, patched, type Selection } from './sheetModel'
+import { bounds, cards, cellKey, cellMap, cellName, columnName, columnNumber, extent, patched, viewRows, type Selection } from './sheetModel'
 
 type Dialogs =
   | { kind: 'details' }
@@ -114,6 +116,24 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   // The open discussion: by its thread's id once it has one, since rows and
   // columns moving around it move its anchor.
   const [commenting, setCommenting] = useState<{ anchor: SheetAnchor; label: string; threadId?: string } | null>(null)
+  // Find and replace, and the filter view on screen (C1.16).
+  const [finding, setFinding] = useState(false)
+  const [viewId, setViewId] = useState<string | null>(null)
+  const [viewDialog, setViewDialog] = useState<{ view: SheetView | null } | null>(null)
+  const [editingRules, setEditingRules] = useState(false)
+  const views = useSheetViews(sheetId, body?.tab, !phone)
+  const shownTab = body?.tabs.find((entry) => entry.id === body.tab)
+  const activeView = views.data?.views.find((view) => view.id === viewId && view.tabId === body?.tab) ?? null
+  const frozenRows = shownTab?.frozenRows ?? 0
+  const usedRows = shownTab?.rows ?? 0
+  const shown = useMemo<GridShown | null>(() => {
+    if (!activeView) return null
+    const spec = viewSpec(activeView)
+    return {
+      rows: viewRows(cells, spec, frozenRows + 1, usedRows),
+      hiddenColumns: new Set(spec.hiddenColumns.map(columnNumber).filter(Boolean)),
+    }
+  }, [activeView, cells, frozenRows, usedRows])
 
   if (sheet.isPending) {
     return (
@@ -270,6 +290,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
 
   const chooseTab = (id: string) => {
     setSelection(START)
+    setViewId(null)
     setParams(
       (current) => {
         const next = new URLSearchParams(current)
@@ -307,8 +328,20 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const rowCount = box.bottom - box.top + 1
   const columnCount = box.right - box.left + 1
   const plural = (count: number, one: string) => (count === 1 ? one : `${count} ${one}s`)
+  // Sorting moves the data: the selected rows, or every row under the frozen ones.
+  const sortBlock = (descending: boolean) => {
+    if (!tab) return
+    const whole = rowCount === 1
+    const rows: [number, number] = whole ? [tab.frozenRows + 1, Math.max(tab.frozenRows + 1, used.rows)] : [box.top, box.bottom]
+    const columns: [number, number] = whole ? [1, Math.max(1, used.columns)] : [Math.min(box.left, selection.focus.column), Math.max(box.right, selection.focus.column)]
+    void structural([{ type: 'sort', tab: tab.id, rows, columns, by: [[selection.focus.column, descending]] }])
+  }
+  const sortTarget = rowCount === 1 ? 'the sheet' : `${plural(rowCount, 'row')}`
   const gridItems: MenuEntry[] = tab
     ? [
+        { label: `Sort ${sortTarget} by column ${columnName(selection.focus.column)}, A to Z`, icon: 'arrow-down', onSelect: () => sortBlock(false) },
+        { label: `Sort ${sortTarget} by column ${columnName(selection.focus.column)}, Z to A`, icon: 'arrow-up', onSelect: () => sortBlock(true) },
+        { separator: true },
         {
           label: `Insert ${plural(rowCount, 'row')} above`,
           icon: 'arrow-up',
@@ -446,7 +479,35 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
           onSelect: () => look({ fill }),
         })),
         { separator: true },
+        { label: 'Conditional formatting', onSelect: () => setEditingRules(true) },
         { label: 'Clear formatting', onSelect: () => look({ clear: true }) },
+      ]
+    : []
+  const mayChange = (view: SheetView) => !view.shared || editable
+  const viewItems: MenuEntry[] = tab
+    ? [
+        { label: 'All rows', checked: !activeView, onSelect: () => setViewId(null) },
+        ...(views.data?.views ?? []).map((view): MenuEntry => ({
+          label: view.shared ? view.name : `${view.name} (only you)`,
+          checked: activeView?.id === view.id,
+          onSelect: () => setViewId(view.id),
+        })),
+        { separator: true },
+        { label: 'New filter view', icon: 'plus', onSelect: () => setViewDialog({ view: null }) },
+        ...(activeView && mayChange(activeView)
+          ? [
+              { label: 'Edit this view', icon: 'pencil' as const, onSelect: () => setViewDialog({ view: activeView }) },
+              {
+                label: 'Remove this view',
+                icon: 'trash' as const,
+                danger: true,
+                onSelect: () =>
+                  void deleteSheetView(client, activeView)
+                    .then(() => setViewId(null))
+                    .catch((error: unknown) => showToast({ tone: 'danger', title: 'That view wasn’t removed', description: describeError(error).message })),
+              },
+            ]
+          : []),
       ]
     : []
   const download = (format: 'xlsx' | 'csv') => {
@@ -533,7 +594,16 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
 
   return (
     <AppShell project={project} user={user}>
-      <div className="aw-page aw-page--full aw-sheet">
+      <div
+        className="aw-page aw-page--full aw-sheet"
+        onKeyDown={(event) => {
+          // Ctrl or Cmd with F finds in the sheet rather than the page.
+          if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'f' && !phone) {
+            event.preventDefault()
+            setFinding(true)
+          }
+        }}
+      >
         <PageHeader
           actions={sheetItems.length ? <Menu items={sheetItems} label="Sheet actions" placement="bottom-end" trigger={<IconButton icon="more" label="Sheet actions" />} /> : null}
           icon="table"
@@ -565,6 +635,21 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
                   {focusThread ? 'Comments' : 'Comment'}
                 </Button>
               ) : null}
+              <Button icon="search" onClick={() => setFinding(true)} size="sm" variant="ghost">
+                Find
+              </Button>
+              {viewItems.length ? (
+                <Menu
+                  items={viewItems}
+                  label="Filter views"
+                  placement="bottom-end"
+                  trigger={
+                    <Button size="sm" variant="ghost">
+                      {activeView ? activeView.name : 'All rows'}
+                    </Button>
+                  }
+                />
+              ) : null}
               {writable && formatItems.length ? (
                 <Menu
                   items={formatItems}
@@ -590,6 +675,24 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
                 />
               ) : null}
             </div>
+            {finding ? (
+              <SheetFind
+                editable={writable}
+                onClose={() => setFinding(false)}
+                onGo={(tabId, row, column) => {
+                  if (tabId !== tab?.id) chooseTab(tabId)
+                  else if (shown && row > tab.frozenRows && !shown.rows.includes(row)) setViewId(null)
+                  setSelection({ anchor: { row, column }, focus: { row, column } })
+                }}
+                onReplace={async (changes) => {
+                  const saved = await send(changes)
+                  if (saved) void refresh()
+                  return saved
+                }}
+                sheetId={sheetId}
+                tabs={tabs}
+              />
+            ) : null}
             {tab ? (
               <SheetGrid
                 cells={cells}
@@ -603,6 +706,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
                 pending={tabPending}
                 revision={body.sheet.revision}
                 selection={selection}
+                shown={shown}
                 size={size}
                 tab={tab}
               />
@@ -636,6 +740,29 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
             viewerId={user.actorId}
           />
         </SidePanel>
+      ) : null}
+      {editingRules && tab ? (
+        <SheetRulesDialog
+          onClose={() => setEditingRules(false)}
+          onSave={async (rules) => {
+            const saved = await send([{ type: 'conditionalFormats', tab: tab.id, rules }])
+            if (saved) void refresh()
+            return saved
+          }}
+          selection={`${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`}
+          tab={tab}
+        />
+      ) : null}
+      {viewDialog && tab ? (
+        <SheetViewDialog
+          canShare={editable}
+          columns={Math.max(used.columns, 1)}
+          onClose={() => setViewDialog(null)}
+          onSaved={(view) => setViewId(view.id)}
+          sheetId={sheetId}
+          tabId={tab.id}
+          view={viewDialog.view}
+        />
       ) : null}
       {dialog?.kind === 'details' ? (
         <SheetDetailsDialog

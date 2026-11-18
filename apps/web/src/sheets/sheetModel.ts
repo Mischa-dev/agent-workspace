@@ -61,7 +61,8 @@ export function inkOn(fill: string) {
 
 /** A cell's style as the grid draws it: inline properties and the custom properties its class reads. */
 export function cellLook(cell: SheetCell | undefined): Record<string, string> | undefined {
-  const style = cell?.style
+  // Conditional formats, when they apply, decide how the cell looks.
+  const style = cell?.conditional ?? cell?.style
   if (!style) return undefined
   const look: Record<string, string> = {}
   if (style.bold) look.fontWeight = '600'
@@ -195,6 +196,7 @@ export function patched(body: SheetBody, result: ChangeResult): SheetBody | null
       ...(change.format ? { format: change.format } : {}),
       ...(change.style ? { style: change.style } : {}),
       ...(change.display !== undefined ? { display: change.display } : {}),
+      ...(change.conditional ? { conditional: change.conditional } : {}),
     })
     if (!input) continue
     rows = Math.max(rows, change.row)
@@ -235,13 +237,6 @@ export function cards(body: SheetBody, frozenRows: number) {
 
 export type Range = { top: number; left: number; bottom: number; right: number }
 
-/** A1 → 1; AA → 27; anything else → 0. */
-function columnNumber(name: string) {
-  let number = 0
-  for (const character of name) number = number * 26 + (character.charCodeAt(0) - 64)
-  return number
-}
-
 /** `B2:D9` (either corner first) or one cell such as `C4`, or `null` when it isn't a range of the grid. */
 export function parseRange(text: string): Range | null {
   const match = /^\s*([A-Za-z]{1,3})(\d{1,5})(?::([A-Za-z]{1,3})(\d{1,5}))?\s*$/.exec(text)
@@ -260,3 +255,99 @@ export function parseRange(text: string): Range | null {
 
 export const rangeName = ({ top, left, bottom, right }: Range) =>
   top === bottom && left === right ? cellName({ row: top, column: left }) : `${cellName({ row: top, column: left })}:${cellName({ row: bottom, column: right })}`
+
+/** A → 1, AA → 27; 0 when it isn't a column name. */
+export function columnNumber(name: string) {
+  const letters = name.trim().toUpperCase()
+  if (!/^[A-Z]{1,3}$/.test(letters)) return 0
+  let column = 0
+  for (const letter of letters) column = column * 26 + (letter.charCodeAt(0) - 64)
+  return column
+}
+
+/** A saved filter view as the grid applies it. */
+export type ViewSpec = {
+  filters: { column: string; op: string; value?: unknown; values?: unknown[] }[]
+  sort: { column: string; descending?: boolean }[]
+  hiddenColumns: string[]
+}
+
+const asNumber = (value: unknown) => {
+  if (typeof value === 'number') return value
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value)
+  return null
+}
+
+/** -1, 0 or 1: numbers by size when both are numbers, otherwise text ignoring case. */
+function compareTo(cell: SheetCell | undefined, wanted: unknown) {
+  const left = cell?.kind === 'number' ? asNumber(cell.value) : asNumber(display(cell))
+  const right = asNumber(wanted)
+  if (left !== null && right !== null) return Math.sign(left - right)
+  return Math.sign(display(cell).toLowerCase().localeCompare(String(wanted ?? '').toLowerCase()))
+}
+
+function passes(cell: SheetCell | undefined, filter: ViewSpec['filters'][number]) {
+  const shown = display(cell)
+  switch (filter.op) {
+    case 'empty':
+      return shown === ''
+    case 'notEmpty':
+      return shown !== ''
+    case 'equals':
+      return compareTo(cell, filter.value) === 0
+    case 'notEquals':
+      return compareTo(cell, filter.value) !== 0
+    case 'contains':
+      return shown.toLowerCase().includes(String(filter.value ?? '').toLowerCase())
+    case 'notContains':
+      return !shown.toLowerCase().includes(String(filter.value ?? '').toLowerCase())
+    case 'greaterThan':
+      return shown !== '' && compareTo(cell, filter.value) > 0
+    case 'lessThan':
+      return shown !== '' && compareTo(cell, filter.value) < 0
+    case 'atLeast':
+      return shown !== '' && compareTo(cell, filter.value) >= 0
+    case 'atMost':
+      return shown !== '' && compareTo(cell, filter.value) <= 0
+    case 'oneOf':
+      return (filter.values ?? []).some((value) => compareTo(cell, value) === 0)
+    default:
+      return true
+  }
+}
+
+/** Numbers, then text, then TRUE/FALSE, then errors; empty cells always last. */
+function rank(cell: SheetCell | undefined) {
+  if (!cell || display(cell) === '') return 4
+  return { number: 0, text: 1, boolean: 2, error: 3 }[cell.kind as string] ?? 1
+}
+
+function sortCompare(left: SheetCell | undefined, right: SheetCell | undefined, descending: boolean) {
+  const [a, b] = [rank(left), rank(right)]
+  if (a !== b || a === 4) return a - b
+  const order = a === 0 ? Math.sign(Number(left?.value) - Number(right?.value)) : display(left).toLowerCase().localeCompare(display(right).toLowerCase())
+  return descending ? -order : order
+}
+
+/**
+ * The rows a view shows, in its order: rows `from` to `to` that pass every
+ * filter, sorted by its columns (ties keep sheet order). The data stays as it is.
+ */
+export function viewRows(cells: Map<string, SheetCell>, view: ViewSpec, from: number, to: number) {
+  const filters = view.filters.map((filter) => ({ ...filter, at: columnNumber(filter.column) })).filter((filter) => filter.at > 0)
+  const rows: number[] = []
+  for (let row = from; row <= to; row += 1) {
+    if (filters.every((filter) => passes(cells.get(cellKey(row, filter.at)), filter))) rows.push(row)
+  }
+  const keys = view.sort.map((key) => ({ at: columnNumber(key.column), descending: Boolean(key.descending) })).filter((key) => key.at > 0)
+  if (keys.length) {
+    rows.sort((left, right) => {
+      for (const key of keys) {
+        const order = sortCompare(cells.get(cellKey(left, key.at)), cells.get(cellKey(right, key.at)), key.descending)
+        if (order) return order
+      }
+      return left - right
+    })
+  }
+  return rows
+}

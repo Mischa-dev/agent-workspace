@@ -402,6 +402,12 @@ pub static SHEET_VERSION_RESTORED: EventType = fact(
     Some("sheet"),
     "An earlier revision of a sheet was put back",
 );
+pub static SHEET_VIEWS_CHANGED: EventType = fact(
+    "sheet.views_changed",
+    "sheets",
+    Some("sheet"),
+    "A sheet's filter views were added, changed or removed",
+);
 
 // --- dashboards ------------------------------------------------------------
 pub static DASHBOARD_UPDATED: EventType = fact(
@@ -642,6 +648,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &DECISION_UPDATED,
         &SHEET_UPDATED,
         &SHEET_VERSION_RESTORED,
+        &SHEET_VIEWS_CHANGED,
         &DASHBOARD_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,
         &WHITEBOARD_UPDATED,

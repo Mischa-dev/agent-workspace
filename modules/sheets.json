@@ -12,10 +12,15 @@
   "tools": {
     "sheet_list": "query",
     "sheet_read": "query",
-    "sheet_write": "change"
+    "sheet_write": "change",
+    "sheet_search": "query",
+    "sheet_view_list": "query",
+    "sheet_view_create": "create",
+    "sheet_view_update": "change",
+    "sheet_view_delete": "change"
   },
   "routes": ["/api/v1/projects/{project_id}/sheets*"],
-  "events": { "emits": ["sheet.updated", "sheet.version_restored"], "listens": [] },
+  "events": { "emits": ["sheet.updated", "sheet.version_restored", "sheet.views_changed"], "listens": [] },
   "notifications": [],
   "search": ["sheets"],
   "automations": { "triggers": ["sheet_changed"], "actions": [] },

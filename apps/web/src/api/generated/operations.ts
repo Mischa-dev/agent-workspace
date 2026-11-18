@@ -86,6 +86,8 @@ export type FigureGroup = { color?: string | null; count: number; key: string; n
 
 export type Figures = { collectionName: string; groups: FigureGroup[]; measure?: string | null; records: string[]; style?: string | null; total: number; value?: number | null; viewName: string; viewType: string }
 
+export type FilterOp = ("equals" | "notEquals" | "contains" | "notContains" | "greaterThan" | "lessThan" | "atLeast" | "atMost" | "empty" | "notEmpty") | "oneOf"
+
 export type FilterWrite = { field: string; op: FieldOp; values?: string[] }
 
 export type FollowedThreadView = { id: string; lastActivityAt: string; messageCount: number; name: string; originMessageId?: string | null; outcome?: string | null; parentId: string; parentKind: string; parentName?: string | null; spaceId: string; spaceName: string; status: string; unread: boolean }
@@ -200,6 +202,10 @@ export type ScheduleView = { createdAt: string; everyMinutes?: number | null; id
 
 export type ScheduledLine = { conversationId: string; failure?: string | null; id: string; place: string; sendAt: string; status: string; text: string; url: string }
 
+export type SheetMatch = { cell: string; input: string; shown: string; tab: string }
+
+export type SheetViewOut = { filters: ViewFilter[]; hiddenColumns: string[]; id: string; name: string; shared: boolean; sheetId: string; sort: ViewSort[]; tab: string; tabId: string; updatedAt: string; version: number }
+
 export type SortWrite = { direction?: Direction; field: string }
 
 export type StatusView = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
@@ -223,6 +229,10 @@ export type TileKind = "view" | "text"
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
 export type ViewEntry = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
+
+export type ViewFilter = { column: string; op: FilterOp; value?: unknown; values?: unknown[] }
+
+export type ViewSort = { column: string; descending?: boolean }
 
 export type ViewWrite = { chart?: ChartWrite | null; columns?: ColumnWrite[] | null; dateField?: string | null; endField?: string | null; filters?: FilterWrite[] | null; groupBucket?: DateBucket | null; groupBy?: string | null; name?: string | null; position?: number | null; remove?: boolean | null; sort?: SortWrite[] | null; titleWidth?: number | null; type?: string | null; view?: string | null }
 
@@ -586,6 +596,26 @@ export type ScheduledMessageUpdateInput = { cancel?: boolean | null; id: string;
 
 export type ScheduledMessageUpdateOutput = { canceled: boolean; scheduled?: ScheduledLine | null }
 
+export type SheetSearchInput = { inFormulas?: boolean; limit?: number | null; matchCase?: boolean; query: string; sheetId: string; tab?: string | null; wholeCell?: boolean }
+
+export type SheetSearchOutput = { matches: SheetMatch[]; revision: number; truncated: boolean }
+
+export type SheetViewCreateInput = { filters?: ViewFilter[]; hiddenColumns?: string[]; name: string; shared?: boolean; sheetId: string; sort?: ViewSort[]; tab?: string | null }
+
+export type SheetViewCreateOutput = { filters: ViewFilter[]; hiddenColumns: string[]; id: string; name: string; shared: boolean; sheetId: string; sort: ViewSort[]; tab: string; tabId: string; updatedAt: string; version: number }
+
+export type SheetViewDeleteInput = { viewId: string }
+
+export type SheetViewDeleteOutput = { deleted: string }
+
+export type SheetViewListInput = { sheetId: string; tab?: string | null }
+
+export type SheetViewListOutput = { views: SheetViewOut[] }
+
+export type SheetViewUpdateInput = { expectedVersion?: number | null; filters?: ViewFilter[] | null; hiddenColumns?: string[] | null; name?: string | null; sort?: ViewSort[] | null; viewId: string }
+
+export type SheetViewUpdateOutput = { filters: ViewFilter[]; hiddenColumns: string[]; id: string; name: string; shared: boolean; sheetId: string; sort: ViewSort[]; tab: string; tabId: string; updatedAt: string; version: number }
+
 export type StatusDeleteInput = { account?: string | null; workspaceOnly?: boolean }
 
 export type StatusDeleteOutput = { cleared: boolean }
@@ -780,6 +810,11 @@ export type Operations = {
   schedule_list: { input: ScheduleListInput; output: ScheduleListOutput }
   schedule_update: { input: ScheduleUpdateInput; output: ScheduleUpdateOutput }
   scheduled_message_update: { input: ScheduledMessageUpdateInput; output: ScheduledMessageUpdateOutput }
+  sheet_search: { input: SheetSearchInput; output: SheetSearchOutput }
+  sheet_view_create: { input: SheetViewCreateInput; output: SheetViewCreateOutput }
+  sheet_view_delete: { input: SheetViewDeleteInput; output: SheetViewDeleteOutput }
+  sheet_view_list: { input: SheetViewListInput; output: SheetViewListOutput }
+  sheet_view_update: { input: SheetViewUpdateInput; output: SheetViewUpdateOutput }
   status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
   status_list: { input: StatusListInput; output: StatusListOutput }
   status_set: { input: StatusSetInput; output: StatusSetOutput }

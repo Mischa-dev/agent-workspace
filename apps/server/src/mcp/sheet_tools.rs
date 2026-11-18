@@ -297,6 +297,9 @@ pub(super) struct TabLine {
     pub used: String,
     /// Rows at the top that stay put while the rest scrolls.
     pub frozen_rows: i32,
+    /// Its conditional formats, in order (the first that applies wins).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditional_formats: Vec<sheets::conditional::ConditionalRule>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -325,6 +328,10 @@ pub(super) struct CellLine {
     /// wrap), when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<sheets::CellStyle>,
+    /// How it looks once the tab's conditional formats apply, when that
+    /// differs from its own style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditional_style: Option<sheets::CellStyle>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -378,6 +385,7 @@ fn tab_line(tab: &Tab, used: (i32, i32)) -> TabLine {
             format!("{}{}", column_name(used.1), used.0)
         },
         frozen_rows: tab.frozen_rows,
+        conditional_formats: tab.rules(),
     }
 }
 
@@ -392,6 +400,7 @@ fn cell_line(cell: &StoredCell) -> CellLine {
         display: cell.display.clone(),
         number_format: look.format,
         style: (!look.style.is_plain()).then_some(look.style),
+        conditional_style: cell.conditional_style(),
     }
 }
 
@@ -726,6 +735,46 @@ pub(super) struct TabWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SortKey {
+    /// A column of the range, by its letters (such as "C").
+    pub column: String,
+    /// Largest or last first.
+    #[serde(default)]
+    pub descending: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SortWrite {
+    /// The tab, by name or ID. Defaults to the first.
+    pub tab: Option<String>,
+    /// The block whose rows are sorted, such as "A2:F40" (leave the header
+    /// row out). Only its cells move; formulas that point at one follow it.
+    pub range: String,
+    /// One to three columns to sort by, most important first. Numbers come
+    /// before text, empty cells last.
+    pub by: Vec<SortKey>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ConditionalFormatsWrite {
+    /// The tab, by name or ID. Defaults to the first.
+    pub tab: Option<String>,
+    /// All of the tab's rules, in order: the first that applies to a cell
+    /// wins. "when" is lessThan, greaterThan, atLeast, atMost, equals,
+    /// notEquals (with "value"), between or notBetween (with "value" and
+    /// "value2"), textContains, textDoesNotContain, textBeginsWith or
+    /// textEndsWith (with "text"), empty, notEmpty, errors, formula (with
+    /// "formula", such as "=$C2=\"Late\""), top or bottom (with "rank"),
+    /// aboveAverage, belowAverage, duplicates, or colorScale (with "low" and
+    /// "high" colours). "style" sets bold, italic, underline, strike,
+    /// color and fill.
+    pub rules: Vec<sheets::conditional::ConditionalRule>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct FormatWrite {
     /// The tab, by name or ID. Defaults to the first.
     pub tab: Option<String>,
@@ -793,10 +842,19 @@ pub(super) struct SheetWriteArguments {
     /// Rows to add or change by header, after the cells.
     #[serde(default)]
     pub rows: Vec<RowWrite>,
+    /// Blocks to sort, after the rows. A sort moves cells, so edits that
+    /// check ifRevision on the same tab go in a separate call.
+    #[serde(default)]
+    pub sorts: Vec<SortWrite>,
     /// Number formats and styles to set on blocks of cells, last. They
     /// don't change what's typed, values, or the cells' revisions.
     #[serde(default)]
     pub formats: Vec<FormatWrite>,
+    /// Replace tabs' conditional formats: rules that colour cells by what
+    /// they hold, such as {"range": "C2:C40", "when": "lessThan", "value": 0,
+    /// "style": {"color": "#C62828"}}. An empty list removes a tab's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditional_formats: Vec<ConditionalFormatsWrite>,
     /// Fill a new sheet from a file instead of tabs, cells and rows: its
     /// tabs and what was typed in them, formulas included.
     pub import: Option<SheetImport>,
@@ -1012,6 +1070,30 @@ fn changes_of(arguments: &SheetWriteArguments) -> Result<Vec<Change>, (String, S
                 .collect(),
         });
     }
+    for (index, sort) in arguments.sorts.iter().enumerate() {
+        let Some(range) = address::range(&sort.range, sheets::MAX_ROWS, sheets::MAX_COLUMNS) else {
+            return Err((
+                format!("sorts[{index}].range"),
+                "Name the block in A1 form, such as \"A2:F40\".".to_owned(),
+            ));
+        };
+        let mut by = Vec::with_capacity(sort.by.len());
+        for (key, entry) in sort.by.iter().enumerate() {
+            let Some(column) = address::column_number(entry.column.trim()) else {
+                return Err((
+                    format!("sorts[{index}].by[{key}].column"),
+                    "Name a column by its letters, such as \"C\".".to_owned(),
+                ));
+            };
+            by.push((column, entry.descending));
+        }
+        changes.push(Change::Sort {
+            tab: sort.tab.clone(),
+            rows: range.rows,
+            columns: range.columns,
+            by,
+        });
+    }
     for (index, format) in arguments.formats.iter().enumerate() {
         let Some(range) = address::range(&format.range, sheets::MAX_ROWS, sheets::MAX_COLUMNS)
         else {
@@ -1031,6 +1113,21 @@ fn changes_of(arguments: &SheetWriteArguments) -> Result<Vec<Change>, (String, S
             patch,
         });
     }
+    for (index, entry) in arguments.conditional_formats.iter().enumerate() {
+        if let Err((rule, message)) = sheets::conditional::checked(entry.rules.clone()) {
+            return Err((
+                match rule {
+                    Some(rule) => format!("conditionalFormats[{index}].rules[{rule}]"),
+                    None => format!("conditionalFormats[{index}].rules"),
+                },
+                message,
+            ));
+        }
+        changes.push(Change::ConditionalFormats {
+            tab: entry.tab.clone(),
+            rules: entry.rules.clone(),
+        });
+    }
     Ok(changes)
 }
 
@@ -1041,7 +1138,11 @@ fn change_field(arguments: &SheetWriteArguments, index: usize, changes: &[Change
         .position(|change| {
             matches!(
                 change,
-                Change::Cell { .. } | Change::Row { .. } | Change::Format { .. }
+                Change::Cell { .. }
+                    | Change::Row { .. }
+                    | Change::Sort { .. }
+                    | Change::Format { .. }
+                    | Change::ConditionalFormats { .. }
             )
         })
         .unwrap_or(changes.len());
@@ -1053,10 +1154,28 @@ fn change_field(arguments: &SheetWriteArguments, index: usize, changes: &[Change
         format!("cells[{at}]")
     } else if at < arguments.cells.len() + arguments.rows.len() {
         format!("rows[{}]", at - arguments.cells.len())
-    } else {
+    } else if at < arguments.cells.len() + arguments.rows.len() + arguments.sorts.len() {
+        format!(
+            "sorts[{}]",
+            at - arguments.cells.len() - arguments.rows.len()
+        )
+    } else if at
+        < arguments.cells.len()
+            + arguments.rows.len()
+            + arguments.sorts.len()
+            + arguments.formats.len()
+    {
         format!(
             "formats[{}]",
-            at - arguments.cells.len() - arguments.rows.len()
+            at - arguments.cells.len() - arguments.rows.len() - arguments.sorts.len()
+        )
+    } else {
+        format!(
+            "conditionalFormats[{}]",
+            at - arguments.cells.len()
+                - arguments.rows.len()
+                - arguments.sorts.len()
+                - arguments.formats.len()
         )
     }
 }

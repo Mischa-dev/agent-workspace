@@ -43,6 +43,7 @@ fn tab(cells: usize) -> TabInput {
         name: "Sheet1".to_owned(),
         cells: filled,
         looks: Vec::new(),
+        rules: Vec::new(),
     }
 }
 

@@ -298,6 +298,8 @@ struct TabBody {
     frozen_rows: i32,
     /// `{"<column number>": width}` for columns not at the default width.
     column_widths: Json_,
+    /// Its conditional formats, the first that applies winning.
+    conditional_formats: Json_,
     /// The last row and column holding something (0 when it's empty).
     rows: i32,
     columns: i32,
@@ -320,6 +322,9 @@ struct CellBody {
     /// The value as its number format shows it.
     #[serde(skip_serializing_if = "Option::is_none")]
     display: Option<String>,
+    /// How it looks once conditional formats apply, when that differs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conditional: Option<Json_>,
 }
 
 impl From<StoredCell> for CellBody {
@@ -334,6 +339,7 @@ impl From<StoredCell> for CellBody {
             format: cell.format,
             style: cell.style,
             display: cell.display,
+            conditional: cell.conditional,
         }
     }
 }
@@ -404,6 +410,7 @@ async fn sheet_body(
                     structure_revision: tab.structure_revision,
                     frozen_rows: tab.frozen_rows,
                     column_widths: tab.column_widths,
+                    conditional_formats: tab.conditional_formats,
                     rows,
                     columns,
                 }
@@ -700,6 +707,15 @@ enum ChangeRequest {
         /// Pixels; null puts the column back to the default.
         width: Option<i32>,
     },
+    /// Sort a block's rows by its columns: `by` is `[column, descending]`
+    /// pairs, most important first.
+    #[serde(rename_all = "camelCase")]
+    Sort {
+        tab: String,
+        rows: (i32, i32),
+        columns: (i32, i32),
+        by: Vec<(i32, bool)>,
+    },
     /// Number format and style for a block, `[first, last]` rows and
     /// columns.
     #[serde(rename_all = "camelCase")]
@@ -708,6 +724,12 @@ enum ChangeRequest {
         rows: (i32, i32),
         columns: (i32, i32),
         look: super::LookInput,
+    },
+    /// Replace a tab's conditional formats.
+    #[serde(rename_all = "camelCase")]
+    ConditionalFormats {
+        tab: String,
+        rules: Vec<super::conditional::ConditionalRule>,
     },
 }
 
@@ -767,6 +789,17 @@ impl ChangeRequest {
                 column,
                 width,
             },
+            Self::Sort {
+                tab,
+                rows,
+                columns,
+                by,
+            } => Change::Sort {
+                tab: Some(tab),
+                rows,
+                columns,
+                by,
+            },
             Self::Format {
                 tab,
                 rows,
@@ -777,6 +810,10 @@ impl ChangeRequest {
                 rows,
                 columns,
                 patch: look.patch()?,
+            },
+            Self::ConditionalFormats { tab, rules } => Change::ConditionalFormats {
+                tab: Some(tab),
+                rules,
             },
         })
     }
@@ -803,6 +840,8 @@ struct ChangedCellBody {
     style: Option<super::CellStyle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conditional: Option<super::CellStyle>,
 }
 
 #[derive(Debug, Serialize)]
@@ -941,6 +980,7 @@ async fn change_sheet(
                 format: cell.look.format,
                 style: (!cell.look.style.is_plain()).then_some(cell.look.style),
                 display: cell.display,
+                conditional: cell.conditional,
             })
             .collect(),
     };
@@ -1164,7 +1204,7 @@ async fn export_sheet(
         Format::Xlsx => {
             let inputs = tabs
                 .iter()
-                .map(|tab| transfer::input_of(&tab.name, &of(tab)))
+                .map(|tab| transfer::input_of(&tab.name, &of(tab), tab.rules()))
                 .collect::<Vec<_>>();
             let bytes = tokio::task::spawn_blocking(move || {
                 use super::engine::FormulaEngine;
@@ -1280,6 +1320,7 @@ mod tests {
             structure_revision: 1,
             frozen_rows: 1,
             column_widths: Json_::Object(Map::new()),
+            conditional_formats: Json_::Array(Vec::new()),
         };
         let tabs = vec![tab("Summary"), tab("Data")];
         assert_eq!(

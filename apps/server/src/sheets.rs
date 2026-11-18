@@ -21,9 +21,11 @@
 //! sheet's own row lock orders writes to one sheet.
 
 pub mod address;
+pub mod conditional;
 pub mod engine;
 pub mod history;
 pub mod http;
+pub mod ops;
 pub mod transfer;
 
 use std::collections::{BTreeMap, HashMap};
@@ -142,6 +144,20 @@ pub struct Tab {
     pub structure_revision: i64,
     pub frozen_rows: i32,
     pub column_widths: Json,
+    /// Its conditional formats (C1.17), as [`conditional::ConditionalRule`]s.
+    pub conditional_formats: Json,
+}
+
+impl Tab {
+    /// Its conditional formats; any that don't read are left out.
+    pub fn rules(&self) -> Vec<conditional::ConditionalRule> {
+        self.conditional_formats
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|rule| serde_json::from_value(rule.clone()).ok())
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -158,9 +174,19 @@ pub struct StoredCell {
     pub style: Option<Json>,
     /// The value as its number format shows it.
     pub display: Option<String>,
+    /// How it looks once its tab's conditional formats apply, when that
+    /// differs from its own look (C1.17).
+    pub conditional: Option<Json>,
 }
 
 impl StoredCell {
+    /// Its look once conditional formats apply, when that differs.
+    pub fn conditional_style(&self) -> Option<CellStyle> {
+        self.conditional
+            .clone()
+            .and_then(|style| serde_json::from_value(style).ok())
+    }
+
     pub fn value(&self) -> Value {
         Value::from_stored(&self.kind, &self.value)
     }
@@ -184,7 +210,7 @@ impl StoredCell {
 
 /// The columns a [`StoredCell`] reads.
 const CELL_COLUMNS: &str = "tab_id, row_number, column_number, input, kind, value, revision, \
-     format, style, display";
+     format, style, display, conditional";
 
 /// A sheet as the web app and agents see it in a list.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -320,7 +346,8 @@ pub async fn tabs(
     sheet_id: Uuid,
 ) -> Result<Vec<Tab>, AppError> {
     Ok(sqlx::query_as::<_, Tab>(
-        "SELECT id, name, position, structure_revision, frozen_rows, column_widths \
+        "SELECT id, name, position, structure_revision, frozen_rows, column_widths, \
+                conditional_formats \
          FROM sheet_tabs WHERE sheet_id = $1 ORDER BY position, id",
     )
     .bind(sheet_id)
@@ -650,6 +677,15 @@ pub enum Change {
         column: i32,
         width: Option<i32>,
     },
+    /// Sort a block's rows by its columns' values: `by` is (column,
+    /// descending) in order of importance. Only the block's cells move, and
+    /// formulas that point at one of them follow it.
+    Sort {
+        tab: TabRef,
+        rows: (i32, i32),
+        columns: (i32, i32),
+        by: Vec<(i32, bool)>,
+    },
     /// Change how a block of cells looks (rows and columns inclusive): a
     /// number format, a style. Inputs, values and the cells' revisions stay
     /// as they are.
@@ -658,6 +694,12 @@ pub enum Change {
         rows: (i32, i32),
         columns: (i32, i32),
         patch: LookPatch,
+    },
+    /// Replace a tab's conditional formats (C1.17); an empty list removes
+    /// them all.
+    ConditionalFormats {
+        tab: TabRef,
+        rules: Vec<conditional::ConditionalRule>,
     },
 }
 
@@ -677,6 +719,8 @@ impl Change {
             Self::FreezeRows { .. } => "freezeRows",
             Self::ColumnWidth { .. } => "columnWidth",
             Self::Format { .. } => "format",
+            Self::Sort { .. } => "sort",
+            Self::ConditionalFormats { .. } => "conditionalFormats",
         }
     }
 }
@@ -808,6 +852,8 @@ pub struct ChangedCell {
     pub value: Value,
     pub look: Look,
     pub display: Option<String>,
+    /// How it looks once conditional formats apply, when that differs.
+    pub conditional: Option<CellStyle>,
 }
 
 impl ChangedCell {
@@ -845,6 +891,11 @@ struct WorkingTab {
     settings_changed: bool,
     /// Rows and columns this write inserted or deleted, in order.
     moves: Vec<Move>,
+    /// A sort in this write moved cells, so where a cell was before it
+    /// can't be told from `moves`.
+    sorted: bool,
+    /// Its conditional formats as this write leaves them.
+    rules: Vec<conditional::ConditionalRule>,
     /// Where the tab stands among the others now, from 0. Moves change it
     /// as they come; the engine keeps its own stable indexes.
     rank: usize,
@@ -1094,6 +1145,8 @@ async fn apply_unbounded(
             column_widths: tab.column_widths.as_object().cloned().unwrap_or_default(),
             settings_changed: false,
             moves: Vec::new(),
+            sorted: false,
+            rules: tab.rules(),
             rank: 0,
         })
         .collect::<Vec<_>>();
@@ -1149,6 +1202,16 @@ async fn apply_unbounded(
                 check!(check_input(index, input));
                 if let Some(read_at) = if_revision {
                     let working_tab = &working[tab];
+                    if working_tab.sorted {
+                        return Ok(Err(problem(
+                            index,
+                            ProblemKind::Invalid,
+                            format!(
+                                "\"{}\" was sorted earlier in this write. Send edits that check ifRevision in a separate call.",
+                                working_tab.name
+                            ),
+                        )));
+                    }
                     if working_tab.stored_structure_revision > *read_at {
                         return Ok(Err(problem(
                             index,
@@ -1506,6 +1569,8 @@ async fn apply_unbounded(
                     column_widths: serde_json::Map::new(),
                     settings_changed: false,
                     moves: Vec::new(),
+                    sorted: false,
+                    rules: Vec::new(),
                     rank: working.len(),
                 });
                 operations.push((index, Operation::AddTab { name }));
@@ -1614,6 +1679,48 @@ async fn apply_unbounded(
                     }
                 }
             }
+            Change::Sort {
+                tab,
+                rows,
+                columns,
+                by,
+            } => {
+                let tab = tab!(tab);
+                check!(check_row(index, rows.0));
+                check!(check_row(index, rows.1));
+                check!(check_column(index, columns.0));
+                check!(check_column(index, columns.1));
+                if rows.0 > rows.1 || columns.0 > columns.1 {
+                    return Ok(Err(problem(
+                        index,
+                        ProblemKind::Invalid,
+                        "Name the block from its top-left cell to its bottom-right one.",
+                    )));
+                }
+                if by.is_empty()
+                    || by.len() > 3
+                    || by
+                        .iter()
+                        .any(|(column, _)| !(columns.0..=columns.1).contains(column))
+                {
+                    return Ok(Err(problem(
+                        index,
+                        ProblemKind::Invalid,
+                        "Sort by one to three of the block's own columns.",
+                    )));
+                }
+                working[tab].structure_changed = true;
+                working[tab].sorted = true;
+                operations.push((
+                    index,
+                    Operation::Sort {
+                        tab,
+                        rows: *rows,
+                        columns: *columns,
+                        by: by.clone(),
+                    },
+                ));
+            }
             Change::Format {
                 tab,
                 rows,
@@ -1657,6 +1764,20 @@ async fn apply_unbounded(
                     },
                 ));
             }
+            Change::ConditionalFormats { tab, rules } => {
+                let tab = tab!(tab);
+                let rules = match conditional::checked(rules.clone()) {
+                    Ok(rules) => rules,
+                    Err((_, message)) => {
+                        return Ok(Err(problem(index, ProblemKind::Invalid, message)));
+                    }
+                };
+                if working[tab].rules != rules {
+                    working[tab].rules = rules.clone();
+                    working[tab].settings_changed = true;
+                    operations.push((index, Operation::Rules { tab, rules }));
+                }
+            }
         }
     }
 
@@ -1685,6 +1806,7 @@ async fn apply_unbounded(
                         .collect()
                 })
                 .unwrap_or_default(),
+            rules: tab.rules(),
         })
         .collect::<Vec<_>>();
     let (indexes, engine_operations): (Vec<usize>, Vec<Operation>) = operations.into_iter().unzip();
@@ -1759,6 +1881,30 @@ async fn apply_unbounded(
         }
     }
 
+    // Conditional formats follow inserted and deleted rows and columns:
+    // their ranges as the engine left them; a rule whose cells all went goes.
+    if let Some(outputs) = &outputs {
+        for (tab, output) in working.iter_mut().zip(outputs) {
+            if output.rule_ranges.len() != tab.rules.len() {
+                continue;
+            }
+            let moved = tab
+                .rules
+                .iter()
+                .cloned()
+                .zip(&output.rule_ranges)
+                .filter_map(|(mut rule, range)| {
+                    rule.range = range.clone()?;
+                    Some(rule)
+                })
+                .collect::<Vec<_>>();
+            if moved != tab.rules {
+                tab.rules = moved;
+                tab.settings_changed = true;
+            }
+        }
+    }
+
     // Tabs: removed ones go (with their cells), added ones come, the rest
     // take their names, positions and settings.
     let kept: Vec<Uuid> = working.iter().filter_map(|tab| tab.id).collect();
@@ -1814,8 +1960,8 @@ async fn apply_unbounded(
                 sqlx::query(
                     "INSERT INTO sheet_tabs \
                        (id, project_id, sheet_id, name, position, structure_revision, frozen_rows, \
-                        column_widths) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                        column_widths, conditional_formats) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                 )
                 .bind(id)
                 .bind(sheet.project_id)
@@ -1825,6 +1971,7 @@ async fn apply_unbounded(
                 .bind(revision)
                 .bind(tab.frozen_rows)
                 .bind(Json::Object(tab.column_widths.clone()))
+                .bind(json!(tab.rules))
                 .execute(&mut *connection)
                 .await?;
             }
@@ -1835,7 +1982,8 @@ async fn apply_unbounded(
                     sqlx::query(
                         "UPDATE sheet_tabs SET name = $3, position = $4, \
                            structure_revision = CASE WHEN $5 THEN $6 ELSE structure_revision END, \
-                           frozen_rows = $7, column_widths = $8, updated_at = now() \
+                           frozen_rows = $7, column_widths = $8, conditional_formats = $9, \
+                           updated_at = now() \
                          WHERE sheet_id = $1 AND id = $2",
                     )
                     .bind(sheet.id)
@@ -1846,6 +1994,7 @@ async fn apply_unbounded(
                     .bind(revision)
                     .bind(tab.frozen_rows)
                     .bind(Json::Object(tab.column_widths.clone()))
+                    .bind(json!(tab.rules))
                     .execute(&mut *connection)
                     .await?;
                 }
@@ -1885,6 +2034,7 @@ async fn apply_unbounded(
         let mut upsert_formats: Vec<Option<String>> = Vec::new();
         let mut upsert_styles: Vec<Option<String>> = Vec::new();
         let mut upsert_displays: Vec<Option<String>> = Vec::new();
+        let mut upsert_conditionals: Vec<Option<String>> = Vec::new();
         let mut seen: std::collections::HashSet<(Uuid, i32, i32)> =
             std::collections::HashSet::new();
         let mut input_cells = Vec::new();
@@ -1901,7 +2051,8 @@ async fn apply_unbounded(
                         stored.look() != cell.look,
                         stored.value() != cell.value
                             || stored.kind != cell.value.kind()
-                            || stored.display != cell.display,
+                            || stored.display != cell.display
+                            || stored.conditional_style() != cell.conditional,
                     ),
                     None => (!cell.input.is_empty(), !cell.look.is_plain(), true),
                 };
@@ -1924,6 +2075,11 @@ async fn apply_unbounded(
                     (!cell.look.style.is_plain()).then(|| json!(cell.look.style).to_string()),
                 );
                 upsert_displays.push(cell.display.clone());
+                upsert_conditionals.push(
+                    cell.conditional
+                        .as_ref()
+                        .map(|style| json!(style).to_string()),
+                );
                 let line = ChangedCell {
                     tab: output.name.clone(),
                     row: cell.row,
@@ -1932,6 +2088,7 @@ async fn apply_unbounded(
                     value: cell.value.clone(),
                     look: cell.look.clone(),
                     display: cell.display.clone(),
+                    conditional: cell.conditional.clone(),
                 };
                 if input_changed || look_changed {
                     delta.push(history::Delta {
@@ -1993,6 +2150,7 @@ async fn apply_unbounded(
                     value: Value::Empty,
                     look: Look::default(),
                     display: None,
+                    conditional: None,
                 });
             }
         }
@@ -2014,18 +2172,20 @@ async fn apply_unbounded(
             sqlx::query(
                 "INSERT INTO sheet_cells \
                    (project_id, sheet_id, tab_id, row_number, column_number, input, kind, value, \
-                    revision, updated_by_actor_id, format, style, display) \
+                    revision, updated_by_actor_id, format, style, display, conditional) \
                  SELECT $1, $2, cell.tab_id, cell.row_number, cell.column_number, cell.input, \
                         cell.kind, cell.value::jsonb, cell.revision, $3, cell.format, \
-                        cell.style::jsonb, cell.display \
+                        cell.style::jsonb, cell.display, cell.conditional::jsonb \
                  FROM UNNEST($4::uuid[], $5::int[], $6::int[], $7::text[], $8::text[], \
-                             $9::text[], $10::bigint[], $11::text[], $12::text[], $13::text[]) \
+                             $9::text[], $10::bigint[], $11::text[], $12::text[], $13::text[], \
+                             $14::text[]) \
                       AS cell(tab_id, row_number, column_number, input, kind, value, revision, \
-                              format, style, display) \
+                              format, style, display, conditional) \
                  ON CONFLICT (tab_id, row_number, column_number) DO UPDATE SET \
                    input = EXCLUDED.input, kind = EXCLUDED.kind, value = EXCLUDED.value, \
                    revision = EXCLUDED.revision, format = EXCLUDED.format, \
                    style = EXCLUDED.style, display = EXCLUDED.display, \
+                   conditional = EXCLUDED.conditional, \
                    updated_by_actor_id = CASE WHEN sheet_cells.input IS DISTINCT FROM EXCLUDED.input \
                      THEN EXCLUDED.updated_by_actor_id ELSE sheet_cells.updated_by_actor_id END, \
                    updated_at = CASE WHEN sheet_cells.input IS DISTINCT FROM EXCLUDED.input \
@@ -2044,6 +2204,7 @@ async fn apply_unbounded(
             .bind(&upsert_formats)
             .bind(&upsert_styles)
             .bind(&upsert_displays)
+            .bind(&upsert_conditionals)
             .execute(&mut *connection)
             .await?;
         }

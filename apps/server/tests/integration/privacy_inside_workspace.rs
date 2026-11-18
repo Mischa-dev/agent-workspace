@@ -1917,6 +1917,118 @@ async fn personal_views_stay_their_owners() {
     world.finish().await;
 }
 
+/// Sheet filter views (C1.16) keep to their owner: someone else's personal
+/// view of a sheet is not listed to you and can't be renamed or removed by
+/// you, and a role that can't edit sheets can keep a view of its own but
+/// can't share one.
+#[tokio::test]
+async fn personal_sheet_views_stay_their_owners() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("nate", "member")
+        .custom_role("Sheets reader", &["projects.view", "sheets.comment"])
+        .build("privacy_sheet_views")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = Uuid::parse_str(world.project("WORK")).expect("work");
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Sheets reader"]).expect("role id"))
+    .bind(work)
+    .bind(world.people["nate"].actor)
+    .execute(pool)
+    .await
+    .expect("narrow nate");
+    let (status, made) = send(
+        app,
+        world.people["lena"].browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/sheets"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"name": "Budget"}),
+        ),
+    )
+    .await;
+    let sheet = made
+        .pointer("/sheet/id")
+        .or_else(|| made.pointer("/id"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("lena makes a sheet: {status} {made}"))
+        .to_owned();
+
+    let (status, made) = op(
+        &world.people["lena"].browser,
+        "sheet_view_create",
+        json!({"sheetId": sheet, "name": "Lena's own",
+               "filters": [{"column": "A", "op": "notEmpty"}]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "lena makes a view: {status} {made}");
+    let mine = made["value"]["id"].as_str().expect("view id").to_owned();
+
+    let (_, listed) = op(
+        &world.people["mara"].browser,
+        "sheet_view_list",
+        json!({"sheetId": sheet}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(
+        !listed.to_string().contains(&mine),
+        "mara sees lena's view: {listed}"
+    );
+    for (name, input) in [
+        (
+            "sheet_view_update",
+            json!({"viewId": mine, "name": "Mara's now"}),
+        ),
+        ("sheet_view_delete", json!({"viewId": mine})),
+    ] {
+        let (status, body) = op(&world.people["mara"].browser, name, input).await;
+        assert_ne!(body["outcome"], "ok", "mara {name}: {status} {body}");
+    }
+    let name = sqlx::query_scalar::<_, String>("SELECT name FROM sheet_views WHERE id = $1")
+        .bind(Uuid::parse_str(&mine).expect("id"))
+        .fetch_one(pool)
+        .await
+        .expect("lena's view");
+    assert_eq!(name, "Lena's own");
+
+    let nate = &world.people["nate"].browser;
+    let (status, body) = op(
+        nate,
+        "sheet_view_create",
+        json!({"sheetId": sheet, "name": "Nate's own"}),
+    )
+    .await;
+    assert_eq!(body["outcome"], "ok", "nate keeps a view: {status} {body}");
+    let (status, body) = op(
+        nate,
+        "sheet_view_create",
+        json!({"sheetId": sheet, "name": "Nate's shared", "shared": true}),
+    )
+    .await;
+    assert_ne!(body["outcome"], "ok", "nate shares a view: {status} {body}");
+    world.finish().await;
+}
+
 /// Dashboards (T1.32) keep to their owner and read as the viewer: someone
 /// else's personal dashboard is not listed to you and can't be read,
 /// changed or removed by you; a role that can't build collections can't

@@ -26,6 +26,9 @@ const OVERSCAN = 12
 /** A cell's new input; `revision` is the sheet revision the editor opened at. */
 export type GridEdit = { row: number; column: number; input: string; revision?: number }
 
+/** What a filter view shows: its rows in order (after the frozen ones) and the columns it hides. */
+export type GridShown = { rows: number[]; hiddenColumns: ReadonlySet<number> }
+
 const STYLE_KEYS: Record<string, 'bold' | 'italic' | 'underline'> = { b: 'bold', i: 'italic', u: 'underline' }
 
 /**
@@ -45,6 +48,7 @@ export function SheetGrid({
   pending,
   revision,
   selection,
+  shown,
   size,
   tab,
 }: {
@@ -62,6 +66,8 @@ export function SheetGrid({
   /** The sheet's revision as shown: an edit holds the one it opened at. */
   revision: number
   selection: Selection
+  /** A filter view's rows and hidden columns; all of them when left out. */
+  shown?: GridShown | null
   size: { rows: number; columns: number }
   tab: SheetTab
 }) {
@@ -81,7 +87,14 @@ export function SheetGrid({
   } | null>(null)
   const frozen = Math.min(tab.frozenRows, size.rows)
   const width = useCallback((column: number) => (resizing?.column === column ? resizing.width : (tab.columnWidths[column] ?? DEFAULT_WIDTH)), [resizing, tab.columnWidths])
-  const columns = useMemo(() => Array.from({ length: size.columns }, (_, index) => index + 1), [size.columns])
+  const hidden = shown?.hiddenColumns
+  const columns = useMemo(() => Array.from({ length: size.columns }, (_, index) => index + 1).filter((column) => !hidden?.has(column)), [size.columns, hidden])
+  // Body rows by position: in a view, its rows in its order; otherwise every row after the frozen ones.
+  const order = shown?.rows ?? null
+  const positions = useMemo(() => (order ? new Map(order.map((row, index) => [row, index])) : null), [order])
+  const bodyCount = order ? order.length : Math.max(0, size.rows - frozen)
+  const rowAt = useCallback((index: number) => (order ? order[index] : frozen + 1 + index), [order, frozen])
+  const indexOf = useCallback((row: number) => (positions ? (positions.get(row) ?? -1) : row - frozen - 1), [positions, frozen])
 
   // What's in view, kept as the grid scrolls and resizes.
   useLayoutEffect(() => {
@@ -106,9 +119,9 @@ export function SheetGrid({
     }
   }, [])
 
-  const first = Math.max(frozen + 1, frozen + 1 + Math.floor(view.top / ROW_HEIGHT) - OVERSCAN)
-  const last = Math.min(size.rows, first + Math.ceil(view.height / ROW_HEIGHT) + OVERSCAN * 2)
-  const body = useMemo(() => Array.from({ length: Math.max(0, last - first + 1) }, (_, index) => first + index), [first, last])
+  const first = Math.max(0, Math.floor(view.top / ROW_HEIGHT) - OVERSCAN)
+  const last = Math.min(bodyCount - 1, first + Math.ceil(view.height / ROW_HEIGHT) + OVERSCAN * 2)
+  const body = useMemo(() => Array.from({ length: Math.max(0, last - first + 1) }, (_, index) => rowAt(first + index)), [first, last, rowAt])
   const frozenRows = useMemo(() => Array.from({ length: frozen }, (_, index) => index + 1), [frozen])
 
   // The focused cell stays in view.
@@ -117,19 +130,34 @@ export function SheetGrid({
     const element = scroller.current
     if (!element) return
     const headHeight = head.current?.offsetHeight ?? ROW_HEIGHT
-    if (focus.row > frozen) {
-      const top = (focus.row - frozen - 1) * ROW_HEIGHT
+    const index = indexOf(focus.row)
+    if (focus.row > frozen && index >= 0) {
+      const top = index * ROW_HEIGHT
       const visible = element.clientHeight - headHeight
       if (top < element.scrollTop) element.scrollTop = top
       else if (top + ROW_HEIGHT > element.scrollTop + visible) element.scrollTop = top + ROW_HEIGHT - visible
     }
     let left = 0
-    for (let column = 1; column < focus.column; column += 1) left += width(column)
+    for (let column = 1; column < focus.column; column += 1) if (!hidden?.has(column)) left += width(column)
     const right = left + width(focus.column)
     const gutter = 48
     if (left < element.scrollLeft) element.scrollLeft = left
     else if (right + gutter > element.scrollLeft + element.clientWidth) element.scrollLeft = right + gutter - element.clientWidth
-  }, [focus, frozen, width])
+  }, [focus, frozen, width, indexOf, hidden])
+
+  // Steps that keep to what's shown: a view's order of rows, past hidden columns.
+  const stepRow = (row: number, delta: number) => {
+    if (!order) return row + delta
+    const index = indexOf(row)
+    if (index < 0) return delta > 0 && row >= frozen ? (order[0] ?? row) : row + delta
+    if (index + delta < 0) return frozen > 0 ? frozen : row
+    return order[Math.min(index + delta, order.length - 1)] ?? row
+  }
+  const stepColumn = (column: number, delta: number) => {
+    let next = column + delta
+    while (hidden?.has(next) && next > 1 && next < size.columns) next += delta
+    return hidden?.has(next) ? column : next
+  }
 
   const move = (to: Position, extend = false) => {
     const next = clamp(to, {
@@ -179,21 +207,21 @@ export function SheetGrid({
     const { row, column } = focus
     const extend = event.shiftKey
     const step: Record<string, Position> = {
-      ArrowUp: { row: row - 1, column },
-      ArrowDown: { row: row + 1, column },
-      ArrowLeft: { row, column: column - 1 },
-      ArrowRight: { row, column: column + 1 },
+      ArrowUp: { row: stepRow(row, -1), column },
+      ArrowDown: { row: stepRow(row, 1), column },
+      ArrowLeft: { row, column: stepColumn(column, -1) },
+      ArrowRight: { row, column: stepColumn(column, 1) },
     }
     if (step[event.key]) {
       event.preventDefault()
       move(step[event.key], extend)
     } else if (event.key === 'Tab') {
       event.preventDefault()
-      move({ row, column: column + (extend ? -1 : 1) })
+      move({ row, column: stepColumn(column, extend ? -1 : 1) })
     } else if (event.key === 'Enter' || event.key === 'F2') {
       event.preventDefault()
       if (editable) startEdit()
-      else move({ row: row + 1, column })
+      else move({ row: stepRow(row, 1), column })
     } else if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault()
       clearSelection()
@@ -297,7 +325,7 @@ export function SheetGrid({
           selected ? 'is-selected' : '',
           focused ? 'is-focused' : '',
           commented?.has(cellKey(row, column)) ? 'has-comment' : '',
-          cell?.style?.fill ? 'has-fill' : '',
+          (cell?.conditional ?? cell?.style)?.fill ? 'has-fill' : '',
         ]
           .filter(Boolean)
           .join(' ')
@@ -340,10 +368,10 @@ export function SheetGrid({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
                     event.preventDefault()
-                    commit({ row: row + (event.shiftKey ? -1 : 1), column })
+                    commit({ row: stepRow(row, event.shiftKey ? -1 : 1), column })
                   } else if (event.key === 'Tab') {
                     event.preventDefault()
-                    commit({ row, column: column + (event.shiftKey ? -1 : 1) })
+                    commit({ row, column: stepColumn(column, event.shiftKey ? -1 : 1) })
                   } else if (event.key === 'Escape') {
                     event.preventDefault()
                     committed.current = true
@@ -362,8 +390,8 @@ export function SheetGrid({
     </tr>
   )
 
-  const above = (first - frozen - 1) * ROW_HEIGHT
-  const below = (size.rows - last) * ROW_HEIGHT
+  const above = first * ROW_HEIGHT
+  const below = Math.max(0, bodyCount - 1 - last) * ROW_HEIGHT
 
   return (
     <div

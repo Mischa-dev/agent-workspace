@@ -365,3 +365,256 @@ async fn formats_and_styles_stay_through_writes_files_and_history() {
     assert_eq!(b2["value"], json!(20.0), "{read}");
     assert!(!cells.iter().any(|cell| cell["cell"] == "B4"), "{read}");
 }
+
+/// C1.16: sorting a block moves its rows and a formula that pointed at a
+/// moved row follows it; sheet_search finds what cells show; a saved view
+/// keeps its filters and comes back in the list.
+#[tokio::test]
+async fn sorting_finding_and_saved_views() {
+    let Some(setup) = setup("awd54_sheet_sort").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "SORT", "Sorting").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "SORT",
+            "name": "Team",
+            "cells": [
+                {"cell": "A1", "input": "Name"}, {"cell": "B1", "input": "Score"},
+                {"cell": "A2", "input": "Cy"}, {"cell": "B2", "input": "3"},
+                {"cell": "A3", "input": "Ana"}, {"cell": "B3", "input": "7"},
+                {"cell": "A4", "input": "Di"}, {"cell": "B4", "input": "1"},
+                {"cell": "A5", "input": "Bo"}, {"cell": "B5", "input": "11"},
+                {"cell": "D1", "input": "=B3"},
+                {"cell": "D2", "input": "=SUM(B2:B5)"},
+            ],
+            "clientRequestId": "sort-0",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+
+    let sorted = call(
+        "sheet_write",
+        json!({"projectId": "SORT", "sheet": sheet, "sorts": [{"range": "A2:B5", "by": [{"column": "A"}]}]}),
+    )
+    .await;
+    assert_eq!(sorted["outcome"], "ok", "{sorted}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "SORT", "sheet": sheet, "range": "A1:D5"}),
+    )
+    .await;
+    let at = |name: &str| {
+        read["value"]["cells"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|cell| cell["cell"] == name)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let names: Vec<Value> = ["A2", "A3", "A4", "A5"]
+        .map(|name| at(name)["value"].clone())
+        .into();
+    assert_eq!(
+        names,
+        vec![json!("Ana"), json!("Bo"), json!("Cy"), json!("Di")],
+        "{read}"
+    );
+    assert_eq!(at("D1")["formula"], "=B2", "{read}");
+    assert_eq!(at("D1")["value"], json!(7.0), "{read}");
+    assert_eq!(at("D2")["value"], json!(22.0), "{read}");
+
+    let found = call("sheet_search", json!({"sheetId": sheet, "query": "an"})).await;
+    assert_eq!(found["outcome"], "ok", "{found}");
+    assert_eq!(found["value"]["matches"][0]["cell"], "A2", "{found}");
+    assert_eq!(
+        found["value"]["matches"].as_array().map(Vec::len),
+        Some(1),
+        "{found}"
+    );
+    let formulas = call(
+        "sheet_search",
+        json!({"sheetId": sheet, "query": "sum(", "inFormulas": true}),
+    )
+    .await;
+    assert_eq!(formulas["value"]["matches"][0]["cell"], "D2", "{formulas}");
+
+    let view = call(
+        "sheet_view_create",
+        json!({"sheetId": sheet, "name": "High scores", "shared": true,
+               "filters": [{"column": "B", "op": "atLeast", "value": 5}],
+               "sort": [{"column": "B", "descending": true}],
+               "hiddenColumns": ["D"], "clientRequestId": "view-0"}),
+    )
+    .await;
+    assert_eq!(view["outcome"], "ok", "{view}");
+    let bad = call(
+        "sheet_view_create",
+        json!({"sheetId": sheet, "name": "Bad", "filters": [{"column": "B2", "op": "equals"}],
+               "clientRequestId": "view-bad"}),
+    )
+    .await;
+    assert_ne!(bad["outcome"], "ok", "{bad}");
+    let listed = call("sheet_view_list", json!({"sheetId": sheet})).await;
+    assert_eq!(
+        listed["value"]["views"][0]["name"], "High scores",
+        "{listed}"
+    );
+    assert_eq!(listed["value"]["views"][0]["shared"], true, "{listed}");
+    assert_eq!(
+        listed["value"]["views"][0]["filters"][0]["op"], "atLeast",
+        "{listed}"
+    );
+    let id = view["value"]["id"].clone();
+    let version = view["value"]["version"].clone();
+    let renamed = call(
+        "sheet_view_update",
+        json!({"viewId": id, "expectedVersion": version, "name": "Top"}),
+    )
+    .await;
+    assert_eq!(renamed["value"]["name"], "Top", "{renamed}");
+    let stale = call(
+        "sheet_view_update",
+        json!({"viewId": id, "expectedVersion": version, "name": "Late"}),
+    )
+    .await;
+    assert_ne!(stale["outcome"], "ok", "{stale}");
+    let gone = call("sheet_view_delete", json!({"viewId": id})).await;
+    assert_eq!(gone["outcome"], "ok", "{gone}");
+}
+
+/// C1.17: a "less than 0 is red" rule colours the right cells after an
+/// edit, readers see it, a bad rule is refused by field, and a restore
+/// brings the rules back.
+#[tokio::test]
+async fn a_less_than_zero_rule_colours_the_right_cells() {
+    let Some(setup) = setup("awd54_sheet_rules").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "RULE", "Rules").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "RULE",
+            "name": "Money",
+            "cells": [
+                {"cell": "A1", "input": "Net"},
+                {"cell": "A2", "input": "5"},
+                {"cell": "A3", "input": "-2"},
+                {"cell": "A4", "input": "=A2-10"},
+            ],
+            "clientRequestId": "rule-0",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    let before_rules = made["value"]["revision"].as_i64().expect("revision");
+
+    let bad = call(
+        "sheet_write",
+        json!({"projectId": "RULE", "sheet": sheet, "conditionalFormats": [{"rules": [
+            {"range": "A2:A9", "when": "lessThan", "value": 0, "style": {"color": "red"}}
+        ]}]}),
+    )
+    .await;
+    assert_eq!(bad["outcome"], "invalid_request", "{bad}");
+    assert!(
+        bad.to_string().contains("conditionalFormats[0].rules[0]"),
+        "{bad}"
+    );
+
+    let ruled = call(
+        "sheet_write",
+        json!({"projectId": "RULE", "sheet": sheet, "conditionalFormats": [{"rules": [
+            {"range": "a2:a9", "when": "lessThan", "value": 0, "style": {"color": "#C62828"}}
+        ]}]}),
+    )
+    .await;
+    assert_eq!(ruled["outcome"], "ok", "{ruled}");
+    let red = |read: &Value, name: &str| {
+        read["value"]["cells"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|cell| cell["cell"] == name)
+            .and_then(|cell| {
+                cell["conditionalStyle"]["color"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+    };
+    let read = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    assert_eq!(red(&read, "A2"), None, "{read}");
+    assert_eq!(red(&read, "A3").as_deref(), Some("#C62828"), "{read}");
+    assert_eq!(red(&read, "A4").as_deref(), Some("#C62828"), "{read}");
+    assert_eq!(
+        read["value"]["tabs"][0]["conditionalFormats"][0]["range"], "A2:A9",
+        "{read}"
+    );
+
+    // An edit: A2 goes to 20, so A4 is 10 and no longer red; A2 turns red at -1.
+    let edited = call(
+        "sheet_write",
+        json!({"projectId": "RULE", "sheet": sheet, "cells": [{"cell": "A2", "input": "20"}, {"cell": "A3", "input": "-1"}]}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let read = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    assert_eq!(red(&read, "A2"), None, "{read}");
+    assert_eq!(red(&read, "A3").as_deref(), Some("#C62828"), "{read}");
+    assert_eq!(red(&read, "A4"), None, "{read}");
+
+    // A row inserted above moves the rule with its cells.
+    let moved = call(
+        "sheet_write",
+        json!({"projectId": "RULE", "sheet": sheet, "tabs": [{"tab": "Sheet1", "insertRowsAt": 1, "count": 1}]}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let read = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    assert_eq!(
+        read["value"]["tabs"][0]["conditionalFormats"][0]["range"], "A3:A10",
+        "{read}"
+    );
+    assert_eq!(red(&read, "A4").as_deref(), Some("#C62828"), "{read}");
+
+    // Back to before the rule: no rules, nothing red.
+    let current = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    let revision = current["value"]["sheet"]["revision"]
+        .as_i64()
+        .expect("revision");
+    let restored = call(
+        "history_restore",
+        json!({"thing": sheet, "version": before_rules, "expectedVersion": revision, "clientRequestId": "rule-restore"}),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    let read = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    assert!(
+        read["value"]["tabs"][0].get("conditionalFormats").is_none(),
+        "{read}"
+    );
+    assert_eq!(red(&read, "A3"), None, "{read}");
+}

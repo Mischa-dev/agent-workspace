@@ -28,6 +28,8 @@ use ironcalc_base::{
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
+use super::conditional::ConditionalRule;
+
 /// One tab's cells as they're stored: (row, column) from 1, and the input.
 /// `looks` are the cells that aren't plain (a number format or a style),
 /// which can include cells with nothing typed in them.
@@ -36,6 +38,8 @@ pub struct TabInput {
     pub name: String,
     pub cells: Vec<(i32, i32, String)>,
     pub looks: Vec<(i32, i32, Look)>,
+    /// Its conditional formats, the first that applies winning (C1.17).
+    pub rules: Vec<ConditionalRule>,
 }
 
 /// Horizontal alignment of a cell's text.
@@ -283,6 +287,15 @@ pub enum Operation {
     RemoveTab {
         tab: usize,
     },
+    /// Sort the rows of a block by its columns' values, in order of the
+    /// keys (column, descending). Rows move whole, the way moving a row
+    /// does, so formulas that point at a moved row follow it.
+    Sort {
+        tab: usize,
+        rows: (i32, i32),
+        columns: (i32, i32),
+        by: Vec<(i32, bool)>,
+    },
     /// Change how a block of cells looks (rows and columns inclusive);
     /// inputs and values stay as they are.
     Format {
@@ -290,6 +303,11 @@ pub enum Operation {
         rows: (i32, i32),
         columns: (i32, i32),
         patch: LookPatch,
+    },
+    /// Replace a tab's conditional formats.
+    Rules {
+        tab: usize,
+        rules: Vec<ConditionalRule>,
     },
 }
 
@@ -350,6 +368,9 @@ pub struct CellOutput {
     pub look: Look,
     /// The value as its number format shows it, for a cell with a format.
     pub display: Option<String>,
+    /// How it looks once its tab's conditional formats apply, when that
+    /// differs from its own look.
+    pub conditional: Option<CellStyle>,
 }
 
 /// One tab after the operations, its cells in row then column order.
@@ -357,6 +378,10 @@ pub struct CellOutput {
 pub struct TabOutput {
     pub name: String,
     pub cells: Vec<CellOutput>,
+    /// Each conditional format's range now, in the tab's order: inserting
+    /// and deleting rows and columns moves them; None when its cells are
+    /// all gone.
+    pub rule_ranges: Vec<Option<String>>,
 }
 
 /// Why the engine refused. `operation` is the index of the operation that
@@ -483,7 +508,255 @@ fn apply_one(model: &mut Model<'_>, operation: &Operation) -> Result<(), String>
             }
             model.delete_sheet(index(*tab, count)?)
         }
+        Operation::Sort {
+            tab,
+            rows,
+            columns,
+            by,
+        } => sort(model, index(*tab, count)?, *rows, *columns, by),
+        Operation::Rules { tab, rules } => {
+            let tab = index(*tab, count)?;
+            while !model.get_conditional_formatting_list(tab)?.is_empty() {
+                model.delete_conditional_formatting(tab, 0)?;
+            }
+            for (position, rule) in rules.iter().enumerate() {
+                model
+                    .add_conditional_formatting(tab, &rule.range, rule.input()?)
+                    .map_err(|message| format!("Conditional format {}: {message}", position + 1))?;
+            }
+            Ok(())
+        }
     }
+}
+
+/// How a cell looks once its tab's conditional formats apply, when that
+/// differs from `own`.
+fn conditional_of(
+    model: &Model<'_>,
+    tab: u32,
+    row: i32,
+    column: i32,
+    own: &Style,
+) -> Result<Option<CellStyle>, String> {
+    let extended = model.get_extended_style_for_cell(tab, row, column)?;
+    Ok((extended.style != *own).then(|| look_of(&extended.style).style))
+}
+
+/// Where a value sorts: numbers, then text (ignoring case), then true and
+/// false, then errors, and empty cells last whichever way the sort goes.
+fn sort_rank(value: &Value) -> (u8, f64, String) {
+    match value {
+        Value::Number(number) => (0, *number, String::new()),
+        Value::Text(text) => (1, 0.0, text.to_lowercase()),
+        Value::Boolean(value) => (2, f64::from(u8::from(*value)), String::new()),
+        Value::Error(text) => (3, 0.0, text.clone()),
+        Value::Empty => (4, 0.0, String::new()),
+    }
+}
+
+fn compare(left: &Value, right: &Value, descending: bool) -> std::cmp::Ordering {
+    let (left, right) = (sort_rank(left), sort_rank(right));
+    // Empty cells stay last either way.
+    if left.0 == 4 || right.0 == 4 {
+        return left.0.cmp(&right.0);
+    }
+    let order = left
+        .0
+        .cmp(&right.0)
+        .then(left.1.total_cmp(&right.1))
+        .then_with(|| left.2.cmp(&right.2));
+    if descending { order.reverse() } else { order }
+}
+
+fn sort(
+    model: &mut Model<'_>,
+    tab: u32,
+    rows: (i32, i32),
+    columns: (i32, i32),
+    by: &[(i32, bool)],
+) -> Result<(), String> {
+    model.evaluate();
+    let mut order = (rows.0..=rows.1)
+        .map(|row| {
+            let keys = by
+                .iter()
+                .map(|(column, _)| value_of(model, tab, row, *column))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((row, keys))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    order.sort_by(|(_, left), (_, right)| {
+        by.iter()
+            .zip(left.iter().zip(right))
+            .map(|((_, descending), (left, right))| compare(left, right, *descending))
+            .find(|order| order.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    // Where each row of the block goes.
+    let mut moved_to = BTreeMap::new();
+    for (place, (original, _)) in order.iter().enumerate() {
+        moved_to.insert(*original, rows.0 + place as i32);
+    }
+    if moved_to.iter().all(|(from, to)| from == to) {
+        return Ok(());
+    }
+    let names = model
+        .get_worksheets_properties()
+        .into_iter()
+        .map(|properties| properties.name)
+        .collect::<Vec<_>>();
+    let sorted = names.get(tab as usize).cloned().unwrap_or_default();
+    let block = Block {
+        rows,
+        columns,
+        moved_to: &moved_to,
+    };
+    // Every cell's content and style, with references into the block's
+    // cells pointed at where those cells go.
+    let mut placed = Vec::new();
+    for cell in model.get_all_cells() {
+        let (sheet, row, column) = (cell.index, cell.row, cell.column);
+        let in_block = sheet == tab && block.holds(row, column);
+        let input = model.get_localized_cell_content(sheet, row, column)?;
+        let rewritten = match input.strip_prefix('=') {
+            Some(formula) => {
+                let own = names.get(sheet as usize).map(String::as_str).unwrap_or("");
+                follow(formula, own, &sorted, &block).map(|formula| format!("={formula}"))
+            }
+            None => None,
+        };
+        if in_block || rewritten.is_some() {
+            let style = model.get_style_for_cell(sheet, row, column)?;
+            let target = if in_block {
+                moved_to.get(&row).copied().unwrap_or(row)
+            } else {
+                row
+            };
+            placed.push((sheet, target, column, rewritten.unwrap_or(input), style));
+        }
+    }
+    model.range_clear_all(&Area {
+        sheet: tab,
+        row: rows.0,
+        column: columns.0,
+        width: columns.1 - columns.0 + 1,
+        height: rows.1 - rows.0 + 1,
+    })?;
+    for (sheet, row, column, input, style) in placed {
+        model.set_cell_style(sheet, row, column, &style)?;
+        if input.is_empty() {
+            continue;
+        }
+        model.set_user_input(sheet, row, column, input)?;
+    }
+    Ok(())
+}
+
+/// The block a sort reorders, and where each of its rows goes.
+struct Block<'a> {
+    rows: (i32, i32),
+    columns: (i32, i32),
+    moved_to: &'a BTreeMap<i32, i32>,
+}
+
+impl Block<'_> {
+    fn holds(&self, row: i32, column: i32) -> bool {
+        (self.rows.0..=self.rows.1).contains(&row)
+            && (self.columns.0..=self.columns.1).contains(&column)
+    }
+
+    fn row(&self, row: i32) -> i32 {
+        self.moved_to.get(&row).copied().unwrap_or(row)
+    }
+}
+
+fn reference_text(column: i32, row: i32, absolute_column: bool, absolute_row: bool) -> String {
+    format!(
+        "{}{}{}{}",
+        if absolute_column { "$" } else { "" },
+        crate::sheets::address::column_name(column),
+        if absolute_row { "$" } else { "" },
+        row
+    )
+}
+
+/// `formula` (without its `=`, in a cell of tab `own`) with every reference
+/// to a cell of the block on tab `sorted` pointing where that cell went, or
+/// None when nothing in it changes. A range moves only when it lies in one
+/// row of the block; a range across rows keeps covering the same rows.
+fn follow(formula: &str, own: &str, sorted: &str, block: &Block<'_>) -> Option<String> {
+    use ironcalc_base::expressions::{
+        lexer::{Lexer, LexerMode},
+        token::TokenType,
+    };
+    let locale = ironcalc_base::locale::get_locale(LOCALE).ok()?;
+    let language = ironcalc_base::language::get_language(LANGUAGE).ok()?;
+    let chars = formula.chars().collect::<Vec<_>>();
+    let mut lexer = Lexer::new(formula, LexerMode::A1, locale, language);
+    let mut out = String::new();
+    let mut copied = 0usize;
+    let mut changed = false;
+    let on_sorted =
+        |sheet: &Option<String>| sheet.as_deref().unwrap_or(own).eq_ignore_ascii_case(sorted);
+    loop {
+        let before = lexer.get_position().max(0) as usize;
+        let token = lexer.next_token();
+        let after = lexer.get_position().max(0) as usize;
+        let replacement = match &token {
+            TokenType::EOF | TokenType::Illegal(_) => break,
+            TokenType::Reference {
+                sheet,
+                row,
+                column,
+                absolute_column,
+                absolute_row,
+            } if on_sorted(sheet) && block.holds(*row, *column) && block.row(*row) != *row => Some(
+                reference_text(*column, block.row(*row), *absolute_column, *absolute_row),
+            ),
+            TokenType::Range { sheet, left, right }
+                if on_sorted(sheet)
+                    && left.row == right.row
+                    && block.holds(left.row, left.column)
+                    && block.holds(right.row, right.column)
+                    && block.row(left.row) != left.row =>
+            {
+                let row = block.row(left.row);
+                Some(format!(
+                    "{}:{}",
+                    reference_text(left.column, row, left.absolute_column, left.absolute_row),
+                    reference_text(right.column, row, right.absolute_column, right.absolute_row)
+                ))
+            }
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            let text = chars[before.min(chars.len())..after.min(chars.len())]
+                .iter()
+                .collect::<String>();
+            let start = before + (text.len() - text.trim_start().len());
+            let token_text = &chars[start.min(chars.len())..after.min(chars.len())]
+                .iter()
+                .collect::<String>();
+            // Keep the sheet name as written; change only the cell part.
+            let prefix = token_text
+                .rfind('!')
+                .map(|bang| &token_text[..=bang])
+                .unwrap_or("");
+            out.extend(&chars[copied..start]);
+            out.push_str(prefix);
+            out.push_str(&replacement);
+            copied = after;
+            changed = true;
+        }
+        if after >= chars.len() {
+            break;
+        }
+    }
+    if !changed {
+        return None;
+    }
+    out.extend(&chars[copied..]);
+    Some(out)
 }
 
 /// Empties a cell and keeps its look, the way a spreadsheet's Delete does.
@@ -572,6 +845,13 @@ fn build(tabs: &[TabInput]) -> Result<Model<'static>, EngineError> {
                 .set_user_input(tab_index, *row, *column, input.clone())
                 .map_err(whole)?;
         }
+        // A kept rule that no longer reads (a formula the engine has since
+        // refused) is left out rather than stopping the whole sheet.
+        for rule in &tab.rules {
+            if let Ok(input) = rule.input() {
+                let _ = model.add_conditional_formatting(tab_index, &rule.range, input);
+            }
+        }
     }
     Ok(model)
 }
@@ -619,6 +899,7 @@ impl FormulaEngine for IronCalc {
                 ),
                 _ => None,
             };
+            let conditional = conditional_of(&model, tab, row, column, &style).map_err(whole)?;
             cells.entry(tab).or_default().push(CellOutput {
                 row,
                 column,
@@ -626,6 +907,7 @@ impl FormulaEngine for IronCalc {
                 value,
                 look,
                 display,
+                conditional,
             });
         }
         Ok(names
@@ -634,9 +916,20 @@ impl FormulaEngine for IronCalc {
             .map(|(position, name)| {
                 let mut tab_cells = cells.remove(&(position as u32)).unwrap_or_default();
                 tab_cells.sort_by_key(|cell| (cell.row, cell.column));
+                let mut rule_ranges = model
+                    .get_conditional_formatting_list(position as u32)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|view| (view.index, view.range))
+                    .collect::<Vec<_>>();
+                rule_ranges.sort_by_key(|(index, _)| *index);
                 TabOutput {
                     name,
                     cells: tab_cells,
+                    rule_ranges: rule_ranges
+                        .into_iter()
+                        .map(|(_, range)| (!range.trim().is_empty()).then_some(range))
+                        .collect(),
                 }
             })
             .collect())
@@ -765,6 +1058,7 @@ mod tests {
                 .map(|(row, column, input)| (*row, *column, (*input).to_owned()))
                 .collect(),
             looks: Vec::new(),
+            rules: Vec::new(),
         }
     }
 
@@ -982,6 +1276,7 @@ mod tests {
             name: "Rates".to_owned(),
             cells: vec![(1, 1, rate.input.clone())],
             looks: vec![(1, 1, rate.look.clone())],
+            rules: Vec::new(),
         };
         let again = IronCalc.apply(&[stored], &[]).expect("ok");
         assert_eq!(again[0].cells[0], *rate);
@@ -1046,6 +1341,7 @@ mod tests {
                     name: "Data".to_owned(),
                     cells: vec![],
                     looks: vec![(1, 1, header.look.clone())],
+                    rules: Vec::new(),
                 }],
                 &[format(
                     0,
@@ -1075,6 +1371,7 @@ mod tests {
                     name: "Due".to_owned(),
                     cells: vec![(1, 1, due.input.clone())],
                     looks: vec![(1, 1, due.look.clone())],
+                    rules: Vec::new(),
                 }],
                 &[],
             )
@@ -1100,6 +1397,7 @@ mod tests {
             name: "Costs".to_owned(),
             cells: vec![(1, 1, "1200".to_owned()), (2, 1, "10%".to_owned())],
             looks: vec![(1, 1, look.clone())],
+            rules: Vec::new(),
         }];
         let bytes = IronCalc.to_xlsx(&tabs).expect("written");
         let back = IronCalc
@@ -1110,5 +1408,146 @@ mod tests {
         let computed = IronCalc.apply(&back, &[]).expect("computed");
         assert_eq!(computed[0].cells[0].display.as_deref(), Some("$1,200.00"));
         assert_eq!(computed[0].cells[1].display.as_deref(), Some("10%"));
+    }
+
+    #[test]
+    fn a_less_than_zero_rule_colours_the_right_cells_after_an_edit() {
+        let rule: ConditionalRule = serde_json::from_value(serde_json::json!({
+            "range": "B1:B3", "when": "lessThan", "value": 0, "style": {"color": "#C62828"}
+        }))
+        .expect("rule");
+        let mut sheet = tab("Money", &[(1, 2, "5"), (2, 2, "-2"), (3, 2, "=B1-10")]);
+        sheet.rules = vec![rule.clone()];
+        let red = |output: &[TabOutput], row| {
+            cell(output, 0, row, 2)
+                .and_then(|cell| cell.conditional.clone())
+                .and_then(|style| style.color)
+        };
+        let output = IronCalc.apply(&[sheet.clone()], &[]).expect("apply");
+        assert_eq!(red(&output, 1), None);
+        assert_eq!(red(&output, 2).as_deref(), Some("#C62828"));
+        assert_eq!(
+            red(&output, 3).as_deref(),
+            Some("#C62828"),
+            "a formula's value counts"
+        );
+        assert_eq!(output[0].rule_ranges, vec![Some("B1:B3".to_owned())]);
+
+        let edited = IronCalc
+            .apply(
+                &[sheet.clone()],
+                &[Operation::Set {
+                    tab: 0,
+                    row: 1,
+                    column: 2,
+                    input: "20".to_owned(),
+                }],
+            )
+            .expect("edit");
+        assert_eq!(red(&edited, 1), None);
+        assert_eq!(red(&edited, 3), None, "B3 is 10 now");
+        assert_eq!(red(&edited, 2).as_deref(), Some("#C62828"));
+
+        // A row inserted above moves the rule with its cells.
+        let moved = IronCalc
+            .apply(
+                &[sheet.clone()],
+                &[Operation::InsertRows {
+                    tab: 0,
+                    row: 1,
+                    count: 1,
+                }],
+            )
+            .expect("insert");
+        assert_eq!(moved[0].rule_ranges, vec![Some("B2:B4".to_owned())]);
+        assert_eq!(red(&moved, 3).as_deref(), Some("#C62828"));
+
+        // Replacing the rules: none left, nothing coloured.
+        let cleared = IronCalc
+            .apply(
+                &[sheet],
+                &[Operation::Rules {
+                    tab: 0,
+                    rules: Vec::new(),
+                }],
+            )
+            .expect("clear rules");
+        assert_eq!(red(&cleared, 2), None);
+        assert!(cleared[0].rule_ranges.is_empty());
+
+        // And an .xlsx carries the rule.
+        let mut with_rule = tab("Money", &[(1, 2, "-1")]);
+        with_rule.rules = vec![rule];
+        let bytes = IronCalc.to_xlsx(&[with_rule]).expect("xlsx");
+        let workbook = ironcalc::import::load_from_xlsx_bytes(&bytes, "check", LOCALE, TIMEZONE)
+            .expect("read back");
+        let model = Model::from_workbook(workbook, LANGUAGE).expect("model");
+        let rules = model.get_conditional_formatting_list(0).expect("rules");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].range, "B1:B3");
+    }
+
+    #[test]
+    fn sorting_moves_rows_and_formulas_follow_them() {
+        let output = IronCalc
+            .apply(
+                &[
+                    tab(
+                        "Team",
+                        &[
+                            (1, 1, "Name"),
+                            (1, 2, "Score"),
+                            (2, 1, "Ana"),
+                            (2, 2, "7"),
+                            (3, 1, "Bo"),
+                            (3, 2, ""),
+                            (4, 1, "Cy"),
+                            (4, 2, "12"),
+                            (5, 1, "Di"),
+                            (5, 2, "3"),
+                        ],
+                    ),
+                    tab("Notes", &[(1, 1, "=Team!B2"), (2, 1, "=SUM(Team!B2:B5)")]),
+                ],
+                &[Operation::Sort {
+                    tab: 0,
+                    rows: (2, 5),
+                    columns: (1, 2),
+                    by: vec![(2, true)],
+                }],
+            )
+            .expect("sorted");
+        let names = (2..=5)
+            .map(|row| cell(&output, 0, row, 1).expect("name").input.clone())
+            .collect::<Vec<_>>();
+        // Highest first, the empty score last.
+        assert_eq!(names, ["Cy", "Ana", "Di", "Bo"]);
+        // Ana's score moved from B2 to B3; the note follows it.
+        let note = cell(&output, 1, 1, 1).expect("note");
+        assert_eq!(note.input, "=Team!B3");
+        assert_eq!(note.value, Value::Number(7.0));
+        assert_eq!(
+            cell(&output, 1, 2, 1).expect("sum").value,
+            Value::Number(22.0)
+        );
+        // Only the block moves: a note beside it stays where it is.
+        let output = IronCalc
+            .apply(
+                &[tab(
+                    "T",
+                    &[(1, 1, "2"), (2, 1, "1"), (2, 2, "=A2*10"), (2, 3, "note")],
+                )],
+                &[Operation::Sort {
+                    tab: 0,
+                    rows: (1, 2),
+                    columns: (1, 2),
+                    by: vec![(1, false)],
+                }],
+            )
+            .expect("sorted");
+        assert_eq!(cell(&output, 0, 1, 1).expect("A1").input, "1");
+        assert_eq!(cell(&output, 0, 1, 2).expect("B1").input, "=A1*10");
+        assert_eq!(cell(&output, 0, 2, 1).expect("A2").input, "2");
+        assert_eq!(cell(&output, 0, 2, 3).expect("C2").input, "note");
     }
 }

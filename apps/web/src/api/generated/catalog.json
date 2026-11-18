@@ -1364,6 +1364,82 @@
     "title": "Change scheduled message"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_search",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Find in a sheet"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.views_changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_view_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Save a sheet view"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "sheet.views_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_view_delete",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a sheet view"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_view_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List a sheet's views"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.views_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_view_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Change a sheet view"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

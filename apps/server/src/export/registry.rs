@@ -1162,6 +1162,19 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "sheet_views",
+                table: "sheet_views",
+                references: &[
+                    ("space_id", "projects"),
+                    ("sheet_id", "sheets"),
+                    ("tab_id", "sheet_tabs"),
+                    ("owner_actor_id", "actors"),
+                    ("created_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "sheets",
                 table: "sheets",
                 references: &[

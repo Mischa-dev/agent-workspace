@@ -200,6 +200,14 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = sheet.project_id \
          WHERE sheet.id = $1 AND subject_visible_to('sheet', sheet.id, $2)",
     ),
+    // C1.16: a sheet's view, for whoever sees the sheet and, for a
+    // personal one, only its owner.
+    (
+        "sheet_view",
+        "SELECT view.workspace_id, view.space_id FROM sheet_views view \
+         WHERE view.id = $1 AND subject_visible_to('sheet', view.sheet_id, $2) \
+           AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2)",
+    ),
     (
         "record",
         "SELECT project.organization_id, project.id FROM collection_records record \

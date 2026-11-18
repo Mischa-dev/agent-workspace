@@ -489,6 +489,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "record_write",
     "button_press",
     "sheet_write",
+    "sheet_view_create",
+    "sheet_view_update",
+    "sheet_view_delete",
     "later_save",
     "later_update",
     "schedule_create",
@@ -1327,6 +1330,8 @@ struct Targets {
     custom_emoji: Uuid,
     /// A thread in the sheet's comments (C1.3).
     comment_thread: Uuid,
+    /// A shared filter view of the sheet (C1.16).
+    sheet_view: Uuid,
 }
 
 /// The smallest PNG header a custom emoji passes with (C2.19).
@@ -1843,10 +1848,29 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         .await
         .expect("comments");
     }
+    // C1.16: a shared filter view of the sheet's first tab.
+    let sheet_view = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO sheet_views (id, workspace_id, space_id, sheet_id, tab_id, name, created_by_actor_id)
+        SELECT $1, $2, sheet.project_id, sheet.id,
+               (SELECT tab.id FROM sheet_tabs tab WHERE tab.sheet_id = sheet.id ORDER BY tab.position LIMIT 1),
+               'Net view', $3
+        FROM sheets sheet WHERE sheet.id = $4
+        "#,
+    )
+    .bind(sheet_view)
+    .bind(organization)
+    .bind(owner)
+    .bind(world.sheet)
+    .execute(pool)
+    .await
+    .expect("sheet view");
     let in_project = |sql: &'static str| scalar(pool, sql, project);
     let in_organization = |sql: &'static str| scalar(pool, sql, organization);
     Targets {
         connection,
+        sheet_view,
         schedule,
         custom_emoji,
         comment_thread,
@@ -6938,6 +6962,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"projectId": a.project, "sheet": b.sheet, "archived": true}),
                 json!({"projectId": b.project, "name": "Net mcp sheet"}),
             ],
+        ),
+        // C1.16: a sheet's filter views live on its tabs; B's sheet and
+        // B's views can't be reached from A.
+        mcp_case(
+            "sheet_view_create",
+            json!({"sheetId": a.sheet, "name": "Net mcp view", "clientRequestId": "net-sheet-view"}),
+            vec![json!({"sheetId": b.sheet, "name": "Net taken", "clientRequestId": "net-sheet-view-b"})],
+        ),
+        mcp_case(
+            "sheet_view_update",
+            json!({"viewId": ax.sheet_view, "name": "Net renamed view"}),
+            vec![json!({"viewId": bx.sheet_view, "name": "Net taken"})],
+        ),
+        mcp_case(
+            "sheet_view_delete",
+            json!({"viewId": ax.sheet_view}),
+            vec![json!({"viewId": bx.sheet_view})],
         ),
         // Views (T1.6): a view goes in the collection named; B's views and
         // collections can't be changed, pinned or made a default from A,

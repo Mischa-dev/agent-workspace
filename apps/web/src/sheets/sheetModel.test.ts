@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import type { SheetBody } from './api'
-import { cards, cellLook, columnName, display, formatTable, inkOn, parseRange, parseTable, patched, rangeName } from './sheetModel'
+import type { SheetBody, SheetCell } from './api'
+import { cards, cellLook, cellMap, columnName, columnNumber, display, formatTable, inkOn, parseRange, parseTable, patched, rangeName, viewRows } from './sheetModel'
+import { replaced } from './sheetViews'
 
 const body = (): SheetBody => ({
   sheet: {
@@ -22,6 +23,7 @@ const body = (): SheetBody => ({
       structureRevision: 1,
       frozenRows: 1,
       columnWidths: {},
+      conditionalFormats: [],
       rows: 2,
       columns: 2,
     },
@@ -168,5 +170,44 @@ describe('sheet model', () => {
     expect(parseRange('GS1')).toBeNull()
     expect(parseRange('A0')).toBeNull()
     expect(parseRange('Sheet1!A1')).toBeNull()
+  })
+})
+
+describe('filter views', () => {
+  const cell = (row: number, column: number, value: string | number): SheetCell => ({
+    row,
+    column,
+    input: String(value),
+    kind: typeof value === 'number' ? 'number' : 'text',
+    value,
+    revision: 1,
+  })
+  const cells = cellMap([
+    cell(1, 1, 'Name'),
+    cell(1, 2, 'Score'),
+    cell(2, 1, 'Cy'),
+    cell(2, 2, 3),
+    cell(3, 1, 'Ana'),
+    cell(3, 2, 7),
+    cell(4, 1, 'Di'),
+    cell(5, 1, 'Bo'),
+    cell(5, 2, 11),
+  ])
+
+  it('filters and sorts rows without touching the data', () => {
+    expect(viewRows(cells, { filters: [{ column: 'B', op: 'atLeast', value: 5 }], sort: [{ column: 'B', descending: true }], hiddenColumns: [] }, 2, 5)).toEqual([5, 3])
+    expect(viewRows(cells, { filters: [], sort: [{ column: 'B' }], hiddenColumns: [] }, 2, 5)).toEqual([2, 3, 5, 4])
+    expect(viewRows(cells, { filters: [{ column: 'A', op: 'contains', value: 'a' }], sort: [], hiddenColumns: [] }, 2, 5)).toEqual([3])
+    expect(viewRows(cells, { filters: [{ column: 'B', op: 'empty' }], sort: [], hiddenColumns: [] }, 2, 5)).toEqual([4])
+    expect(columnNumber('AA')).toBe(27)
+  })
+})
+
+describe('replacing what was found', () => {
+  it('replaces every match, ignoring case unless asked', () => {
+    expect(replaced('Rent and rent', 'rent', 'Lease', { matchCase: false, wholeCell: false })).toBe('Lease and Lease')
+    expect(replaced('Rent and rent', 'rent', 'lease', { matchCase: true, wholeCell: false })).toBe('Rent and lease')
+    expect(replaced('a.b', '.', '$&', { matchCase: false, wholeCell: false })).toBe('a$&b')
+    expect(replaced('Rent', 'rent', 'Lease', { matchCase: false, wholeCell: true })).toBe('Lease')
   })
 })
