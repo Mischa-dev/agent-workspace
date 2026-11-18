@@ -166,6 +166,14 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
         .await
         .expect("analyze");
     settle(pool).await;
+    // What autovacuum does on a server in time: the log and the queue grew
+    // by a workspace's worth of rows each, and stale statistics would plan
+    // the idle polls by position as scans of the whole table.
+    sqlx::query("ANALYZE events, background_jobs, hosts")
+        .execute(pool)
+        .await
+        .expect("analyze the log");
+    settle(pool).await;
     let (many_transactions, many_rows, many_tables) = idle(pool).await;
 
     eprintln!(
