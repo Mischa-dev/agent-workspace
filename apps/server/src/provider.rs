@@ -15,23 +15,13 @@ use crate::{
     realtime::RealtimeEvent,
 };
 
-pub mod adapter;
 pub mod catalog;
-pub(crate) mod claude_cloud;
-pub(crate) mod claude_code;
-mod codex_app_server;
-pub(crate) mod codex_cloud;
-pub(crate) mod command_line;
-#[cfg(test)]
-mod contract_tests;
-pub mod demo;
-pub mod host;
-mod line_process;
-pub mod manifest;
 pub(crate) mod registry;
-pub mod run_config;
-pub(crate) mod secret_fd;
-mod slots;
+
+pub use agent_workspace_builtin_host::harness::{
+    adapter, claude_cloud, claude_code, codex_app_server, codex_cloud, command_line, demo, host,
+    manifest, run_config, secret_fd,
+};
 
 pub use adapter::{
     AccountHandle, AccountSummary, HarnessError, HarnessSession, LoginKind, LoginStart,

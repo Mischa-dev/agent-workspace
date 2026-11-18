@@ -5,6 +5,8 @@ members = [
   "crates/delivery-contract",
   "crates/host-conformance",
   "crates/host-protocol",
+  "crates/redaction",
+  "crates/builtin-host",
   "examples/minimal-host",
   "tools/codex-bridge-spike",
   "tools/host-maintenance",

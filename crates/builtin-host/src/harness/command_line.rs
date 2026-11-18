@@ -38,7 +38,7 @@ use super::{
     secret_fd,
     slots::{RunSlot, RunSlots},
 };
-use crate::secrets::SecretValue;
+use agent_workspace_redaction::SecretValue;
 
 pub const PROTOCOL: u32 = 1;
 const MAX_ARGUMENTS: usize = 64;
@@ -792,7 +792,10 @@ fn parse_line(value: &Value, turn: &mut Turn) -> Vec<HarnessEvent> {
                     RequestKind::Approval
                 },
                 durable_id: key(turn, kind, &id),
-                summary: crate::run_log::cap(&crate::run_log::redact(&summary), 1_000),
+                summary: agent_workspace_redaction::cap(
+                    &agent_workspace_redaction::redact(&summary),
+                    1_000,
+                ),
                 options: if question {
                     Vec::new()
                 } else {
@@ -929,7 +932,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
-    use crate::provider::contract_tests::adapter_contract;
+    use crate::harness::contract_tests::adapter_contract;
 
     /// A 30-line shell harness speaking aw-harness/1: it reports a command,
     /// asks for approval, writes a file, reports usage and finishes. It

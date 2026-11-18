@@ -588,7 +588,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
         Ok(prepared) => prepared,
         Err(error) => {
             fail_admission(state, &run, PROVIDER_START_FAILURE_REASON, None).await?;
-            return Err(error);
+            return Err(error.into());
         }
     };
 
