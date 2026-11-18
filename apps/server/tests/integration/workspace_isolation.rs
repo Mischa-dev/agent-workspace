@@ -224,8 +224,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/usage/accounts/{account_id}/ready-tasks",
     "/api/v1/usage/accounts/{account_id}/batch",
     "/api/v1/usage/accounts/{account_id}/history",
-    "/api/v1/webhooks",
-    "/api/v1/webhooks/{webhook_id}/deliveries",
     "/api/v1/whiteboard-links",
     "/api/v1/whiteboards",
     "/api/v1/whiteboards/{id}",
@@ -261,6 +259,13 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
         "a form's public page reads it by the link's secret token, not a session; it holds \
          only the form (the collection's name and the asked fields), never records or \
          people; covered in awd110_collection_forms",
+    ),
+    (
+        "/api/v1/file-links/{token}",
+        "a short-lived file link (A2.12) is read by its signed token, not a session; the \
+         token names the account it was made for, which must still be able to read the file \
+         when it is fetched; covered in delivery (a_client_id_comes_back_and_a_file_link_\
+         follows_access), and file_link_get, which makes one, has a case here",
     ),
     (
         "/api/v1/auth/csrf",
@@ -1400,18 +1405,6 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
                 vec![],
             )
         },
-        case(
-            "/api/v1/webhooks",
-            vec!["/api/v1/webhooks".to_owned()],
-            vec![],
-            vec![],
-        ),
-        case(
-            "/api/v1/webhooks/{webhook_id}/deliveries",
-            vec![format!("/api/v1/webhooks/{}/deliveries", a.webhook)],
-            vec![format!("/api/v1/webhooks/{}/deliveries", b.webhook)],
-            vec![],
-        ),
         project_route("/api/v1/projects/{project_id}/timeline", "/timeline"),
         project_route(
             "/api/v1/projects/{project_id}/task-templates",
@@ -2030,6 +2023,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "briefing",
     "bug_report_link_list",
     "connection_list",
+    "connection_delivery_list",
     "schedule_list",
     "conversation_list",
     "conversation_open",
@@ -2042,6 +2036,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "external_event_poll",
     "file_list",
     "file_read",
+    "file_link_get",
     "history_list",
     "history_show",
     "invite_link_list",
@@ -2053,6 +2048,10 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "sheet_list",
     "sheet_read",
     "host_list",
+    "account_joinable_list",
+    "agent_offer_list",
+    "agent_action_get",
+    "agent_recipe_list",
     "inbox_list",
     "invitation_list",
     "label_list",
@@ -2117,8 +2116,6 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "usage_batch",
     "usage_windows",
     "view_list",
-    "webhook_deliveries",
-    "webhook_list",
     "whiteboard_list",
     "whiteboard_read",
     "whiteboard_render",
@@ -2400,7 +2397,6 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![],
         ),
-        case("webhook_list", vec![json!({})], vec![], vec![]),
         // K4.26: another workspace's invitation links are out of reach.
         case(
             "invite_link_list",
@@ -2409,6 +2405,39 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"workspace": a.organization, "includeInactive": true}),
             ],
             vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // A2.18: the agents you could add here, asked of this workspace;
+        // another workspace can't be asked.
+        case(
+            "account_joinable_list",
+            vec![json!({}), json!({"workspace": a.organization})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // A2.19: the offers of the hosts you may use here; another
+        // workspace's aren't listed, and another's action reply isn't read.
+        case(
+            "agent_offer_list",
+            vec![json!({}), json!({"workspace": a.organization})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // A2.17: the same built-in list everywhere, but only asked where
+        // the caller is.
+        case(
+            "agent_recipe_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "agent_action_get",
+            vec![json!({"commandId": a.host_action})],
+            vec![
+                json!({"commandId": b.host_action}),
+                json!({"commandId": b.host_action, "workspace": b.organization}),
+            ],
             vec![],
         ),
         // A1.11: another workspace's hosts are out of reach.
@@ -2462,12 +2491,6 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"whiteboardId": b.whiteboard, "format": "svg"}),
                 json!({"whiteboardId": b.project_whiteboard}),
             ],
-            vec![],
-        ),
-        case(
-            "webhook_deliveries",
-            vec![json!({"webhookId": a.webhook.to_string()})],
-            vec![json!({"webhookId": b.webhook.to_string()})],
             vec![],
         ),
         by_project("template_list"),
@@ -2853,6 +2876,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"account": b.agent})],
             vec![],
         ),
+        // A2.6: a webhook's delivery log is its account's; B's isn't A's.
+        case(
+            "connection_delivery_list",
+            vec![json!({"connectionId": a.webhook})],
+            vec![json!({"connectionId": b.webhook})],
+            vec![],
+        ),
         case(
             "schedule_list",
             vec![json!({}), json!({"includeFinished": true})],
@@ -2881,6 +2911,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"fileId": b.file.to_string()}),
                 json!({"fileId": b.task_file.to_string()}),
             ],
+            vec![],
+        ),
+        // A2.12: a link to a file only for a file the caller can read.
+        case(
+            "file_link_get",
+            vec![json!({"fileId": a.file.to_string()})],
+            vec![json!({"fileId": b.file.to_string()})],
             vec![],
         ),
         // K3.19: any thing's history by id alone.

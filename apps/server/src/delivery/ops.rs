@@ -29,7 +29,10 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<ConnectionCreate>()
         .add::<ConnectionUpdate>()
         .add::<ConnectionSecretRotate>()
-        .add::<ConnectionRemove>();
+        .add::<ConnectionRemove>()
+        .add::<ConnectionDeliveryList>()
+        .add::<ConnectionRedeliver>()
+        .add::<ConnectionTest>();
 }
 
 // --- event_list --------------------------------------------------------------
@@ -174,7 +177,22 @@ pub struct ConnectionView {
     pub last_seen_at: Option<String>,
     pub last_error: Option<String>,
     pub subscriptions: Vec<Subscription>,
+    /// A person's app set it up: it is pushed to within that app's limit.
+    pub made_through_app: bool,
+    /// What the webhook answered to the last test ping (connection_test).
+    pub last_test: Option<LastTest>,
     pub version: i64,
+}
+
+/// The last test ping's answer.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LastTest {
+    pub at: String,
+    pub ok: bool,
+    /// The HTTP status it answered with, if it answered.
+    pub status: Option<i32>,
+    pub error: Option<String>,
 }
 
 async fn view(
@@ -206,6 +224,13 @@ async fn view(
         last_seen_at: time(delivery.last_seen_at),
         last_error: delivery.last_error,
         subscriptions,
+        made_through_app: delivery.made_through_app,
+        last_test: delivery.last_test_at.map(|at| LastTest {
+            at: at.to_rfc3339(),
+            ok: delivery.last_test_error.is_none(),
+            status: delivery.last_test_status,
+            error: delivery.last_test_error.clone(),
+        }),
         version: delivery.version,
     })
 }
@@ -585,11 +610,17 @@ async fn write(
         }
     };
     let config = std::sync::Arc::clone(&call.state.config);
+    // An app acting for a person: what it sets up is pushed to within its
+    // limit from now on, however the connection was made.
+    let through_app = call.ctx.caller.limits.is_some();
+    let via_grant = call.ctx.caller.via_grant_id;
     let tx = call.tx().await?;
     sqlx::query(
         r#"
         UPDATE agent_connections
         SET name = COALESCE($2, name), reaches_all = COALESCE($3, reaches_all),
+            made_through_app = made_through_app OR $4,
+            via_grant_id = CASE WHEN $4 THEN COALESCE($5, via_grant_id) ELSE via_grant_id END,
             version = version + 1, updated_at = now()
         WHERE id = $1
         "#,
@@ -597,6 +628,8 @@ async fn write(
     .bind(delivery.id)
     .bind(input.name.as_deref().map(str::trim))
     .bind(input.reaches_all)
+    .bind(through_app)
+    .bind(via_grant)
     .execute(&mut **tx)
     .await
     .map_err(AppError::from)?;
@@ -871,5 +904,234 @@ impl Operation for ConnectionRemove {
         let shown = view(tx, saved).await?;
         call.audit_target("connection", delivery.id, json!({ "removed": true }));
         Ok(shown)
+    }
+}
+
+// --- a webhook's deliveries ---------------------------------------------------
+
+/// What was pushed to a connection's webhook.
+pub struct ConnectionDeliveryList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectionDeliveryListInput {
+    pub connection_id: IdRef,
+    /// Only pushes of events before this position (the last page's
+    /// nextBefore), newest first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<i64>,
+    /// How many at most (default 50, limit 100).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
+}
+
+impl Targeted for ConnectionDeliveryListInput {
+    fn target(&self) -> Target {
+        Target::Account
+    }
+}
+
+/// One push of one event.
+#[derive(Debug, Serialize, JsonSchema, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryView {
+    /// The event's place in the log; redeliver names it.
+    pub event_position: i64,
+    #[schemars(with = "String")]
+    pub event_id: Uuid,
+    pub event_type: String,
+    /// Why the connection heard it.
+    pub reason: String,
+    /// pending, delivered, failed or skipped (no longer visible or true).
+    pub state: String,
+    pub attempts: i32,
+    /// The HTTP status of the last attempt, if the receiver answered.
+    pub last_status: Option<i32>,
+    pub last_error: Option<String>,
+    pub elapsed_ms: Option<i32>,
+    #[schemars(with = "Option<String>")]
+    pub delivered_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[schemars(with = "Option<String>")]
+    pub next_attempt_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[schemars(with = "String")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryPage {
+    pub deliveries: Vec<DeliveryView>,
+    /// Pass as before for older pushes; absent when there are none.
+    pub next_before: Option<i64>,
+}
+
+impl Operation for ConnectionDeliveryList {
+    const NAME: &'static str = "connection_delivery_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "agents";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List webhook deliveries";
+    const DESCRIPTION: &'static str = "What was pushed to a connection's webhook, newest first: \
+        each event's type, why it was heard, whether it was delivered, the receiver's last \
+        status and error, and when it is tried again. Kept for 30 days. Yours, or a connection \
+        of an agent or app you manage.";
+
+    type Input = ConnectionDeliveryListInput;
+    type Output = DeliveryPage;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConnectionDeliveryListInput,
+    ) -> Result<DeliveryPage, OpError> {
+        let delivery = managed_connection(call, input.connection_id.id()).await?;
+        let limit = i64::from(input.limit.unwrap_or(50).clamp(1, 100));
+        let tx = call.tx().await?;
+        let mut deliveries = sqlx::query_as::<_, DeliveryView>(
+            r#"
+            SELECT event_position, event_id, event_type, reason, state, attempts, last_status,
+                   last_error, elapsed_ms, delivered_at,
+                   CASE WHEN state = 'pending' THEN next_attempt_at END AS next_attempt_at,
+                   created_at
+            FROM deliveries
+            WHERE connection_id = $1 AND ($2::bigint IS NULL OR event_position < $2)
+            ORDER BY event_position DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(delivery.id)
+        .bind(input.before)
+        .bind(limit + 1)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(AppError::from)?;
+        let more = deliveries.len() > usize::try_from(limit).unwrap_or(100);
+        deliveries.truncate(usize::try_from(limit).unwrap_or(100));
+        Ok(DeliveryPage {
+            next_before: more
+                .then(|| deliveries.last().map(|row| row.event_position))
+                .flatten(),
+            deliveries,
+        })
+    }
+}
+
+/// Push one event to a connection's webhook again.
+pub struct ConnectionRedeliver;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectionRedeliverInput {
+    pub connection_id: IdRef,
+    /// The delivery's eventPosition (connection_delivery_list).
+    pub event_position: i64,
+}
+
+impl Targeted for ConnectionRedeliverInput {
+    fn target(&self) -> Target {
+        Target::Account
+    }
+}
+
+impl Operation for ConnectionRedeliver {
+    const NAME: &'static str = "connection_redeliver";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "agents";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["connection.changed"];
+    const TITLE: &'static str = "Redeliver webhook event";
+    const DESCRIPTION: &'static str = "Push one event to a connection's webhook again, with the \
+        same id so the receiver can tell a repeat. It is checked again first: an event the \
+        account can no longer see, or that is no longer true, is skipped; through an app, only \
+        what the app may see is sent. The webhook must be on (save it to turn stopped pushes \
+        back on).";
+
+    type Input = ConnectionRedeliverInput;
+    type Output = DeliveryView;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConnectionRedeliverInput,
+    ) -> Result<DeliveryView, OpError> {
+        let delivery = managed_connection(call, input.connection_id.id()).await?;
+        if delivery.webhook_url.is_none() || delivery.state != "active" {
+            return Err(OpError::invalid(
+                "connectionId",
+                "Its webhook isn't on. Set webhookUrl, or save it to turn pushes back on.",
+            ));
+        }
+        let limits = call.ctx.caller.limits.clone();
+        let tx = call.tx().await?;
+        // Through an app: only what that app may see now is sent again.
+        if let Some(limits) = &limits
+            && !super::read::within_limits_at(tx, limits, input.event_position).await?
+        {
+            return Err(OpError::not_found("That delivery"));
+        }
+        let again = sqlx::query_as::<_, DeliveryView>(
+            r#"
+            UPDATE deliveries
+            SET state = 'pending', attempts = 0, next_attempt_at = now(), lease_until = NULL,
+                last_error = NULL
+            WHERE connection_id = $1 AND event_position = $2
+            RETURNING event_position, event_id, event_type, reason, state, attempts, last_status,
+                      last_error, elapsed_ms, delivered_at, next_attempt_at, created_at
+            "#,
+        )
+        .bind(delivery.id)
+        .bind(input.event_position)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(AppError::from)?
+        .ok_or_else(|| OpError::not_found("That delivery"))?;
+        super::push::queue_push(tx, &delivery).await?;
+        changed(tx, &delivery).await?;
+        call.audit_target(
+            "connection",
+            delivery.id,
+            json!({ "redelivered": input.event_position }),
+        );
+        Ok(again)
+    }
+}
+
+/// Send a connection's webhook a test ping.
+pub struct ConnectionTest;
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TestQueued {
+    /// The ping is on its way; connection_list shows its answer as lastTest.
+    pub queued: bool,
+}
+
+impl Operation for ConnectionTest {
+    const NAME: &'static str = "connection_test";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "agents";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["connection.changed"];
+    const TITLE: &'static str = "Test webhook";
+    const DESCRIPTION: &'static str = "Send a connection's webhook a signed test ping (type \
+        ping, nothing to act on), the way a real push is signed and sent. It goes out in a few \
+        seconds; connection_list then shows what the receiver answered as lastTest.";
+
+    type Input = ConnectionRef;
+    type Output = TestQueued;
+
+    async fn run(call: &mut OpCall<'_>, input: ConnectionRef) -> Result<TestQueued, OpError> {
+        let delivery = managed_connection(call, input.connection_id.id()).await?;
+        if delivery.webhook_url.is_none() {
+            return Err(OpError::invalid(
+                "connectionId",
+                "This connection has no webhook to test. Set webhookUrl first.",
+            ));
+        }
+        let tx = call.tx().await?;
+        super::push::queue_ping(tx, &delivery).await?;
+        call.audit_target("connection", delivery.id, json!({ "tested": true }));
+        Ok(TestQueued { queued: true })
     }
 }

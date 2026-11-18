@@ -1,11 +1,13 @@
 # agent-workspace-runner
 
 A runner SDK for Agent Workspace in Python 3.10 or later, standard library
-only. It does the protocol in [docs/agent-runner.md](../../docs/agent-runner.md)
-for you: checks the wakeup's signature, claims the request, gives your code
-the prompt and a few calls to answer with, sets `stopped` when a person
-presses Stop, and hands follow-ups to the work already running in their
-thread.
+only. It hears reply requests on the event log (a stream, long-poll, or
+signed pushes to your address), claims each one, gives your code the prompt
+and a few calls to answer with, sets `stopped` when a person presses Stop,
+and hands follow-ups to the work already running in their thread.
+
+Underneath is `WorkspaceChannel`, the reference channel adapter: everything a
+chat integration needs, for when you want more than reply requests.
 
 ## Use
 
@@ -28,12 +30,17 @@ server = runner.listen(8787)  # POST /wake on 127.0.0.1; put your https proxy in
 server.serve_forever()  # or keep the main thread busy some other way
 ```
 
-Each wakeup runs `on_request` on its own thread. Without a public URL, poll
-instead of listening:
+Each request runs `on_request` on its own thread. Without a public address,
+read the stream instead of listening. It falls back to long-polling where
+something on the way cuts streams, and picks up requests already waiting
+first:
 
 ```python
-runner.poll(interval_seconds=30)
+runner.connect(stop)  # a threading.Event; blocks until it is set
 ```
+
+Pass `cursor_file=` to keep your place across restarts yourself; without one
+the server keeps it for the connection.
 
 ## What a request gives you
 
@@ -49,7 +56,7 @@ runner.poll(interval_seconds=30)
 | `reply(text)` | The final answer. Closes the request. |
 | `pass_(reason=None)` | Nothing to add (optional requests only). |
 | `release(reason)` | You can't do it; people see the reason. |
-| `bind_session(ref, url=None, state=None)` | Names your session so the thread links to it and later wakeups carry it. |
+| `bind_session(ref, url=None, state=None)` | Names your session so the thread links to it and later claims carry it. |
 | `run_id` | The run a launch opened for this request, or `None`. The reply calls already move it. |
 | `step(title)` | One step of the work on the run (nothing without one). |
 | `result(kind, url, title=None)` | Something the run produced, such as a `pull_request` (nothing without a run). |
@@ -60,9 +67,42 @@ Calls the server refuses raise `ToolError` with the `outcome` (such as
 `conflict` after Stop); `error.retryable` is true for
 `temporarily_unavailable`.
 
-The lower-level pieces are there too: `verify_wakeup`, `sign_wakeup`,
-`DeliveryDeduper`, `McpClient(url, token).call_tool(name, arguments)`,
-`ReplyTools`, `parse_settings` and `strip_leading_mentions`.
+## The channel
+
+```python
+from agent_workspace_runner import FileCursor, McpClient, WorkspaceChannel
+
+channel = WorkspaceChannel(
+    "https://workspace.example",
+    token,
+    McpClient("https://workspace.example/api/v1/mcp", token),
+    cursor=FileCursor(".workspace-cursor"),
+)
+
+
+def mentioned(event):
+    # Events carry ids only: read the text live with your own access.
+    channel.send(event["data"]["conversationId"], "On it", client_message_id=f"ack-{event['id']}")
+
+
+channel.on("message.mentioned", mentioned)
+channel.connect(stop)
+```
+
+`on(type, handler)` takes a type, a family (`reply.*`) or `*`; each event
+reaches its handlers once, then the cursor moves past it. `poll_once(wait)`
+reads one page; `receive_push(secret, headers, body)` checks and handles a
+signed push. `send` posts a message, or answers a reply request with
+`reply={"requestId": ..., "generation": ...}`; `edit`, `delete`, `react`,
+`typing`, `download` and `upload` do the rest. `verify_push` checks Standard
+Webhooks signatures (and the older `x-workspace-signature`) against several
+secrets during a rotation, and turns a push to an older `typed_v1`
+connection into an event like any other. The tests run against
+`sdks/fixtures/delivery`.
+
+The lower-level pieces are there too: `Deduper`,
+`McpClient(url, token).call_tool(name, arguments)`, `ReplyTools`,
+`parse_settings` and `strip_leading_mentions`.
 
 ## Secrets
 

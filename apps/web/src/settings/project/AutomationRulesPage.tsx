@@ -132,6 +132,8 @@ function describeAction(action: RuleAction): string {
       return 'post a message'
     case 'run_operation':
       return `run ${action.operation}`
+    case 'ask_agent':
+      return 'ask an agent'
   }
 }
 

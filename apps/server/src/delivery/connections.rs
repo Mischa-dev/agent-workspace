@@ -39,12 +39,22 @@ pub struct Connection {
     pub version: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// A person's app made or changed it: it is pushed to within that
+    /// app's delegation limit, and stops once the app is disconnected.
+    pub made_through_app: bool,
+    pub via_grant_id: Option<Uuid>,
+    /// The last test ping: when, what the receiver answered, and why it
+    /// didn't work.
+    pub last_test_at: Option<DateTime<Utc>>,
+    pub last_test_status: Option<i32>,
+    pub last_test_error: Option<String>,
 }
 
 pub(crate) const COLUMNS: &str = "id, home_workspace_id, account_id, reaches_all, \
     source_connection_id, is_default, name, webhook_url, webhook_format, cursor_key, \
     push_cursor, read_cursor, state, disabled_reason, consecutive_failures, first_failure_at, \
-    last_seen_at, last_delivered_at, last_error, version, created_at, updated_at";
+    last_seen_at, last_delivered_at, last_error, version, created_at, updated_at, \
+    made_through_app, via_grant_id, last_test_at, last_test_status, last_test_error";
 
 /// What a subscription asks for.
 #[derive(Clone, Debug, FromRow, Serialize, JsonSchema)]
@@ -138,7 +148,8 @@ pub async fn for_caller(
     }
 }
 
-/// The connection made for an older project credential's connection.
+/// The connection made for an agent's token. Like the token, it reaches
+/// each workspace the account is in (R19).
 pub async fn for_source(
     connection: &mut PgConnection,
     account_id: Uuid,
@@ -150,7 +161,7 @@ pub async fn for_source(
             id, home_workspace_id, account_id, reaches_all, source_connection_id, is_default,
             name, push_cursor, read_cursor, created_by_account_id
         )
-        SELECT $1, source.workspace_id, source.actor_id, false, source.id, true,
+        SELECT $1, source.workspace_id, source.actor_id, true, source.id, true,
                source.connection_name, counter.next_position - 1, counter.next_position - 1,
                source.created_by_actor_id
         FROM external_agent_connections source, event_position_counter counter

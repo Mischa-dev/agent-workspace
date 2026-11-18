@@ -1,70 +1,17 @@
 import { requestJson } from '../api/client'
 
 /**
- * Outgoing webhooks, automation rules and the public API's document (W14).
+ * Automation rules and the public API's document (W14). A person's
+ * webhooks are connections (settings/account/WebhooksPage, on callOp).
  * The query keys live here so the pages that use them stay out of the first
  * load; project keys start with the project so a project-wide invalidation
  * reaches them.
  */
 export const automationKeys = {
-  webhooks: ['account', 'webhooks'] as const,
-  deliveries: (webhookId: string) => ['account', 'webhooks', webhookId, 'deliveries'] as const,
   rules: (projectId: string) => ['project', projectId, 'automations'] as const,
   channels: (projectId: string) => ['project', projectId, 'automations', 'channels'] as const,
   runs: (projectId: string, ruleId: string) => ['project', projectId, 'automations', ruleId, 'runs'] as const,
   openapi: ['public-api', 'openapi'] as const,
-}
-
-// Webhooks
-
-export type WebhookState = 'active' | 'paused' | 'disabled'
-
-export type Webhook = {
-  id: string
-  organizationId: string
-  projectId: string | null
-  projectName: string | null
-  name: string
-  url: string
-  eventTypes: string[]
-  state: WebhookState
-  disabledReason: string | null
-  consecutiveFailures: number
-  lastDeliveryAt: string | null
-  hasSecret: boolean
-  viaApp: boolean
-  version: number
-  createdAt: string
-  updatedAt: string
-}
-
-export type WebhookList = {
-  webhooks: Webhook[]
-  eventTypes: { name: string; description: string }[]
-  projects: { id: string; name: string; organizationId: string }[]
-  signing: string
-}
-
-export type WebhookDelivery = {
-  id: string
-  eventType: string
-  projectId: string | null
-  subject: Record<string, unknown>
-  state: 'pending' | 'delivered' | 'failed' | 'skipped'
-  attempts: number
-  lastStatusCode: number | null
-  lastError: string | null
-  durationMs: number | null
-  occurredAt: string
-  createdAt: string
-  deliveredAt: string | null
-}
-
-export type WebhookInput = {
-  name: string
-  url: string
-  eventTypes: string[]
-  projectId?: string | null
 }
 
 const json = <T>(path: string, method: string, body: unknown = {}) =>
@@ -73,43 +20,6 @@ const json = <T>(path: string, method: string, body: unknown = {}) =>
     json: body,
     idempotencyKey: crypto.randomUUID(),
   })
-
-export const listWebhooks = () => requestJson<WebhookList>('/api/v1/webhooks')
-
-export const createWebhook = (input: WebhookInput) =>
-  json<{ webhook: Webhook; secret: string }>('/api/v1/webhooks', 'POST', {
-    name: input.name,
-    url: input.url,
-    eventTypes: input.eventTypes,
-    ...(input.projectId ? { projectId: input.projectId } : {}),
-  })
-
-export const updateWebhook = (
-  webhook: Pick<Webhook, 'id' | 'version'>,
-  change: Partial<Pick<Webhook, 'name' | 'url' | 'eventTypes'>> & {
-    state?: 'active' | 'paused'
-  },
-) =>
-  json<Webhook>(`/api/v1/webhooks/${encodeURIComponent(webhook.id)}`, 'PATCH', {
-    expectedVersion: webhook.version,
-    ...change,
-  })
-
-export const deleteWebhook = (webhookId: string) =>
-  requestJson<void>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}`, {
-    method: 'DELETE',
-  })
-
-export const rotateWebhookSecret = (webhookId: string) =>
-  json<{ webhook: Webhook; secret: string }>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}/rotate-secret`, 'POST')
-
-export const testWebhook = (webhookId: string) => json<WebhookDelivery>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}/test`, 'POST')
-
-export const listDeliveries = (webhookId: string) =>
-  requestJson<{ deliveries: WebhookDelivery[]; nextCursor: string | null }>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}/deliveries`)
-
-export const redeliver = (webhookId: string, deliveryId: string) =>
-  json<WebhookDelivery>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}/deliveries/${encodeURIComponent(deliveryId)}/redeliver`, 'POST')
 
 // Automation rules
 
@@ -164,6 +74,7 @@ export type RuleAction =
   | { kind: 'notify'; recipients: Recipients; message: string }
   | { kind: 'post_message'; conversationId: string; text: string }
   | { kind: 'run_operation'; operation: string; input: Record<string, unknown> }
+  | { kind: 'ask_agent'; accountId: string; prompt: string; conversationId?: string | null }
 
 export type RuleActionKind = RuleAction['kind']
 

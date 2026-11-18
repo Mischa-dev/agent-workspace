@@ -70,7 +70,8 @@ export type Launch = {
   startAt: string | null
   state: LaunchState
   statusReason: string | null
-  agentRunId: string | null
+  /** The run it started, whichever host or agent does it. */
+  runId: string | null
   runState: string | null
   position: number
   createdAt: string

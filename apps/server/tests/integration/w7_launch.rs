@@ -309,7 +309,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
                EXISTS (SELECT 1 FROM work_item_conversation_links link
                        WHERE link.work_item_id = launch.work_item_id
                          AND link.conversation_id = run.conversation_id)
-        FROM launches launch JOIN agent_runs run ON run.id = launch.agent_run_id
+        FROM launches launch JOIN agent_runs run ON run.id = launch.run_id
         WHERE launch.work_item_id = $1
         "#,
     )
@@ -320,6 +320,23 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     assert_eq!(run_prompt, format!("Do {} on Demo harness.", tasks[0].1));
     assert_eq!(harness.as_deref(), Some("demo"));
     assert!(linked);
+    // The built-in run has the same cause and launch as a host's or a
+    // runner's (A1.13; a1_launch_paths covers those).
+    let (cause, run_task, run_launch) = sqlx::query_as::<_, (String, Option<Uuid>, bool)>(
+        r#"
+        SELECT run.cause_kind, run.work_item_id, run.launch_id = launch.id
+        FROM launches launch JOIN runs run ON run.id = launch.run_id
+        WHERE launch.work_item_id = $1
+        "#,
+    )
+    .bind(design)
+    .fetch_one(&pool)
+    .await
+    .expect("design's run record");
+    assert_eq!(
+        (cause.as_str(), run_task, run_launch),
+        ("task", Some(design), true)
+    );
 
     // Test's run ends: the slot goes to ship, while build still waits.
     finish_run(&pool, test).await;
@@ -534,7 +551,7 @@ async fn finish_run(pool: &PgPool, work_item_id: Uuid) {
     let updated = sqlx::query(
         r#"
         UPDATE agent_runs SET state = 'canceled', finished_at = now()
-        WHERE id = (SELECT agent_run_id FROM launches
+        WHERE id = (SELECT run_id FROM launches
                     WHERE work_item_id = $1 AND state = 'started')
         "#,
     )

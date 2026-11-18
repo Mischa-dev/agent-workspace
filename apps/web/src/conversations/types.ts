@@ -233,6 +233,8 @@ export type ReplyRequest = {
   threadId?: string | null
   /** A follow-up queued behind the request the agent is working on. */
   followsRequestId?: string | null
+  /** Still waiting past the time to pick it up: nobody has. */
+  unresponsiveAt?: string | null
 }
 
 export type MentionSearchPage = {

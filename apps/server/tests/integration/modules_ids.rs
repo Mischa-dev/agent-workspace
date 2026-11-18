@@ -1,4 +1,4 @@
-//! AWD-75: tools that resolve their own targets (scheduled messages, webhooks, saved items, usage batches) check the module there.
+//! AWD-75: tools that resolve their own targets (scheduled messages, saved items, usage batches) check the module there.
 
 use super::{
     agent_interface::{connect_app, initialize, send, tool},
@@ -158,108 +158,6 @@ async fn later_items_and_scheduled_messages_follow_their_own_project() {
             .await
             .expect("status");
     assert_eq!(status, "scheduled");
-}
-
-/// Webhook tools follow Automations where each webhook acts: its project,
-/// or the workspace a new one across a workspace goes to.
-#[tokio::test]
-async fn webhook_tools_follow_automations_where_each_webhook_acts() {
-    let Some(setup) = setup("awd75_ids_webhooks").await else {
-        return;
-    };
-    let app = &setup.app;
-    let work = create_project(&setup, "WORK", "Work").await;
-    let other = create_project(&setup, "OTHER", "Other").await;
-    let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
-    let mut hooks = Vec::new();
-    for (project, name) in [(&work, "Work hook"), (&other, "Other hook")] {
-        let id = Uuid::now_v7();
-        sqlx::query(
-            r#"
-            INSERT INTO webhook_subscriptions (
-                id, organization_id, project_id, owner_actor_id, name, url, event_types
-            ) VALUES ($1, $2, $3, $4, $5, 'https://example.com/hook', '{task.updated}')
-            "#,
-        )
-        .bind(id)
-        .bind(setup.organization_id)
-        .bind(project.parse::<Uuid>().expect("project"))
-        .bind(bea)
-        .bind(name)
-        .execute(&setup.pool)
-        .await
-        .expect("webhook");
-        hooks.push(id.to_string());
-    }
-    let (in_work, in_other) = (hooks[0].clone(), hooks[1].clone());
-    let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
-    let session = initialize(app, &bea_app).await.expect("Bea's app");
-    let call = |name: &'static str, arguments: Value| {
-        let token = bea_app.clone();
-        let session = session.clone();
-        async move { tool(app, &token, &session, name, arguments).await }
-    };
-    let listed = call("webhook_list", json!({})).await;
-    assert_eq!(listed["outcome"], "ok", "{listed}");
-    assert!(listed.to_string().contains(&in_work), "{listed}");
-    assert!(listed.to_string().contains(&in_other), "{listed}");
-
-    // In Other only, Bea's role leaves Automations out.
-    narrow_in_project(&setup, &other, bea, &["automations"], "awd75-ids-hooks").await;
-    let listed = call("webhook_list", json!({})).await;
-    assert_eq!(listed["outcome"], "ok", "{listed}");
-    assert!(listed.to_string().contains(&in_work), "{listed}");
-    assert!(!listed.to_string().contains(&in_other), "{listed}");
-    assert!(
-        !listed["value"]["projects"].to_string().contains(&other),
-        "{listed}"
-    );
-    let renamed = call(
-        "webhook_write",
-        json!({"operation": "update", "webhookId": in_other, "expectedVersion": 1, "name": "Renamed"}),
-    )
-    .await;
-    assert_module_off(&renamed, "Automations");
-    let name =
-        sqlx::query_scalar::<_, String>("SELECT name FROM webhook_subscriptions WHERE id = $1")
-            .bind(in_other.parse::<Uuid>().expect("hook"))
-            .fetch_one(&setup.pool)
-            .await
-            .expect("name");
-    assert_eq!(name, "Other hook");
-    let log = call("webhook_deliveries", json!({"webhookId": in_other})).await;
-    assert_module_off(&log, "Automations");
-    let log = call("webhook_deliveries", json!({"webhookId": in_work})).await;
-    assert_eq!(log["outcome"], "ok", "{log}");
-
-    // A webhook across a workspace goes to the owner's first workspace: with
-    // Automations off there (and on in their second), it's refused.
-    second_workspace(&setup).await;
-    let (status, changed) = switch(
-        &setup,
-        &setup.browser,
-        json!({"switches": {"automations": false}}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{changed}");
-    let token = connect_app(app, &setup.browser, "Owner's app", "full").await;
-    let owner_session = initialize(app, &token).await.expect("owner's app");
-    let created = tool(
-        app,
-        &token,
-        &owner_session,
-        "webhook_write",
-        json!({"operation": "create", "name": "Everything", "url": "https://example.com/all", "eventTypes": ["task.updated"]}),
-    )
-    .await;
-    assert_module_off(&created, "Automations");
-    let made = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM webhook_subscriptions WHERE name = 'Everything'",
-    )
-    .fetch_one(&setup.pool)
-    .await
-    .expect("count");
-    assert_eq!(made, 0);
 }
 
 /// A person's plain reminder is kept in their home workspace, so with Inbox

@@ -32,9 +32,6 @@ use crate::{
 pub const LIFETIME_MINUTES: i64 = 30;
 const CODE_BYTES: usize = 32;
 
-/// The apps a link writes its steps for.
-pub const APPS: [&str; 3] = ["claude_code", "codex", "other"];
-
 /// What the person gets back: the link to paste, and when it lapses.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,7 +63,7 @@ pub async fn store(
     app: &str,
     token: &str,
 ) -> Result<SetupLinkView, AppError> {
-    if !APPS.contains(&app) {
+    if crate::agent_plugin::recipe(app).is_none() {
         return Err(AppError::Validation("app"));
     }
     let keys = secrets::keyring(config)?;
@@ -271,35 +268,31 @@ async fn claim_inner(state: &AppState, code: &str) -> Result<Option<String>, App
     Ok(Some(body))
 }
 
-/// The steps for the link's app, with the token in them.
+/// The page the agent reads: who it is, its token in its app's steps (the
+/// agent plugin's recipe for it), where it hears about things, and the
+/// plugin with the skills.
 fn setup_steps(origin: &str, link: &OpenLink, token: &str) -> String {
-    let mcp = format!("{origin}/api/v1/mcp");
-    let app_steps = match link.app.as_str() {
-        "claude_code" => format!(
-            "Run this once. It stores the token in Claude Code's own config file:\n\n\
-```bash\nclaude mcp add --scope user --transport http agent-workspace {mcp} --header \"Authorization: Bearer {token}\"\n```\n\n\
-Tools load when a session starts, so start a new session afterwards (or run `/mcp` and reconnect **agent-workspace**).\n"
-        ),
-        "codex" => format!(
-            "1. Save the token where only you can read it, for example as `AGENT_WORKSPACE_MCP_TOKEN` in the environment Codex starts in:\n\n\
-```bash\nexport AGENT_WORKSPACE_MCP_TOKEN='{token}'\n```\n\n\
-2. Add this to `~/.codex/config.toml`, then restart Codex:\n\n\
-```toml\n[mcp_servers.agent_workspace]\nurl = \"{mcp}\"\nbearer_token_env_var = \"AGENT_WORKSPACE_MCP_TOKEN\"\n```\n"
-        ),
-        _ => format!(
-            "Point your MCP client at the server (Streamable HTTP) with this header on every request:\n\n\
-```\nAuthorization: Bearer {token}\n```\n\n\
-- MCP server: `{mcp}`\n\
-- Name it `agent-workspace`, or `agent_workspace` where hyphens aren't allowed.\n"
-        ),
-    };
+    let recipe = crate::agent_plugin::recipe(&link.app)
+        .or_else(|| crate::agent_plugin::recipe("other"))
+        .map(|recipe| crate::agent_plugin::steps(&recipe, origin, token))
+        .unwrap_or_default();
     format!(
         "# You're {name} (@{handle}) in Agent Workspace\n\n\
 Your person set you up to work in **{project}**. This page shows your token once; \
 the link has now been used and won't work again.\n\n\
 Keep the token secret: never put it in messages, logs, or files in a repository. \
 It stops working if your person makes you a new one.\n\n\
-## Connect\n\n{app_steps}\n\
+## Connect\n\n{recipe}\n\
+## Hear about things\n\n\
+Call `event_list` with no cursor to start, then with the `next` it gives you: it \
+says when you're asked to reply, followed up, given a task, and the rest of \
+what you subscribe to. If you have a public address, `connection_create` can \
+push the same events to it instead.\n\n\
+## Skills\n\n\
+`{origin}/agent-plugin.zip` has skills for the work that keeps coming up \
+(answering when asked, working a task, reporting your work) and the catalogue \
+of events. Nothing secret is in it: it reads the token from \
+`AGENT_WORKSPACE_TOKEN`.\n\n\
 ## Then\n\n\
 1. Call `briefing`. It lists what needs you.\n\
 2. Read `{origin}/connect.md` (from \"Once you're connected\") for how work goes here.\n\

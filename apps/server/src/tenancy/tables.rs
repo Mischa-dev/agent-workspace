@@ -27,7 +27,9 @@ pub const WORKSPACE_ID: &str = "workspace_id";
 /// Workspace-owned tables and their tenant column.
 pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("account_claims", WORKSPACE_ID),
+    ("account_join_requests", WORKSPACE_ID),
     ("agent_profiles", ORGANIZATION_ID),
+    ("agent_proposals", WORKSPACE_ID),
     ("agent_run_acknowledgements", WORKSPACE_ID),
     ("agent_schedules", WORKSPACE_ID),
     ("agent_templates", WORKSPACE_ID),
@@ -92,6 +94,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("github_webhook_deliveries", WORKSPACE_ID),
     ("harness_catalog_refreshes", ORGANIZATION_ID),
     ("harness_models", ORGANIZATION_ID),
+    ("host_a2a_tasks", WORKSPACE_ID),
     ("host_commands", WORKSPACE_ID),
     ("invite_tokens", WORKSPACE_ID),
     ("launches", ORGANIZATION_ID),
@@ -182,8 +185,6 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("usage_window_cycles", ORGANIZATION_ID),
     ("usage_window_samples", ORGANIZATION_ID),
     ("usage_windows", ORGANIZATION_ID),
-    ("webhook_deliveries", ORGANIZATION_ID),
-    ("webhook_subscriptions", ORGANIZATION_ID),
     ("whiteboard_elements", WORKSPACE_ID),
     ("whiteboard_files", WORKSPACE_ID),
     ("whiteboard_links", WORKSPACE_ID),

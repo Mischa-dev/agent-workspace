@@ -1040,6 +1040,32 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     .await;
     assert_eq!(started["outcome"], "ok", "{started}");
     assert_eq!(run_state(&setup.pool, run).await, "working");
+    // It reaches the run's space only, even where the agent itself is a
+    // member too.
+    let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
+    let (status, added) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{elsewhere}/members"),
+            None,
+            json!({"actorId": fixer, "role": "member"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let listed = tool(app, &token, &session, "projects_list", json!({})).await;
+    assert!(!listed.to_string().contains(&elsewhere), "{listed}");
+    assert!(listed.to_string().contains(&work), "{listed}");
+    let opened = tool(
+        app,
+        &token,
+        &session,
+        "project_open",
+        json!({"projectId": elsewhere}),
+    )
+    .await;
+    assert_ne!(opened["outcome"], "ok", "{opened}");
     let done = last_tool(
         app,
         &token,
