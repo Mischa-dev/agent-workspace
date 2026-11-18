@@ -197,7 +197,7 @@ pub(super) async fn visible_links(
     // call, its agent limit decides as well.
     let seen = |task: &work_item_planning::TaskRef| {
         (task.project_id == project_id || reachable.contains(&task.project_id))
-            && !crate::policy::agent_limit_hides(
+            && !crate::access::limit_hides(
                 principal.actor_id,
                 task.project_id,
                 crate::policy::Permission::TasksView,

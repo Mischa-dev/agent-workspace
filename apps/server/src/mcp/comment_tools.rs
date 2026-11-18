@@ -223,13 +223,9 @@ pub(super) async fn task_comment_delete(
         else {
             return Ok(ToolResult::not_found("That comment"));
         };
-        let moderator = is_comment_moderator(
-            &mut transaction,
-            principal.actor_id,
-            principal.actor_kind,
-            principal.project_id,
-        )
-        .await?;
+        let moderator =
+            is_comment_moderator(&mut transaction, principal.actor_id, principal.project_id)
+                .await?;
         let actor = mcp_actor(principal, String::new());
         let already_deleted =
             match apply_comment_removal(&mut transaction, &actor, moderator, &locked).await? {

@@ -16,10 +16,7 @@ use crate::{
     error::AppError,
     external_events::enqueue_external_work_item_event,
     outbox::enqueue_work_item_updated,
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, ActorKind, Decision, DenyReason, RoleGrant},
     work_item_fields::FieldValueChanges,
     work_item_history::FieldChanges,
     work_item_labels::{self, LabelDelta, LabelPlan, MAX_LABELS_PER_TASK},
@@ -457,31 +454,32 @@ pub async fn read_membership(
         .await?)
 }
 
+/// Whether a task write may go ahead (K1.16): the access rule read from the
+/// membership the write locked, the same answer `access::check` gives. The
+/// role holds the action's permission, the membership is enabled and not a
+/// worker's (a worker acts only through its run's delegated scope), and an
+/// app acting for the account keeps it under its delegation limit. The
+/// account's kind plays no part.
 pub fn authorize_mutation(
     actor: &CommandActor,
     membership: &ProjectMembership,
     action: Action,
-    work_item_id: Option<Uuid>,
+    _work_item_id: Option<Uuid>,
 ) -> Result<Decision, AppError> {
-    let scope = work_item_id.map_or_else(
-        || ProjectScope::project(membership.project_id),
-        |id| ProjectScope::work_item(membership.project_id, id),
-    );
-    Ok(authorize(
-        &Subject::new(
-            actor.actor_id,
-            actor.actor_kind,
-            true,
-            Some(Membership::project(
-                membership.project_id,
-                membership.grant()?,
-                membership.enabled,
-            )),
-            None,
-        ),
-        action,
-        Resource::Project(scope),
-    ))
+    if !membership.enabled {
+        return Ok(Decision::Deny(DenyReason::MembershipDisabled));
+    }
+    let grant = membership.grant()?;
+    let permission = action.permission();
+    if grant.role() == crate::policy::MembershipRole::Worker
+        || !grant.permissions().contains(permission)
+    {
+        return Ok(Decision::Deny(DenyReason::RoleDenied));
+    }
+    if crate::access::limit_hides(actor.actor_id, membership.project_id, permission) {
+        return Ok(Decision::Deny(DenyReason::AgentLimit));
+    }
+    Ok(Decision::Allow)
 }
 
 pub async fn lock_work_item(

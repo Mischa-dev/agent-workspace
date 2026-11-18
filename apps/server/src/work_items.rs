@@ -3029,7 +3029,7 @@ async fn create_work_item_comment(
     authorize_work_item(
         &principal,
         &membership,
-        Action::WorkItemEdit,
+        Action::WorkItemComment,
         Some(work_item_id),
     )?;
     if membership.project_archived_at.is_some() {
@@ -4205,7 +4205,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                        AND EXISTS (SELECT 1 FROM project_memberships sees_task
                            WHERE sees_task.project_id = linked.project_id
                              AND sees_task.actor_id = $3 AND sees_task.enabled
-                             AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                             AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
         ), '[]'::jsonb) AS blocked_by,
         COALESCE((
             SELECT jsonb_agg("#,
@@ -4227,7 +4227,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                        AND EXISTS (SELECT 1 FROM project_memberships sees_task
                            WHERE sees_task.project_id = linked.project_id
                              AND sees_task.actor_id = $3 AND sees_task.enabled
-                             AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                             AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
         ), '[]'::jsonb) AS blocks,
         COALESCE((
             SELECT jsonb_agg(jsonb_build_object(
@@ -4251,7 +4251,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                        AND EXISTS (SELECT 1 FROM project_memberships sees_task
                            WHERE sees_task.project_id = linked.project_id
                              AND sees_task.actor_id = $3 AND sees_task.enabled
-                             AND custom_role_allows(sees_task.role_id, 'tasks.view'))))
+                             AND role_allows(sees_task.role, sees_task.role_id, 'tasks.view'))))
         ), '[]'::jsonb) AS relations,
         COALESCE((
             SELECT jsonb_agg("#,

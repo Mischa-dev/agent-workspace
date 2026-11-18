@@ -64,6 +64,9 @@ pub enum Action {
     WorkItemView,
     WorkItemCreate,
     WorkItemEdit,
+    /// Comment on a task (K1.16: the web and agents both need
+    /// "comment on tasks").
+    WorkItemComment,
     /// Archive a task, or bring one back.
     WorkItemArchive,
     /// Change a project's task workflow: its statuses and their order.
@@ -103,7 +106,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 50] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -133,6 +136,7 @@ impl Action {
         Self::WorkItemView,
         Self::WorkItemCreate,
         Self::WorkItemEdit,
+        Self::WorkItemComment,
         Self::WorkItemArchive,
         Self::WorkflowManage,
         Self::PageEdit,
@@ -188,6 +192,7 @@ impl Action {
             Self::WorkItemView => Permission::TasksView,
             Self::WorkItemCreate => Permission::TasksCreate,
             Self::WorkItemArchive => Permission::TasksDelete,
+            Self::WorkItemComment => Permission::TasksComment,
             Self::WorkflowManage => Permission::TasksWorkflow,
             Self::PageEdit => Permission::PagesEdit,
             Self::WhiteboardEdit => Permission::WhiteboardsEdit,
@@ -659,6 +664,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::WorkItemView
             | Action::WorkItemCreate
             | Action::WorkItemEdit
+            | Action::WorkItemComment
             | Action::WorkItemArchive
             | Action::WorkflowManage
             | Action::PageEdit
@@ -841,6 +847,7 @@ mod tests {
                             | Action::WorkItemView
                             | Action::WorkItemCreate
                             | Action::WorkItemEdit
+                            | Action::WorkItemComment
                             | Action::RepositoryView
                             // Split from WorkItemEdit.
                             | Action::WorkItemArchive

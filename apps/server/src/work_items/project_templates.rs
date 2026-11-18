@@ -251,26 +251,22 @@ async fn workspace_role(
 }
 
 /// Whoever made the template, or someone who manages the workspace's
-/// settings.
+/// settings, whatever kind of account (K1.16).
 fn may_edit(reader: TemplateReader, role: &RoleGrant, row: &ProjectTemplateRow) -> bool {
-    reader.human
-        && (row.created_by_actor_id == reader.actor_id
-            || role.permissions().contains(Permission::SettingsManage))
+    row.created_by_actor_id == reader.actor_id
+        || role.permissions().contains(Permission::SettingsManage)
 }
 
-/// Who reads or changes project templates: their actor, and whether they're
-/// a person (agents never edit one).
+/// Who reads or changes project templates.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TemplateReader {
     pub actor_id: Uuid,
-    pub human: bool,
 }
 
 impl TemplateReader {
     fn browser(principal: &AuthenticatedActor) -> Self {
         Self {
             actor_id: principal.actor_id,
-            human: principal.actor_kind == "human",
         }
     }
 }

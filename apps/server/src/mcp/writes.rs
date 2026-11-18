@@ -23,7 +23,7 @@ use crate::{
         resource_bound_scope,
     },
     message_content::MessageContent,
-    policy::{Action, ActorKind, Decision},
+    policy::{Action, Decision},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, CommandActor, ConflictKind, CreateWorkItemCommand,
@@ -1318,7 +1318,10 @@ async fn post_update_inner(
         },
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+    // Commenting needs "comment on tasks", as on the web (K1.16).
+    if let Some(result) =
+        authorize_write_for(&mut transaction, principal, Action::WorkItemComment).await?
+    {
         return Ok(result);
     }
     let scope = resource_bound_scope("mcp_work_items", work_item_id, "post_update")?;
@@ -2020,12 +2023,9 @@ pub(super) async fn check_access_for(
     let Some(membership) = membership else {
         return Ok(WriteAccess::NotFound);
     };
-    if !membership.enabled
-        || !matches!(
-            principal.actor_kind,
-            ActorKind::Human | ActorKind::ExternalAgent
-        )
-    {
+    // Whatever kind of account: a worker's membership never passes
+    // `authorize_mutation`, which is where that is decided (K1.16).
+    if !membership.enabled {
         return Ok(WriteAccess::NotFound);
     }
     if membership.project_archived_at.is_some() {

@@ -5,7 +5,6 @@
     "automations.rs": "K1.19: a built-in role named in SQL; asks access_allows or the role tier instead",
     "bootstrap.rs": "K1.19: a built-in role named in SQL; asks access_allows or the role tier instead",
     "execution.rs": "K1.18: a built-in role named in SQL; asks access_allows or the role tier instead",
-    "external_events.rs": "K1.20: a built-in role named in SQL; asks access_allows or the role tier instead",
     "invitations.rs": "K1.19: a built-in role named in SQL; asks access_allows or the role tier instead",
     "mail/mod.rs": "K1.19: a built-in role named in SQL; asks access_allows or the role tier instead",
     "mcp/agents.rs": "K1.6: a built-in role named in SQL; asks access_allows or the role tier instead",
@@ -13,22 +12,18 @@
     "migration_preflight.rs": "K1.19: a built-in role named in SQL; asks access_allows or the role tier instead",
     "notifications.rs": "K1.20: a built-in role named in SQL; asks access_allows or the role tier instead",
     "seed.rs": "K1.19: a built-in role named in SQL; asks access_allows or the role tier instead",
-    "work_items/comments.rs": "K1.16: a built-in role named in SQL; asks access_allows or the role tier instead",
     "work_items/imports.rs": "K1.20: a built-in role named in SQL; asks access_allows or the role tier instead",
     "workspace.rs": "K1.19: a built-in role named in SQL; asks access_allows or the role tier instead",
     "workspace_templates.rs": "K1.19: a built-in role named in SQL; asks access_allows or the role tier instead"
   },
   "custom_role_allows": {
     "ai/ready.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
-    "external_events.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
     "files.rs": "K1.17: a custom role read by hand in SQL; becomes access::sql_filter",
     "later.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
     "notifications.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
     "runs/reads.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
     "webhooks.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
     "work_item_planning.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
-    "work_items.rs": "K1.16: a custom role read by hand in SQL; becomes access::sql_filter",
-    "work_items/comments.rs": "K1.16: a custom role read by hand in SQL; becomes access::sql_filter",
     "work_items/imports.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter"
   },
   "workspace_role_enum": {
@@ -64,7 +59,6 @@
     "layouts.rs": "K1.19: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "mcp.rs": "K1.21: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "mcp/oauth.rs": "K1.6: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
-    "mcp/planning.rs": "K1.16: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "mcp/reads.rs": "K1.20: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "memberships.rs": "K1.19: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "memory.rs": "K1.17: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
@@ -75,9 +69,7 @@
     "scheduler.rs": "K1.20: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "search.rs": "K1.20: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "settings.rs": "K1.19: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
-    "work_item_commands.rs": "K1.16: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "work_item_planning.rs": "K1.20: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
-    "work_items/comments.rs": "K1.16: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "work_items/imports.rs": "K1.20: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter"
   },
   "account_kind_checks": {
@@ -116,7 +108,6 @@
     "mcp/launch_tools.rs": "K1.18: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "mcp/module_tools.rs": "K1.21: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "mcp/oauth.rs": "K1.6: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "mcp/project_template_tools.rs": "K1.21: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "mcp/role_tools.rs": "K1.19: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "mcp/runs.rs": "K1.18: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "memberships.rs": "K1.19: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
@@ -131,9 +122,7 @@
     "settings.rs": "K1.19: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "webhooks.rs": "K1.20: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "work_item_commands.rs": "K1.16: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "work_items/comments.rs": "K1.16: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "work_items/imports.rs": "K1.20: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
-    "work_items/project_templates.rs": "K1.16: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts",
     "workspace.rs": "K1.19: a decision or mechanic by account kind; a permission (K1.13, K1.14b) or a mechanical marker moved behind accounts"
   },
   "account_kind_strings": {
@@ -156,9 +145,7 @@
     "settings.rs": "K1.19: an account kind compared as its stored string; a permission or AccountKind behind accounts",
     "work_item_commands.rs": "K1.16: an account kind compared as its stored string; a permission or AccountKind behind accounts",
     "work_items.rs": "K1.16: an account kind compared as its stored string; a permission or AccountKind behind accounts",
-    "work_items/comments.rs": "K1.16: an account kind compared as its stored string; a permission or AccountKind behind accounts",
     "work_items/list.rs": "K1.16: an account kind compared as its stored string; a permission or AccountKind behind accounts",
-    "work_items/project_templates.rs": "K1.16: an account kind compared as its stored string; a permission or AccountKind behind accounts",
     "workspace.rs": "K1.19: an account kind compared as its stored string; a permission or AccountKind behind accounts"
   }
 }

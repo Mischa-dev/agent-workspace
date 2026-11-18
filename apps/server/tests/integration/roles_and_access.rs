@@ -6395,3 +6395,113 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
     .expect("owners");
     assert_eq!(owners, 1);
 }
+
+/// K1.16: commenting on a task is "comment on tasks", on the web and for
+/// agents alike, so a role that may comment but not edit tasks comments
+/// through both and changes nothing else. Removing someone else's comment is
+/// "moderate channels", held by admins, whatever kind of account holds it.
+#[tokio::test]
+async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
+    let Some(setup) = setup("k116_task_comments").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let task = owner_task(&setup, &work, "Ship it").await;
+    let (status, commenters) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Commenters", "baseRole": "member", "permissions": ["tasks.view", "tasks.comment"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{commenters}");
+    let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
+    let (mara, mara_token) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
+    for (who, actor) in [("alex", alex), ("mara", mara)] {
+        let (status, changed) = set_project_role(
+            &setup,
+            &work,
+            actor,
+            &format!("k116-{who}"),
+            json!({"roleId": commenters["id"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{who}: {changed}");
+    }
+
+    // Alex comments in the browser, and can't edit the task.
+    let (status, said) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items/{task}/comments"),
+            Some("k116-alex-comment"),
+            json!({"content": text("Looks good")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{said}");
+    let (status, refused) = send(
+        app,
+        alex_browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{work}/work-items/{task}"),
+            Some("k116-alex-edit"),
+            json!({"title": "Renamed", "expectedVersion": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+
+    // Mara comments through her tools.
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+    let commented = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "task_comment",
+        json!({"taskId": task, "text": "On it", "clientRequestId": "k116-mara"}),
+    )
+    .await;
+    assert_eq!(commented["outcome"], "applied", "{commented}");
+    let mara_comment = commented["activityId"]
+        .as_str()
+        .expect("comment id")
+        .to_owned();
+
+    // An agent holding Admin removes someone else's comment; Mara, without
+    // "moderate channels", can't remove Alex's.
+    let alex_comment = said["comment"]["id"]
+        .as_str()
+        .or_else(|| said["id"].as_str())
+        .unwrap_or_else(|| panic!("comment id: {said}"))
+        .to_owned();
+    let denied = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "task_comment_delete",
+        json!({"taskId": task, "commentId": alex_comment}),
+    )
+    .await;
+    assert_ne!(denied["outcome"], "ok", "{denied}");
+    let (rook, rook_token) = create_agent(app, &setup.browser, &work, "Rook", "rook").await;
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'admin', role_id = NULL WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(work.parse::<Uuid>().expect("project"))
+    .bind(rook)
+    .execute(&setup.pool)
+    .await
+    .expect("rook administers the project");
+    let rook_session = initialize(app, &rook_token).await.expect("Rook MCP");
+    let removed = tool(
+        app,
+        &rook_token,
+        &rook_session,
+        "task_comment_delete",
+        json!({"taskId": task, "commentId": mara_comment}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+}

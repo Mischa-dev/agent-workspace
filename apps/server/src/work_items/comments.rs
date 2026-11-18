@@ -29,7 +29,7 @@ use crate::{
     conversations::ActorView,
     error::{ApiJson, ApiPath, AppError},
     message_content::{MessageContent, MessageNode},
-    policy::{Action, ActorKind, Permission},
+    policy::{Action, Permission},
     work_item_commands::{CommandActor, enqueue_update, record_audit},
 };
 
@@ -687,8 +687,7 @@ async fn lock_for_change(
     let locked = lock_comment(transaction, project_id, work_item_id, comment_id)
         .await?
         .ok_or(AppError::NotFound("comment"))?;
-    let moderator =
-        principal.actor_kind == "human" && membership.may(Permission::ChannelsModerate)?;
+    let moderator = membership.may(Permission::ChannelsModerate)?;
     Ok((locked, moderator))
 }
 
@@ -790,38 +789,14 @@ async fn comment_revisions_http(
     ))
 }
 
-/// Whether `actor` may delete other people's comments in a project: an
-/// enabled owner or admin, and a person.
+/// Whether `actor` may delete other people's comments in a project: their
+/// role there holds "moderate channels" (owners and admins by default),
+/// whatever kind of account holds it, and an app acting for them keeps it
+/// under its delegation limit (K1.16).
 pub(crate) async fn is_comment_moderator(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     project_id: Uuid,
 ) -> Result<bool, AppError> {
-    if actor_kind != ActorKind::Human {
-        return Ok(false);
-    }
-    // An app acting for them moderates only while its agent limit keeps
-    // "moderate channels" too.
-    if crate::policy::agent_limit_hides(
-        actor_id,
-        project_id,
-        crate::policy::Permission::ChannelsModerate,
-    ) {
-        return Ok(false);
-    }
-    Ok(sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM project_memberships
-            WHERE project_id = $1 AND actor_id = $2 AND enabled
-              AND role IN ('owner', 'admin')
-              AND custom_role_allows(role_id, 'channels.moderate')
-        )
-        "#,
-    )
-    .bind(project_id)
-    .bind(actor_id)
-    .fetch_one(&mut **transaction)
-    .await?)
+    crate::conversations::may_notify_everyone(&mut **transaction, actor_id, project_id).await
 }
