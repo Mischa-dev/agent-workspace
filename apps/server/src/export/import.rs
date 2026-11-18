@@ -998,7 +998,10 @@ struct TableInfo {
     columns: HashSet<String>,
     has_id: bool,
     tenant: &'static str,
-    keys: Vec<Vec<String>>,
+    /// The primary key's columns.
+    primary: Vec<String>,
+    /// Each unique key's columns, with the predicate of a partial one.
+    keys: Vec<(Vec<String>, Option<String>)>,
     fks: Vec<Fk>,
     /// A unique constraint checked at commit, which `ON CONFLICT` can't
     /// arbitrate: only the id may then.
@@ -1028,9 +1031,10 @@ async fn table_info(
     .await?
     .into_iter()
     .collect::<HashSet<_>>();
-    let keys = sqlx::query_scalar::<_, Vec<String>>(
+    let keys = sqlx::query_as::<_, (Vec<String>, Option<String>)>(
         "SELECT array(SELECT a.attname::text FROM unnest(i.indkey::int2[]) k \
-                      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k) \
+                      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k), \
+                pg_get_expr(i.indpred, i.indrelid) \
          FROM pg_index i \
          WHERE i.indrelid = $1::regclass AND i.indisunique AND NOT i.indisprimary \
            AND i.indexprs IS NULL",
@@ -1062,6 +1066,15 @@ async fn table_info(
         referenced,
     })
     .collect();
+    let primary = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT array(SELECT a.attname::text FROM unnest(i.indkey::int2[]) k \
+                      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k) \
+         FROM pg_index i WHERE i.indrelid = $1::regclass AND i.indisprimary",
+    )
+    .bind(table)
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or_default();
     let deferred_unique = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = $1::regclass \
                         AND contype IN ('u', 'x') AND condeferrable)",
@@ -1075,6 +1088,7 @@ async fn table_info(
         columns,
         tenant: tables::tenant_column(table)
             .ok_or_else(|| refused(format!("{table} has no workspace column")))?,
+        primary,
         keys,
         fks,
     })
@@ -1791,10 +1805,36 @@ async fn insert_rows(
         return Ok((0, 0));
     }
     let returning = if info.has_id { " RETURNING id" } else { "" };
-    let conflict = match (info.deferred_unique, info.has_id) {
-        (false, _) => " ON CONFLICT DO NOTHING",
-        (true, true) => " ON CONFLICT (id) DO NOTHING",
-        (true, false) => "",
+    let tenant = identifier(info.tenant);
+    // A row without an id that the new workspace already made for itself
+    // (a space's counter or instructions) takes the archive's values, so
+    // the import is lossless; one in another workspace is never touched.
+    let take_over = if !info.has_id && !info.deferred_unique && !info.primary.is_empty() {
+        let changed = columns
+            .iter()
+            .filter(|column| !info.primary.contains(column))
+            .map(|column| plain(column).map(|column| format!("{column} = EXCLUDED.{column}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let key = info
+            .primary
+            .iter()
+            .map(|column| plain(column))
+            .collect::<Result<Vec<_>, _>>()?
+            .join(", ");
+        (!changed.is_empty()).then(|| {
+            format!(
+                " ON CONFLICT ({key}) DO UPDATE SET {} WHERE {table}.{tenant} = EXCLUDED.{tenant}",
+                changed.join(", ")
+            )
+        })
+    } else {
+        None
+    };
+    let conflict = match (take_over, info.deferred_unique, info.has_id) {
+        (Some(take_over), _, _) => take_over,
+        (None, false, _) => " ON CONFLICT DO NOTHING".to_owned(),
+        (None, true, true) => " ON CONFLICT (id) DO NOTHING".to_owned(),
+        (None, true, false) => String::new(),
     };
     let sql = format!(
         "INSERT INTO {table} ({list}) SELECT {list} FROM jsonb_populate_recordset(NULL::{table}, $1)\
@@ -1813,7 +1853,6 @@ async fn insert_rows(
         .await?
         .into_iter()
         .collect::<HashSet<_>>();
-    let tenant = identifier(info.tenant);
     let mut matched = Vec::new();
     let mut skipped = 0;
     for ((line, row), whole) in lines.iter().zip(&rows).zip(&full) {
@@ -1840,21 +1879,34 @@ async fn insert_rows(
             )));
         }
         let mut found = None;
-        for key in &info.keys {
+        for (key, predicate) in &info.keys {
             if key
                 .iter()
                 .any(|column| whole.get(column).is_none_or(Value::is_null))
             {
                 continue;
             }
-            let condition = key
+            let columns = key
                 .iter()
-                .map(|column| plain(column).map(|column| format!("t.{column} = r.{column}")))
+                .map(|column| plain(column))
                 .collect::<Result<Vec<_>, _>>()?
-                .join(" AND ");
+                .join(", ");
+            // A partial key holds only where its predicate does, for the
+            // row arriving (inner scope) and the row found (outer scope)
+            // alike: the predicate comes from the catalogue, not the archive.
+            let partial = predicate
+                .as_deref()
+                .map(|predicate| {
+                    format!(
+                        " AND ({predicate}) AND EXISTS (SELECT 1 FROM \
+                         jsonb_populate_record(NULL::{table}, $1) arriving WHERE {predicate})"
+                    )
+                })
+                .unwrap_or_default();
             found = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(&format!(
-                "SELECT t.id, t.{tenant} FROM {table} t, \
-                 jsonb_populate_record(NULL::{table}, $1) r WHERE {condition} LIMIT 1"
+                "SELECT id, {tenant} FROM {table} \
+                 WHERE ({columns}) = (SELECT {columns} FROM jsonb_populate_record(NULL::{table}, $1)) \
+                 {partial} LIMIT 1"
             ))
             .bind(whole)
             .fetch_optional(&mut *connection)
@@ -1868,6 +1920,7 @@ async fn insert_rows(
                 if let Some(source) = line.id.as_deref().and_then(|id| id.parse::<Uuid>().ok()) {
                     matched.push((source, existing));
                 }
+                take_values(connection, step, info, workspace, existing, row).await?;
             }
             Some(_) => skipped += 1,
             None => {
@@ -1879,6 +1932,48 @@ async fn insert_rows(
     }
     record_map(connection, transfer, workspace, &matched).await?;
     Ok((inserted.len() as u64, skipped))
+}
+
+/// A row the new workspace made for itself (its workspace space, a
+/// built-in role, its owner's membership) takes the archive's values, all
+/// but its id, so what arrives is what was exported.
+async fn take_values(
+    connection: &mut PgConnection,
+    step: &Step,
+    info: &TableInfo,
+    workspace: Uuid,
+    existing: Uuid,
+    row: &Value,
+) -> Result<(), ImportError> {
+    let Value::Object(fields) = row else {
+        return Ok(());
+    };
+    let columns = fields
+        .keys()
+        .filter(|column| column.as_str() != "id" && !step.deferred.contains(*column))
+        .map(|column| plain(column))
+        .collect::<Result<Vec<_>, _>>()?;
+    if columns.is_empty() {
+        return Ok(());
+    }
+    let table = identifier(step.table);
+    let tenant = identifier(info.tenant);
+    let list = columns.join(", ");
+    let from = columns
+        .iter()
+        .map(|column| format!("r.{column}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    sqlx::query(&format!(
+        "UPDATE {table} t SET ({list}) = (SELECT {from} FROM jsonb_populate_record(NULL::{table}, $1) r) \
+         WHERE t.id = $2 AND t.{tenant} = $3"
+    ))
+    .bind(row)
+    .bind(existing)
+    .bind(workspace)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
 }
 
 /// Fills in the columns [`plan`] deferred.

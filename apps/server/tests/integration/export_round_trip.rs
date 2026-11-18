@@ -34,6 +34,83 @@ use crate::{
     },
 };
 
+/// Kinds an archive carries that can't arrive anywhere, each with why. Every
+/// one of their rows must be counted in the import's report as left out,
+/// never dropped without a word.
+const LEFT_OUT: &[(&str, &str)] = &[
+    (
+        "agent_profiles",
+        "an agent's profile names the execution worker it runs on, a machine on the old server that is set up again after import",
+    ),
+    (
+        "agent_runs",
+        "a provider run names its execution profile and worker, which never travel; the run's own record (runs) does",
+    ),
+    (
+        "github_pull_requests",
+        "a pull request belongs to its GitHub installation, a connection reconnected after import, which brings its pull requests back",
+    ),
+];
+
+/// Columns an import is declared to write differently, each with why.
+const REWRITTEN: &[(&str, &str, &str)] = &[(
+    "links",
+    "created_at",
+    "a link read from text is made again from the text as it arrives",
+)];
+
+/// What the database says about how to compare one table: its primary key,
+/// its generated columns (worked out again, never carried), and its
+/// nullable references to tables an export never carries (credentials,
+/// sessions), which arrive empty.
+struct Shape {
+    primary: Vec<String>,
+    generated: BTreeSet<String>,
+    uncarried: BTreeSet<String>,
+}
+
+async fn shape(pool: &PgPool, table: &str, carried: &BTreeSet<&str>) -> Shape {
+    let primary = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT array(SELECT a.attname::text FROM unnest(i.indkey::int2[]) k \
+                      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k) \
+         FROM pg_index i WHERE i.indrelid = $1::regclass AND i.indisprimary",
+    )
+    .bind(table)
+    .fetch_optional(pool)
+    .await
+    .expect("primary key")
+    .unwrap_or_default();
+    let generated = sqlx::query_scalar::<_, String>(
+        "SELECT attname::text FROM pg_attribute \
+         WHERE attrelid = $1::regclass AND attnum > 0 AND attgenerated <> ''",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .expect("generated")
+    .into_iter()
+    .collect();
+    let uncarried = sqlx::query_as::<_, (String, String)>(
+        "SELECT c.confrelid::regclass::text, a.attname::text \
+         FROM pg_constraint c JOIN pg_attribute a \
+           ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey) \
+         WHERE c.contype = 'f' AND c.conrelid = $1::regclass AND NOT a.attnotnull",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .expect("references")
+    .into_iter()
+    .filter(|(target, _)| !carried.contains(target.as_str()))
+    .map(|(_, column)| column)
+    .collect();
+    Shape {
+        primary,
+        generated,
+        uncarried,
+    }
+}
+
 /// Each exported kind's rows in `workspace` as the export reads them, as
 /// JSON objects with sorted keys.
 async fn arrived(pool: &PgPool, workspace: Uuid) -> BTreeMap<&'static str, Vec<Value>> {
@@ -58,8 +135,7 @@ fn archived(
     archive: &std::path::Path,
     map: &BTreeMap<String, String>,
 ) -> BTreeMap<&'static str, Vec<Value>> {
-    let mut zip =
-        zip::ZipArchive::new(std::fs::File::open(archive).expect("open")).expect("zip");
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(archive).expect("open")).expect("zip");
     let mut read = BTreeMap::new();
     for module in DECLARATIONS {
         for kind in module.kinds {
@@ -70,8 +146,8 @@ fn archived(
                 entry.read_to_string(&mut text).expect("read lines");
                 for line in text.lines().filter(|line| !line.trim().is_empty()) {
                     let line = serde_json::from_str::<Value>(line).expect("line");
-                    let data: Value = serde_json::from_str(&canonical(&line["data"], map))
-                        .expect("canonical");
+                    let data: Value =
+                        serde_json::from_str(&canonical(&line["data"], map)).expect("canonical");
                     rows.push(data);
                 }
             }
@@ -81,12 +157,13 @@ fn archived(
     read
 }
 
-/// A row's identity for matching: its id, else the whole row.
-fn identity(row: &Value) -> String {
-    match row.get("id") {
-        Some(id) if !id.is_null() => id.to_string(),
-        _ => row.to_string(),
-    }
+/// A row's identity for matching: its primary key.
+fn identity(row: &Value, primary: &[String]) -> String {
+    primary
+        .iter()
+        .map(|column| row.get(column).unwrap_or(&Value::Null).to_string())
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 /// `value` with object keys sorted and every mapped id swapped.
@@ -171,7 +248,10 @@ async fn a_workspace_arrives_on_a_fresh_server_with_every_exported_column() {
             "AGENT_WORKSPACE_DATA_ROOT",
             data.path().to_string_lossy().into_owned(),
         )
-        .with("AGENT_WORKSPACE_MINIMUM_FREE_BYTES", "1073741824".to_owned())
+        .with(
+            "AGENT_WORKSPACE_MINIMUM_FREE_BYTES",
+            "1073741824".to_owned(),
+        )
         .build();
     setup::prepare(&fresh.pool, &state.config)
         .await
@@ -190,12 +270,11 @@ async fn a_workspace_arrives_on_a_fresh_server_with_every_exported_column() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{session}");
-    let owner = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM users WHERE login_name = 'mover'",
-    )
-    .fetch_one(&fresh.pool)
-    .await
-    .expect("owner");
+    let owner =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'mover'")
+            .fetch_one(&fresh.pool)
+            .await
+            .expect("owner");
     let started = import::start_import(
         &state,
         StartImport {
@@ -235,25 +314,50 @@ async fn a_workspace_arrives_on_a_fresh_server_with_every_exported_column() {
     .collect::<BTreeMap<_, _>>();
     let before = archived(&archive, &map);
     let after = arrived(&fresh.pool, started.workspace_id).await;
+    let report =
+        sqlx::query_scalar::<_, Value>("SELECT counts FROM workspace_transfers WHERE id = $1")
+            .bind(started.transfer.id)
+            .fetch_one(&fresh.pool)
+            .await
+            .expect("report");
+    let carried = before.keys().copied().collect::<BTreeSet<_>>();
     let mut lost = Vec::new();
     for (table, rows) in &before {
+        if LEFT_OUT.iter().any(|(left, _)| left == table) {
+            // Declared: every row is reported as left out.
+            let reported = report["skipped"][*table].as_u64().unwrap_or(0);
+            if reported != rows.len() as u64 {
+                lost.push(format!(
+                    "{table}: {} rows, {reported} reported left out",
+                    rows.len()
+                ));
+            }
+            continue;
+        }
+        let shape = shape(&fresh.pool, table, &carried).await;
         let here = after
             .get(table)
             .map(|rows| {
                 rows.iter()
-                    .map(|row| (identity(row), row))
+                    .map(|row| (identity(row, &shape.primary), row))
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
         let mut columns = BTreeSet::new();
         let mut missing = 0;
         for row in rows {
-            let Some(arrived) = here.get(&identity(row)) else {
+            let Some(arrived) = here.get(&identity(row, &shape.primary)) else {
                 missing += 1;
                 continue;
             };
             for (column, value) in row.as_object().into_iter().flatten() {
-                if arrived.get(column) != Some(value) {
+                let now = arrived.get(column);
+                let declared = shape.generated.contains(column)
+                    || (shape.uncarried.contains(column) && now.is_none_or(Value::is_null))
+                    || REWRITTEN
+                        .iter()
+                        .any(|(kind, name, _)| kind == table && name == column);
+                if now != Some(value) && !declared {
                     columns.insert(column.clone());
                 }
             }
@@ -269,10 +373,9 @@ async fn a_workspace_arrives_on_a_fresh_server_with_every_exported_column() {
         before.values().map(Vec::len).sum::<usize>() > 50,
         "the fixture exports a real workspace"
     );
-    let report = sqlx::query_scalar::<_, Value>("SELECT counts FROM workspace_transfers WHERE id = $1")
-        .bind(started.transfer.id)
-        .fetch_one(&fresh.pool)
-        .await
-        .expect("report");
-    assert!(lost.is_empty(), "lost on the way:\n{}\nreport: {report}", lost.join("\n"));
+    assert!(
+        lost.is_empty(),
+        "lost on the way:\n{}\nreport: {report}",
+        lost.join("\n")
+    );
 }
