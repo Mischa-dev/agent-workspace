@@ -233,10 +233,15 @@ async fn issue(transaction: &mut Transaction<'_, Postgres>, path: &Path) -> Resu
 }
 
 /// Ends setup inside `transaction` (an account was made another way).
+/// `bootstrap-admin` also runs against databases from before first run in
+/// the browser existed, where there is no setup to end.
 pub(crate) async fn forget(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM server_setup")
-        .execute(connection)
-        .await?;
+    sqlx::query(
+        "DO $$ BEGIN IF to_regclass('server_setup') IS NOT NULL THEN \
+         DELETE FROM server_setup; END IF; END $$",
+    )
+    .execute(connection)
+    .await?;
     Ok(())
 }
 

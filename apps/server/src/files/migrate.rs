@@ -51,7 +51,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
             .await
             .map_err(JobError::from)?;
         if let Some(next) = moved.next {
-            queue(
+            let queued = queue(
                 &context.state.pool,
                 MovePayload {
                     after: Some(next),
@@ -60,6 +60,9 @@ pub fn register_jobs(registry: &mut JobRegistry) {
             )
             .await
             .map_err(JobError::from)?;
+            if matches!(queued, jobs::Enqueued::Duplicate) {
+                tracing::debug!(%next, "the next file-move batch was already queued");
+            }
         }
         Ok(())
     });
@@ -113,15 +116,27 @@ async fn queue(pool: &PgPool, payload: MovePayload) -> Result<jobs::Enqueued, Ap
     jobs::enqueue(crate::db::scoped(pool), job(payload)).await
 }
 
-fn job(payload: MovePayload) -> NewJob {
-    let mut job = NewJob::new(MOVE_KIND).payload(&payload).unique(format!(
-        "files.move:{}:{}",
+/// One move at a time per store and workspace; each batch's key names
+/// where it starts, so the next batch, queued while this one still runs,
+/// doesn't collide with it.
+fn unique_key(payload: &MovePayload) -> String {
+    format!(
+        "files.move:{}:{}:{}",
         payload.to,
         payload
             .workspace
             .map(|id| id.to_string())
-            .unwrap_or_default()
-    ));
+            .unwrap_or_default(),
+        payload
+            .after
+            .map_or_else(|| "start".to_owned(), |id| id.to_string())
+    )
+}
+
+fn job(payload: MovePayload) -> NewJob {
+    let mut job = NewJob::new(MOVE_KIND)
+        .payload(&payload)
+        .unique(unique_key(&payload));
     if let Some(workspace) = payload.workspace {
         job = job.workspace(workspace);
     }
@@ -252,5 +267,25 @@ pub async fn prune_sources(pool: &PgPool, config: &AppConfig) -> Result<u64, App
                 .await?;
             pruned += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_next_batch_never_shares_the_running_batchs_key() {
+        let start = MovePayload {
+            to: "object".to_owned(),
+            workspace: None,
+            after: None,
+        };
+        let next = MovePayload {
+            after: Some(Uuid::now_v7()),
+            ..start.clone()
+        };
+        assert_ne!(unique_key(&start), unique_key(&next));
+        assert_eq!(unique_key(&start), unique_key(&start.clone()));
     }
 }

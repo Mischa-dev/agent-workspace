@@ -701,6 +701,16 @@ async fn document_rooms(name: &str, target: Target) {
     })
     .await
     .expect("Mara's ticket went stale");
+    // Until a new ticket is in, the old one carries nothing that can hold
+    // content (a document's changes, streamed text): it may name what Mara
+    // can no longer see.
+    publish(api.state(), change(2)).await;
+    assert!(
+        until(&mut sockets[0], Duration::from_secs(1), is_update)
+            .await
+            .is_none(),
+        "a stale ticket hears no content"
+    );
     let fresh = watch(&mara_browser).await;
     assert_eq!(fresh["documents"], json!([]), "the room is dropped");
     sockets[0]
@@ -716,7 +726,7 @@ async fn document_rooms(name: &str, target: Target) {
     })
     .await
     .expect("the new ticket is in use");
-    publish(api.state(), change(2)).await;
+    publish(api.state(), change(3)).await;
     assert!(
         until(&mut sockets[0], Duration::from_secs(1), is_update)
             .await
