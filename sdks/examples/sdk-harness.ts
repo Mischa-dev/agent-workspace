@@ -82,4 +82,4 @@ const runner = new Runner({
 })
 
 if (process.env.AGENT_WORKSPACE_WEBHOOK_SECRET) runner.listen(Number(process.env.PORT ?? 8787))
-else void runner.poll()
+else void runner.connect()

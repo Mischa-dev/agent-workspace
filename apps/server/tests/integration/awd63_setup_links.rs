@@ -114,6 +114,25 @@ async fn a_setup_link_hands_the_agent_its_token_once() {
     assert_eq!(status, StatusCode::OK, "{steps}");
     assert!(steps.contains("claude mcp add"), "{steps}");
     assert!(steps.contains("@scout"), "{steps}");
+    assert!(steps.contains("/agent-plugin.zip"), "{steps}");
+    // A2.17: the plugin needs no credential and holds nothing secret.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/agent-plugin.zip")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1_000_000)
+        .await
+        .expect("body");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(!text.contains("aw_ext_"));
+    assert!(text.contains("SKILL.md"));
     let first_token = token_in(&steps);
     assert!(initialize(app, &first_token).await.is_some());
     assert_eq!(waiting_secrets(&setup.pool).await, 0);

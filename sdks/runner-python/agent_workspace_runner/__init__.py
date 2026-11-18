@@ -1,33 +1,56 @@
-"""The runner side of Agent Workspace's agent runner contract.
+"""The runner side of Agent Workspace's agent contract.
 
-See docs/agent-runner.md: verify a wakeup, claim the request, bind your
-session, report progress, post interim and final replies, and stop when a
-person presses Stop. Standard library only; Python 3.10 or later.
+Hear reply requests on the event log (a stream, long-poll or signed pushes,
+through ``WorkspaceChannel``), claim them, bind your session, report
+progress, post interim and final replies, and stop when a person presses
+Stop. Standard library only; Python 3.10 or later.
 """
 
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import os
 import re
 import sys
 import threading
-import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Mapping
 
+from .channel import (
+    PUSH_TOLERANCE_SECONDS,
+    ChannelRefused,
+    Deduper,
+    FileCursor,
+    PushError,
+    ToolError,
+    WorkspaceChannel,
+    event_thing,
+    parse_sse_block,
+    reply_request_id,
+    sign_legacy,
+    sign_standard,
+    unwrap,
+    verify_push,
+)
+
 __all__ = [
-    "WAKEUP_TOLERANCE_SECONDS",
-    "WakeupError",
-    "sign_wakeup",
-    "verify_wakeup",
-    "DeliveryDeduper",
+    "PUSH_TOLERANCE_SECONDS",
+    "PushError",
+    "ChannelRefused",
+    "sign_standard",
+    "sign_legacy",
+    "verify_push",
+    "event_thing",
+    "reply_request_id",
+    "parse_sse_block",
+    "Deduper",
+    "FileCursor",
+    "WorkspaceChannel",
     "McpError",
     "ToolError",
     "McpClient",
@@ -36,93 +59,10 @@ __all__ = [
     "parse_settings",
     "strip_leading_mentions",
     "RequestContext",
+    "asked",
     "Runner",
     "runner_settings_from_env",
 ]
-
-# ---------------------------------------------------------------------------
-# Wakeups
-
-#: Five minutes, as docs/agent-runner.md asks.
-WAKEUP_TOLERANCE_SECONDS = 300
-
-
-class WakeupError(Exception):
-    def __init__(self, message: str, status: int = 401) -> None:
-        super().__init__(message)
-        self.status = status
-
-
-def _header(headers: Mapping[str, Any], name: str) -> str | None:
-    getter = getattr(headers, "get", None)
-    value = getter(name) if getter else None
-    if value is None:
-        for key, candidate in headers.items():
-            if key.lower() == name:
-                value = candidate
-                break
-    if isinstance(value, (list, tuple)):
-        value = value[0] if value else None
-    return value
-
-
-def sign_wakeup(secret: str, timestamp: str, body: str | bytes) -> str:
-    """The signature on a wakeup: ``sha256=`` and the hex HMAC of ``"{timestamp}.{body}"``."""
-    raw = body.encode() if isinstance(body, str) else body
-    digest = hmac.new(secret.encode(), timestamp.encode() + b"." + raw, hashlib.sha256).hexdigest()
-    return f"sha256={digest}"
-
-
-def verify_wakeup(
-    secret: str,
-    headers: Mapping[str, Any],
-    body: str | bytes,
-    now: float | None = None,
-    tolerance_seconds: int = WAKEUP_TOLERANCE_SECONDS,
-) -> dict[str, Any]:
-    """Checks a wakeup's signature (in constant time) and age, and parses it.
-
-    Raises ``WakeupError`` for anything that isn't a genuine, fresh wakeup.
-    """
-    timestamp = _header(headers, "x-workspace-timestamp")
-    signature = _header(headers, "x-workspace-signature")
-    if not timestamp or not signature or not re.fullmatch(r"\d{1,12}", timestamp):
-        raise WakeupError("missing signature")
-    current = time.time() if now is None else now
-    if abs(current - int(timestamp)) > tolerance_seconds:
-        raise WakeupError("stale wakeup")
-    if not hmac.compare_digest(sign_wakeup(secret, timestamp, body).encode(), signature.encode()):
-        raise WakeupError("bad signature")
-    try:
-        wakeup = json.loads(body)
-    except ValueError:
-        raise WakeupError("body is not JSON", 400) from None
-    if not isinstance(wakeup, dict) or not isinstance(wakeup.get("event"), str) or not isinstance(wakeup.get("deliveryId"), str):
-        raise WakeupError("not a wakeup", 400)
-    delivery = _header(headers, "x-workspace-delivery")
-    if delivery and delivery != wakeup["deliveryId"]:
-        raise WakeupError("delivery mismatch", 400)
-    return wakeup
-
-
-class DeliveryDeduper:
-    """Remembers recent delivery IDs, so a retried wakeup is handled once."""
-
-    def __init__(self, limit: int = 10_000) -> None:
-        self._seen: OrderedDict[str, None] = OrderedDict()
-        self._limit = limit
-        self._lock = threading.Lock()
-
-    def first(self, delivery_id: str) -> bool:
-        """True the first time an ID is seen."""
-        with self._lock:
-            if delivery_id in self._seen:
-                return False
-            self._seen[delivery_id] = None
-            if len(self._seen) > self._limit:
-                self._seen.popitem(last=False)
-            return True
-
 
 # ---------------------------------------------------------------------------
 # MCP over streamable HTTP
@@ -134,22 +74,6 @@ class McpError(Exception):
     def __init__(self, message: str, code: int | None = None) -> None:
         super().__init__(message)
         self.code = code
-
-
-class ToolError(Exception):
-    """A reply tool answered with something other than ``ok``."""
-
-    def __init__(self, outcome: str, detail: Mapping[str, Any] | None = None) -> None:
-        detail = detail or {}
-        message = detail.get("message") or (f"invalid {detail['field']}" if detail.get("field") else outcome)
-        super().__init__(message)
-        self.outcome = outcome
-        self.field = detail.get("field")
-
-    @property
-    def retryable(self) -> bool:
-        """``temporarily_unavailable``: worth retrying with backoff."""
-        return self.outcome == "temporarily_unavailable"
 
 
 @dataclass
@@ -289,11 +213,7 @@ class McpClient:
 # The reply tools
 
 
-def _unwrap(payload: Any) -> Any:
-    if isinstance(payload, dict) and payload.get("outcome") == "ok":
-        return payload.get("value")
-    outcome = payload.get("outcome", "invalid_response") if isinstance(payload, dict) else "invalid_response"
-    raise ToolError(outcome, payload if isinstance(payload, dict) else None)
+_unwrap = unwrap
 
 
 class ReplyTools:
@@ -502,6 +422,22 @@ class RequestContext:
             listener(followup)
 
 
+def asked(event: Mapping[str, Any]) -> dict[str, Any] | None:
+    """What a ``reply.*`` event asks of the runner, or ``None`` for any other event."""
+    if not str(event.get("type", "")).startswith("reply."):
+        return None
+    request_id = reply_request_id(event)
+    if not request_id:
+        return None
+    data = event.get("data") or {}
+    return {
+        "requestId": request_id,
+        "cancelled": event.get("type") == "reply.cancelled",
+        "followsRequestId": data.get("followsRequestId"),
+        "sessionRef": data.get("sessionRef"),
+    }
+
+
 class Runner:
     def __init__(
         self,
@@ -512,42 +448,54 @@ class Runner:
         webhook_secret: str | None = None,
         transport: Transport | None = None,
         on_error: Callable[[BaseException], None] | None = None,
+        origin: str | None = None,
+        cursor_file: str | None = None,
+        opener: Any = None,
     ) -> None:
-        self.tools = ReplyTools(McpClient(mcp_url, token, transport))
+        mcp = McpClient(mcp_url, token, transport)
+        self.tools = ReplyTools(mcp)
+        if origin is None:
+            parts = urllib.parse.urlsplit(mcp_url)
+            origin = f"{parts.scheme}://{parts.netloc}"
+        self.channel = WorkspaceChannel(
+            origin,
+            token,
+            mcp,
+            cursor=FileCursor(cursor_file) if cursor_file else None,
+            opener=opener,
+            on_error=on_error,
+        )
+        self.channel.on("reply.*", self._on_reply_event)
         self._harness = harness
         self._on_request = on_request
         self._webhook_secret = webhook_secret
         self._on_error = on_error
-        self._deduper = DeliveryDeduper()
         self._active: dict[str, RequestContext] = {}
         self._handed_off: set[str] = set()
         self._lock = threading.Lock()
 
+    def _on_reply_event(self, event: dict[str, Any]) -> None:
+        ask = asked(event)
+        if ask:
+            # On its own thread: the work runs while the channel reads on.
+            threading.Thread(target=self._dispatch_safely, args=(ask,), daemon=True).start()
+
     def receive(self, headers: Mapping[str, Any], body: str | bytes) -> int:
-        """Verifies one wakeup and handles it on a thread. Answer with the returned status right away."""
+        """Checks one push and handles it on a thread. Answer with the returned status right away."""
         if not self._webhook_secret:
             return 500
-        try:
-            wakeup = verify_wakeup(self._webhook_secret, headers, body)
-        except WakeupError as error:
-            return error.status
-        if wakeup["event"] == "ping":
-            # A test wakeup from the Agents page: answering is the whole test.
-            return 204
-        if self._deduper.first(wakeup["deliveryId"]):
-            threading.Thread(target=self._dispatch_safely, args=(wakeup,), daemon=True).start()
-        return 204
+        return self.channel.receive_push(self._webhook_secret, headers, body)
 
-    def _dispatch_safely(self, wakeup: Mapping[str, Any]) -> None:
+    def _dispatch_safely(self, ask: Mapping[str, Any]) -> None:
         try:
-            self.dispatch(wakeup)
+            self.dispatch(ask)
         except Exception as error:  # noqa: BLE001
             self._report(error)
 
-    def dispatch(self, wakeup: Mapping[str, Any]) -> None:
-        """Handles a wakeup that is already verified (or a request found by polling). Blocks while it runs."""
-        request_id = wakeup["replyRequestId"]
-        if wakeup.get("event") == "reply.cancelled":
+    def dispatch(self, ask: Mapping[str, Any]) -> None:
+        """Handles one reply request (``asked(event)``, or ``{"requestId": ...}``). Blocks while it runs."""
+        request_id = ask["requestId"]
+        if ask.get("cancelled"):
             with self._lock:
                 active = self._active.get(request_id)
             if active:
@@ -557,8 +505,8 @@ class Runner:
             if request_id in self._active or request_id in self._handed_off:
                 return
         claim = self.tools.claim(request_id)
-        context = self._context(claim, wakeup.get("sessionRef") or (claim.get("session") or {}).get("externalRef"))
-        follows = claim["request"].get("followsRequestId") or wakeup.get("followsRequestId")
+        context = self._context(claim, ask.get("sessionRef") or (claim.get("session") or {}).get("externalRef"))
+        follows = claim["request"].get("followsRequestId") or ask.get("followsRequestId")
         with self._lock:
             parent = self._active.get(follows) if follows else None
             if parent:
@@ -602,7 +550,7 @@ class Runner:
         )
 
     def listen(self, port: int, host: str = "127.0.0.1", path: str = "/wake") -> ThreadingHTTPServer:
-        """Serves wakeups on ``POST {path}`` from a background thread. Call ``shutdown()`` to stop."""
+        """Serves pushes on ``POST {path}`` from a background thread. Call ``shutdown()`` to stop."""
         runner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -627,26 +575,21 @@ class Runner:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server
 
-    def poll(self, interval_seconds: float = 30, stop: threading.Event | None = None) -> None:
-        """Without a public URL: polls ``inbox_list`` until ``stop`` is set."""
-        stop = stop or threading.Event()
-        while not stop.is_set():
-            try:
-                for item in self.tools.inbox_list():
-                    # Claimed ones too: after a restart, claiming again picks them up.
-                    with self._lock:
-                        busy = item["requestId"] in self._active
-                    if item.get("status") not in ("pending", "claimed") or busy:
-                        continue
-                    event = "reply.followup" if item.get("followsRequestId") else "reply.requested"
-                    threading.Thread(
-                        target=self._dispatch_safely,
-                        args=({"event": event, "replyRequestId": item["requestId"]},),
-                        daemon=True,
-                    ).start()
-            except Exception as error:  # noqa: BLE001
-                self._report(error)
-            stop.wait(interval_seconds)
+    def connect(self, stop: threading.Event | None = None) -> None:
+        """Without a public address: reads the event stream (or long-polls) until ``stop`` is set.
+
+        Requests already waiting are picked up first, so a restart misses nothing.
+        """
+        try:
+            for item in self.tools.inbox_list():
+                # Claimed ones too: after a restart, claiming again picks them up.
+                if item.get("status") not in ("pending", "claimed"):
+                    continue
+                ask = {"requestId": item["requestId"], "followsRequestId": item.get("followsRequestId")}
+                threading.Thread(target=self._dispatch_safely, args=(ask,), daemon=True).start()
+        except Exception as error:  # noqa: BLE001
+            self._report(error)
+        self.channel.connect(stop)
 
     def _report(self, error: BaseException) -> None:
         if self._on_error:

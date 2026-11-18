@@ -517,23 +517,34 @@ pub(super) async fn file_upload(
             return Err(AppError::PayloadTooLarge);
         }
         let prepared = files::prepare_upload(upload).await?;
-        // The retry key, the file and its row in one transaction on one
-        // connection: a retry waits for this one and answers with its file,
-        // and a crash leaves neither.
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        let reservation = match reserve_create(
-            &mut transaction,
-            principal,
-            "files",
-            retry_key.as_ref(),
-            &retried,
-        )
-        .await?
-        {
-            CreateRetry::Fresh(reservation) => reservation,
-            CreateRetry::Replay(file_id, _) => {
+        // The bytes go into the store first, outside any transaction; then
+        // the retry key and the file's row in one transaction: a retry waits
+        // for this one and answers with its file, and a crash leaves neither
+        // (the sweep takes unclaimed bytes away).
+        let staged = files::stage_prepared(state, destination.project_id(), prepared).await?;
+        let reserved = async {
+            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+            let reserved = reserve_create(
+                &mut transaction,
+                principal,
+                "files",
+                retry_key.as_ref(),
+                &retried,
+            )
+            .await?;
+            Ok::<_, AppError>((transaction, reserved))
+        }
+        .await;
+        let (mut transaction, reservation) = match reserved {
+            Ok((transaction, CreateRetry::Fresh(reservation))) => (transaction, reservation),
+            Ok((transaction, CreateRetry::Replay(file_id, _))) => {
                 transaction.commit().await?;
+                files::abandon_staged(state, &staged).await;
                 return Ok((file_id, true, destination));
+            }
+            Err(error) => {
+                files::abandon_staged(state, &staged).await;
+                return Err(error);
             }
         };
         let row = files::store_prepared(
@@ -541,7 +552,7 @@ pub(super) async fn file_upload(
             &mut transaction,
             principal.actor_id,
             destination,
-            prepared,
+            staged,
         )
         .await?;
         let kept = complete_create(&mut transaction, reservation.as_ref(), row.id).await;

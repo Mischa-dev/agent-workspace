@@ -252,7 +252,7 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         .expect("run the tag job");
     let (launch_profile, launch_state, run_id) =
         sqlx::query_as::<_, (Option<Uuid>, String, Option<Uuid>)>(
-            "SELECT agent_profile_id, state, agent_run_id FROM launches WHERE source = 'tag'",
+            "SELECT agent_profile_id, state, run_id FROM launches WHERE source = 'tag'",
         )
         .fetch_one(&pool)
         .await

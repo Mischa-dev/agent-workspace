@@ -13,7 +13,6 @@ impl CoreModule for Module {
     }
 
     fn register(&self, module: &mut Registrar<'_>) {
-        module.routes(crate::webhooks::router);
         module.routes(crate::automations::router);
         module.routes(crate::incoming_hooks::router);
         module.operations(crate::incoming_hooks::ops::register_ops);
@@ -25,7 +24,7 @@ impl CoreModule for Module {
         });
         module.export(ExportPart {
             name: "automations",
-            describe: "Automation rules and webhooks (no secrets).",
+            describe: "Automation rules (no secrets).",
         });
     }
 }

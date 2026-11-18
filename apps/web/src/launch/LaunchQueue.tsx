@@ -82,7 +82,7 @@ export function LaunchQueue({ projectId }: { projectId: string }) {
   if (launches.isError) return <ErrorState error={launches.error} onRetry={() => void launches.refetch()} title="Launches didn’t load" />
   const queued = launches.data.queued
   // Started launches are the runs below; the rest never ran here.
-  const other = launches.data.recent.filter((launch) => !launch.agentRunId && launch.state !== 'started')
+  const other = launches.data.recent.filter((launch) => !launch.runId && launch.state !== 'started')
   return (
     <>
       <Section

@@ -404,6 +404,18 @@ async fn insert_requests(
         .execute(&mut **transaction)
         .await?;
     }
+    // A2.10: a required request is due to be picked up within the space's
+    // claim window; the sweep marks it unresponsive after that.
+    let claim_window = if required {
+        crate::settings::space_integer(
+            transaction,
+            message.project_id,
+            "replies.claim_window_seconds",
+        )
+        .await?
+    } else {
+        0
+    };
     let mut asked = 0;
     for &agent in agents {
         // When the agent is still working on a claim here, the new request
@@ -412,10 +424,11 @@ async fn insert_requests(
             r#"
             INSERT INTO reply_requests (
                 id, project_id, conversation_id, message_id, agent_actor_id,
-                required, mentioned, chain_depth, follows_request_id
+                required, mentioned, chain_depth, claim_due_at, follows_request_id
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8,
+                CASE WHEN $6 THEN now() + make_interval(secs => $9) END,
                 (
                     SELECT claimed.id FROM reply_requests claimed
                     WHERE claimed.agent_actor_id = $5
@@ -437,6 +450,7 @@ async fn insert_requests(
         .bind(required)
         .bind(message.mentioned_actor_ids.contains(&agent))
         .bind(i16::try_from(depth).unwrap_or(i16::MAX))
+        .bind(claim_window as f64)
         .fetch_optional(&mut **transaction)
         .await?;
         if let Some((request_id, follows)) = inserted {
@@ -742,6 +756,9 @@ pub struct ReplyRequestView {
     pub thread_id: Option<Uuid>,
     /// Set on a follow-up queued behind a request the agent is working on.
     pub follows_request_id: Option<Uuid>,
+    /// When a required request still waiting to be picked up passed the
+    /// claim window (A2.10): the agent hasn't picked it up.
+    pub unresponsive_at: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -761,6 +778,7 @@ struct ReplyRequestRow {
     agent_last_seen_at: Option<String>,
     thread_id: Option<Uuid>,
     follows_request_id: Option<Uuid>,
+    unresponsive_at: Option<String>,
 }
 
 /// Recent requests for a conversation's timeline, newest first. A thread also
@@ -792,7 +810,9 @@ pub(crate) async fn timeline_requests(
                      AND connection.actor_id = request.agent_actor_id
                ) AS agent_last_seen_at,
                request.thread_id,
-               request.follows_request_id
+               request.follows_request_id,
+               CASE WHEN request.status = 'pending' THEN request.unresponsive_at::text END
+                   AS unresponsive_at
         FROM reply_requests request
         JOIN project_memberships membership
           ON membership.project_id = request.project_id
@@ -838,6 +858,7 @@ pub(crate) async fn timeline_requests(
             agent_last_seen_at: row.agent_last_seen_at,
             thread_id: row.thread_id,
             follows_request_id: row.follows_request_id,
+            unresponsive_at: row.unresponsive_at,
         })
         .collect();
     Ok((views, remaining))
@@ -1093,22 +1114,35 @@ pub(crate) async fn retry_request_in(
             "the agent can no longer answer in this conversation",
         ));
     }
+    let window = crate::settings::space_integer(
+        transaction,
+        conversation.project_id,
+        "replies.claim_window_seconds",
+    )
+    .await?;
     let updated = sqlx::query(
         r#"
         UPDATE reply_requests request
-        SET status = 'pending', reason = NULL, updated_at = now()
+        SET status = 'pending', reason = NULL, updated_at = now(),
+            -- A2.10: asked again, it has a new window to pick it up in.
+            unresponsive_at = NULL,
+            claim_due_at = CASE WHEN request.required
+                THEN now() + make_interval(secs => $2) END
         FROM messages message
-        WHERE request.id = $1 AND request.status IN ('expired', 'released', 'cancelled')
+        WHERE request.id = $1
+          AND (request.status IN ('expired', 'released', 'cancelled')
+               OR (request.status = 'pending' AND request.unresponsive_at IS NOT NULL))
           AND message.id = request.message_id AND message.removed_at IS NULL
         "#,
     )
     .bind(request_id)
+    .bind(window as f64)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
         return Err(AppError::Conflict(
             "reply request",
-            "only expired, released or stopped requests can be retried",
+            "only expired, released, stopped or unanswered requests can be asked again",
         ));
     }
     wake(
@@ -1402,6 +1436,85 @@ async fn expire_leases(pool: &PgPool) -> Result<(), AppError> {
     for (project_id, conversation_id) in expired {
         if seen.insert(conversation_id) {
             notify(&mut transaction, project_id, conversation_id).await?;
+        }
+    }
+    transaction.commit().await?;
+    mark_unresponsive(pool).await
+}
+
+/// A2.10: required requests nobody picked up within the claim window. The
+/// conversation shows it, and the people who manage the account and can see
+/// the conversation hear about it once an hour at most.
+pub async fn mark_unresponsive(pool: &PgPool) -> Result<(), AppError> {
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    let lapsed = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid)>(
+        r#"
+        UPDATE reply_requests
+        SET unresponsive_at = now(), updated_at = now()
+        WHERE id IN (
+            SELECT id FROM reply_requests
+            WHERE status = 'pending' AND unresponsive_at IS NULL
+              AND claim_due_at IS NOT NULL AND claim_due_at < now()
+            ORDER BY claim_due_at
+            LIMIT 200
+            FOR UPDATE SKIP LOCKED
+        )
+        RETURNING project_id, conversation_id, message_id, agent_actor_id
+        "#,
+    )
+    .fetch_all(&mut *transaction)
+    .await?;
+    let mut seen = std::collections::HashSet::new();
+    let hour = chrono::Utc::now().timestamp() / 3600;
+    for (project_id, conversation_id, message_id, agent) in lapsed {
+        if seen.insert(conversation_id) {
+            notify(&mut transaction, project_id, conversation_id).await?;
+        }
+        // Its owner and named managers who are in the space and can see
+        // the conversation.
+        let managers = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT DISTINCT manager.id
+            FROM actors agent
+            JOIN actors manager
+              ON manager.id = agent.owner_account_id
+              OR manager.id IN (
+                  SELECT manager_account_id FROM account_managers
+                  WHERE account_id = agent.id
+              )
+            JOIN project_memberships membership
+              ON membership.project_id = $2 AND membership.actor_id = manager.id
+             AND membership.enabled
+            WHERE agent.id = $1 AND manager.status = 'active'
+              AND conversation_visible_to($3, manager.id)
+            "#,
+        )
+        .bind(agent)
+        .bind(project_id)
+        .bind(conversation_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        for manager in managers {
+            let notification = crate::notifications::NewNotification {
+                project_id,
+                recipient_actor_id: manager,
+                kind: crate::notifications::kind::AGENT_UNRESPONSIVE,
+                subject_kind: "conversation",
+                subject_id: conversation_id,
+                actor_id: Some(agent),
+                conversation_id: Some(conversation_id),
+                message_id: Some(message_id),
+                work_item_id: None,
+                comment_id: None,
+                agent_run_id: None,
+                pull_request_id: None,
+                detail: serde_json::json!({}),
+                group_key: format!("agent_unresponsive:{agent}"),
+                dedupe_key: format!("agent_unresponsive:{agent}:{hour}"),
+            };
+            if crate::notifications::deliver(&mut transaction, &notification).await? {
+                crate::notifications::announce(&mut transaction, project_id, manager).await?;
+            }
         }
     }
     transaction.commit().await?;

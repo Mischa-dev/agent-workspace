@@ -23,9 +23,9 @@ use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
-    Destination, FileRow, FileStore, NewFile, Upload, clean_name, delete_objects,
+    Destination, FileRow, FileStore, NewFile, Upload, abandon_staged, clean_name, delete_objects,
     file_content_type, hold_room, image, insert_file, organization_of, prepare_upload,
-    store_prepared,
+    stage_prepared, store_prepared,
 };
 use crate::{
     AppState,
@@ -397,18 +397,33 @@ async fn finish_picture(
             return Err(Unfinished::Picture(error));
         }
     };
-    let mut transaction = crate::db::scoped_tx(&state.pool)
-        .await
-        .map_err(AppError::from)?;
-    if let Some(file_id) = claim(&mut transaction, upload.id).await? {
-        return Ok(file_id);
+    // The stripped picture goes into the store before the transaction that
+    // records it opens.
+    let staged = stage_prepared(state, destination.project_id(), prepared).await?;
+    let claimed = async {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let claimed = claim(&mut transaction, upload.id).await?;
+        Ok::<_, AppError>((transaction, claimed))
     }
+    .await;
+    let mut transaction = match claimed {
+        Ok((transaction, Some(file_id))) => {
+            drop(transaction);
+            abandon_staged(state, &staged).await;
+            return Ok(file_id);
+        }
+        Ok((transaction, None)) => transaction,
+        Err(error) => {
+            abandon_staged(state, &staged).await;
+            return Err(error.into());
+        }
+    };
     let row = store_prepared(
         state,
         &mut transaction,
         upload.uploaded_by_actor_id,
         destination,
-        prepared,
+        staged,
     )
     .await?;
     let committed = async {

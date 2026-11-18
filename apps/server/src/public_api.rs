@@ -225,6 +225,12 @@ const ERROR_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The statuses an operation's own refusal answers with (its `outcome`
+/// says which), rather than the shared error body.
+fn refuses(status: &str) -> bool {
+    matches!(status, "403" | "404" | "409" | "422" | "503")
+}
+
 /// Moves a schema's `$defs` into `components.schemas` and points its
 /// references there. A definition keeps its own name when every tool that
 /// has one defines it the same way (shared message content, a thread's
@@ -351,6 +357,9 @@ fn share_refusals(result: &mut Value, components: &mut Map<String, Value>) {
     for branch in branches {
         let outcome = &branch["properties"]["outcome"];
         let key = match outcome["const"].as_str() {
+            // A paused account's answer (A2.10) is the same for every
+            // operation: shared too.
+            Some("ok") if branch["properties"]["paused"]["const"] == true => "Paused".to_owned(),
             Some("ok") => continue,
             Some(outcome) => format!("Refusal{}", pascal(outcome)),
             // The operation layer's own refusals, one branch listing them
@@ -512,35 +521,36 @@ pub(crate) fn document() -> Value {
                 json!({ "$ref": format!("#/components/schemas/{key}") })
             })
             .unwrap_or_else(|| json!({ "type": "object" }));
-        let mut responses = Map::new();
-        responses.insert(
-            "200".to_owned(),
-            json!({
-                "description": "The result. Its `outcome` says whether it worked.",
-                "content": { "application/json": { "schema": output.clone() } },
-            }),
-        );
-        // A refusal is the operation's own result with its `outcome`: one
-        // response per operation that its refusing statuses point at, so the
-        // document stays small as tools are added. The introduction says
-        // what each status means.
-        let refused = format!("{}Refused", pascal(&name));
+        // One response per operation, its own result: 200 and the refusing
+        // statuses (403, 404, 409, 422, 503, through the 4XX and 5XX ranges)
+        // all point at it, as a refusal is the result with its `outcome`.
+        // The introduction says what each status means. The statuses every
+        // operation answers the same way are named, which takes precedence
+        // over a range.
+        let answer = format!("{}Answer", pascal(&name));
         refusals.insert(
-            refused.clone(),
+            answer.clone(),
             json!({
-                "description": "Refused: the status and the result's `outcome` and `message` say why.",
-                "content": { "application/json": { "schema": output.clone() } },
+                "description": "The result; its `outcome` says whether it worked.",
+                "content": { "application/json": { "schema": output } },
             }),
         );
+        let mut responses = Map::new();
+        for status in ["200", "4XX", "5XX"] {
+            responses.insert(
+                status.to_owned(),
+                json!({ "$ref": format!("#/components/responses/{answer}") }),
+            );
+        }
         for (status, _) in ERROR_STATUSES {
-            let response = if matches!(*status, "403" | "404" | "409" | "422" | "503") {
-                json!({ "$ref": format!("#/components/responses/{refused}") })
-            } else {
+            if !refuses(status) {
                 // The same for every operation, so referenced rather than
                 // repeated, which keeps the document small as tools are added.
-                json!({ "$ref": format!("#/components/responses/Error{status}") })
-            };
-            responses.insert((*status).to_owned(), response);
+                responses.insert(
+                    (*status).to_owned(),
+                    json!({ "$ref": format!("#/components/responses/Error{status}") }),
+                );
+            }
         }
         paths.insert(
             format!("/{name}"),
@@ -583,7 +593,7 @@ pub(crate) fn document() -> Value {
             "schemas": components,
             "responses": ERROR_STATUSES
                 .iter()
-                .filter(|(status, _)| !matches!(*status, "403" | "404" | "409" | "422" | "503"))
+                .filter(|(status, _)| !refuses(status))
                 .map(|(status, description)| {
                     (
                         format!("Error{status}"),

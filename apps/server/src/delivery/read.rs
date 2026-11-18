@@ -1,7 +1,11 @@
 //! The one read path (A2 3.5): every transport reads a connection's events
 //! with [`read_batch`], which re-checks access per event
 //! (`delivery_visible`) and drops what is no longer true (a reply request
-//! already answered), so poll, stream and webhook agree.
+//! already answered), so poll, stream and webhook agree. An event of a
+//! module that is off where it happened is not delivered (AWD-75, as rules
+//! hear nothing of it either).
+
+use std::collections::HashMap;
 
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
@@ -14,6 +18,7 @@ use super::{
 use crate::{
     error::AppError,
     events::{LOGGED_EVENT_COLUMNS, LoggedEvent},
+    policy::{AgentLimits, Permission},
 };
 
 /// The most log rows one read looks at; a read that finds nothing for the
@@ -29,6 +34,9 @@ pub struct Scope {
     pub workspaces: Vec<Uuid>,
     /// An older credential confined to one space.
     pub space: Option<Uuid>,
+    /// The delegation limit of an app reading for a person: an event is
+    /// heard only where the app may read what it is about.
+    pub limits: Option<AgentLimits>,
 }
 
 /// One event for the connection, and why.
@@ -46,6 +54,10 @@ pub struct Batch {
     pub next: i64,
     /// More may be waiting: read again now.
     pub has_more: bool,
+    /// A2.10: the position before the first event held for a paused
+    /// recipient in what was read; a read resumes from it once the recipient
+    /// is resumed.
+    pub held: Option<i64>,
 }
 
 #[derive(FromRow)]
@@ -83,6 +95,10 @@ pub async fn read_batch(
         .map(|column| format!("e.{}", column.trim()))
         .collect::<Vec<_>>()
         .join(", ");
+    // The head before the scan: every event up to it is already in the log
+    // (the sequencer numbers and moves the head in one transaction), so a
+    // scan that reaches its end has seen all of them.
+    let head = crate::events::head(&mut *connection).await?;
     let run_followed = crate::runs::sql::run_followed_by("e.thing_id", "$1");
     let rows = sqlx::query_as::<_, Row>(&format!(
         r#"
@@ -135,9 +151,31 @@ pub async fn read_batch(
         next: after,
         ..Batch::default()
     };
+    // The modules on where each event happened, read once per place.
+    let mut modules = HashMap::new();
+    // A2.10: where the recipient is paused, what it would hear waits: the
+    // read goes on past it (its pause, connections and stopped replies
+    // still arrive) and says where the held events start, so a read after
+    // it is resumed starts there.
+    let paused = if scanned == 0 {
+        Vec::new()
+    } else {
+        crate::statuses::paused_in(&mut *connection, scope.recipient).await?
+    };
     for (index, row) in rows.into_iter().enumerate() {
+        let before = batch.next;
         batch.next = row.event.position;
-        if let Some(reason) = accept(&row, subscriptions) {
+        if let Some(reason) = accept(&row, subscriptions)
+            && scope
+                .limits
+                .as_ref()
+                .is_none_or(|limits| within_limits(limits, &row.event))
+            && module_on(&mut *connection, &mut modules, &row).await?
+        {
+            if held(&paused, &row.event) {
+                batch.held.get_or_insert(before);
+                continue;
+            }
             batch.delivered.push(Delivered {
                 event: row.event,
                 reason,
@@ -149,9 +187,92 @@ pub async fn read_batch(
         }
     }
     // Nothing more for this connection in what was read: the cursor still
-    // moves past it.
+    // moves past it, and past the rest of the log up to the head when the
+    // scan reached its end, so a connection nothing is for stays caught up.
     batch.has_more = scanned == SCAN as usize;
+    if !batch.has_more {
+        batch.next = batch.next.max(head);
+    }
     Ok(batch)
+}
+
+/// Whether a paused recipient waits for this event: everything but its own
+/// pause, its connections and stopped replies, where it is paused.
+fn held(paused: &[Option<Uuid>], event: &LoggedEvent) -> bool {
+    let passes = event.event_type.starts_with("agent.")
+        || event.event_type.starts_with("connection.")
+        || event.event_type == "reply.cancelled";
+    !passes
+        && paused
+            .iter()
+            .any(|place| place.is_none_or(|workspace| workspace == event.workspace_id))
+}
+
+/// Whether the module an event belongs to is on where it happened: in its
+/// space, or in its workspace for an event outside any space. A
+/// conversation's event follows Messages in a DM or group and Channels
+/// elsewhere, as rules do.
+async fn module_on(
+    connection: &mut PgConnection,
+    known: &mut HashMap<(Uuid, Option<Uuid>), crate::modules::ModuleSet>,
+    row: &Row,
+) -> Result<bool, AppError> {
+    let Some(module) = crate::automations::in_project_kind(
+        crate::modules::manifest::of_event(&row.event.event_type),
+        row.direct,
+    ) else {
+        return Ok(true);
+    };
+    let place = (row.event.workspace_id, row.event.space_id);
+    let set = match known.get(&place) {
+        Some(set) => *set,
+        None => {
+            let set = match place {
+                (workspace, Some(space)) => {
+                    crate::modules::state::in_space(&mut *connection, workspace, space).await?
+                }
+                (workspace, None) => {
+                    crate::modules::state::workspace(&mut *connection, workspace).await?
+                }
+            };
+            known.insert(place, set);
+            set
+        }
+    };
+    Ok(set.contains(&module.id))
+}
+
+/// Whether an app held to `limits` may read what `event` is about: the
+/// permission to see its space (and, for a task or a pull request, to see
+/// those), in the space where the app's person holds it or else their
+/// workspace, as a policy check under the same limit would find it.
+pub(crate) fn within_limits(limits: &AgentLimits, event: &LoggedEvent) -> bool {
+    let allowed = event
+        .space_id
+        .and_then(|space| limits.projects.get(&space))
+        .or_else(|| limits.organizations.get(&event.workspace_id))
+        .copied()
+        .unwrap_or(crate::policy::PermissionSet::EMPTY);
+    let family = catalogue::get(&event.event_type).map(|entry| entry.family);
+    let needed: &[Permission] = match family {
+        Some("task") => &[Permission::ProjectsView, Permission::TasksView],
+        Some("pull_request") => &[Permission::ProjectsView, Permission::CodeView],
+        _ => &[Permission::ProjectsView],
+    };
+    needed
+        .iter()
+        .all(|permission| allowed.contains(*permission))
+}
+
+/// Whether an app held to `limits` may see the event at `position`; false
+/// when there is no such event.
+pub(crate) async fn within_limits_at(
+    connection: &mut PgConnection,
+    limits: &AgentLimits,
+    position: i64,
+) -> Result<bool, AppError> {
+    let event = crate::events::logged_at(connection, position).await?;
+    Ok(event.is_some_and(|event| within_limits(limits, &event)))
 }
 
 /// Whether any subscription wants the row, and why.

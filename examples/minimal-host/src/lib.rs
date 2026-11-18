@@ -73,6 +73,7 @@ pub fn description(agent: &str) -> Description {
                 action("retire", "Retire it"),
             ],
         }],
+        accounts: Vec::new(),
     }
 }
 

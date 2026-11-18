@@ -19,6 +19,7 @@
 
 pub mod http;
 pub mod image;
+pub mod link;
 pub mod links;
 pub mod migrate;
 pub mod object;
@@ -303,7 +304,7 @@ pub(crate) enum Destination {
 }
 
 impl Destination {
-    fn project_id(self) -> Uuid {
+    pub(crate) fn project_id(self) -> Uuid {
         match self {
             Self::Conversation { project_id, .. } | Self::Task { project_id, .. } => project_id,
         }
@@ -372,8 +373,15 @@ pub(crate) async fn store_upload(
     upload: Upload,
 ) -> Result<FileRow, AppError> {
     let prepared = prepare_upload(upload).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let row = store_prepared(state, &mut transaction, uploader, destination, prepared).await?;
+    let staged = stage_prepared(state, destination.project_id(), prepared).await?;
+    let mut transaction = match crate::db::scoped_tx(&state.pool).await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            abandon_staged(state, &staged).await;
+            return Err(error.into());
+        }
+    };
+    let row = store_prepared(state, &mut transaction, uploader, destination, staged).await?;
     if let Err(error) = transaction.commit().await {
         discard_stored(state, &row).await;
         return Err(error.into());
@@ -429,18 +437,46 @@ pub(crate) async fn prepare_upload(upload: Upload) -> Result<PreparedUpload, App
     })
 }
 
-/// Stores a prepared upload in `transaction`, which the caller commits
-/// (with anything else that belongs with it, such as a retry key). If that
-/// commit fails, [`discard_stored`] takes the stored bytes away again.
-pub(crate) async fn store_prepared(
+/// A prepared upload's bytes, already in the workspace's store, waiting for
+/// [`store_prepared`] to give them a row. Written before any transaction
+/// opens (the store may be a bucket across the network), and noted as
+/// pending so the sweep takes them away if no row ever claims them.
+pub(crate) struct StagedUpload {
+    id: Uuid,
+    organization_id: Uuid,
+    name: String,
+    content_type: String,
+    dimensions: Option<(u32, u32)>,
+    byte_size: u64,
+    sha256: String,
+    thumbnail_bytes: Option<u64>,
+    storage_key: String,
+    thumbnail_key: Option<String>,
+    store: FileStore,
+}
+
+impl StagedUpload {
+    fn incoming(&self) -> u64 {
+        self.byte_size
+            .saturating_add(self.thumbnail_bytes.unwrap_or(0))
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        std::iter::once(self.storage_key.as_str())
+            .chain(self.thumbnail_key.as_deref())
+            .collect()
+    }
+}
+
+/// Writes a prepared upload's bytes for a file in `project_id`, outside any
+/// transaction: a full workspace or disk refuses first. Pair it with
+/// [`store_prepared`], or [`abandon_staged`] when no row will follow.
+pub(crate) async fn stage_prepared(
     state: &AppState,
-    transaction: &mut Transaction<'_, Postgres>,
-    uploader: Uuid,
-    destination: Destination,
+    project_id: Uuid,
     prepared: PreparedUpload,
-) -> Result<FileRow, AppError> {
-    let project_id = destination.project_id();
-    let organization_id = organization_of(&mut **transaction, project_id).await?;
+) -> Result<StagedUpload, AppError> {
+    let organization_id = organization_of(crate::db::scoped(&state.pool), project_id).await?;
     let PreparedUpload {
         name,
         bytes,
@@ -448,57 +484,105 @@ pub(crate) async fn store_prepared(
         dimensions,
         thumbnail,
     } = prepared;
-    let incoming = u64::try_from(bytes.len())
-        .unwrap_or(u64::MAX)
-        .saturating_add(thumbnail.as_ref().map_or(0, |thumbnail| {
-            u64::try_from(thumbnail.len()).unwrap_or(u64::MAX)
-        }));
-    hold_room(state, transaction, organization_id, incoming, 0).await?;
-
+    let byte_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let thumbnail_bytes = thumbnail
+        .as_ref()
+        .map(|thumbnail| u64::try_from(thumbnail.len()).unwrap_or(u64::MAX));
+    let store = {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        require_room(
+            state,
+            &mut transaction,
+            organization_id,
+            byte_size.saturating_add(thumbnail_bytes.unwrap_or(0)),
+            0,
+        )
+        .await?;
+        FileStore::for_uploads(state, &mut transaction, organization_id).await?
+    };
     let id = Uuid::now_v7();
     let storage_key = storage_key(organization_id, id);
     let thumbnail_key = thumbnail.as_ref().map(|_| format!("{storage_key}.thumb"));
-    let store = FileStore::for_uploads(state, transaction, organization_id).await?;
-    let keys = std::iter::once(storage_key.as_str())
-        .chain(thumbnail_key.as_deref())
-        .collect::<Vec<_>>();
-    // These bytes are written inside the row's transaction (they are small:
-    // a picture, or an agent's upload), so no pending entry is needed, and
-    // none is taken: that would hold a second connection.
-    let mut put = store.put(&storage_key, &bytes).await;
-    if let (Ok(()), Some(key), Some(thumbnail)) = (&put, &thumbnail_key, &thumbnail) {
-        put = store.put(key, thumbnail).await;
+    let staged = StagedUpload {
+        id,
+        organization_id,
+        name,
+        content_type,
+        dimensions,
+        byte_size,
+        sha256: hex::encode(Sha256::digest(&bytes)),
+        thumbnail_bytes,
+        storage_key,
+        thumbnail_key,
+        store,
+    };
+    begin_objects(state, &staged.store, organization_id, &staged.keys()).await?;
+    let mut put = staged.store.put(&staged.storage_key, &bytes).await;
+    if let (Ok(()), Some(key), Some(thumbnail)) = (&put, &staged.thumbnail_key, &thumbnail) {
+        put = staged.store.put(key, thumbnail).await;
     }
     if let Err(error) = put {
-        delete_objects(&store, &keys).await;
+        abandon_staged(state, &staged).await;
         return Err(error);
     }
-    let inserted = insert_file(
-        transaction,
-        &NewFile {
-            id,
-            organization_id,
-            project_id,
-            destination,
-            uploader,
-            name: &name,
-            content_type: &content_type,
-            byte_size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-            sha256: &hex::encode(Sha256::digest(&bytes)),
-            storage_key: &storage_key,
-            store_id: store.id(),
-            dimensions,
-            thumbnail_key: thumbnail_key.as_deref(),
-            thumbnail_bytes: thumbnail
-                .as_ref()
-                .map(|thumbnail| u64::try_from(thumbnail.len()).unwrap_or(u64::MAX)),
-        },
-    )
-    .await;
-    if inserted.is_err() {
-        delete_objects(&store, &keys).await;
+    Ok(staged)
+}
+
+/// Takes away staged bytes no row will claim.
+pub(crate) async fn abandon_staged(state: &AppState, staged: &StagedUpload) {
+    drop_objects(state, &staged.store, &staged.keys()).await;
+}
+
+/// Records a staged upload in `transaction`, which the caller commits (with
+/// anything else that belongs with it, such as a retry key). If that commit
+/// fails, [`discard_stored`] takes the stored bytes away again.
+pub(crate) async fn store_prepared(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    uploader: Uuid,
+    destination: Destination,
+    staged: StagedUpload,
+) -> Result<FileRow, AppError> {
+    let project_id = destination.project_id();
+    let incoming = staged.incoming();
+    let recorded = async {
+        if organization_of(&mut **transaction, project_id).await? != staged.organization_id {
+            return Err(AppError::NotFound("project"));
+        }
+        hold_room(
+            state,
+            transaction,
+            staged.organization_id,
+            incoming,
+            incoming,
+        )
+        .await?;
+        insert_file(
+            transaction,
+            &NewFile {
+                id: staged.id,
+                organization_id: staged.organization_id,
+                project_id,
+                destination,
+                uploader,
+                name: &staged.name,
+                content_type: &staged.content_type,
+                byte_size: staged.byte_size,
+                sha256: &staged.sha256,
+                storage_key: &staged.storage_key,
+                store_id: staged.store.id(),
+                dimensions: staged.dimensions,
+                thumbnail_key: staged.thumbnail_key.as_deref(),
+                thumbnail_bytes: staged.thumbnail_bytes,
+            },
+        )
+        .await
     }
-    inserted
+    .await;
+    if recorded.is_err() {
+        abandon_staged(state, &staged).await;
+    }
+    recorded
 }
 
 /// Stores an upload as its body arrives (K5.11). A picture is read whole,

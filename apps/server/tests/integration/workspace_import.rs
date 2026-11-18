@@ -77,7 +77,7 @@ async fn news(pool: &PgPool, workspace: Uuid, source: Uuid) -> (i64, i64, i64) {
                    AND type <> 'workspace.transfer_changed') \
               + (SELECT count(*) FROM event_staging WHERE workspace_id = $1 \
                    AND type <> 'workspace.transfer_changed'), \
-                (SELECT count(*) FROM webhook_deliveries WHERE organization_id = $1), \
+                (SELECT count(*) FROM deliveries WHERE workspace_id = $1), \
                 (SELECT count(*) FROM notifications WHERE workspace_id = $1) \
               - (SELECT count(*) FROM notifications WHERE workspace_id = $2)",
     )

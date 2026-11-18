@@ -79,8 +79,11 @@ impl Caller {
             connection_id: principal.external_agent_connection_id,
             // kind-check: mechanical (an older person's credential is tied
             // to the one project it was made in; agents reach by connection)
-            confined_space: (principal.actor_kind == ActorKind::Human && !principal.account_wide)
-                .then_some(principal.project_id),
+            confined_space: ((principal.actor_kind == ActorKind::Human && !principal.account_wide)
+                // A host's run credential stays in its run's space, whatever
+                // else the agent's own connection reaches.
+                || principal.is_run_credential())
+            .then_some(principal.project_id),
             limits,
             requested_by: None,
             run_id: None,

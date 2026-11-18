@@ -376,6 +376,14 @@ async fn serve(
                                 continue;
                             }
                             last = *position;
+                        } else if stale_until.is_some() {
+                            // A stale ticket may name a conversation or
+                            // document this account can no longer see, and
+                            // a frame without a position can carry its
+                            // content (streamed text, a document's changes):
+                            // none goes out until a new ticket is in. Logged
+                            // events carry ids only, read with access.
+                            continue;
                         }
                         if hears(&ticket, audiences)
                             && *except_account != Some(ticket.account)

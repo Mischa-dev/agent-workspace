@@ -1,6 +1,7 @@
 //! Every server integration test, built as one binary so the server is
 //! compiled and linked for tests once rather than once per file.
 
+mod a1_a2a_binding;
 mod a1_builtin_requests;
 mod a1_example_host;
 mod a1_host_protocol;
@@ -13,6 +14,8 @@ mod a1_runs_record;
 mod accounts;
 mod activity_log;
 mod agent_interface;
+mod agent_join;
+mod agent_register;
 mod awd102_task_move;
 mod awd110_collection_forms;
 mod awd110_collection_views;
@@ -62,6 +65,7 @@ mod followed_threads;
 mod github_task_keys;
 mod harness_support;
 mod history_seam;
+mod host_windows;
 mod hosting_limits;
 mod idle_cost;
 mod incoming_hooks;

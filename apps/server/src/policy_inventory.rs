@@ -553,37 +553,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/account/api-tokens/{credential_id}/revoke",
         CredentialManage
     ),
-    policy_route!("webhooks", Post, "/api/v1/webhooks", CredentialManage),
-    policy_route!(
-        "webhooks",
-        Patch,
-        "/api/v1/webhooks/{webhook_id}",
-        CredentialManage
-    ),
-    policy_route!(
-        "webhooks",
-        Delete,
-        "/api/v1/webhooks/{webhook_id}",
-        CredentialManage
-    ),
-    policy_route!(
-        "webhooks",
-        Post,
-        "/api/v1/webhooks/{webhook_id}/rotate-secret",
-        CredentialManage
-    ),
-    policy_route!(
-        "webhooks",
-        Post,
-        "/api/v1/webhooks/{webhook_id}/test",
-        CredentialManage
-    ),
-    policy_route!(
-        "webhooks",
-        Post,
-        "/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-        CredentialManage
-    ),
     policy_route!(
         "bug_reports",
         Post,
@@ -1393,7 +1362,14 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/host/heartbeat",
         HostCredential
     ),
+    boundary_route!("hosts/routes", Post, "/api/v1/host/windows", HostCredential),
     boundary_route!("hosts/routes", Post, "/api/v1/host/notices", HostCredential),
+    boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/agents/register",
+        HostCredential
+    ),
     boundary_route!(
         "hosts/routes",
         Post,

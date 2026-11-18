@@ -117,15 +117,14 @@ pub fn last_entry_sequence(run: &str) -> String {
     )
 }
 
-/// The state of a launch's run: its built-in row's state when it has one
-/// (`builtin`, a column), else the state of the run it reports for itself
-/// (`run`, a column). A scalar expression.
-pub fn launch_run_state(builtin: &str, run: &str) -> String {
+/// The state of a launch's run (`run`, a column): its built-in row's state
+/// when the built-in host does it, else the state of the run as its agent
+/// or host reports it. A scalar expression.
+pub fn launch_run_state(run: &str) -> String {
     format!(
         "COALESCE(\
-           (SELECT detail.state FROM agent_runs detail WHERE detail.id = {builtin}), \
-           (SELECT reported.state FROM runs reported \
-             WHERE reported.id = {run} AND {builtin} IS NULL))"
+           (SELECT detail.state FROM agent_runs detail WHERE detail.id = {run}), \
+           (SELECT reported.state FROM runs reported WHERE reported.id = {run}))"
     )
 }
 

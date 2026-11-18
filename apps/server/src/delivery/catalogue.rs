@@ -15,7 +15,8 @@ pub struct Entry {
     /// The log's name, such as `reply.requested`.
     pub kind: &'static str,
     /// What it is about: `reply`, `message`, `task`, `request`, `run`,
-    /// `page`, `record`, `pull_request`, `schedule` or `connection`.
+    /// `page`, `sheet`, `whiteboard`, `record`, `pull_request`, `schedule` or
+    /// `connection`.
     pub family: &'static str,
     /// Addressed to one account (heard whatever it subscribes to).
     pub addressed: bool,
@@ -88,6 +89,13 @@ pub const ENTRIES: &[Entry] = &[
         "comment.mentioned",
     ),
     entry(
+        "run.start",
+        "run",
+        true,
+        "You were given a run to start",
+        "run.start",
+    ),
+    entry(
         "run.cancel",
         "run",
         true,
@@ -100,6 +108,20 @@ pub const ENTRIES: &[Entry] = &[
         true,
         "A follow-up you set is due",
         "reminder.due",
+    ),
+    entry(
+        "agent.paused",
+        "account",
+        true,
+        "You were paused: you hear nothing else until resumed",
+        "agent.paused",
+    ),
+    entry(
+        "agent.resumed",
+        "account",
+        true,
+        "You were resumed: what you missed follows",
+        "agent.resumed",
     ),
     entry(
         "connection.push_disabled",
@@ -220,6 +242,20 @@ pub const ENTRIES: &[Entry] = &[
         false,
         "A record in a collection changed",
         "record.updated",
+    ),
+    entry(
+        "sheet.updated",
+        "sheet",
+        false,
+        "A sheet's cells, tabs or name changed",
+        "sheet.updated",
+    ),
+    entry(
+        "whiteboard.updated",
+        "whiteboard",
+        false,
+        "A whiteboard was saved as a new version",
+        "whiteboard.updated",
     ),
     entry(
         "pull_request.checks_failed",

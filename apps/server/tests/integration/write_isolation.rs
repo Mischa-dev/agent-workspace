@@ -315,12 +315,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/usage/accounts/{account_id}/rules/{rule}",
     "POST /api/v1/usage/accounts/{account_id}/schedules",
     "DELETE /api/v1/usage/accounts/{account_id}/schedules/{schedule_id}",
-    "POST /api/v1/webhooks",
-    "DELETE /api/v1/webhooks/{webhook_id}",
-    "PATCH /api/v1/webhooks/{webhook_id}",
-    "POST /api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-    "POST /api/v1/webhooks/{webhook_id}/rotate-secret",
-    "POST /api/v1/webhooks/{webhook_id}/test",
     "POST /api/v1/whiteboard-trash/empty",
     "POST /api/v1/whiteboards",
     "DELETE /api/v1/whiteboards/{id}",
@@ -414,6 +408,17 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          (tests/integration/a1_host_protocol.rs)",
     ),
     (
+        "POST /api/v1/host/windows",
+        "a host's own call with its own token, about the accounts it described; another \
+         host's account refs are refused (tests/integration/host_windows.rs)",
+    ),
+    (
+        "POST /api/v1/host/agents/register",
+        "a host's own call with its own token, proposing an agent for a workspace that \
+         owns it or that its owner is in; any other is refused \
+         (tests/integration/agent_register.rs)",
+    ),
+    (
         "POST /api/v1/host/notices",
         "a host's own call with its own token, about agents bound to it \
          (tests/integration/a1_host_protocol.rs)",
@@ -484,8 +489,14 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
 
 /// Every MCP tool that isn't read-only, which `mcp_cases` covers.
 const MCP_WRITE_TOOLS: &[&str] = &[
+    "account_workspace_add",
     "agent_create",
     "agent_managers_set",
+    "agent_action_run",
+    "agent_offer_start",
+    "agent_register_decide",
+    "agent_pause",
+    "agent_resume",
     "agent_profile_write",
     "ai_analyze",
     "ai_suggestion_decide",
@@ -494,8 +505,10 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "bug_report_link_write",
     "channel_create",
     "connection_create",
+    "connection_redeliver",
     "connection_remove",
     "connection_secret_rotate",
+    "connection_test",
     "connection_update",
     "conversation_continue",
     "conversation_mark_read",
@@ -511,6 +524,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "file_upload",
     "github_integration_write",
     "history_restore",
+    "host_link",
     "host_agent_bind",
     "host_agent_unbind",
     "host_enrolment_create",
@@ -643,7 +657,6 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "view_delete",
     "view_pin",
     "view_update",
-    "webhook_write",
     "whiteboard_create",
     "whiteboard_duplicate",
     "whiteboard_update_elements",
@@ -1277,6 +1290,8 @@ struct Targets {
     /// The workspace's hosts (A1.11): the agent is bound to the first two
     /// as "net-agent" (HTTP, MCP); the last two are for unlinking.
     hosts: [Uuid; 4],
+    /// An agent the third host proposed (A2.19), waiting for approval.
+    proposal: Uuid,
     owner: Uuid,
     /// The agent, as an actor.
     agent: Uuid,
@@ -1326,8 +1341,8 @@ struct Targets {
     session: Uuid,
     api_token: Uuid,
     notification: Uuid,
-    /// A failed delivery of the webhook.
-    delivery: Uuid,
+    /// The event position of a failed delivery to the webhook.
+    delivery: i64,
     /// A reply request waiting for the agent, and one it holds.
     reply: Uuid,
     claimed_reply: Uuid,
@@ -1565,17 +1580,30 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         .await
         .expect("request");
     }
-    let delivery = Uuid::now_v7();
+    // Of a real event in the workspace's project, so the app may see it.
+    agent_workspace_server::events::catch_up(pool)
+        .await
+        .expect("sequence events");
+    let (delivery, event_id, event_type) = sqlx::query_as::<_, (i64, Uuid, String)>(
+        "SELECT position, id, type FROM events WHERE workspace_id = $1 AND space_id = $2 \
+         AND class = 'fact' ORDER BY position DESC LIMIT 1",
+    )
+    .bind(organization)
+    .bind(project)
+    .fetch_one(pool)
+    .await
+    .expect("an event in the project");
     sqlx::query(
         r#"
-        INSERT INTO webhook_deliveries (id, subscription_id, organization_id, event_type, event_key, state, attempts)
-        VALUES ($1, $2, $3, 'run.finished', $4, 'failed', 3)
+        INSERT INTO deliveries (connection_id, event_position, event_id, workspace_id, event_type, reason, state, attempts)
+        VALUES ($1, $2, $3, $4, $5, 'visible', 'failed', 3)
         "#,
     )
-    .bind(delivery)
     .bind(world.webhook)
+    .bind(delivery)
+    .bind(event_id)
     .bind(organization)
-    .bind(format!("net:{delivery}"))
+    .bind(&event_type)
     .execute(pool)
     .await
     .expect("webhook delivery");
@@ -1790,10 +1818,11 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         *host = sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO hosts (id, account_id, owner_workspace_id, name, protocol_version,
-                               described_agents, enrolled_by_account_id)
+                               described_agents, actions, offers, enrolled_by_account_id)
             VALUES (gen_random_uuid(), $1, $2, $3, '2026-11',
                     '[{"hostAgentRef": "net-agent", "name": "Net", "backends": [], "actions": []}]',
-                    $4)
+                    '[{"id": "net-action", "label": "Net"}]',
+                    '[{"id": "net-offer", "title": "Net"}]', $4)
             RETURNING id
             "#,
         )
@@ -1819,6 +1848,20 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .expect("host agent");
         }
     }
+    let proposal = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO agent_proposals (id, workspace_id, host_id, host_agent_ref, display_name,
+                                     handle, client_request_id)
+        VALUES (gen_random_uuid(), $1, $2, 'net-proposed', 'Net proposed', $3, 'net-proposal')
+        RETURNING id
+        "#,
+    )
+    .bind(organization)
+    .bind(hosts[2])
+    .bind(format!("net-proposed-{tag}"))
+    .fetch_one(pool)
+    .await
+    .expect("proposal");
     // The owner's delivery connection, with a webhook to sign for (A2).
     let connection = {
         let mut database = pool.acquire().await.expect("connection");
@@ -1896,6 +1939,7 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         custom_emoji,
         comment_thread,
         hosts,
+        proposal,
         questions,
         reported_runs,
         custom_role,
@@ -3070,7 +3114,7 @@ async fn one_workspace_never_writes_to_another() {
         "work_items",
         "messages",
         "project_labels",
-        "webhook_subscriptions",
+        "agent_connections",
     ] {
         assert!(before.contains_key(table), "B's digest has no {table} rows");
     }
@@ -5770,57 +5814,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         )
         .last(),
-        // Webhooks
-        body_case(
-            "POST /api/v1/webhooks",
-            &[],
-            json!({
-                "name": "Net hook",
-                "url": "https://hooks.example.com/net",
-                "eventTypes": ["run.finished"],
-                "organizationId": a.organization,
-            }),
-            vec![
-                json!({
-                    "name": "Net hook",
-                    "url": "https://hooks.example.com/net",
-                    "eventTypes": ["run.finished"],
-                    "organizationId": b.organization,
-                }),
-                json!({
-                    "name": "Net hook",
-                    "url": "https://hooks.example.com/net",
-                    "eventTypes": ["run.finished"],
-                    "projectId": b.project,
-                }),
-            ],
-        ),
-        path_case(
-            "PATCH /api/v1/webhooks/{webhook_id}",
-            &[id(a.webhook, b.webhook)],
-            versioned("webhook_subscriptions", 0, json!({"name": "Hook"})),
-        ),
-        path_case(
-            "POST /api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
-            &[id(a.webhook, b.webhook), id(ax.delivery, bx.delivery)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/webhooks/{webhook_id}/rotate-secret",
-            &[id(a.webhook, b.webhook)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/webhooks/{webhook_id}/test",
-            &[id(a.webhook, b.webhook)],
-            empty(),
-        ),
-        path_case(
-            "DELETE /api/v1/webhooks/{webhook_id}",
-            &[id(a.webhook, b.webhook)],
-            empty(),
-        )
-        .last(),
         // Whiteboards
         body_case(
             "POST /api/v1/whiteboards",
@@ -6202,6 +6195,25 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"agent": a.agent, "add": [b.rook]}),
             ],
         ),
+        // A2.10: pausing and resuming an agent one manages, here; B's
+        // agent isn't in A. Resumed at once, so later cases run unpaused.
+        mcp_case(
+            "agent_pause",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
+        mcp_case(
+            "agent_resume",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
+        // A2.18: adding an agent one manages; it is already a member of
+        // A, so nothing changes. B's agent isn't one A's caller manages.
+        mcp_case(
+            "account_workspace_add",
+            json!({"account": a.agent}),
+            vec![json!({"account": b.agent})],
+        ),
         // A2: an account's delivery connections are its own and its
         // managers'. B's connection and B's agent aren't A's to change.
         mcp_case(
@@ -6218,6 +6230,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "connection_secret_rotate",
             json!({"connectionId": ax.connection}),
             vec![json!({"connectionId": bx.connection})],
+        ),
+        // A2.6: a webhook's test and redelivery are its account's too.
+        mcp_case(
+            "connection_test",
+            json!({"connectionId": a.webhook}),
+            vec![json!({"connectionId": b.webhook})],
+        ),
+        mcp_case(
+            "connection_redeliver",
+            json!({"connectionId": a.webhook, "eventPosition": ax.delivery}),
+            vec![json!({"connectionId": b.webhook, "eventPosition": bx.delivery})],
         ),
         mcp_case(
             "connection_remove",
@@ -7396,6 +7419,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"owner": "workspace", "workspace": b.organization, "label": "Net mcp host"})],
         ),
         mcp_case(
+            "host_link",
+            json!({"owner": "workspace", "workspace": a.organization, "cardUrl": "https://agent.example.com"}),
+            vec![json!({"owner": "workspace", "workspace": b.organization, "cardUrl": "https://agent.example.com"})],
+        )
+        .without_own("it reads an agent card over the network, which tests can't reach"),
+        mcp_case(
             "host_agent_bind",
             json!({"hostId": ax.hosts[1], "accountId": ax.agent, "hostAgentRef": "net-agent"}),
             vec![json!({"hostId": bx.hosts[1], "accountId": bx.agent, "hostAgentRef": "net-agent"})],
@@ -7408,36 +7437,32 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .no_effect(vec![json!({"hostId": ax.hosts[1], "accountId": bx.agent})])
         .last(),
+        // A2.19: B's proposal isn't A's to decide, and B's host and agent
+        // aren't A's to run actions on.
+        mcp_case(
+            "agent_register_decide",
+            json!({"proposal": ax.proposal, "decision": "refuse"}),
+            vec![json!({"proposal": bx.proposal, "decision": "refuse"})],
+        ),
+        mcp_case(
+            "agent_offer_start",
+            json!({"host": ax.hosts[2], "offerId": "net-offer"}),
+            vec![json!({"host": bx.hosts[2], "offerId": "net-offer"})],
+        ),
+        mcp_case(
+            "agent_action_run",
+            json!({"host": ax.hosts[2], "actionId": "net-action"}),
+            vec![
+                json!({"host": bx.hosts[2], "actionId": "net-action"}),
+                json!({"account": bx.agent, "actionId": "net-action"}),
+            ],
+        ),
         mcp_case(
             "host_unlink",
             json!({"hostId": ax.hosts[3]}),
             vec![json!({"hostId": bx.hosts[3]})],
         )
         .last(),
-        mcp_case(
-            "webhook_write",
-            json!({
-                "operation": "create",
-                "name": "Net mcp hook",
-                "url": "https://hooks.example.com/net-mcp",
-                "eventTypes": ["run.finished"],
-            }),
-            vec![
-                json!({"operation": "update", "webhookId": b.webhook, "name": "Net", "expectedVersion": version("webhook_subscriptions", b.webhook)}),
-                json!({"operation": "delete", "webhookId": b.webhook}),
-                json!({"operation": "rotate_secret", "webhookId": b.webhook}),
-                json!({"operation": "test", "webhookId": b.webhook}),
-                json!({"operation": "redeliver", "webhookId": b.webhook, "deliveryId": bx.delivery}),
-                json!({
-                    "operation": "create",
-                    "name": "Net mcp hook",
-                    "url": "https://hooks.example.com/net-mcp",
-                    "eventTypes": ["run.finished"],
-                    "projectId": b.project,
-                }),
-            ],
-        )
-        .rejecting(vec![json!({"operation": "redeliver", "webhookId": a.webhook, "deliveryId": bx.delivery})]),
         mcp_case(
             "bug_report_link_write",
             json!({"projectId": a.project, "name": "Net mcp link"}),
