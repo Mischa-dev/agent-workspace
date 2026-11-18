@@ -126,11 +126,13 @@ export type InboxFilter = { category?: Category; spaces?: string[]; view?: View 
 
 export type InboxViewItem = { density: Density; filter: InboxFilter; id: string; name: string; position: number }
 
-export type Initiative = { archived: boolean; completed: number; fields: InitiativeField[]; id: string; milestones: InitiativeMilestone[]; number: number; scope: number; title: string; version: number }
+export type Initiative = { archived: boolean; completed: number; fields: InitiativeField[]; id: string; milestones: InitiativeMilestone[]; number: number; scope: number; spaces: InitiativeSpace[]; title: string; version: number }
 
 export type InitiativeField = { name: string; type: string; value: unknown }
 
 export type InitiativeMilestone = { archived: boolean; completed: number; id: string; name: string; scope: number; spaceId: string; spaceKey: string; spaceName: string; targetDate?: string | null }
+
+export type InitiativeSpace = { health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; spaceKey: string; spaceName: string; targetDate?: string | null; version: number }
 
 export type InlineAutomation = { collection?: string | null; rule: unknown }
 
@@ -151,6 +153,8 @@ export type InviteLinkView = { active: boolean; createdAt: string; createdBy: st
 export type JoinableAccount = { accountId: string; displayName: string; handle: string; handleTaken: boolean; kind: string }
 
 export type LastTest = { at: string; error?: string | null; ok: boolean; status?: number | null }
+
+export type LatestUpdate = { author?: Person | null; channelId: string; health?: string | null; name: string; postedAt: string; threadId: string }
 
 export type Lifecycle = "active" | "importing" | "suspended" | "deleting"
 
@@ -193,6 +197,8 @@ export type PageTemplateView = { builtIn: boolean; excerpt: string; id: string; 
 export type PartRef = { id: string; kind: string }
 
 export type PartView = { id: string; kind: string; name?: string | null }
+
+export type Person = { id: string; name: string }
 
 export type PlaceHit = { detail?: string | null; id: string; kind: string; path?: string | null; title: string }
 
@@ -269,6 +275,8 @@ export type SidebarSection = { collapsed: boolean; id: string; items: SidebarIte
 export type Snapshot = { completed: number; completedPoints?: number | null; onDate: string; scope: number; scopePoints?: number | null; started: number }
 
 export type SortWrite = { direction?: Direction; field: string }
+
+export type SpaceStatus = { health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
 
 export type StatusView = { accountId: string; awayUntil?: string | null; clearAt?: string | null; emoji?: string | null; state?: string | null; text?: string | null; updatedAt: string; workspaceOnly: boolean }
 
@@ -736,6 +744,18 @@ export type ProfileUpdateInput = { account?: string | null; avatarBase64?: strin
 
 export type ProfileUpdateOutput = { accountId: string; avatarUrl?: string | null; canEdit: boolean; dmPolicy?: string | null; handle: string; kind: string; name: string; pronouns?: string | null; sharedSpaces: SharedSpace[]; statuses: StatusView[]; timeZone?: string | null; title?: string | null }
 
+export type ProjectStatusGetInput = { spaceId: string }
+
+export type ProjectStatusGetOutput = { health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
+
+export type ProjectStatusSetInput = { expectedVersion?: number | null; health?: string | null; lead?: string | null; spaceId: string; targetDate?: string | null }
+
+export type ProjectStatusSetOutput = { health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
+
+export type ProjectUpdateCreateInput = { channelId?: string | null; health: string; spaceId: string; text: string; title?: string | null }
+
+export type ProjectUpdateCreateOutput = { channelId: string; messageId: string; status: SpaceStatus; threadId: string }
+
 export type RecordCreateInput = { collection: string; fields?: Record<string, unknown>; fromMessageId?: string | null; saySo?: boolean; title?: string | null }
 
 export type RecordCreateOutput = { collectionId: string; id: string; number: number; title: string }
@@ -1061,6 +1081,9 @@ export type Operations = {
   profile_avatar_list: { input: ProfileAvatarListInput; output: ProfileAvatarListOutput }
   profile_get: { input: ProfileGetInput; output: ProfileGetOutput }
   profile_update: { input: ProfileUpdateInput; output: ProfileUpdateOutput }
+  project_status_get: { input: ProjectStatusGetInput; output: ProjectStatusGetOutput }
+  project_status_set: { input: ProjectStatusSetInput; output: ProjectStatusSetOutput }
+  project_update_create: { input: ProjectUpdateCreateInput; output: ProjectUpdateCreateOutput }
   record_create: { input: RecordCreateInput; output: RecordCreateOutput }
   request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
   request_create: { input: RequestCreateInput; output: RequestCreateOutput }

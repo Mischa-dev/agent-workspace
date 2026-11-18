@@ -56,6 +56,9 @@
     "recurring_write": "change",
     "milestone_list": "query",
     "milestone_reorder": "change",
+    "project_status_get": "describe",
+    "project_status_set": "change",
+    "project_update_create": "create",
     "milestone_write": "change",
     "dependency_graph": "query",
     "plan_import": "create"
@@ -78,7 +81,7 @@
     "/api/v1/bug-report-links/*",
     "/api/v1/bug-reports/*"
   ],
-  "events": { "emits": ["task.created", "task.updated", "task.assigned", "task.delegated", "task.triaged", "task.snooze_ended", "triage.rules_changed", "cycles.changed", "cycle.started", "cycle.ended", "comment.mentioned", "task.placement_changed", "task.commented", "task.comment_changed", "milestone.created", "milestone.updated", "label.changed", "field.changed"], "listens": ["run.finished", "pull_request.merged"] },
+  "events": { "emits": ["task.created", "task.updated", "task.assigned", "task.delegated", "task.triaged", "task.snooze_ended", "triage.rules_changed", "cycles.changed", "space.status_changed", "cycle.started", "cycle.ended", "comment.mentioned", "task.placement_changed", "task.commented", "task.comment_changed", "milestone.created", "milestone.updated", "label.changed", "field.changed"], "listens": ["run.finished", "pull_request.merged"] },
   "notifications": ["assigned", "comment_mention", "task_changed", "ai_plan_import"],
   "search": ["tasks"],
   "automations": { "triggers": ["task_created", "task_matches"], "actions": ["set_field"] },

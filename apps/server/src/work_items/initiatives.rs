@@ -65,6 +65,18 @@ pub struct Initiative {
     /// Tasks in those milestones, leaving out canceled ones.
     pub scope: i64,
     pub completed: i64,
+    /// The spaces of those milestones, each with its health and latest
+    /// update (T1.43).
+    pub spaces: Vec<InitiativeSpace>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitiativeSpace {
+    pub space_name: String,
+    pub space_key: String,
+    #[serde(flatten)]
+    pub status: super::project_status::SpaceStatus,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
@@ -371,7 +383,16 @@ pub async fn list(
                 completed: row.completed,
             });
     }
-    let names = person_names(connection, &definitions, &records).await?;
+    let mut spaces: Vec<Uuid> = by_initiative
+        .values()
+        .flatten()
+        .filter_map(|milestone| Uuid::parse_str(&milestone.space_id).ok())
+        .collect();
+    spaces.sort_unstable();
+    spaces.dedup();
+    let statuses =
+        super::project_status::statuses_of(&mut *connection, caller.account_id, &spaces).await?;
+    let names = person_names(connection, space, &definitions, &records).await?;
     let name_of = |id: &str| names.get(id).cloned();
     let initiatives = records
         .into_iter()
@@ -391,8 +412,29 @@ pub async fn list(
                     })
                 })
                 .collect();
+            let mut spaces: Vec<InitiativeSpace> = Vec::new();
+            for milestone in &milestones {
+                if spaces
+                    .iter()
+                    .any(|space| space.status.space_id == milestone.space_id)
+                {
+                    continue;
+                }
+                let Some(status) = Uuid::parse_str(&milestone.space_id)
+                    .ok()
+                    .and_then(|id| statuses.get(&id))
+                else {
+                    continue;
+                };
+                spaces.push(InitiativeSpace {
+                    space_name: milestone.space_name.clone(),
+                    space_key: milestone.space_key.clone(),
+                    status: status.clone(),
+                });
+            }
             Initiative {
                 id: record.id.to_string(),
+                spaces,
                 number: record.number,
                 title: record.title,
                 version: record.version,
@@ -414,6 +456,7 @@ pub async fn list(
 /// Display names of the people the records' person fields name.
 async fn person_names(
     connection: &mut PgConnection,
+    space: Uuid,
     definitions: &[fields::FieldDefinition],
     records: &[RecordRow],
 ) -> Result<HashMap<String, String>, AppError> {
@@ -440,9 +483,12 @@ async fn person_names(
     if people.is_empty() {
         return Ok(HashMap::new());
     }
+    // Everyone in the workspace is in its space, under the name they use.
     Ok(sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, display_name FROM actors WHERE id = ANY($1)",
+        "SELECT actor_id, display_name FROM project_memberships \
+         WHERE project_id = $1 AND actor_id = ANY($2)",
     )
+    .bind(space)
     .bind(&people)
     .fetch_all(&mut *connection)
     .await?

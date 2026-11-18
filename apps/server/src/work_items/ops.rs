@@ -44,7 +44,10 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<CycleSet>()
         .add::<InitiativeList>()
         .add::<InitiativeCreate>()
-        .add::<MilestoneReorder>();
+        .add::<MilestoneReorder>()
+        .add::<ProjectStatusGet>()
+        .add::<ProjectStatusSet>()
+        .add::<ProjectUpdatePost>();
 }
 
 /// The bookkeeping every task write shares: a keyed call is retry-safe
@@ -1541,5 +1544,372 @@ impl Operation for MilestoneReorder {
         .collect();
         call.audited_by_command();
         Ok(MilestoneOrder { milestones })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// project_status_get, project_status_set, project_update_create
+
+/// A space named by ID, link or key.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpaceRefInput {
+    /// The space (a project): its ID, link or key (such as "AWD").
+    #[serde(alias = "projectId")]
+    pub space_id: IdRef,
+}
+
+impl Targeted for SpaceRefInput {
+    fn target(&self) -> Target {
+        Target::Space(self.space_id.id())
+    }
+}
+
+pub struct ProjectStatusGet;
+
+impl Operation for ProjectStatusGet {
+    const NAME: &'static str = "project_status_get";
+    const KIND: OpKind = OpKind::Describe;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksView);
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "Get a project's status";
+    const DESCRIPTION: &'static str = "A space's status: its health (on_track, at_risk or \
+        off_track), target date and lead, and its latest update (a thread; read it with \
+        conversation_read). Post an update with project_update_create.";
+
+    type Input = SpaceRefInput;
+    type Output = super::project_status::SpaceStatus;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        _input: SpaceRefInput,
+    ) -> Result<super::project_status::SpaceStatus, OpError> {
+        let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let reader = call.account_id();
+        let tx = call.tx().await?;
+        Ok(super::project_status::status_of(tx, reader, space).await?)
+    }
+}
+
+pub struct ProjectStatusSet;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectStatusSetInput {
+    /// The space (a project): its ID, link or key (such as "AWD").
+    #[serde(alias = "projectId")]
+    pub space_id: IdRef,
+    /// on_track, at_risk or off_track; "" clears it. Posting an update
+    /// (project_update_create) sets it too, and says why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<String>,
+    /// YYYY-MM-DD; "" clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_date: Option<String>,
+    /// "me", a member's ID or handle; "none" clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead: Option<String>,
+    /// The status's version you last read (project_status_get); a change
+    /// since is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<i64>,
+}
+
+impl Targeted for ProjectStatusSetInput {
+    fn target(&self) -> Target {
+        Target::Space(self.space_id.id())
+    }
+}
+
+impl Operation for ProjectStatusSet {
+    const NAME: &'static str = "project_status_set";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const EMITS: &'static [&'static str] = &["space.status_changed"];
+    const TITLE: &'static str = "Set a project's status";
+    const DESCRIPTION: &'static str = "Change a space's health, target date or lead. To say \
+        how it's going (and set its health with it), post an update with project_update_create.";
+
+    type Input = ProjectStatusSetInput;
+    type Output = super::project_status::SpaceStatus;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ProjectStatusSetInput,
+    ) -> Result<super::project_status::SpaceStatus, OpError> {
+        use super::project_status::{self as status, StatusChange, StatusRefusal};
+        let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let workspace = call.ctx.workspace_id;
+        let actor = call.account_id();
+        let mut change = StatusChange::default();
+        if let Some(health) = input.health.as_deref() {
+            change.health = Some(if health.trim().is_empty() {
+                None
+            } else {
+                Some(
+                    status::parse_health(health)
+                        .ok_or(OpError::invalid("health", status::HEALTH_MESSAGE))?,
+                )
+            });
+        }
+        if let Some(date) = input.target_date.as_deref() {
+            change.target_date = Some(if date.trim().is_empty() {
+                None
+            } else {
+                Some(
+                    chrono::NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d")
+                        .map_err(|_| OpError::invalid("targetDate", "Use YYYY-MM-DD, or \"\"."))?,
+                )
+            });
+        }
+        let tx = call.tx().await?;
+        if let Some(lead) = input.lead.as_deref() {
+            change.lead = Some(
+                status::resolve_lead(tx, space, actor, lead)
+                    .await?
+                    .map_err(|()| {
+                        OpError::invalid(
+                            "lead",
+                            "Name a member of this space: me, an ID or a handle.",
+                        )
+                    })?,
+            );
+        }
+        if change.is_empty() {
+            return Err(OpError::invalid(
+                "health",
+                "Change something: health, targetDate or lead.",
+            ));
+        }
+        match status::set(tx, workspace, space, actor, &change, input.expected_version).await? {
+            Ok(_) => {}
+            Err(StatusRefusal::VersionConflict { current_version }) => {
+                return Err(OpError::Conflict {
+                    reason: crate::ops::ConflictReason::Version { current_version },
+                    message: format!(
+                        "Someone changed this status first (now version {current_version}). Read it again, then retry."
+                    )
+                    .into(),
+                    current: None,
+                });
+            }
+        }
+        emit_status_changed(tx, space, actor).await?;
+        call.audit_target("space", space, json!({"status": true}));
+        let tx = call.tx().await?;
+        Ok(status::status_of(tx, actor, space).await?)
+    }
+}
+
+async fn emit_status_changed(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    space: uuid::Uuid,
+    actor: uuid::Uuid,
+) -> Result<(), crate::error::AppError> {
+    let mut event = crate::events::NewEvent::thing(
+        &crate::events::catalog::SPACE_STATUS_CHANGED,
+        space,
+        "space",
+        space,
+    )
+    .actor(actor)
+    .audience(crate::events::Audience::Space);
+    // The status isn't a thing of its own: the event is about the space.
+    event.thing = None;
+    crate::events::emit(tx, event).await?;
+    Ok(())
+}
+
+pub struct ProjectUpdatePost;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectUpdatePostInput {
+    /// The space (a project): its ID, link or key (such as "AWD").
+    #[serde(alias = "projectId")]
+    pub space_id: IdRef,
+    /// How it's going: on_track, at_risk or off_track. It becomes the
+    /// space's health and the update's outcome.
+    pub health: String,
+    /// The update: what moved, what's next, what's in the way. `@handle`
+    /// mentions someone.
+    pub text: String,
+    /// Its name; "Update, <date>" when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The channel it goes in; the space's oldest open channel when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<IdRef>,
+}
+
+impl Targeted for ProjectUpdatePostInput {
+    fn target(&self) -> Target {
+        Target::Space(self.space_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectUpdatePosted {
+    /// The update's thread.
+    pub thread_id: String,
+    pub channel_id: String,
+    pub message_id: String,
+    /// The space's status after it.
+    pub status: super::project_status::SpaceStatus,
+}
+
+impl Operation for ProjectUpdatePost {
+    const NAME: &'static str = "project_update_create";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    const EMITS: &'static [&'static str] = &["space.status_changed", "message.created"];
+    const TITLE: &'static str = "Post a project update";
+    const DESCRIPTION: &'static str = "Say how a space is going, such as its weekly update: a \
+        thread in one of its channels whose outcome is the health you give, which becomes the \
+        space's health. It shows on the space's home, in its members' My work and in the \
+        initiatives its milestones are part of. Pass a clientRequestId so a retry posts once.";
+
+    type Input = ProjectUpdatePostInput;
+    type Output = ProjectUpdatePosted;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ProjectUpdatePostInput,
+    ) -> Result<ProjectUpdatePosted, OpError> {
+        use super::project_status as status;
+        use crate::{
+            conversations::{
+                AppendExtras, ThreadPatch, append_message_command_with,
+                threads::{self, ThreadName, ThreadSpec},
+            },
+            idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
+        };
+        let health = status::parse_health(&input.health)
+            .ok_or(OpError::invalid("health", status::HEALTH_MESSAGE))?;
+        let text = input.text.trim().to_owned();
+        if text.is_empty() {
+            return Err(OpError::invalid("text", "Say how it's going."));
+        }
+        let title = match input.title.as_deref().map(str::trim) {
+            Some(title) if !title.is_empty() => title.to_owned(),
+            _ => format!("Update, {}", chrono::Utc::now().format("%b %-d, %Y")),
+        };
+        let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let workspace = call.ctx.workspace_id;
+        let actor = call.account_id();
+        let key = match call.ctx.request_id.as_deref() {
+            Some(key) => IdempotencyKey::parse(key),
+            None => IdempotencyKey::parse(&uuid::Uuid::now_v7().to_string()),
+        }
+        .map_err(|_| OpError::invalid("clientRequestId", "Pass a short request id."))?;
+        let mut creator = crate::discussion::ops::creator(call.ctx);
+        // The channel must be one of this space's.
+        creator.project_id = Some(space);
+        let state = call.state;
+        let mut tx = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(crate::error::AppError::from)?;
+        let channel = match input.channel_id {
+            Some(channel) => channel.id(),
+            None => status::default_channel(&mut tx, space, actor)
+                .await?
+                .ok_or(OpError::invalid(
+                    "channelId",
+                    "This space has no channel you can post in.",
+                ))?,
+        };
+        let scope = idempotency::resource_bound_scope("space", space, "status_update")?;
+        let thread_id = match idempotency::reserve(
+            &mut tx,
+            actor,
+            &scope,
+            &key,
+            RequestHash::for_value(&json!({
+                "channel": channel, "health": health, "title": title, "text": text,
+            }))?,
+        )
+        .await?
+        {
+            IdempotencyOutcome::Replay(replay) => replay.decode::<uuid::Uuid>()?,
+            IdempotencyOutcome::Reserved(reservation) => {
+                let thread = match threads::create(
+                    &mut tx,
+                    &creator,
+                    channel,
+                    ThreadSpec::new(ThreadName::Composed(title.clone()))
+                        .audited_with(json!({"projectUpdate": true})),
+                )
+                .await
+                {
+                    Ok(thread) => thread,
+                    Err(crate::error::AppError::NotFound(_)) => {
+                        return Err(OpError::not_found("That channel in this space"));
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                if thread.parent.kind != "channel" {
+                    return Err(OpError::invalid(
+                        "channelId",
+                        "An update goes in one of the space's channels.",
+                    ));
+                }
+                crate::conversations::update_thread(
+                    &mut tx,
+                    actor,
+                    call.ctx.caller.kind,
+                    thread.id,
+                    &ThreadPatch {
+                        name: None,
+                        status: None,
+                        outcome: Some(status::health_label(health).to_owned()),
+                        clear_outcome: false,
+                    },
+                )
+                .await?;
+                status::record_update(&mut tx, workspace, space, actor, thread.id, health).await?;
+                emit_status_changed(&mut tx, space, actor).await?;
+                idempotency::complete(
+                    &mut tx,
+                    &reservation,
+                    axum::http::StatusCode::CREATED,
+                    &thread.id,
+                )
+                .await?;
+                thread.id
+            }
+        };
+        tx.commit().await.map_err(crate::error::AppError::from)?;
+
+        let content = crate::mcp::content_from_text(state, space, &text).await?;
+        let posted = append_message_command_with(
+            state,
+            call.ctx.into(),
+            thread_id,
+            Some("thread"),
+            key,
+            content,
+            &[],
+            None,
+            AppendExtras::default(),
+        )
+        .await?;
+        if call.ctx.request_id.is_some() {
+            call.key_honoured();
+        }
+        call.mark_replayed(posted.idempotent_replay);
+        call.audit_target("space", space, json!({"update": thread_id}));
+        let tx = call.tx().await?;
+        Ok(ProjectUpdatePosted {
+            thread_id: thread_id.to_string(),
+            channel_id: channel.to_string(),
+            message_id: posted.body.message.id.to_string(),
+            status: status::status_of(tx, actor, space).await?,
+        })
     }
 }

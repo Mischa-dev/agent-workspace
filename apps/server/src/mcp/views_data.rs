@@ -78,6 +78,9 @@ pub(super) struct MyWorkValue {
     pub claimed: Value,
     /// Tasks in review that you made or watch, assigned to someone else.
     pub review: Value,
+    /// The latest update of each of your projects from the last two weeks
+    /// (project_update_create), newest first.
+    pub updates: Value,
 }
 
 pub(super) async fn my_work(
@@ -107,6 +110,7 @@ pub(super) async fn my_work(
             assigned: value["assigned"].clone(),
             claimed: value["claimed"].clone(),
             review: value["review"].clone(),
+            updates: value["updates"].clone(),
         }))
     }
     .await;

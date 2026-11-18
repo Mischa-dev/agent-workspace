@@ -2091,6 +2091,13 @@
             "format": "int64",
             "type": "integer"
           },
+          "spaces": {
+            "description": "The spaces of those milestones, each with its health and latest\nupdate (T1.43).",
+            "items": {
+              "$ref": "#/components/schemas/InitiativeSpace"
+            },
+            "type": "array"
+          },
           "title": {
             "type": "string"
           },
@@ -2108,7 +2115,8 @@
           "fields",
           "milestones",
           "scope",
-          "completed"
+          "completed",
+          "spaces"
         ],
         "type": "object"
       },
@@ -2173,6 +2181,73 @@
           "archived",
           "scope",
           "completed"
+        ],
+        "type": "object"
+      },
+      "InitiativeSpace": {
+        "description": "A space's status.",
+        "properties": {
+          "health": {
+            "description": "on_track, at_risk or off_track; none until someone sets it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "healthLabel": {
+            "description": "How the health reads (\"At risk\").",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latestUpdate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatestUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest update you can read; none when there is none, or its\nchannel is closed to you."
+          },
+          "lead": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spaceId": {
+            "type": "string"
+          },
+          "spaceKey": {
+            "type": "string"
+          },
+          "spaceName": {
+            "type": "string"
+          },
+          "targetDate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "Pass it back as expectedVersion to project_status_set; 0 before\nanything was set.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "spaceName",
+          "spaceKey",
+          "spaceId",
+          "version"
         ],
         "type": "object"
       },
@@ -2512,6 +2587,49 @@
         "required": [
           "at",
           "ok"
+        ],
+        "type": "object"
+      },
+      "LatestUpdate": {
+        "description": "The update that last set a space's health.",
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "channelId": {
+            "description": "The channel it is in.",
+            "type": "string"
+          },
+          "health": {
+            "description": "The health it set, as it reads (\"At risk\").",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "postedAt": {
+            "type": "string"
+          },
+          "threadId": {
+            "description": "The update's thread: read it with conversation_read.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "channelId",
+          "name",
+          "postedAt"
         ],
         "type": "object"
       },
@@ -3359,6 +3477,21 @@
         "required": [
           "kind",
           "id"
+        ],
+        "type": "object"
+      },
+      "Person": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
         ],
         "type": "object"
       },
@@ -4738,6 +4871,65 @@
         },
         "required": [
           "field"
+        ],
+        "type": "object"
+      },
+      "SpaceStatus": {
+        "description": "A space's status.",
+        "properties": {
+          "health": {
+            "description": "on_track, at_risk or off_track; none until someone sets it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "healthLabel": {
+            "description": "How the health reads (\"At risk\").",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latestUpdate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatestUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest update you can read; none when there is none, or its\nchannel is closed to you."
+          },
+          "lead": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spaceId": {
+            "type": "string"
+          },
+          "targetDate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "Pass it back as expectedVersion to project_status_set; 0 before\nanything was set.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "spaceId",
+          "version"
         ],
         "type": "object"
       },
@@ -46045,6 +46237,1231 @@
           "workspace"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/project_status_get": {
+      "post": {
+        "description": "A space's status: its health (on_track, at_risk or off_track), target date and lead, and its latest update (a thread; read it with conversation_read). Post an update with project_update_create. Needs \"See tasks\" where it acts.",
+        "operationId": "project_status_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "A space named by ID, link or key.",
+                "properties": {
+                  "spaceId": {
+                    "description": "The space (a project): its ID, link or key (such as \"AWD\").",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spaceId"
+                ],
+                "title": "SpaceRefInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A space's status.",
+                          "properties": {
+                            "health": {
+                              "description": "on_track, at_risk or off_track; none until someone sets it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "healthLabel": {
+                              "description": "How the health reads (\"At risk\").",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "latestUpdate": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/LatestUpdate"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The latest update you can read; none when there is none, or its\nchannel is closed to you."
+                            },
+                            "lead": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/Person"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "targetDate": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass it back as expectedVersion to project_status_set; 0 before\nanything was set.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "spaceId",
+                            "version"
+                          ],
+                          "title": "SpaceStatus",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A space's status.",
+                          "properties": {
+                            "health": {
+                              "description": "on_track, at_risk or off_track; none until someone sets it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "healthLabel": {
+                              "description": "How the health reads (\"At risk\").",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "latestUpdate": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/LatestUpdate"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The latest update you can read; none when there is none, or its\nchannel is closed to you."
+                            },
+                            "lead": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/Person"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "targetDate": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass it back as expectedVersion to project_status_set; 0 before\nanything was set.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "spaceId",
+                            "version"
+                          ],
+                          "title": "SpaceStatus",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Get a project's status",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/project_status_set": {
+      "post": {
+        "description": "Change a space's health, target date or lead. To say how it's going (and set its health with it), post an update with project_update_create. Needs \"Edit tasks\" where it acts.",
+        "operationId": "project_status_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedVersion": {
+                    "description": "The status's version you last read (project_status_get); a change\nsince is refused.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "health": {
+                    "description": "on_track, at_risk or off_track; \"\" clears it. Posting an update\n(project_update_create) sets it too, and says why.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lead": {
+                    "description": "\"me\", a member's ID or handle; \"none\" clears it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "spaceId": {
+                    "description": "The space (a project): its ID, link or key (such as \"AWD\").",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "targetDate": {
+                    "description": "YYYY-MM-DD; \"\" clears it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "spaceId"
+                ],
+                "title": "ProjectStatusSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A space's status.",
+                          "properties": {
+                            "health": {
+                              "description": "on_track, at_risk or off_track; none until someone sets it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "healthLabel": {
+                              "description": "How the health reads (\"At risk\").",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "latestUpdate": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/LatestUpdate"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The latest update you can read; none when there is none, or its\nchannel is closed to you."
+                            },
+                            "lead": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/Person"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "targetDate": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass it back as expectedVersion to project_status_set; 0 before\nanything was set.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "spaceId",
+                            "version"
+                          ],
+                          "title": "SpaceStatus",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "A space's status.",
+                          "properties": {
+                            "health": {
+                              "description": "on_track, at_risk or off_track; none until someone sets it.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "healthLabel": {
+                              "description": "How the health reads (\"At risk\").",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "latestUpdate": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/LatestUpdate"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The latest update you can read; none when there is none, or its\nchannel is closed to you."
+                            },
+                            "lead": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/Person"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "targetDate": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "Pass it back as expectedVersion to project_status_set; 0 before\nanything was set.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "spaceId",
+                            "version"
+                          ],
+                          "title": "SpaceStatus",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Set a project's status",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/project_update_create": {
+      "post": {
+        "description": "Say how a space is going, such as its weekly update: a thread in one of its channels whose outcome is the health you give, which becomes the space's health. It shows on the space's home, in its members' My work and in the initiatives its milestones are part of. Pass a clientRequestId so a retry posts once. Needs \"Edit tasks\" where it acts.",
+        "operationId": "project_update_create",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "channelId": {
+                    "description": "The channel it goes in; the space's oldest open channel when left out.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "health": {
+                    "description": "How it's going: on_track, at_risk or off_track. It becomes the\nspace's health and the update's outcome.",
+                    "type": "string"
+                  },
+                  "spaceId": {
+                    "description": "The space (a project): its ID, link or key (such as \"AWD\").",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "text": {
+                    "description": "The update: what moved, what's next, what's in the way. `@handle`\nmentions someone.",
+                    "type": "string"
+                  },
+                  "title": {
+                    "description": "Its name; \"Update, <date>\" when left out.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "spaceId",
+                  "health",
+                  "text"
+                ],
+                "title": "ProjectUpdatePostInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "channelId": {
+                              "type": "string"
+                            },
+                            "messageId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "$ref": "#/components/schemas/SpaceStatus",
+                              "description": "The space's status after it."
+                            },
+                            "threadId": {
+                              "description": "The update's thread.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "threadId",
+                            "channelId",
+                            "messageId",
+                            "status"
+                          ],
+                          "title": "ProjectUpdatePosted",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "channelId": {
+                              "type": "string"
+                            },
+                            "messageId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "$ref": "#/components/schemas/SpaceStatus",
+                              "description": "The space's status after it."
+                            },
+                            "threadId": {
+                              "description": "The update's thread.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "threadId",
+                            "channelId",
+                            "messageId",
+                            "status"
+                          ],
+                          "title": "ProjectUpdatePosted",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Post a project update",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "create"
       }
     },
     "/api/v2/w/{workspace}/ops/record_create": {

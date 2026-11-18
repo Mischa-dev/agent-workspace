@@ -90,6 +90,7 @@ pub(crate) mod list;
 mod moves;
 pub(crate) mod ops;
 mod planning;
+pub mod project_status;
 pub(crate) mod project_templates;
 pub(crate) mod templates;
 pub mod triage;

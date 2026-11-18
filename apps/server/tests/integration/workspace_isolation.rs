@@ -2085,6 +2085,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "cycle_list",
     "triage_rule_list",
     "initiative_list",
+    "project_status_get",
     "module_list",
     "module_open",
     "my_permissions",
@@ -2384,6 +2385,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("milestone_list"),
         by_project("cycle_list"),
         by_project("triage_rule_list"),
+        by_project("project_status_get"),
         // T1.26: B's initiatives never list in A.
         case(
             "initiative_list",

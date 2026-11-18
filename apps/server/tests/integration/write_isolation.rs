@@ -553,6 +553,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "message_update",
     "milestone_write",
     "milestone_reorder",
+    "project_status_set",
+    "project_update_create",
     "module_archive",
     "module_create",
     "module_part_link",
@@ -7550,6 +7552,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"milestoneId": ax.milestone, "position": 1}),
             vec![json!({"milestoneId": bx.milestone, "position": 1})],
         ),
+        // T1.43: a space's status and updates stay in its workspace, and an
+        // update never goes in another workspace's channel.
+        mcp_case(
+            "project_status_set",
+            json!({"projectId": a.project, "health": "at_risk"}),
+            vec![json!({"projectId": b.project, "health": "at_risk"})],
+        ),
+        mcp_case(
+            "project_update_create",
+            json!({"projectId": a.project, "health": "on_track", "text": "Net update",
+                   "channelId": a.channel, "clientRequestId": "net-update"}),
+            vec![json!({"projectId": b.project, "health": "on_track", "text": "Net update",
+                        "clientRequestId": "net-update-b"})],
+        )
+        .rejecting(vec![json!({"projectId": a.project, "health": "on_track",
+                               "text": "Net update", "channelId": b.channel,
+                               "clientRequestId": "net-update-cross"})]),
         // AI
         mcp_case(
             "ai_suggestion_decide",

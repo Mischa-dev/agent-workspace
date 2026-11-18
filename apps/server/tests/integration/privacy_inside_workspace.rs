@@ -3025,6 +3025,39 @@ async fn triage_keeps_to_the_edit_and_workflow_permissions() {
     let planned = as_owner("task_update", planned).await;
     assert_eq!(planned["outcome"], "ok", "{planned}");
 
+    // Project status (T1.43): a viewer reads it, posts no update and sets
+    // nothing; an update in a private channel they aren't in stays out of
+    // what they read.
+    let private = as_owner(
+        "channel_create",
+        json!({"projectId": "TRI", "name": "leads", "private": true}),
+    )
+    .await;
+    assert_eq!(private["outcome"], "ok", "{private}");
+    let posted = as_owner(
+        "project_update_create",
+        json!({"spaceId": "TRI", "health": "off_track", "text": "Quietly off track.",
+               "channelId": private["value"]["id"], "clientRequestId": "tri-update"}),
+    )
+    .await;
+    assert_eq!(posted["outcome"], "ok", "{posted}");
+    let read = as_rook("project_status_get", json!({"spaceId": "TRI"})).await;
+    assert_eq!(read["value"]["health"], "off_track", "{read}");
+    assert!(read["value"]["latestUpdate"].is_null(), "{read}");
+    let refused = as_rook(
+        "project_update_create",
+        json!({"spaceId": "TRI", "health": "on_track", "text": "Fine.",
+               "clientRequestId": "rook-update"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let refused = as_rook(
+        "project_status_set",
+        json!({"spaceId": "TRI", "health": "on_track"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
     // Initiatives (T1.26) are records of the workspace's own space: a
     // viewer there reads them and starts none.
     let started = as_owner(

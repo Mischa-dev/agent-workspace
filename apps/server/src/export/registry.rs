@@ -838,6 +838,19 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "space_statuses",
+                table: "space_statuses",
+                references: &[
+                    ("space_id", "projects"),
+                    ("lead_actor_id", "actors"),
+                    ("latest_update_id", "conversations"),
+                    ("latest_update_by_actor_id", "actors"),
+                    ("updated_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "triage_rules",
                 table: "triage_rules",
                 references: &[("space_id", "projects"), ("created_by_actor_id", "actors")],

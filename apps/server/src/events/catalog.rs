@@ -331,6 +331,12 @@ pub static CYCLES_CHANGED: EventType = fact(
     None,
     "A space's cycle settings changed, or a cycle was renamed",
 );
+pub static SPACE_STATUS_CHANGED: EventType = fact(
+    "space.status_changed",
+    "tasks",
+    None,
+    "A space's health, target date or lead changed, or someone posted an update",
+);
 pub static CYCLE_STARTED: EventType = fact(
     "cycle.started",
     "tasks",
@@ -709,6 +715,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &TASK_SNOOZE_ENDED,
         &TRIAGE_RULES_CHANGED,
         &CYCLES_CHANGED,
+        &SPACE_STATUS_CHANGED,
         &CYCLE_STARTED,
         &CYCLE_ENDED,
         &COMMENT_MENTIONED,

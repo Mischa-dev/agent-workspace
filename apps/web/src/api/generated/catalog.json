@@ -1642,6 +1642,53 @@
     "title": "Update profile"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "tasks",
+    "name": "project_status_get",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Get a project's status"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "space.status_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "project_status_set",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Set a project's status"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "space.status_changed",
+      "message.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "project_update_create",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Post a project update"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
