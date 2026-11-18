@@ -1,6 +1,7 @@
 //! The harness adapters: each speaks one harness's own protocol (a local
 //! program, a cloud API) and turns it into the same events and answers.
 
+pub mod acp;
 pub mod adapter;
 pub mod claude_cloud;
 pub mod claude_code;

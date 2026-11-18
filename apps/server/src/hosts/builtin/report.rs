@@ -301,6 +301,7 @@ fn activity_kind(step: &str, payload: &Value) -> &'static str {
         }
         "run_completed" | "run_failed" | "run_interrupted" => "run_finished",
         "agent_note" | "agent_reply" => "text_message",
+        "plan" => "plan",
         _ => "custom",
     }
 }

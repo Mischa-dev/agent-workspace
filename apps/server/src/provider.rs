@@ -21,8 +21,8 @@ pub mod catalog;
 pub(crate) mod registry;
 
 pub use agent_workspace_builtin_host::harness::{
-    adapter, claude_cloud, claude_code, codex_app_server, codex_cloud, command_line, demo, host,
-    manifest, run_config, secret_fd,
+    acp, adapter, claude_cloud, claude_code, codex_app_server, codex_cloud, command_line, demo,
+    host, manifest, run_config, secret_fd,
 };
 
 pub use adapter::{
@@ -835,6 +835,17 @@ async fn drive_turn(
                                 false,
                             ).await?;
                         }
+                    }
+                    HarnessEvent::Plan(items) => {
+                        let items = items
+                            .iter()
+                            .map(|item| json!({
+                                "title": crate::run_log::cap(&crate::run_log::redact(&item.title), 500),
+                                "status": item.status,
+                            }))
+                            .collect::<Vec<_>>();
+                        let key = format!("plan:{}", Uuid::now_v7());
+                        reports.step(&key, "plan", "The plan.", json!({ "items": items }), false).await?;
                     }
                     HarnessEvent::ItemStarted(_)
                     | HarnessEvent::ItemCompleted(_)
