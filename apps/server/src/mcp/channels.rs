@@ -69,10 +69,15 @@ async fn conversation_value(
         parent_kind.as_deref(),
         view.parent_channel_id,
     ) {
-        ("thread", Some("dm" | "group"), Some(parent_id)) => {
-            format!("/messages/{parent_id}?thread={}", view.id)
-        }
-        (kind, _, _) => conversation_path(view.project_id, kind, view.id, kind == "group"),
+        ("thread", Some("dm" | "group"), Some(parent_id)) => crate::addresses::link(
+            state,
+            None,
+            &crate::addresses::Target::Direct {
+                id: parent_id,
+                thread: Some(view.id),
+            },
+        ),
+        (kind, _, _) => conversation_path(state, view.project_id, kind, view.id, kind == "group"),
     };
     Ok(ConversationValue {
         id: view.id.to_string(),

@@ -852,5 +852,9 @@ fn require_policy(
 
 /// Where an external execution request's events point.
 fn request_href(project_id: Uuid, request_id: Uuid) -> String {
-    format!("/projects/{project_id}/external-execution-requests/{request_id}")
+    crate::addresses::Target::space(
+        project_id,
+        crate::addresses::Place::ExternalRequest(request_id),
+    )
+    .legacy_path()
 }

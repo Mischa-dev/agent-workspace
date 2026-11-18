@@ -30,7 +30,7 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, ToolResult, accessible_project_ids,
-        archived_task_message, insert_audit, parse_id, project_is_chosen, public_url,
+        archived_task_message, insert_audit, link_url, parse_id, project_is_chosen,
         version_conflict_message,
     },
     task_drafts::{self, NewTask, ParentChoice},
@@ -663,9 +663,10 @@ async fn create_many(
             labels,
             criteria_count: u32::try_from(task.acceptance_criteria.len()).unwrap_or(u32::MAX),
             version: 1,
-            url: Some(public_url(
+            url: Some(link_url(
                 state,
-                &format!("/projects/{project_id}/work-items/{}", row.work_item_id),
+                None,
+                &crate::addresses::Target::task(project_id, row.work_item_id),
             )),
         });
     }
@@ -1854,9 +1855,10 @@ async fn update_many(
             changed_fields: outcome.changed_fields,
             status: workflow.status_name(outcome.status_id).to_owned(),
             archived: outcome.archived,
-            url: public_url(
+            url: link_url(
                 state,
-                &format!("/projects/{project_id}/work-items/{task_id}"),
+                None,
+                &crate::addresses::Target::task(project_id, *task_id),
             ),
         })
         .collect::<Vec<_>>();

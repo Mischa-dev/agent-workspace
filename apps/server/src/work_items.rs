@@ -3422,7 +3422,7 @@ fn work_item_reference_view(project_id: Uuid, row: WorkItemReferenceRow) -> Work
         title: row.title,
         status_category: row.status_category,
         archived_at: row.archived_at,
-        href: format!("/projects/{project_id}/work-items/{}", row.id),
+        href: crate::addresses::Target::task(project_id, row.id).legacy_path(),
     }
 }
 
@@ -4648,10 +4648,9 @@ fn message_content_error(_error: MessageContentError) -> AppError {
 }
 
 fn work_item_response(status: StatusCode, item: WorkItemView) -> Result<Response, AppError> {
-    let location = HeaderValue::from_str(&format!(
-        "/projects/{}/work-items/{}",
-        item.project_id, item.id
-    ))
+    let location = HeaderValue::from_str(
+        &crate::addresses::Target::task(item.project_id, item.id).legacy_path(),
+    )
     .map_err(|_| AppError::Internal("construct Work Item Location header"))?;
     Ok((status, [(LOCATION, location)], Json(item)).into_response())
 }

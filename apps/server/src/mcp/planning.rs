@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, accessible_project_ids_in, archived_task_message, parse_id, public_url},
+    common::{ToolResult, accessible_project_ids_in, archived_task_message, link_url, parse_id},
     tasks::{command_actor, resolve_tasks},
     writes::{
         CreateRetry, REQUEST_ID_MESSAGE, WriteAccess, check_access_for, check_write_access,
@@ -788,9 +788,13 @@ pub(super) struct MilestoneListValue {
 fn milestone_value(state: &AppState, project_id: Uuid, view: MilestoneView) -> MilestoneValue {
     MilestoneValue {
         id: view.id.to_string(),
-        url: public_url(
-            state,
-            &format!("/projects/{project_id}/work-items?milestoneId={}", view.id),
+        url: crate::addresses::with_query(
+            link_url(
+                state,
+                None,
+                &crate::addresses::Target::space(project_id, crate::addresses::Place::Tasks),
+            ),
+            &format!("milestoneId={}", view.id),
         ),
         name: view.name,
         description: view.description,

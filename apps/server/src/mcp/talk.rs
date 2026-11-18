@@ -12,7 +12,7 @@ use super::{
     McpPrincipal,
     common::{
         MESSAGE_CHARACTERS, SNIPPET_CHARACTERS, ToolResult, content_from_text, conversation_path,
-        insert_audit, mark_via, parse_id, parse_message_id, project_role, public_url,
+        insert_audit, link_url, mark_via, parse_id, parse_message_id, project_role, public_url,
         resolve_direct_people, role_allows, scope_projects, snippet, truncate_text,
     },
     reactions::{ReactionSummary, reaction_summaries},
@@ -786,7 +786,7 @@ pub(super) fn summary(
         },
         url: public_url(
             state,
-            &conversation_path(row.project_id, &row.kind, row.id, direct),
+            &conversation_path(state, row.project_id, &row.kind, row.id, direct),
         ),
         kind: row.kind,
     }
@@ -2174,7 +2174,7 @@ pub(super) async fn thread_start(
         )
         .await?;
         Ok::<_, AppError>(ToolResult::ok(ThreadValue {
-            url: public_url(state, &thread_path(&created.parent, created.id)),
+            url: link_url(state, None, &thread_target(&created.parent, created.id)),
             id: created.id.to_string(),
             name: created.name,
             status: created.status,
@@ -2215,11 +2215,14 @@ async fn post_optional(
     )
 }
 
-fn thread_path(parent: &ConversationAccessRow, thread_id: Uuid) -> String {
+fn thread_target(parent: &ConversationAccessRow, thread_id: Uuid) -> crate::addresses::Target {
     if matches!(parent.kind.as_str(), "dm" | "group") {
-        format!("/messages/{}?thread={thread_id}", parent.id)
+        crate::addresses::Target::Direct {
+            id: parent.id,
+            thread: Some(thread_id),
+        }
     } else {
-        format!("/projects/{}/threads/{thread_id}", parent.place())
+        crate::addresses::Target::space(parent.place(), crate::addresses::Place::Thread(thread_id))
     }
 }
 
@@ -2272,11 +2275,21 @@ pub(super) async fn thread_update(
         .await?;
         transaction.commit().await?;
         let parent_id = view.parent_channel_id.unwrap_or(view.id);
-        let url = if matches!(view.parent_kind.as_deref(), Some("dm" | "group")) {
-            format!("/messages/{parent_id}?thread={}", view.id)
-        } else {
-            format!("/projects/{}/threads/{}", view.project_id, view.id)
-        };
+        let url = crate::addresses::link(
+            state,
+            None,
+            &if matches!(view.parent_kind.as_deref(), Some("dm" | "group")) {
+                crate::addresses::Target::Direct {
+                    id: parent_id,
+                    thread: Some(view.id),
+                }
+            } else {
+                crate::addresses::Target::space(
+                    view.project_id,
+                    crate::addresses::Place::Thread(view.id),
+                )
+            },
+        );
         Ok::<_, AppError>(ToolResult::ok(ThreadValue {
             id: view.id.to_string(),
             name: view.name,

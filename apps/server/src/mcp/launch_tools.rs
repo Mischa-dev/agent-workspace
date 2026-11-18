@@ -216,9 +216,12 @@ fn launch_value(state: &AppState, project_id: Uuid, view: LaunchView) -> LaunchV
         requested_by: view.requested_by_name,
         run_id: view.run_id.map(|id| id.to_string()),
         run_state: view.run_state,
-        thread_url: view
-            .conversation_id
-            .map(|id| public_url(state, &conversation_path(project_id, "thread", id, false))),
+        thread_url: view.conversation_id.map(|id| {
+            public_url(
+                state,
+                &conversation_path(state, project_id, "thread", id, false),
+            )
+        }),
         created_at: view.created_at.to_rfc3339(),
     }
 }

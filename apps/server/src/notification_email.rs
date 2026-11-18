@@ -360,8 +360,9 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
     }
     if total > DIGEST_ITEMS {
         text.push_str(&format!(
-            "\n…and {} more in your inbox: {origin}/inbox\n",
-            total - DIGEST_ITEMS
+            "\n…and {} more in your inbox: {origin}{}\n",
+            total - DIGEST_ITEMS,
+            crate::addresses::Target::Inbox.legacy_path()
         ));
     }
     text.push_str(&footer(&origin));

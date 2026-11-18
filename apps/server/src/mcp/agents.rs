@@ -25,8 +25,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        SNIPPET_CHARACTERS, StoredRole, ToolResult, accessible_project_ids, public_url,
-        role_allows, scope_projects, snippet,
+        SNIPPET_CHARACTERS, StoredRole, ToolResult, accessible_project_ids, link_url, role_allows,
+        scope_projects, snippet,
     },
 };
 use crate::{AppState, error::AppError, policy::Action};
@@ -426,7 +426,7 @@ pub(super) async fn agent_list(
                         access: if has("write") { "full" } else { "read" }.to_owned(),
                         can_request_runs: has("worker_request"),
                         last_error: agent.last_error_category.clone(),
-                        manage_url: public_url(state, "/messages/agents"),
+                        manage_url: link_url(state, None, &crate::addresses::Target::MessageAgents),
                     }
                 });
                 AgentLine {

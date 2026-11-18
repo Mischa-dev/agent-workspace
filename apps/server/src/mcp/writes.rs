@@ -10,7 +10,7 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, accessible_project_ids_in,
-        archived_task_message, parse_id, public_url, version_conflict_message,
+        archived_task_message, link_url, parse_id, version_conflict_message,
     },
     planning,
     workflow::Workflow,
@@ -2696,9 +2696,10 @@ pub(super) async fn locate(
     .await?;
     Ok((
         key,
-        public_url(
+        link_url(
             state,
-            &format!("/projects/{project_id}/work-items/{work_item_id}"),
+            None,
+            &crate::addresses::Target::task(project_id, work_item_id),
         ),
     ))
 }

@@ -2300,7 +2300,14 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
             detail: json!({
                 "title": format!("Automation \u{201c}{}\u{201d} was turned off", rule.name),
                 "preview": reason,
-                "href": format!("/settings/projects/{}/automations", rule.project_id),
+                "href": crate::addresses::link(
+                    state,
+                    Some(rule.organization_id),
+                    &crate::addresses::Target::SpaceSettings {
+                        space: rule.project_id,
+                        section: "automations",
+                    },
+                ),
                 "place": project_name,
                 "ruleId": rule.id,
             }),
@@ -2614,7 +2621,14 @@ impl Context {
             variables.push(("task.status", text("status")));
             variables.push((
                 "task.url",
-                format!("{origin}/projects/{}/work-items/{id}", rule.project_id),
+                format!(
+                    "{origin}{}",
+                    crate::addresses::link(
+                        state,
+                        Some(rule.organization_id),
+                        &crate::addresses::Target::task(rule.project_id, id),
+                    )
+                ),
             ));
             assignee = task
                 .get("assigneeActorId")
@@ -3241,7 +3255,14 @@ async fn notify(
             detail: json!({
                 "title": rendered.chars().take(200).collect::<String>(),
                 "preview": format!("From the automation \u{201c}{}\u{201d}", rule.name),
-                "href": format!("/settings/projects/{}/automations", rule.project_id),
+                "href": crate::addresses::link(
+                    state,
+                    Some(rule.organization_id),
+                    &crate::addresses::Target::SpaceSettings {
+                        space: rule.project_id,
+                        section: "automations",
+                    },
+                ),
                 "ruleId": rule.id,
             }),
             group_key: format!("automation:{}:{run_id}:{index}", rule.id),

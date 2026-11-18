@@ -541,14 +541,28 @@ pub(super) fn public_url(state: &AppState, path: &str) -> String {
     format!("{}{path}", super::oauth::public_origin(state))
 }
 
-pub(super) fn conversation_path(project_id: Uuid, kind: &str, id: Uuid, direct: bool) -> String {
-    if direct {
-        format!("/messages/{id}")
-    } else if kind == "thread" {
-        format!("/projects/{project_id}/threads/{id}")
-    } else {
-        format!("/projects/{project_id}/channels/{id}")
-    }
+/// The URL of `target`, in `workspace` when the caller knows it
+/// (`addresses::link`).
+pub(super) fn link_url(
+    state: &AppState,
+    workspace: Option<Uuid>,
+    target: &crate::addresses::Target,
+) -> String {
+    public_url(state, &crate::addresses::link(state, workspace, target))
+}
+
+pub(super) fn conversation_path(
+    state: &AppState,
+    project_id: Uuid,
+    kind: &str,
+    id: Uuid,
+    direct: bool,
+) -> String {
+    crate::addresses::link(
+        state,
+        None,
+        &crate::addresses::Target::conversation(project_id, kind, id, None, direct, false),
+    )
 }
 
 #[derive(Debug, FromRow)]

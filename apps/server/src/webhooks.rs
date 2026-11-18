@@ -162,7 +162,10 @@ pub(crate) async fn task_data(
         "archived": task.archived,
         "version": task.version,
         "updatedAt": task.updated_at,
-        "url": format!("{origin}/projects/{project_id}/work-items/{}", task.id),
+        "url": format!(
+            "{origin}{}",
+            crate::addresses::Target::task(project_id, task.id).legacy_path()
+        ),
     })))
 }
 
@@ -214,7 +217,17 @@ pub(crate) async fn record_data(
         "archived": line.archived,
         "version": line.version,
         "updatedAt": line.updated_at,
-        "url": format!("{origin}/projects/{project_id}/collections/{collection_id}?record={record_id}"),
+        "url": format!(
+            "{origin}{}",
+            crate::addresses::Target::space(
+                project_id,
+                crate::addresses::Place::Record {
+                    collection: collection_id,
+                    record: record_id,
+                },
+            )
+            .legacy_path()
+        ),
     })))
 }
 

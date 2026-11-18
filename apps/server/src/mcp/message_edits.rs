@@ -19,6 +19,7 @@ use super::{
 };
 use crate::{
     AppState,
+    addresses::{Place, Target},
     conversations::{
         ActorView, ConversationAccessRow, authorize_conversation_row_for,
         fetch_conversation_access, finish_idempotent_command,
@@ -158,24 +159,19 @@ fn actor_label(actor: &ActorView) -> String {
 /// The web address of a message: its conversation's page plus
 /// `#message-<id>`, which message tools accept in place of the ID.
 fn message_url(state: &AppState, conversation: &ConversationAccessRow, message_id: Uuid) -> String {
-    let path = match (conversation.kind.as_str(), conversation.effective_kind()) {
-        ("thread", "dm" | "group") => format!(
-            "/messages/{}?thread={}",
-            conversation.parent_channel_id.unwrap_or(conversation.id),
-            conversation.id
-        ),
-        (_, "dm" | "group") => format!("/messages/{}", conversation.id),
-        ("thread", _) => format!(
-            "/projects/{}/threads/{}",
-            conversation.place(),
-            conversation.id
-        ),
-        _ => format!(
-            "/projects/{}/channels/{}",
-            conversation.place(),
-            conversation.id
-        ),
+    let target = match (conversation.kind.as_str(), conversation.effective_kind()) {
+        ("thread", "dm" | "group") => Target::Direct {
+            id: conversation.parent_channel_id.unwrap_or(conversation.id),
+            thread: Some(conversation.id),
+        },
+        (_, "dm" | "group") => Target::Direct {
+            id: conversation.id,
+            thread: None,
+        },
+        ("thread", _) => Target::space(conversation.place(), Place::Thread(conversation.id)),
+        _ => Target::space(conversation.place(), Place::Channel(conversation.id)),
     };
+    let path = crate::addresses::link(state, None, &target);
     public_url(state, &format!("{path}#message-{message_id}"))
 }
 

@@ -77,20 +77,25 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
     ]))
     .expect("configuration");
     let seed = dev_seed(&pool, &config).await.expect("seed");
-    bootstrap_admin(
-        &pool,
-        BootstrapCommand {
-            login_name: "owner".to_owned(),
-            display_name: "Owner".to_owned(),
-            organization_name: None,
-            organization_slug: None,
-            adopt_actor_id: Some(seed.human_actor_id),
-            organization_id: Some(seed.organization_id),
-        },
-        PASSWORD.to_owned(),
-    )
-    .await
-    .expect("bootstrap owner");
+    // Signing in, and the bootstrap that makes the person able to, need
+    // the current schema (server roles, sessions), so a database held at
+    // an older migration keeps the seed's person as it is.
+    if version == i64::MAX {
+        bootstrap_admin(
+            &pool,
+            BootstrapCommand {
+                login_name: "owner".to_owned(),
+                display_name: "Owner".to_owned(),
+                organization_name: None,
+                organization_slug: None,
+                adopt_actor_id: Some(seed.human_actor_id),
+                organization_id: Some(seed.organization_id),
+            },
+            PASSWORD.to_owned(),
+        )
+        .await
+        .expect("bootstrap owner");
+    }
     sqlx::query(
         "UPDATE execution_profiles SET account_state = 'authenticated', version = version + 1 WHERE id = $1",
     )
@@ -99,8 +104,6 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
     .await
     .expect("authenticate profile");
     let app = test_app(pool.clone(), &database_url);
-    // Signing in needs the current schema (sessions, two-factor), so a
-    // database held at an older migration gets no browser session.
     let browser = if version == i64::MAX {
         login(&app).await
     } else {

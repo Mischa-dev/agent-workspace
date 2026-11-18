@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::{Place, Target},
     auth::{AuthenticatedActor, require_authenticated_write},
     environments::{self, EnvironmentRow, EnvironmentView},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
@@ -278,7 +279,10 @@ pub(crate) async fn task_fields(
     );
     fields.insert(
         "task.url",
-        format!("{origin}/projects/{project_id}/work-items/{}", task.id),
+        format!(
+            "{origin}{}",
+            crate::addresses::link(state, None, &Target::task(project_id, task.id))
+        ),
     );
     fields.insert(
         "task.priority",
@@ -294,7 +298,10 @@ pub(crate) async fn task_fields(
         "task.pages",
         pages
             .iter()
-            .map(|(id, title)| format!("- {title}: {origin}/projects/{project_id}/pages/{id}"))
+            .map(|(id, title)| {
+                let page = crate::addresses::link(state, None, &Target::page(project_id, *id));
+                format!("- {title}: {origin}{page}")
+            })
             .collect::<Vec<_>>()
             .join("\n"),
     );
@@ -314,7 +321,13 @@ pub(crate) async fn task_fields(
     .await?;
     fields.insert(
         "project.skills",
-        skills_field(&skills, &format!("{origin}/projects/{project_id}/pages")),
+        skills_field(
+            &skills,
+            &format!(
+                "{origin}{}",
+                crate::addresses::link(state, None, &Target::space(project_id, Place::Pages))
+            ),
+        ),
     );
     Ok(fields)
 }

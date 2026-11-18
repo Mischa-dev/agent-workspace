@@ -13,9 +13,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{
-        ToolResult, accessible_project_ids, parse_id, project_role, public_url, truncate_text,
-    },
+    common::{ToolResult, accessible_project_ids, link_url, parse_id, project_role, truncate_text},
     replies::{InboxItem, InboxListArguments, ReplyToolResult, inbox_list},
     talk::{ConversationSummary, ListFilter, list_rows, summary},
 };
@@ -436,10 +434,13 @@ pub(super) async fn projects_list(
         .fetch_all(crate::db::scoped(&state.pool))
         .await?;
         for row in &mut rows {
-            row.url = if row.messages_space {
-                public_url(state, "/messages")
-            } else {
-                public_url(state, &format!("/projects/{}", row.id))
+            row.url = match Uuid::parse_str(&row.id) {
+                Ok(space) if !row.messages_space => link_url(
+                    state,
+                    None,
+                    &crate::addresses::Target::space(space, crate::addresses::Place::Home),
+                ),
+                _ => link_url(state, None, &crate::addresses::Target::Messages),
             };
         }
         Ok::<_, AppError>(ToolResult::ok(ProjectsValue { projects: rows }))
@@ -827,12 +828,13 @@ pub(super) async fn project_open(
                     name
                 },
                 role: role.role,
-                url: public_url(
+                url: link_url(
                     state,
+                    None,
                     &if kind == "direct" {
-                        "/messages".to_owned()
+                        crate::addresses::Target::Messages
                     } else {
-                        format!("/projects/{project_id}")
+                        crate::addresses::Target::space(project_id, crate::addresses::Place::Home)
                     },
                 ),
             },

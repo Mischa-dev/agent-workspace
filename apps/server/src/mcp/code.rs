@@ -23,8 +23,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        StoredRole, ToolResult, accessible_project_ids, conversation_path, parse_id, public_url,
-        role_allows, scope_projects,
+        StoredRole, ToolResult, accessible_project_ids, conversation_path, link_url, parse_id,
+        public_url, role_allows, scope_projects,
     },
 };
 use crate::{AppState, error::AppError, policy::Action, runs::ACTIVE_RUN_STATES};
@@ -470,9 +470,16 @@ pub(super) async fn repository_list(
                 RepositoryItem {
                     id: row.id.to_string(),
                     project_id: row.project_id.to_string(),
-                    settings_url: public_url(
-                        state,
-                        &format!("/projects/{}/settings?tab=repositories", row.project_id),
+                    settings_url: crate::addresses::with_query(
+                        link_url(
+                            state,
+                            None,
+                            &crate::addresses::Target::space(
+                                row.project_id,
+                                crate::addresses::Place::Settings,
+                            ),
+                        ),
+                        "tab=repositories",
                     ),
                     project_key: row.project_key,
                     project: row.project,
@@ -1106,7 +1113,7 @@ async fn page_details(
                     name: row.name,
                     url: public_url(
                         state,
-                        &conversation_path(row.project_id, &row.kind, row.id, row.direct),
+                        &conversation_path(state, row.project_id, &row.kind, row.id, row.direct),
                     ),
                 },
             )

@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    addresses::{Place, Target},
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     policy::{Action, MembershipRole, RoleGrant},
@@ -553,7 +554,7 @@ async fn create_project(
                 conversation_id: None,
                 page_id: None,
             },
-            href: format!("/projects/{project_id}"),
+            href: Target::space(project_id, Place::Home).legacy_path(),
             context_drawer_open: false,
             filters: serde_json::json!({}),
             pinned: false,
@@ -1319,19 +1320,19 @@ fn navigation_view(row: &ProjectRow) -> Result<NavigationView, AppError> {
     })
 }
 
-/// The address of a place in a project that doesn't name a conversation or a page.
-fn plain_location_path(kind: &str) -> Option<&'static str> {
+/// A place in a project that doesn't name a conversation or a page.
+fn plain_location_path(kind: &str) -> Option<Place> {
     Some(match kind {
         // Older clients saved settings as the last place; opening the Project
         // from there should lead out of settings, so it lands on the overview.
-        "project_overview" | "settings" => "",
-        "work_items" => "/work-items",
-        "milestones" => "/milestones",
-        "timeline" => "/timeline",
-        "planning" => "/next",
-        "pages" => "/pages",
-        "decisions" => "/decisions",
-        "runs" => "/launches",
+        "project_overview" | "settings" => Place::Home,
+        "work_items" => Place::Tasks,
+        "milestones" => Place::Milestones,
+        "timeline" => Place::Timeline,
+        "planning" => Place::Next,
+        "pages" => Place::Pages,
+        "decisions" => Place::Decisions,
+        "runs" => Place::Runs,
         _ => return None,
     })
 }
@@ -1342,18 +1343,14 @@ fn navigation_href(project_id: Uuid, location: &NavigationLocation) -> Result<St
         location.conversation_id,
         location.page_id,
     ) {
-        ("thread", Some(conversation_id), None) => {
-            Ok(format!("/projects/{project_id}/threads/{conversation_id}"))
-        }
-        ("channel", Some(conversation_id), None) => {
-            Ok(format!("/projects/{project_id}/channels/{conversation_id}"))
-        }
-        ("page", None, Some(page_id)) => Ok(format!("/projects/{project_id}/pages/{page_id}")),
+        ("thread", Some(conversation_id), None) => Ok(Place::Thread(conversation_id)),
+        ("channel", Some(conversation_id), None) => Ok(Place::Channel(conversation_id)),
+        ("page", None, Some(page_id)) => Ok(Place::Page(page_id)),
         (kind, None, None) => plain_location_path(kind)
-            .map(|path| format!("/projects/{project_id}{path}"))
             .ok_or(AppError::Internal("stored Project navigation location")),
         _ => Err(AppError::Internal("stored Project navigation location")),
     }
+    .map(|place| Target::space(project_id, place).legacy_path())
 }
 
 async fn validate_navigation_location(

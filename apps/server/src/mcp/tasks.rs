@@ -15,9 +15,8 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, ToolResult, accessible_project_ids, archived_task_message,
-        flag_or_text, mark_via, one_or_many, parse_id, parse_message_id, parse_since,
-        project_is_chosen, public_url, scope_projects, snippet, string_or_number,
-        version_conflict_message,
+        flag_or_text, link_url, mark_via, one_or_many, parse_id, parse_message_id, parse_since,
+        project_is_chosen, scope_projects, snippet, string_or_number, version_conflict_message,
     },
     field_tools, history, planning,
     reads::{self, ReadResult, WorkItemProjection},
@@ -3578,9 +3577,10 @@ async fn task_whiteboard_link(
             version,
             role: None,
             notes: Vec::new(),
-            task_url: public_url(
+            task_url: link_url(
                 state,
-                &format!("/projects/{project_id}/work-items/{task_id}"),
+                None,
+                &crate::addresses::Target::task(project_id, task_id),
             ),
         }))
     }
@@ -3877,9 +3877,10 @@ async fn task_link_inner(
         version,
         role,
         notes,
-        task_url: public_url(
+        task_url: link_url(
             state,
-            &format!("/projects/{project_id}/work-items/{task_id}"),
+            None,
+            &crate::addresses::Target::task(project_id, task_id),
         ),
     }))
 }

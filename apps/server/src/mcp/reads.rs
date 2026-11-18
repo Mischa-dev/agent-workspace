@@ -707,7 +707,11 @@ fn work_item_projection(
             .collect(),
         canonical_url: canonical_url(
             state,
-            &format!("/projects/{}/work-items/{}", row.project_id, row.id),
+            &crate::addresses::link(
+                state,
+                None,
+                &crate::addresses::Target::task(row.project_id, row.id),
+            ),
         ),
     }
 }
@@ -735,9 +739,13 @@ fn repository_projection(state: &crate::AppState, row: RepositoryRow) -> Reposit
         archived: row.archived,
         canonical_url: canonical_url(
             state,
-            &format!(
-                "/projects/{}/settings/repositories/{}",
-                row.project_id, row.id
+            &crate::addresses::link(
+                state,
+                None,
+                &crate::addresses::Target::space(
+                    row.project_id,
+                    crate::addresses::Place::Repository(row.id),
+                ),
             ),
         ),
     }
@@ -763,7 +771,14 @@ fn pull_request_projection(state: &crate::AppState, row: PullRequestRow) -> Pull
         version: row.version,
         canonical_url: canonical_url(
             state,
-            &format!("/projects/{}/pull-requests/{}", row.project_id, row.id),
+            &crate::addresses::link(
+                state,
+                None,
+                &crate::addresses::Target::space(
+                    row.project_id,
+                    crate::addresses::Place::PullRequest(row.id),
+                ),
+            ),
         ),
         suggested: row.suggested,
     }

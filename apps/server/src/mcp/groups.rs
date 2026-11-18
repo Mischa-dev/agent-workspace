@@ -19,7 +19,7 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ToolResult, insert_audit, mark_via, parse_id, project_role, public_url,
+        ToolResult, insert_audit, link_url, mark_via, parse_id, project_role,
         resolve_conversation_members, resolve_direct_people,
     },
 };
@@ -372,7 +372,14 @@ pub(super) async fn conversation_members(
             added: change.added.into_iter().map(MemberRef::from).collect(),
             removed: change.removed.into_iter().map(MemberRef::from).collect(),
             left,
-            url: public_url(state, &format!("/messages/{group_id}")),
+            url: link_url(
+                state,
+                None,
+                &crate::addresses::Target::Direct {
+                    id: group_id,
+                    thread: None,
+                },
+            ),
             idempotent_replay: false,
         };
         if let Some(reservation) = &reservation {

@@ -25,8 +25,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ARCHIVED_PROJECT_MESSAGE, StoredRole, ToolResult, insert_audit, mark_via, parse_id,
-        public_url, role_allows, string_or_number,
+        ARCHIVED_PROJECT_MESSAGE, StoredRole, ToolResult, insert_audit, link_url, mark_via,
+        parse_id, role_allows, string_or_number,
     },
     talk::can_write_in,
     writes::{REQUEST_ID_MESSAGE, parse_request_id},
@@ -58,9 +58,13 @@ const EDIT_MESSAGE: &str =
     "Your role here can't edit records (collections.edit). my_permissions says what it can do.";
 
 fn collection_url(state: &AppState, project_id: Uuid, collection_id: Uuid) -> String {
-    public_url(
+    link_url(
         state,
-        &format!("/projects/{project_id}/collections/{collection_id}"),
+        None,
+        &crate::addresses::Target::space(
+            project_id,
+            crate::addresses::Place::Collection(collection_id),
+        ),
     )
 }
 
