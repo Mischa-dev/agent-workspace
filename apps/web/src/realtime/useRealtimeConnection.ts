@@ -114,6 +114,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
             query.queryKey[0] === 'project' &&
             query.queryKey[1] === projectId,
         })
+        // Your sidebar sections (C2.9) show unread and mentions for the
+        // conversations in them, wherever they live.
+        void queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === 'sidebar_list',
+        })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(projectId, timer)
     }

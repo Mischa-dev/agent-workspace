@@ -160,9 +160,30 @@ async fn requests_blocks_and_a_shared_workspace_decide_who_reaches_whom() {
     let (status, body) = say(app, nina, &nina_mara, "hello?").await;
     refused(status, &body, "declined");
 
-    // Lena blocks Nina: the DM leaves Lena's list, neither can send, and
-    // Nina's mention of Lena in a channel doesn't reach Lena's inbox.
+    // Lena blocks Nina: the DM leaves Lena's list, neither can send (in a
+    // thread under the DM either), and Nina's mention of Lena in a channel
+    // doesn't reach Lena's inbox.
     assert!(listed(app, lena).await.contains(&lena_nina));
+    let (status, sent) = say(app, lena, &lena_nina, "a topic").await;
+    assert_eq!(status, StatusCode::CREATED, "{sent}");
+    let (status, made) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{lena_nina}/threads"),
+            Some("dm-rules-thread"),
+            json!({"originMessageId": sent["message"]["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let thread = made["conversation"]["id"]
+        .as_str()
+        .or_else(|| made["id"].as_str())
+        .expect("thread")
+        .to_owned();
+    let (status, body) = say(app, nina, &thread, "in the thread").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
     let (status, body) = op(
         app,
         lena,
@@ -181,6 +202,8 @@ async fn requests_blocks_and_a_shared_workspace_decide_who_reaches_whom() {
     refused(status, &body, "blocked by them");
     let (status, body) = say(app, lena, &lena_nina, "hey").await;
     refused(status, &body, "blocked them");
+    let (status, body) = say(app, nina, &thread, "still in the thread").await;
+    refused(status, &body, "blocked, in a thread under the DM");
     assert_eq!(standing(app, lena, &lena_nina).await["reason"], "blocked");
     assert_eq!(standing(app, nina, &lena_nina).await["reason"], "closed");
     let (status, made) = send(

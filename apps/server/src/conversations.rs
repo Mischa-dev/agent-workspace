@@ -1926,10 +1926,11 @@ pub(crate) async fn append_message_command_with(
     };
     // C2.39: blocks, a shared workspace, and message requests (after the
     // replay, so a retried first message isn't refused as waiting).
+    // A thread under a DM follows the DM's rules.
     crate::direct_rules::check_send(
         &mut transaction,
-        conversation.id,
-        &conversation.kind,
+        conversation.membership_conversation_id(),
+        conversation.effective_kind(),
         actor.actor_id,
     )
     .await?;
