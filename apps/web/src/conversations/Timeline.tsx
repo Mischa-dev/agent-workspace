@@ -421,6 +421,20 @@ export function MessageRow({
                 previews={normalizeLinkPreviews(message.linkPreviews)}
               />
             ) : null}
+            {/* C2.20: what this message was made into, named as the reader may see it. */}
+            {message.madeInto?.length ? (
+              <p className="aw-msg__made">
+                <Icon name="link" size={12} /> Made into{' '}
+                {message.madeInto.map((made, index) => (
+                  <span key={`${made.kind}:${made.id}`}>
+                    {index ? ', ' : null}
+                    <Suspense fallback={made.kind.replace(/_/g, ' ')}>
+                      <MadeThing id={made.id} kind={made.kind} />
+                    </Suspense>
+                  </span>
+                ))}
+              </p>
+            ) : null}
             {/* C2.23: a card for each thing in this app it links to, as the reader may see it. */}
             {linked.length ? (
               <Suspense fallback={null}>

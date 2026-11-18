@@ -1498,6 +1498,17 @@ button.aw-reaction:focus-visible {
   padding: var(--space-1) var(--space-4) var(--space-2) calc(var(--space-4) + var(--size-avatar) + var(--space-3));
 }
 
+/* C2.20: what a message was made into */
+.aw-msg__made {
+  margin: var(--space-1) 0 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-msg__made > svg {
+  vertical-align: -1px;
+}
+
 /* W21: a forward's quote, read live, and the saved mark */
 .aw-msg__saved {
   color: var(--accent);

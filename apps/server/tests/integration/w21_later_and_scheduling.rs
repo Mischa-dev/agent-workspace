@@ -692,6 +692,23 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
     assert_eq!(status, StatusCode::OK, "{created}");
     let (_, told) = get(setup, &setup.browser, &timeline_uri).await;
     assert_eq!(made(&told).len(), 2, "{told}");
+    // The message itself carries what it was made into, ids and kinds only.
+    let chips = told["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["message"]["id"] == json!(open))
+        .map(|entry| entry["message"]["madeInto"].clone())
+        .expect("the message");
+    let chips = chips.as_array().expect("made into");
+    assert_eq!(chips.len(), 3, "{told}");
+    assert!(chips.iter().all(|chip| chip["kind"] == "task"));
+    assert!(
+        chips
+            .iter()
+            .any(|chip| chip["id"] == created["value"]["workItemId"]),
+        "{created}"
+    );
     let (status, refused) = op(
         "op-secret",
         json!({"projectId": project, "title": "Peek", "fromMessageId": secret}),

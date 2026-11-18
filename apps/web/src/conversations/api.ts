@@ -126,6 +126,11 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
     forwarded: message.forwarded ?? null,
     replyTo: message.replyTo ?? null,
     saved: normalizeSavedMark(message.saved),
+    madeInto: Array.isArray(message.madeInto)
+      ? message.madeInto.map(asRecord).flatMap((made) =>
+          typeof made.kind === 'string' && typeof made.id === 'string' ? [{ kind: made.kind, id: made.id }] : [],
+        )
+      : [],
   }
 }
 

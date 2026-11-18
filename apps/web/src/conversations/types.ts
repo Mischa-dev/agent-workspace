@@ -58,7 +58,11 @@ export type ConversationMessage = {
   replyTo?: unknown
   /** You saved this for later. */
   saved?: SavedMark | null
+  /** What it was made into (C2.20): kinds and ids, read live with your access. */
+  madeInto?: MadeIntoThing[]
 }
+
+export type MadeIntoThing = { kind: string; id: string }
 
 /** The message a reply you're writing answers, shown above the message box. */
 export type ReplyTarget = {

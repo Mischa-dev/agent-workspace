@@ -388,6 +388,9 @@ pub struct MessageView {
     /// it done (W21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved: Option<SavedMark>,
+    /// What this message was made into (C2.20), for the reader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub made_into: Vec<system_entries::MadeIntoView>,
 }
 
 /// The viewer's own saved-for-later mark on a message.
@@ -2168,6 +2171,7 @@ pub(crate) async fn append_message_command_with(
         forwarded: None,
         reply_to,
         saved: None,
+        made_into: Vec::new(),
     };
     let body = MessageAppendResponse {
         conversation_id: conversation.id,
@@ -2821,6 +2825,8 @@ async fn conversation_timeline(
         hide_entry_work_item_details(&mut entries);
     }
     crate::later::attach_saved(&state.pool, &mut entries, principal.actor_id).await?;
+    system_entries::attach_made_into(&state.pool, conversation.id, &mut entries, sees_tasks)
+        .await?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
     let mut linked_work_items: Vec<ConversationWorkItemReferenceView> =
         if conversation.kind == "thread" {
@@ -4579,6 +4585,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                     .reply_to_message_id
                     .map(crate::forwarding::ForwardedView::unread),
                 saved: None,
+                made_into: Vec::new(),
             })
         }
         None => None,
