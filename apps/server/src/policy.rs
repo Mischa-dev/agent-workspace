@@ -684,10 +684,12 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
     Decision::Allow
 }
 
+/// What a run may hand its worker: reading where it runs, stopping it, and
+/// posting what its agent says in the run's own thread (`runs::say`).
 const fn worker_action_is_delegatable(action: Action) -> bool {
     matches!(
         action,
-        Action::ProjectView | Action::NavigationRead | Action::RunInterrupt
+        Action::ProjectView | Action::NavigationRead | Action::RunInterrupt | Action::MessageSend
     )
 }
 
@@ -841,7 +843,10 @@ mod tests {
                     }
                     MembershipRole::Worker => matches!(
                         action,
-                        Action::ProjectView | Action::NavigationRead | Action::RunInterrupt
+                        Action::ProjectView
+                            | Action::NavigationRead
+                            | Action::RunInterrupt
+                            | Action::MessageSend
                     ),
                 };
 

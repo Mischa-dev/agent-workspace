@@ -11,7 +11,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 use super::adapter::HarnessFuture;
-use crate::secrets::SecretValue;
+use agent_workspace_redaction::SecretValue;
 
 /// A run's repository on GitHub and a short-lived token that can read and
 /// push it.

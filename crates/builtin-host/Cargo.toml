@@ -1,0 +1,36 @@
+[package]
+name = "agent-workspace-builtin-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "The built-in host: the harness adapters, run worktrees and account homes that run agents on this machine."
+
+[dependencies]
+agent-workspace-redaction = { version = "0.0.1", path = "../redaction" }
+base64 = "0.22.1"
+codex-bridge-spike = { version = "0.0.1", path = "../../tools/codex-bridge-spike" }
+command-fds = { version = "0.3.3", features = ["tokio"] }
+fs2 = "0.4.3"
+futures-util = "0.3.33"
+hex = "0.4.3"
+http = "1.3.1"
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+secrecy = "0.10.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7.16"
+tracing = "0.1.41"
+uuid = { version = "1.18.1", features = ["serde", "v4", "v7"] }
+zeroize = "1.8.2"
+
+[dev-dependencies]
+axum = { version = "0.8.7", features = ["json"] }
+tempfile = "3.23.0"
+
+[lints]
+workspace = true

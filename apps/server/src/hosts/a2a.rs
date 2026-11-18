@@ -868,16 +868,20 @@ pub async fn apply(state: &AppState, run_id: Uuid, task: &Value) -> Result<(), A
                 return Err(error);
             }
         }
-        let batch = snapshot
+        // A long task can say more than one report takes: all of it is
+        // recorded, a report at a time, before the run can finish.
+        let reports = snapshot
             .activities
             .iter()
             .map(|(id, kind, payload)| activity(id.clone(), kind, payload.clone()))
             .collect::<Vec<_>>();
-        if !batch.is_empty()
-            && let Err(error) = ops::append(&mut transaction, reporter, run_id, batch).await
-            && let Some(error) = run_error(error)
-        {
-            return Err(error);
+        for batch in reports.chunks(crate::runs::activities::MAX_BATCH) {
+            if let Err(error) =
+                ops::append(&mut transaction, reporter, run_id, batch.to_vec()).await
+                && let Some(error) = run_error(error)
+            {
+                return Err(error);
+            }
         }
         match &snapshot.end {
             Some(("failed", reason)) => {

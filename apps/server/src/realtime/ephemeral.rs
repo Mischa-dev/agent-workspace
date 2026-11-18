@@ -179,8 +179,8 @@ async fn delta_route(
     ) else {
         return Ok(None);
     };
-    let Some(place) =
-        crate::runs::store::builtin_turn_place(crate::db::scoped(&state.pool), run).await?
+    let Some(worker_actor_id) =
+        crate::runs::store::worker_actor_of(crate::db::scoped(&state.pool), run).await?
     else {
         return Ok(None);
     };
@@ -196,7 +196,7 @@ async fn delta_route(
     )
     .bind(conversation)
     .bind(event.project_id)
-    .bind(place.worker_actor_id)
+    .bind(worker_actor_id)
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?)
 }

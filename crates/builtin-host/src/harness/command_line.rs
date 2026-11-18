@@ -38,7 +38,7 @@ use super::{
     secret_fd,
     slots::{RunSlot, RunSlots},
 };
-use crate::secrets::SecretValue;
+use agent_workspace_redaction::SecretValue;
 
 pub const PROTOCOL: u32 = 1;
 const MAX_ARGUMENTS: usize = 64;
@@ -257,6 +257,75 @@ fn allowed_program(program: &Path, allowed_dirs: &[PathBuf]) -> Result<PathBuf, 
     Ok(real)
 }
 
+/// The secrets a child may have: the registration's named ones, and the
+/// account's key as `API_KEY`.
+pub(crate) async fn child_secrets(
+    host: &HostCell,
+    account: &AccountHandle,
+    names: &[String],
+) -> Result<Vec<(String, SecretValue)>, HarnessError> {
+    let Some(host) = host.get() else {
+        return Ok(Vec::new());
+    };
+    let mut secrets = host.harness_secrets(account.id, names).await?;
+    if let Some(key) = host.account_secret(account.id).await? {
+        secrets.push(("API_KEY".to_owned(), key));
+    }
+    Ok(secrets)
+}
+
+/// Starts a registered program for one account in `cwd`: checked again
+/// against the allowed directories (the list or the file may have changed
+/// since it was registered), its arguments expanded, its environment only
+/// a path, a home, a locale and `protocol`, its secrets on descriptor 3.
+pub(crate) async fn spawn_child(
+    spec: &CommandSpec,
+    host: &HostCell,
+    account: &AccountHandle,
+    config: &RunConfig,
+    cwd: &Path,
+    protocol: (&str, &str),
+) -> Result<LineProcess, HarnessError> {
+    let program = allowed_program(Path::new(&spec.command[0]), &spec.allowed_dirs)
+        .map_err(|_| HarnessError::InvalidConfiguration)?;
+    let secrets = child_secrets(host, account, &spec.secret_names).await?;
+    let mut attempt = 0;
+    loop {
+        let mut command = tokio::process::Command::new(&program);
+        command
+            .args(expand(&spec.command, config, cwd))
+            .current_dir(cwd)
+            .env_clear()
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env("HOME", &account.home)
+            .env("LANG", "C.UTF-8")
+            .env("LC_ALL", "C.UTF-8")
+            .env(protocol.0, protocol.1);
+        if !secrets.is_empty() {
+            command.env(
+                "AGENT_WORKSPACE_SECRETS_FD",
+                secret_fd::SECRET_FD.to_string(),
+            );
+            let bytes = secret_fd::secrets_json(&secrets);
+            secret_fd::attach(&mut command, secret_fd::secret_file(&bytes)?)?;
+        }
+        match LineProcess::spawn(command) {
+            // The program is being replaced (or was just written and a
+            // fork elsewhere still holds it open): try again shortly.
+            Err(HarnessError::Transport(error))
+                if attempt < 5
+                    && error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                        error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    }) =>
+            {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Expands an argument template for one turn. An element that was only a
 /// placeholder and comes out empty is dropped.
 pub fn expand(template: &[String], config: &RunConfig, worktree: &Path) -> Vec<String> {
@@ -406,21 +475,6 @@ struct CommandSession {
     turn: Option<Turn>,
 }
 
-impl CommandSession {
-    async fn secrets(&self) -> Result<Vec<(String, SecretValue)>, HarnessError> {
-        let Some(host) = self.host.get() else {
-            return Ok(Vec::new());
-        };
-        let mut secrets = host
-            .harness_secrets(self.account.id, &self.spec.secret_names)
-            .await?;
-        if let Some(key) = host.account_secret(self.account.id).await? {
-            secrets.push(("API_KEY".to_owned(), key));
-        }
-        Ok(secrets)
-    }
-}
-
 impl HarnessSession for CommandSession {
     fn account_id(&self) -> Uuid {
         self.account.id
@@ -469,31 +523,15 @@ impl HarnessSession for CommandSession {
                 .threads
                 .get(thread_id)
                 .ok_or(HarnessError::MissingResult("thread"))?;
-            // Checked again at every turn: the directory list or the file
-            // may have changed since the harness was registered.
-            let program =
-                allowed_program(Path::new(&self.spec.command[0]), &self.spec.allowed_dirs)
-                    .map_err(|_| HarnessError::InvalidConfiguration)?;
-            let mut command = tokio::process::Command::new(&program);
-            command
-                .args(expand(&self.spec.command, config, cwd))
-                .current_dir(cwd)
-                .env_clear()
-                .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-                .env("HOME", &self.account.home)
-                .env("LANG", "C.UTF-8")
-                .env("LC_ALL", "C.UTF-8")
-                .env("AGENT_WORKSPACE_HARNESS_PROTOCOL", PROTOCOL.to_string());
-            let secrets = self.secrets().await?;
-            if !secrets.is_empty() {
-                command.env(
-                    "AGENT_WORKSPACE_SECRETS_FD",
-                    secret_fd::SECRET_FD.to_string(),
-                );
-                let bytes = secret_fd::secrets_json(&secrets);
-                secret_fd::attach(&mut command, secret_fd::secret_file(&bytes)?)?;
-            }
-            let mut process = LineProcess::spawn(command)?;
+            let mut process = spawn_child(
+                &self.spec,
+                &self.host,
+                &self.account,
+                config,
+                cwd,
+                ("AGENT_WORKSPACE_HARNESS_PROTOCOL", &PROTOCOL.to_string()),
+            )
+            .await?;
             let turn_id = format!("cli-turn-{}", Uuid::now_v7());
             process
                 .send(&json!({
@@ -792,7 +830,10 @@ fn parse_line(value: &Value, turn: &mut Turn) -> Vec<HarnessEvent> {
                     RequestKind::Approval
                 },
                 durable_id: key(turn, kind, &id),
-                summary: crate::run_log::cap(&crate::run_log::redact(&summary), 1_000),
+                summary: agent_workspace_redaction::cap(
+                    &agent_workspace_redaction::redact(&summary),
+                    1_000,
+                ),
                 options: if question {
                     Vec::new()
                 } else {
@@ -929,7 +970,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
-    use crate::provider::contract_tests::adapter_contract;
+    use crate::harness::contract_tests::adapter_contract;
 
     /// A 30-line shell harness speaking aw-harness/1: it reports a command,
     /// asks for approval, writes a file, reports usage and finishes. It

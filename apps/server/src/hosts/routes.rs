@@ -6,7 +6,7 @@ use std::{convert::Infallible, time::Duration};
 
 use agent_workspace_host_protocol::{Ack, AckReply, CommandList};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header::ACCEPT},
     response::{
@@ -20,11 +20,15 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use super::builtin::transport::BuiltinCaller;
 use super::{
     HostRow, commands,
     protocol::{self, HostError},
 };
-use crate::{AppState, error::ApiJson};
+use crate::{
+    AppState,
+    error::{ApiJson, AppError},
+};
 
 pub const PROTOCOL_HEADER: &str = "aw-host-protocol";
 
@@ -131,6 +135,38 @@ async fn host_caller(state: &AppState, headers: &HeaderMap) -> Result<HostRow, H
     protocol::authenticate(&state.pool, token).await
 }
 
+/// The host a call about one command comes from: the caller's own, or, for
+/// the built-in host (A1.16), the built-in row the command was written for.
+async fn command_caller(
+    state: &AppState,
+    builtin: Option<Extension<BuiltinCaller>>,
+    headers: &HeaderMap,
+    command_id: Uuid,
+) -> Result<HostRow, HostError> {
+    if builtin.is_none() {
+        return host_caller(state, headers).await;
+    }
+    protocol_header(headers)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
+    let host_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT command.host_id FROM host_commands command \
+         JOIN hosts host ON host.id = command.host_id AND host.builtin \
+         WHERE command.id = $1",
+    )
+    .bind(command_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(AppError::from)?
+    .ok_or(HostError::CommandUnknown)?;
+    let host = super::get(&mut transaction, host_id)
+        .await?
+        .ok_or(HostError::CommandUnknown)?;
+    transaction.commit().await.map_err(AppError::from)?;
+    Ok(host)
+}
+
 async fn enrol_route(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -218,9 +254,17 @@ const STREAM_FOR: Duration = Duration::from_secs(300);
 /// `Last-Event-ID`). Either counts as a heartbeat.
 async fn commands_route(
     State(state): State<AppState>,
+    builtin: Option<Extension<BuiltinCaller>>,
     headers: HeaderMap,
     Query(query): Query<CommandsQuery>,
 ) -> Result<Response, HostError> {
+    if builtin.is_some() {
+        // A1.16: the built-in host, for every workspace at once; it reads
+        // in process and never waits here.
+        protocol_header(&headers)?;
+        let after = query.after.unwrap_or(0).max(0);
+        return Ok(Json(commands::due_builtin(&state.pool, after).await?).into_response());
+    }
     let host = host_caller(&state, &headers).await?;
     let resume = headers
         .get("last-event-id")
@@ -282,21 +326,23 @@ fn command_stream(
 /// A1.12: one command whole, with any credential minted for it.
 async fn command_route(
     State(state): State<AppState>,
+    builtin: Option<Extension<BuiltinCaller>>,
     headers: HeaderMap,
     Path(command_id): Path<Uuid>,
 ) -> Result<Json<Value>, HostError> {
-    let host = host_caller(&state, &headers).await?;
+    let host = command_caller(&state, builtin, &headers, command_id).await?;
     Ok(Json(commands::fetch(&state, &host, command_id).await?))
 }
 
 /// A1.12: the host's answer to a command.
 async fn ack_route(
     State(state): State<AppState>,
+    builtin: Option<Extension<BuiltinCaller>>,
     headers: HeaderMap,
     Path(command_id): Path<Uuid>,
     ApiJson(ack): ApiJson<Ack>,
 ) -> Result<Json<AckReply>, HostError> {
-    let host = host_caller(&state, &headers).await?;
+    let host = command_caller(&state, builtin, &headers, command_id).await?;
     Ok(Json(
         commands::ack(&state.pool, &host, command_id, ack).await?,
     ))

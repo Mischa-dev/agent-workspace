@@ -1,9 +1,19 @@
-//! A1.14: a run on the built-in host asks through requests, like a run on
-//! any host. The silent failures: a denied approval that leaves the run
-//! waiting, an answer the harness is handed twice or never, and an approval
-//! that reaches nobody's inbox.
+//! A1.14, A1.16: a run on the built-in host asks through requests, like a
+//! run on any host: an `interrupt` it reports, answered through the request
+//! operations, heard by the host as an `answer` command. The silent
+//! failures: a denied approval that leaves the run waiting, an answer the
+//! host never hears, and an approval that reaches nobody's inbox.
 
-use agent_workspace_server::hosts::builtin::requests::{Outcome, claim_delivery, outcome};
+use std::{collections::BTreeMap, sync::Arc};
+
+use agent_workspace_server::{
+    AppState,
+    config::AppConfig,
+    hosts::builtin::requests::{Outcome, outcome_of},
+    provider::SupervisorRegistry,
+    rate_limit::RateLimiters,
+    realtime::RealtimeHub,
+};
 use axum::http::StatusCode;
 use serde_json::json;
 use sqlx::PgPool;
@@ -47,8 +57,53 @@ async fn run_state(pool: &PgPool, run_id: Uuid) -> String {
         .expect("run state")
 }
 
+async fn record_state(pool: &PgPool, run_id: Uuid) -> String {
+    sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .expect("run record state")
+}
+
+/// The answer commands the built-in host got for the run.
+async fn answers(pool: &PgPool, run_id: Uuid) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM host_commands WHERE run_id = $1 AND kind = 'answer'",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .expect("answer commands")
+}
+
+/// The server as the built-in host's driver sees it.
+fn app_state(pool: &PgPool) -> AppState {
+    let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database");
+    let config = AppConfig::from_values(&BTreeMap::from([(
+        "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+        database_url,
+    )]))
+    .expect("configuration");
+    let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
+    AppState {
+        config: Arc::new(config),
+        pool: pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(32),
+        supervisors,
+    }
+}
+
+/// Give the run its start, and let the host take it.
+async fn started(state: &AppState, run_id: Uuid) {
+    crate::support::builtin_run_started(&state.pool, run_id).await;
+    agent_workspace_server::scheduler::drain_now(state)
+        .await
+        .expect("the host takes the start");
+}
+
 #[tokio::test]
-async fn an_approval_reaches_the_owner_and_the_harness_hears_the_answer_once() {
+async fn an_approval_reaches_the_owner_and_the_host_hears_the_answer() {
     let Some((setup, seed, _temporary)) = seeded("a1_builtin_approve").await else {
         return;
     };
@@ -73,14 +128,7 @@ async fn an_approval_reaches_the_owner_and_the_harness_hears_the_answer_once() {
     .await
     .expect("cards");
     assert_eq!(cards, 1);
-    assert_eq!(
-        outcome(pool, approval).await.expect("outcome"),
-        Outcome::Waiting
-    );
-    assert!(
-        !claim_delivery(pool, approval).await.expect("claim"),
-        "nothing to hand over yet"
-    );
+    assert_eq!(record_state(pool, run_id).await, "waiting");
 
     let (status, answered) = send(
         &setup.app,
@@ -94,21 +142,13 @@ async fn an_approval_reaches_the_owner_and_the_harness_hears_the_answer_once() {
     .await;
     assert_eq!(status, StatusCode::OK, "{answered}");
     assert_eq!(
-        run_state(pool, run_id).await,
+        record_state(pool, run_id).await,
         "working",
         "an approved run goes on"
     );
-    assert_eq!(
-        outcome(pool, approval).await.expect("outcome"),
-        Outcome::Approve
-    );
-    assert!(claim_delivery(pool, approval).await.expect("claim"));
-    assert!(
-        !claim_delivery(pool, approval).await.expect("claim again"),
-        "the harness is handed an answer once"
-    );
+    assert_eq!(answers(pool, run_id).await, 1, "the host hears the answer");
     let resolved = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM run_activities WHERE run_id = $1 AND payload->>'step' = 'approval_resolved'",
+        "SELECT count(*) FROM run_activities WHERE run_id = $1 AND kind = 'interrupt_resolved'",
     )
     .bind(run_id)
     .fetch_one(pool)
@@ -124,6 +164,8 @@ async fn a_denied_approval_stops_the_run_and_its_other_requests() {
     };
     let pool = &setup.pool;
     let run_id = blocked_run(pool, &seed, "builtin-deny").await;
+    let state = app_state(pool);
+    started(&state, run_id).await;
     let approval =
         crate::support::requests::approval(pool, run_id, "builtin-deny", "Force-push main?").await;
     // A harness may name an option by its whole label, longer than a
@@ -157,20 +199,46 @@ async fn a_denied_approval_stops_the_run_and_its_other_requests() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{denied}");
+    // The host hears the answer and stops the run, with no turn waiting.
+    agent_workspace_server::scheduler::drain_now(&state)
+        .await
+        .expect("the host hears the answer");
     assert_eq!(
         run_state(pool, run_id).await,
         "interrupted",
         "a denied run stops"
     );
-    // The harness is told no, and what else the run asked is withdrawn.
-    assert_eq!(
-        outcome(pool, approval).await.expect("outcome"),
-        Outcome::Interrupted
-    );
+    assert_eq!(record_state(pool, run_id).await, "cancelled");
+    // What else the run asked is withdrawn.
     let left = sqlx::query_scalar::<_, String>("SELECT status FROM requests WHERE id = $1")
         .bind(question)
         .fetch_one(pool)
         .await
         .expect("question");
     assert_eq!(left, "cancelled");
+}
+
+#[test]
+fn the_harness_hears_what_was_answered() {
+    let approval = |picked: &str| {
+        json!({"kind": "approval", "status": "answered",
+               "options": [{"id": "approve", "label": "Allow", "style": "approve"},
+                           {"id": "deny", "label": "Deny", "style": "deny"}],
+               "answer": {"optionId": picked}})
+    };
+    assert_eq!(outcome_of(&approval("approve")), Outcome::Approve);
+    assert_eq!(outcome_of(&approval("deny")), Outcome::Deny);
+    assert_eq!(
+        outcome_of(&json!({"kind": "approval", "status": "open"})),
+        Outcome::Waiting
+    );
+    assert_eq!(
+        outcome_of(&json!({"kind": "question", "status": "answered",
+                           "answer": {"optionId": "main", "label": "main", "text": "and rebase"}})),
+        Outcome::Text("main\n\nand rebase".to_owned())
+    );
+    assert_eq!(
+        outcome_of(&json!({"kind": "question", "status": "expired"})),
+        Outcome::Deny
+    );
 }

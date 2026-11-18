@@ -653,7 +653,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         ("answered".to_owned(), Some(second_actor_id))
     );
     assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+        sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
             .bind(question_run_id)
             .fetch_one(&pool)
             .await
@@ -662,6 +662,15 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         "an answered question lets its run go on"
     );
     let mut question_terminal = pool.begin().await.expect("begin question run end");
+    // The built-in host goes on when its harness hears the answer.
+    transition_run(
+        &mut question_terminal,
+        question_run_id,
+        RunState::Working,
+        None,
+    )
+    .await
+    .expect("question run goes on");
     transition_run(
         &mut question_terminal,
         question_run_id,

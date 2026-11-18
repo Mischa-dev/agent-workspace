@@ -440,6 +440,7 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
                             actor_kind: "human".to_owned(),
                             mcp_credential: None,
                             via_grant_id: None,
+                            run_id: None,
                         },
                         conversation_id,
                         None,
