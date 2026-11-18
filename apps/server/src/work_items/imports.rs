@@ -377,11 +377,17 @@ fn resolve(
             .push(format!("No status “{wanted}”; it starts in the default"));
     }
     if resolved.status_name.is_none() {
-        resolved.status_name = context
+        // A row that says nothing about its status lands in triage when
+        // the space uses it (T1.23), otherwise in the default.
+        let landing = context
             .statuses
             .iter()
-            .find(|status| status.3)
-            .map(|status| status.1.clone());
+            .find(|status| status.2 == "triage")
+            .or_else(|| context.statuses.iter().find(|status| status.3));
+        resolved.status_id = landing
+            .filter(|status| status.2 == "triage")
+            .map(|status| status.0);
+        resolved.status_name = landing.map(|status| status.1.clone());
     }
 
     if let Some(wanted) = &row.type_name {

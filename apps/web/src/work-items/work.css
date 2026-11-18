@@ -2206,3 +2206,58 @@ span.aw-taskstart__fix {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* The triage queue's decisions (T1.23), above the list on the Triage view. */
+.aw-triagebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+.aw-triagebar__hint {
+  flex: 1 1 12rem;
+  color: var(--content-fg-muted);
+}
+
+.aw-triagebar__snooze {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-triagerules__rule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-triagerules__text {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.aw-triagerules__text > span {
+  color: var(--content-fg-muted);
+}
+
+.aw-triagerules__form {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 28rem;
+}
+
+.aw-triagerules__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.aw-triagerules__note {
+  margin: 0;
+  color: var(--content-fg-muted);
+}

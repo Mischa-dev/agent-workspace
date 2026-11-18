@@ -312,6 +312,25 @@ pub static TASK_DELEGATED: EventType = addressed(
     Some("task"),
     "A task was handed to you to do",
 );
+pub static TASK_TRIAGED: EventType = fact(
+    "task.triaged",
+    "tasks",
+    Some("task"),
+    "A task was accepted, declined, marked a duplicate or snoozed in triage",
+)
+.automatable();
+pub static TRIAGE_RULES_CHANGED: EventType = fact(
+    "triage.rules_changed",
+    "tasks",
+    None,
+    "A space's triage rules were added, changed, moved or removed",
+);
+pub static TASK_SNOOZE_ENDED: EventType = addressed(
+    "task.snooze_ended",
+    "tasks",
+    Some("task"),
+    "A task you snoozed is back in triage",
+);
 pub static COMMENT_MENTIONED: EventType = addressed(
     "comment.mentioned",
     "tasks",
@@ -668,6 +687,9 @@ pub fn catalog() -> &'static [&'static EventType] {
         &TASK_UPDATED,
         &TASK_ASSIGNED,
         &TASK_DELEGATED,
+        &TASK_TRIAGED,
+        &TASK_SNOOZE_ENDED,
+        &TRIAGE_RULES_CHANGED,
         &COMMENT_MENTIONED,
         &TASK_PLACEMENT_CHANGED,
         &TASK_COMMENTED,

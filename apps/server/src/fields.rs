@@ -566,8 +566,10 @@ pub struct FieldDefinition {
     pub accessor: Accessor,
 }
 
-/// What kind of status a status is, in workflow order.
-pub const STATUS_CATEGORIES: [&str; 7] = [
+/// What kind of status a status is, in workflow order. `triage` holds
+/// what arrived and hasn't been looked at yet (T1.23).
+pub const STATUS_CATEGORIES: [&str; 8] = [
+    "triage",
     "backlog",
     "unstarted",
     "started",

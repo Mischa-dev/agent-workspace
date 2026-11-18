@@ -816,6 +816,13 @@ pub const DECLARATIONS: &[ExportDecl] = &[
         after: &["projects", "channels"],
         kinds: &[
             KindDecl {
+                kind: "triage_rules",
+                table: "triage_rules",
+                references: &[("space_id", "projects"), ("created_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "work_item_acceptance_criteria",
                 table: "work_item_acceptance_criteria",
                 references: &[
@@ -1037,6 +1044,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("milestone_id", "project_milestones"),
                     ("collection_id", "collections"),
                     ("delegate_actor_id", "actors"),
+                    ("triaged_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],

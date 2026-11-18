@@ -90,6 +90,7 @@ pub(crate) mod ops;
 mod planning;
 pub(crate) mod project_templates;
 pub(crate) mod templates;
+pub mod triage;
 pub(crate) mod views;
 
 pub fn router() -> Router<AppState> {
@@ -4593,18 +4594,7 @@ fn validate_priority(value: &str) -> Result<(), AppError> {
 }
 
 fn validate_semantic_category(value: Option<&str>) -> Result<(), AppError> {
-    if value.is_none_or(|value| {
-        matches!(
-            value,
-            "backlog"
-                | "unstarted"
-                | "started"
-                | "review"
-                | "verification"
-                | "completed"
-                | "canceled"
-        )
-    }) {
+    if value.is_none_or(|value| crate::fields::STATUS_CATEGORIES.contains(&value)) {
         Ok(())
     } else {
         Err(AppError::Validation("semanticCategory"))

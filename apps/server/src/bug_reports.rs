@@ -1044,6 +1044,15 @@ async fn receive(
     if let Some(priority) = priority(report.priority.as_deref()) {
         arguments["priority"] = json!(priority);
     }
+    // A report lands in triage when the space uses it (T1.23).
+    if let Some(triage) = crate::work_items::triage::triage_status_name(
+        &mut *crate::db::scoped_tx(&state.pool).await?,
+        link.project_id,
+    )
+    .await?
+    {
+        arguments["status"] = json!(triage);
+    }
     let result = mcp::call_tool_direct(state, principal, "task_create", arguments)
         .await
         .map_err(|error| match error {
@@ -1211,11 +1220,24 @@ async fn receive_answer(
         false,
     )
     .await?;
-    let (title, values) =
+    let (title, mut values) =
         match collection_forms::record_from_answer(&collection, &form, &definitions, &answer) {
             Ok(record) => record,
             Err(message) => return Ok(refused(StatusCode::UNPROCESSABLE_ENTITY, &message)),
         };
+    // An answer that makes a task lands in triage when the space uses it
+    // (T1.23), unless the form asks for its status.
+    let status_key = crate::collections::tasks::STATUS.to_string();
+    if collection.acts_like_task
+        && !values.contains_key(&status_key)
+        && let Some(triage) = crate::work_items::triage::triage_status(
+            &mut *crate::db::scoped_tx(&state.pool).await?,
+            link.project_id,
+        )
+        .await?
+    {
+        values.insert(status_key, json!(triage.to_string()));
+    }
     if turned_off_for_maker(&state.pool, link).await? {
         return closed();
     }

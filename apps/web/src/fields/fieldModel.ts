@@ -23,10 +23,11 @@ import type { FieldDecl } from '../modules/contract'
 import { FIELD_TYPE_INFO, FIELD_TYPE_LIST, isFieldType, typeInfo, type FieldOp, type FieldType } from './fieldTypes'
 
 /** What kind of status a status option is, in workflow order (the server's STATUS_CATEGORIES). */
-export const STATUS_CATEGORIES = ['backlog', 'unstarted', 'started', 'review', 'verification', 'completed', 'canceled'] as const
+export const STATUS_CATEGORIES = ['triage', 'backlog', 'unstarted', 'started', 'review', 'verification', 'completed', 'canceled'] as const
 export type StatusCategory = (typeof STATUS_CATEGORIES)[number]
 
 export const CATEGORY_LABELS: Record<StatusCategory, string> = {
+  triage: 'Triage',
   backlog: 'Backlog',
   unstarted: 'Not started',
   started: 'Started',

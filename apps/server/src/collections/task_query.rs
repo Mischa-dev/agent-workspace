@@ -370,6 +370,11 @@ pub fn from_params(params: &BTreeMap<String, String>) -> Result<TaskQuery, Probl
             } else {
                 clause(tasks::BLOCKED, FieldOp::Empty, Vec::new())
             }),
+            "snoozed" => all.push(if flag("snoozed", value)? {
+                clause(tasks::SNOOZED, FieldOp::Is, vec!["true".to_owned()])
+            } else {
+                clause(tasks::SNOOZED, FieldOp::Empty, Vec::new())
+            }),
             "ready" => all.push(if flag("ready", value)? {
                 clause(tasks::READY, FieldOp::Is, vec!["true".to_owned()])
             } else {
@@ -810,6 +815,7 @@ fn builtin_system(field: Uuid) -> bool {
         tasks::BLOCKED,
         tasks::READY,
         tasks::CLAIMED_BY,
+        tasks::SNOOZED,
     ]
     .contains(&field)
 }

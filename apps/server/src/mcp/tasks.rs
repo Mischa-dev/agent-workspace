@@ -59,15 +59,7 @@ const MAX_FILTER_LABELS: usize = 10;
 /// The most values any other list filter names, such as 20 statuses.
 const MAX_FILTER_VALUES: usize = 20;
 /// Status groups, in board order.
-const STATUS_GROUPS: [&str; 7] = [
-    "backlog",
-    "unstarted",
-    "started",
-    "review",
-    "verification",
-    "completed",
-    "canceled",
-];
+const STATUS_GROUPS: [&str; 8] = crate::fields::STATUS_CATEGORIES;
 const UPDATED_SINCE_MESSAGE: &str = "Use a date (YYYY-MM-DD), a timestamp such as 2026-09-30T14:00:00Z, or a span such as 24h or 7d.";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]

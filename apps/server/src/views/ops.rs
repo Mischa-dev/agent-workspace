@@ -283,7 +283,7 @@ pub struct ViewEntry {
     /// one of your own.
     pub shared: bool,
     /// One of the views every Tasks collection starts with: my_tasks,
-    /// ready_for_agents, blocked or recently_changed.
+    /// ready_for_agents, blocked, recently_changed or triage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub builtin: Option<String>,
     /// In your sidebar.

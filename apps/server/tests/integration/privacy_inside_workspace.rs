@@ -2568,7 +2568,17 @@ async fn channel_writes_keep_to_private_channels() {
         .person("lena", "member")
         .person("omar", "member")
         .person("nate", "member")
+        .person("tess", "member")
         .custom_role("Read only", &["projects.view", "directory.view"])
+        .custom_role(
+            "Tasks, no posting",
+            &[
+                "projects.view",
+                "directory.view",
+                "tasks.view",
+                "tasks.create",
+            ],
+        )
         .build("privacy_channel_writes")
         .await
     else {
@@ -2760,6 +2770,41 @@ async fn channel_writes_keep_to_private_channels() {
         "{timeline}"
     );
 
+    // Someone who may make tasks but not post in the channel makes one from
+    // a message quietly: saySo posts nothing for them.
+    let tess = &world.people["tess"];
+    sqlx::query(
+        "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
+    )
+    .bind(Uuid::parse_str(&world.roles["Tasks, no posting"]).expect("role id"))
+    .bind(Uuid::parse_str(&work).expect("work"))
+    .bind(tess.actor)
+    .execute(pool)
+    .await
+    .expect("tess's role");
+    let system_entries = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM conversation_entries WHERE conversation_id = $1::uuid AND kind = 'system'",
+        )
+        .bind(&open)
+        .fetch_one(pool)
+        .await
+        .expect("system entries")
+    };
+    let before = system_entries().await;
+    let (status, quiet) = op(
+        &tess.browser,
+        "task_create",
+        json!({"projectId": work, "title": "Quietly", "fromMessageId": shown, "saySo": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{quiet}");
+    assert_eq!(
+        system_entries().await,
+        before,
+        "a reader announced in the channel"
+    );
+
     // C2.8: a channel's Tasks tab lists what its tasks are only to people
     // who read the channel and may see tasks.
     let (status, task) = op(
@@ -2892,5 +2937,73 @@ async fn channel_writes_keep_to_private_channels() {
             .expect("topic");
     assert_eq!(topic, None);
 
+    world.finish().await;
+}
+
+/// T1.23: triage decisions need `tasks.edit`, and a space's triage rules
+/// and queue `tasks.workflow`, whatever the account. A viewer reads the
+/// rules but triages nothing and writes no rule; the owner does both.
+#[tokio::test]
+async fn triage_keeps_to_the_edit_and_workflow_permissions() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("TRI")
+        .person("vera", "viewer")
+        .agent("rook", "viewer")
+        .connected_app("laptop")
+        .build("privacy_triage")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let (rook, laptop) = (&world.agents["rook"], &world.apps["laptop"]);
+    let as_owner = |name: &'static str, arguments: Value| async move {
+        laptop.call(app, Call::Tool { name, arguments }).await.1
+    };
+    let as_rook = |name: &'static str, arguments: Value| async move {
+        structured(
+            &call_tool(app, &rook.token, &rook.session, name, arguments)
+                .await
+                .1,
+        )
+    };
+    let enabled = as_rook("triage_enable", json!({"spaceId": "TRI"})).await;
+    assert_eq!(enabled["outcome"], "permission_denied", "{enabled}");
+    let enabled = as_owner("triage_enable", json!({"spaceId": "TRI"})).await;
+    assert_eq!(enabled["outcome"], "ok", "{enabled}");
+    let made = as_owner(
+        "task_create",
+        json!({"projectId": "TRI", "title": "Arrived", "status": "Triage", "clientRequestId": "tri-1"}),
+    )
+    .await;
+    let key = made["value"]["key"].as_str().expect("key").to_owned();
+    let rule = json!({"spaceId": "TRI", "name": "Keep", "action": {"kind": "keep"}});
+
+    let listed = as_rook("triage_rule_list", json!({"spaceId": "TRI"})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let refused = as_rook("triage_rule_set", rule.clone()).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let accept = json!({"taskIds": [key], "action": "accept"});
+    let refused = as_rook("triage_decide", accept.clone()).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let (status, refused) = send(
+        app,
+        world.people["vera"].browser.request(
+            "POST",
+            "/api/v2/ops/triage_decide",
+            Some("privacy-triage-vera"),
+            accept.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "{status} {refused}"
+    );
+
+    let written = as_owner("triage_rule_set", rule).await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let accepted = as_owner("triage_decide", accept).await;
+    assert_eq!(accepted["outcome"], "ok", "{accepted}");
     world.finish().await;
 }

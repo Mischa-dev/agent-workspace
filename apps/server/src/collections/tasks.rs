@@ -65,6 +65,8 @@ pub const CREATED_BY: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000010");
 pub const CREATED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000011");
 pub const EDITED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000012");
 pub const KEY: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000013");
+/// Whether a snooze keeps the task out of the triage queue now (T1.23).
+pub const SNOOZED: Uuid = uuid!("0192f5c0-0000-7000-8000-000000000014");
 
 /// Priorities as choice options, most urgent first; "no_priority" is no value.
 const PRIORITIES: [(&str, &str, Uuid, &str); 4] = [
@@ -131,6 +133,7 @@ pub fn is_builtin_field(id: Uuid) -> bool {
 /// A status's color, by what kind of status it is.
 fn status_color(category: &str) -> &'static str {
     match category {
+        "triage" => "#f59e0b",
         "backlog" => "#8b8d98",
         "unstarted" => "#a1a1aa",
         "started" => "#3b82f6",
@@ -143,6 +146,7 @@ fn status_color(category: &str) -> &'static str {
 /// SQL for the color of a status of `category` (an expression).
 fn status_color_sql(category: &str) -> String {
     let arms = [
+        "triage",
         "backlog",
         "unstarted",
         "started",
@@ -224,6 +228,10 @@ pub fn accessor(id: Uuid) -> Option<Accessor> {
         CREATED => column("core.created_at", "timestamptz"),
         EDITED => column("core.updated_at", "timestamptz"),
         KEY => column("core.number", "bigint"),
+        SNOOZED => column(
+            "CASE WHEN core.snoozed_until > now() THEN true END",
+            "boolean",
+        ),
         _ => return None,
     })
 }
@@ -422,6 +430,7 @@ pub async fn system_fields(
         builtin(EDITED, "Edited", FieldType::Date, Vec::new(), 15),
         builtin(KEY, "Key", FieldType::Number, Vec::new(), 16),
         builtin(DELEGATE, "Delegate", FieldType::Person, Vec::new(), 17),
+        builtin(SNOOZED, "Snoozed", FieldType::Checkbox, Vec::new(), 18),
     ]);
     Ok(found)
 }

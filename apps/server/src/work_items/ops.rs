@@ -35,7 +35,11 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<TaskCommentCreate>()
         .add::<TaskCommentUpdate>()
         .add::<TaskCommentDelete>()
-        .add::<TaskCriteriaUpdate>();
+        .add::<TaskCriteriaUpdate>()
+        .add::<TaskTriage>()
+        .add::<TriageEnable>()
+        .add::<TriageRuleList>()
+        .add::<TriageRuleWrite>();
 }
 
 /// The bookkeeping every task write shares: a keyed call is retry-safe
@@ -716,5 +720,347 @@ impl Operation for TaskCriteriaUpdate {
         call.audit_target("task", task_id, json!({}));
         call.audited_by_command();
         Ok(value)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Triage (T1.23): triage_decide, triage_enable, triage_rule_list,
+// triage_rule_set
+
+fn refusal((field, message): super::triage::Refusal) -> OpError {
+    OpError::Invalid {
+        field: std::borrow::Cow::Borrowed(field),
+        message: std::borrow::Cow::Owned(message),
+    }
+}
+
+/// Locks the call's space for a write, as task commands do.
+async fn locked_space(
+    call: &mut OpCall<'_>,
+) -> Result<crate::work_item_commands::CommandActor, OpError> {
+    let actor = crate::work_item_commands::CommandActor::from(call.ctx);
+    let tx = call.tx().await?;
+    crate::work_item_commands::lock_membership(tx, actor.actor_id, actor.project_id)
+        .await?
+        .ok_or(OpError::not_found("That space"))?;
+    Ok(actor)
+}
+
+pub struct TaskTriage;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskTriageInput {
+    /// The tasks, all in one space: their IDs, links or keys such as
+    /// AWD-12 (at most 50).
+    pub task_ids: Vec<IdRef>,
+    pub action: super::triage::TriageAction,
+    /// accept: the status it moves to, by name or ID; the space's first
+    /// unstarted status if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// duplicate: the original task (ID, link or key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<IdRef>,
+    /// snooze: when it comes back to the queue, such as
+    /// 2026-12-01T09:00:00Z (within a year).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<chrono::DateTime<chrono::Utc>>,
+    /// decline: why, posted on the task as your comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl Targeted for TaskTriageInput {
+    fn target(&self) -> Target {
+        Target::thing(
+            "task",
+            self.task_ids
+                .first()
+                .map_or_else(uuid::Uuid::nil, |task| task.id()),
+        )
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskTriageOutput {
+    /// Each task as it is now.
+    pub tasks: Vec<super::triage::TriagedTask>,
+}
+
+impl Operation for TaskTriage {
+    const NAME: &'static str = "triage_decide";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Triage tasks";
+    const DESCRIPTION: &'static str = "Decide on tasks waiting in a space's triage queue: \
+        accept moves them out of triage (to status, or the first unstarted status), decline \
+        cancels them with reason as a comment, duplicate marks them duplicates of duplicateOf \
+        and cancels them, and snooze hides them from the queue until a time. All the tasks \
+        change, or none do.";
+    const EMITS: &'static [&'static str] = &["task.updated", "task.triaged"];
+
+    type Input = TaskTriageInput;
+    type Output = TaskTriageOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: TaskTriageInput,
+    ) -> Result<TaskTriageOutput, OpError> {
+        let actor = locked_space(call).await?;
+        let task_ids = input
+            .task_ids
+            .iter()
+            .map(|task| task.id())
+            .collect::<Vec<_>>();
+        let tx = call.tx().await?;
+        let tasks = super::triage::triage(
+            tx,
+            &actor,
+            &task_ids,
+            &super::triage::TriageRequest {
+                action: input.action,
+                status: input.status.as_deref(),
+                of: input.duplicate_of.map(IdRef::id),
+                until: input.until,
+                reason: input.reason.as_deref(),
+            },
+        )
+        .await?
+        .map_err(refusal)?;
+        for task in &tasks {
+            call.audit_target("task", task.task_id, json!({ "action": input.action }));
+        }
+        Ok(TaskTriageOutput { tasks })
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TriageSpaceInput {
+    /// The space (a project): its ID, link or key (such as "AWD").
+    #[serde(alias = "projectId")]
+    pub space_id: IdRef,
+}
+
+impl Targeted for TriageSpaceInput {
+    fn target(&self) -> Target {
+        Target::Space(self.space_id.id())
+    }
+}
+
+pub struct TriageEnable;
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageEnableOutput {
+    /// The space's triage status, where new tasks from forms and bug
+    /// reports land.
+    #[schemars(with = "String")]
+    pub status_id: uuid::Uuid,
+}
+
+impl Operation for TriageEnable {
+    const NAME: &'static str = "triage_enable";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksWorkflow);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Turn on triage";
+    const DESCRIPTION: &'static str = "Give a space a triage queue: a Triage status first in \
+        its workflow, which tasks from forms and bug report links land in, with a move from \
+        it to every other status. A space that has one already keeps it. To stop using \
+        triage, retire the status with workflow_update.";
+    const EMITS: &'static [&'static str] = &["task.updated"];
+
+    type Input = TriageSpaceInput;
+    type Output = TriageEnableOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: TriageSpaceInput,
+    ) -> Result<TriageEnableOutput, OpError> {
+        let actor = locked_space(call).await?;
+        let tx = call.tx().await?;
+        let status_id = super::triage::enable(tx, &actor).await?.map_err(refusal)?;
+        call.audit_target(
+            "space",
+            input.space_id.id(),
+            json!({ "triageStatusId": status_id }),
+        );
+        Ok(TriageEnableOutput { status_id })
+    }
+}
+
+pub struct TriageRuleList;
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageRuleListOutput {
+    /// The space's triage status; none while it doesn't use triage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub triage_status_id: Option<uuid::Uuid>,
+    /// In the order they run.
+    pub rules: Vec<super::triage::Rule>,
+}
+
+impl Operation for TriageRuleList {
+    const NAME: &'static str = "triage_rule_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksView);
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List triage rules";
+    const DESCRIPTION: &'static str = "A space's triage rules in the order they run over each \
+        task that lands in triage (the first that matches acts), and its triage status.";
+
+    type Input = TriageSpaceInput;
+    type Output = TriageRuleListOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        _input: TriageSpaceInput,
+    ) -> Result<TriageRuleListOutput, OpError> {
+        let space_id = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let tx = call.tx().await?;
+        Ok(TriageRuleListOutput {
+            triage_status_id: super::triage::triage_status(tx, space_id).await?,
+            rules: super::triage::rules(tx, space_id).await?,
+        })
+    }
+}
+
+pub struct TriageRuleWrite;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TriageRuleWriteInput {
+    /// The space (a project): its ID, link or key (such as "AWD").
+    #[serde(alias = "projectId")]
+    pub space_id: IdRef,
+    /// The rule to change or remove; leave it out to make one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<IdRef>,
+    /// The rule's version you last read; a change since is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Which arriving tasks it matches: a view filter (a list of clauses
+    /// such as [{"field": "<field id>", "op": "is", "values": ["…"]}], or
+    /// "and" and "or" groups); an empty list matches every task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<super::triage::RuleAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Its place, from 1 (runs first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<i32>,
+    /// true removes the rule.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove: bool,
+}
+
+impl Targeted for TriageRuleWriteInput {
+    fn target(&self) -> Target {
+        Target::Space(self.space_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageRuleWriteOutput {
+    /// The rule as it is now; none once removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<super::triage::Rule>,
+    pub removed: bool,
+}
+
+/// Tells the space's open settings that its triage rules changed, naming
+/// the rule only.
+async fn rules_changed(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &crate::work_item_commands::CommandActor,
+    rule: uuid::Uuid,
+) -> Result<(), OpError> {
+    let mut event = crate::events::NewEvent::thing(
+        &crate::events::catalog::TRIAGE_RULES_CHANGED,
+        actor.project_id,
+        "space",
+        actor.project_id,
+    )
+    .actor(actor.actor_id)
+    .audience(crate::events::Audience::Space)
+    .payload(json!({ "ruleId": rule }));
+    // A rule isn't a thing of its own: the event is about the space.
+    event.thing = None;
+    crate::events::emit(tx, event).await?;
+    Ok(())
+}
+
+impl Operation for TriageRuleWrite {
+    const NAME: &'static str = "triage_rule_set";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksWorkflow);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const DESTRUCTIVE: bool = true;
+    const EMITS: &'static [&'static str] = &["triage.rules_changed"];
+    const TITLE: &'static str = "Write a triage rule";
+    const DESCRIPTION: &'static str = "Make, change, move or remove (remove: true) one of a \
+        space's triage rules. Rules run in order over each task that lands in triage, and the \
+        first whose filter matches acts: action {kind: accept, status?} moves it out of \
+        triage, {kind: assign, to} gives it to someone, {kind: keep} leaves it for a person.";
+
+    type Input = TriageRuleWriteInput;
+    type Output = TriageRuleWriteOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: TriageRuleWriteInput,
+    ) -> Result<TriageRuleWriteOutput, OpError> {
+        let actor = locked_space(call).await?;
+        let tx = call.tx().await?;
+        if input.remove {
+            let rule = input
+                .rule
+                .ok_or(OpError::invalid("rule", "Name the rule to remove."))?;
+            let removed = super::triage::remove_rule(tx, actor.project_id, rule.id()).await?;
+            if !removed {
+                return Err(OpError::not_found("That triage rule"));
+            }
+            rules_changed(tx, &actor, rule.id()).await?;
+            call.audit_target("triage_rule", rule.id(), json!({ "removed": true }));
+            return Ok(TriageRuleWriteOutput {
+                rule: None,
+                removed: true,
+            });
+        }
+        let rule = super::triage::write_rule(
+            tx,
+            &actor,
+            input.rule.map(|rule| (rule.id(), input.expected_version)),
+            super::triage::RuleChange {
+                name: input.name,
+                filter: input.filter,
+                action: input.action,
+                enabled: input.enabled,
+                position: input.position,
+            },
+        )
+        .await?
+        .map_err(refusal)?;
+        rules_changed(tx, &actor, rule.id).await?;
+        call.audit_target("triage_rule", rule.id, json!({}));
+        Ok(TriageRuleWriteOutput {
+            rule: Some(rule),
+            removed: false,
+        })
     }
 }

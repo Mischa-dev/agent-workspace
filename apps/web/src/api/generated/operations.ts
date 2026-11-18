@@ -222,6 +222,12 @@ export type RevisionItem = { redacted?: boolean; revision: number; text: string;
 
 export type RollupInput = { aggregate: string; field?: string | null; relation: string }
 
+export type Rule = { action: RuleAction; enabled: boolean; filter: unknown; id: string; name: string; position: number; version: number }
+
+export type RuleAction = { kind: RuleActionKind; status?: string | null; to?: string | null }
+
+export type RuleActionKind = "accept" | "assign" | "keep"
+
 export type RulesInput = { buildersOnly?: boolean; default?: unknown; max?: number | null; min?: number | null; pattern?: string | null; required?: boolean; unique?: boolean }
 
 export type RunActivityInput = { at?: string | null; id: string; kind: string; parentRef?: string | null; payload?: unknown; stepRef?: string | null; summary?: string | null }
@@ -267,6 +273,10 @@ export type TileEntry = { collection?: string | null; figures?: Figures | null; 
 export type TileInput = { height?: number | null; id?: string | null; kind?: TileKind | null; text?: string | null; title?: string | null; view?: string | null; width?: number | null }
 
 export type TileKind = "view" | "text"
+
+export type TriageAction = "accept" | "decline" | "duplicate" | "snooze"
+
+export type TriagedTask = { snoozedUntil?: string | null; status: string; taskId: string; version: number }
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
@@ -836,6 +846,22 @@ export type ThreadFollowedListInput = { limit?: number | null; openOnly?: boolea
 
 export type ThreadFollowedListOutput = { threads: FollowedThreadView[] }
 
+export type TriageDecideInput = { action: TriageAction; duplicateOf?: string | null; reason?: string | null; status?: string | null; taskIds: string[]; until?: string | null }
+
+export type TriageDecideOutput = { tasks: TriagedTask[] }
+
+export type TriageEnableInput = { spaceId: string }
+
+export type TriageEnableOutput = { statusId: string }
+
+export type TriageRuleListInput = { spaceId: string }
+
+export type TriageRuleListOutput = { rules: Rule[]; triageStatusId?: string | null }
+
+export type TriageRuleSetInput = { action?: RuleAction | null; enabled?: boolean | null; expectedVersion?: number | null; filter?: unknown; name?: string | null; position?: number | null; remove?: boolean; rule?: string | null; spaceId: string }
+
+export type TriageRuleSetOutput = { removed: boolean; rule?: Rule | null }
+
 export type ViewCreateInput = { collection: string; config?: unknown; name: string; position?: number | null; shared?: boolean; type: string }
 
 export type ViewCreateOutput = { builtin?: string | null; collectionId: string; config: unknown; id: string; listParams?: Record<string, string> | null; name: string; pinPosition?: number | null; pinned: boolean; position: number; shared: boolean; type: string; version: number }
@@ -1032,6 +1058,10 @@ export type Operations = {
   task_restore: { input: TaskRestoreInput; output: TaskRestoreOutput }
   task_update: { input: TaskUpdateInput; output: TaskUpdateOutput }
   thread_followed_list: { input: ThreadFollowedListInput; output: ThreadFollowedListOutput }
+  triage_decide: { input: TriageDecideInput; output: TriageDecideOutput }
+  triage_enable: { input: TriageEnableInput; output: TriageEnableOutput }
+  triage_rule_list: { input: TriageRuleListInput; output: TriageRuleListOutput }
+  triage_rule_set: { input: TriageRuleSetInput; output: TriageRuleSetOutput }
   view_create: { input: ViewCreateInput; output: ViewCreateOutput }
   view_default_set: { input: ViewDefaultSetInput; output: ViewDefaultSetOutput }
   view_delete: { input: ViewDeleteInput; output: ViewDeleteOutput }

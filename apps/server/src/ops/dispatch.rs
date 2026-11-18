@@ -157,9 +157,26 @@ async fn task_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
-    for field in ["taskId", "workItemId", "parentId", "parentWorkItemId"] {
-        let Some((space_key, number)) = input
-            .get(field)
+    // Single task fields, then each task of a list.
+    let mut places = [
+        "taskId",
+        "workItemId",
+        "parentId",
+        "parentWorkItemId",
+        "duplicateOf",
+    ]
+    .iter()
+    .map(|field| ((*field).to_owned(), None))
+    .collect::<Vec<(String, Option<usize>)>>();
+    if let Some(list) = input.get("taskIds").and_then(Value::as_array) {
+        places.extend((0..list.len().min(100)).map(|index| ("taskIds".to_owned(), Some(index))));
+    }
+    for (field, index) in places {
+        let value = match index {
+            None => input.get(&field),
+            Some(index) => input.get(&field).and_then(|list| list.get(index)),
+        };
+        let Some((space_key, number)) = value
             .and_then(Value::as_str)
             .and_then(crate::mcp::split_task_key)
             .map(|(key, number)| (key.to_owned(), number))
@@ -211,8 +228,8 @@ async fn task_keys_to_ids(
         })
         .await
         .map_err(|error: sqlx::Error| OpError::logged("task key", &error.into()))?;
-        match found.as_slice() {
-            [id] => input[field] = Value::String(id.to_string()),
+        let id = match found.as_slice() {
+            [id] => Value::String(id.to_string()),
             [] => return Err(OpError::not_found("That task")),
             _ => {
                 return Err(OpError::invalid(
@@ -221,6 +238,10 @@ async fn task_keys_to_ids(
                      id or link.",
                 ));
             }
+        };
+        match index {
+            None => input[field.as_str()] = id,
+            Some(index) => input[field.as_str()][index] = id,
         }
     }
     Ok(input)

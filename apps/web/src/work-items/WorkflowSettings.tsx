@@ -5,6 +5,7 @@ import { Banner, Button, Section, SegmentedControl, SelectField, SettingsSkeleto
 import { useWorkItemWorkflow } from './hooks'
 import { useSaveWorkflow } from './planningHooks'
 import type { EstimateUnit, WorkItemWorkflow } from './types'
+import { TriageSettings } from './TriageSettings'
 import { TransitionMatrix, WorkflowEntries } from './WorkflowEntries'
 import {
   addStatus,
@@ -218,6 +219,7 @@ function WorkflowEditor({
           </div>
         </div>
       )}
+      <TriageSettings projectId={projectId} workflow={saved} />
     </div>
   )
 }

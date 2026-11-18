@@ -616,6 +616,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "task_release",
     "task_reorder",
     "task_restore",
+    "triage_decide",
     "task_update",
     "task_update_many",
     "task_watch",
@@ -635,6 +636,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "whiteboard_update",
     "whiteboard_trash_empty",
     "workflow_update",
+    "triage_enable",
+    "triage_rule_set",
     "workspace_template_apply",
     "workspace_template_save",
     "project_template_write",
@@ -7586,6 +7589,34 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "allTransitions": true,
             }),
         ]),
+        // Triage (T1.23): a space's queue, its rules and the tasks in it.
+        // Last, so A's workflow and task versions read above still hold.
+        mcp_case(
+            "triage_enable",
+            json!({"spaceId": a.project}),
+            vec![json!({"spaceId": b.project})],
+        )
+        .last(),
+        mcp_case(
+            "triage_rule_set",
+            json!({"spaceId": a.project, "name": "Net rule", "action": {"kind": "keep"}}),
+            vec![json!({"spaceId": b.project, "name": "Net rule", "action": {"kind": "keep"}})],
+        )
+        .rejecting(vec![
+            json!({"spaceId": a.project, "name": "Net", "action": {"kind": "assign", "to": b.rook}}),
+            json!({"spaceId": a.project, "name": "Net", "action": {"kind": "keep"}, "filter": [{"field": b.collection_field, "op": "notEmpty"}]}),
+        ])
+        .last(),
+        mcp_case(
+            "triage_decide",
+            json!({"taskIds": [a.subtask], "action": "snooze", "until": (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339()}),
+            vec![json!({"taskIds": [b.task], "action": "snooze", "until": (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339()})],
+        )
+        .rejecting(vec![
+            json!({"taskIds": [a.subtask, b.task], "action": "snooze", "until": (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339()}),
+            json!({"taskIds": [a.subtask], "action": "duplicate", "duplicateOf": b.task}),
+        ])
+        .last(),
         // Runs
         mcp_case(
             "run_start",

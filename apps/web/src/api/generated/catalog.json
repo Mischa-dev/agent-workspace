@@ -2127,6 +2127,69 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "task.updated",
+      "task.triaged"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "triage_decide",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Triage tasks"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "triage_enable",
+    "permission": "tasks.workflow",
+    "preview": false,
+    "proposable": false,
+    "title": "Turn on triage"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "triage_rule_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List triage rules"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "triage.rules_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "triage_rule_set",
+    "permission": "tasks.workflow",
+    "preview": false,
+    "proposable": false,
+    "title": "Write a triage rule"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "view.changed",
       "collection.updated"
     ],

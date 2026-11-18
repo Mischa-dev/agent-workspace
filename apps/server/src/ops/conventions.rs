@@ -79,6 +79,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "add",
             // A host's published action runs (A2.19).
             "run",
+            // Something a space can use is turned on, such as triage (T1.23).
+            "enable",
         ],
     ),
     (

@@ -335,14 +335,17 @@ export function PageDetailPage() {
   return <ProjectFrame>{(project) => <PageDetail key={pageId} pageId={pageId} project={project} />}</ProjectFrame>
 }
 
-/** A page shown as a tab on a channel (C1.26), in the channel's own frame. */
+/**
+ * A page shown as a tab on a channel (C1.26), in the channel's own frame.
+ * The channel stays the space's last place: the page doesn't remember itself.
+ */
 export function PageInChannel({ pageId, project }: { pageId: string; project: Project }) {
-  return <PageDetail key={pageId} pageId={pageId} project={project} />
+  return <PageDetail inChannel key={pageId} pageId={pageId} project={project} />
 }
 
 type Viewing = { version: number; title: string; body: string }
 
-function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
+function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolean; pageId: string; project: Project }) {
   const projectId = project.id
   const queryClient = useQueryClient()
   const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
@@ -444,7 +447,7 @@ function PageDetail({ pageId, project }: { pageId: string; project: Project }) {
   )
   return (
     <>
-      <RememberPlace location={{ kind: 'page', pageId }} project={project} />
+      {inChannel ? null : <RememberPlace location={{ kind: 'page', pageId }} project={project} />}
       <PageHeader
         actions={
           editing ? null : (

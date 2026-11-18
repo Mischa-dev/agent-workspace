@@ -774,6 +774,12 @@ pub async fn create_work_item_with_id(
         },
     )
     .await?;
+    // A task made in a triage status meets the space's triage rules (T1.23).
+    if crate::work_items::triage::triage_status(transaction, actor.project_id).await?
+        == Some(status_id)
+    {
+        crate::work_items::triage::run_rules(transaction, actor, work_item_id).await?;
+    }
     Ok(CreateWorkItemOutcome::Created {
         work_item_id,
         number,
@@ -1362,23 +1368,13 @@ pub async fn set_archived(
             "locked Work Item archive lost its record",
         ));
     }
-    let updated = sqlx::query(
-        r#"
-        UPDATE work_items
-        SET version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2 AND version = $3
-        "#,
+    advance_version(
+        transaction,
+        actor.project_id,
+        work_item_id,
+        command.expected_version,
     )
-    .bind(actor.project_id)
-    .bind(work_item_id)
-    .bind(command.expected_version)
-    .execute(&mut **transaction)
     .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::Internal(
-            "locked Work Item archive lost its version",
-        ));
-    }
     let open_subtasks = if command.archived {
         sqlx::query("DELETE FROM work_item_claims WHERE work_item_id = $1")
             .bind(work_item_id)
@@ -2798,6 +2794,99 @@ async fn emit_assigned(
     )
     .await?;
     Ok(())
+}
+
+/// Records that `actor` triaged a task (T1.23): when and by whom, and the
+/// snooze that now hides it from the triage queue, if any. A snooze is a
+/// change of its own (a new version and an update event); any other
+/// decision came with a move that was one already, and clears a snooze.
+/// The caller holds the task's lock.
+pub async fn mark_triaged(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    snoozed_until: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<(), AppError> {
+    let rows = write_snoozes(
+        transaction,
+        Some((actor.project_id, work_item_id, actor.actor_id)),
+        snoozed_until,
+        1,
+    )
+    .await?;
+    let Some((_, _, _, version)) = rows.first() else {
+        return Err(AppError::NotFound("task"));
+    };
+    if snoozed_until.is_some() {
+        enqueue_update(transaction, actor.project_id, work_item_id, *version).await?;
+    }
+    Ok(())
+}
+
+/// A task whose snooze ended.
+pub struct WokenTask {
+    pub task_id: Uuid,
+    pub project_id: Uuid,
+    /// Who snoozed it.
+    pub snoozed_by: Option<Uuid>,
+}
+
+/// Ends up to `limit` snoozes that are due, oldest first, skipping tasks
+/// another writer holds; each task gets a new version and an update event,
+/// so open triage queues show it again.
+pub async fn end_due_snoozes(
+    transaction: &mut Transaction<'_, Postgres>,
+    limit: i64,
+) -> Result<Vec<WokenTask>, AppError> {
+    let rows = write_snoozes(transaction, None, None, limit).await?;
+    let mut woken = Vec::with_capacity(rows.len());
+    for (task_id, project_id, snoozed_by, version) in rows {
+        enqueue_update(transaction, project_id, task_id, version).await?;
+        woken.push(WokenTask {
+            task_id,
+            project_id,
+            snoozed_by,
+        });
+    }
+    Ok(woken)
+}
+
+/// The one write of a task's triage columns: one task triaged by someone
+/// (`triaged` is its space, id and who), or else the snoozes that are due
+/// ended. A snooze set or ended is a new version; a decision with no
+/// snooze rode on a move that was one already.
+async fn write_snoozes(
+    transaction: &mut Transaction<'_, Postgres>,
+    triaged: Option<(Uuid, Uuid, Uuid)>,
+    snoozed_until: Option<chrono::DateTime<chrono::Utc>>,
+    limit: i64,
+) -> Result<Vec<(Uuid, Uuid, Option<Uuid>, i64)>, AppError> {
+    let (project_id, task_id, by) = match triaged {
+        Some((project_id, task_id, by)) => (Some(project_id), Some(task_id), Some(by)),
+        None => (None, None, None),
+    };
+    Ok(sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, i64)>(
+        "UPDATE work_items task SET snoozed_until = $4, \
+           triaged_at = CASE WHEN $5::uuid IS NULL THEN task.triaged_at ELSE now() END, \
+           triaged_by_actor_id = COALESCE($5, task.triaged_by_actor_id), \
+           version = task.version + \
+             CASE WHEN $5::uuid IS NULL OR $4::timestamptz IS NOT NULL THEN 1 ELSE 0 END, \
+           updated_at = CASE WHEN $5::uuid IS NULL OR $4::timestamptz IS NOT NULL \
+             THEN now() ELSE task.updated_at END \
+         FROM (SELECT id FROM work_items \
+               WHERE CASE WHEN $2::uuid IS NULL THEN snoozed_until <= now() \
+                          ELSE project_id = $1 AND id = $2 END \
+               ORDER BY snoozed_until, id LIMIT $3 FOR UPDATE SKIP LOCKED) chosen \
+         WHERE task.id = chosen.id \
+         RETURNING task.id, task.project_id, task.triaged_by_actor_id, task.version",
+    )
+    .bind(project_id)
+    .bind(task_id)
+    .bind(limit)
+    .bind(snoozed_until)
+    .bind(by)
+    .fetch_all(&mut **transaction)
+    .await?)
 }
 
 /// Hands a task to `delegate` when it has no delegate yet, as a launch does

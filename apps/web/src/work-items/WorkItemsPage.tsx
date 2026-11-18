@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
@@ -8,6 +9,7 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { useShellPage } from '../shell/shellStore'
+import { listProjectTaskViews, viewKeys } from '../views/api'
 import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, ErrorState, ListSkeleton, PageHeader, SegmentedControl } from '../ui'
 import { BoardSkeleton } from './BoardSkeleton'
@@ -22,6 +24,8 @@ import { WorkItemList } from './WorkItemList'
 import './work.css'
 
 const ViewsMenu = lazy(() => import('./ViewsMenu'))
+// The triage queue's decisions show on its own view (T1.23).
+const TriageBar = lazy(() => import('./TriageBar').then((module) => ({ default: module.TriageBar })))
 // Managing labels loads when someone opens it.
 const LabelManager = lazy(() => import('./LabelManager').then((module) => ({ default: module.LabelManager })))
 // The board is its own chunk: most visits open the list.
@@ -96,6 +100,9 @@ export function WorkItemsPage() {
     [state.task, update],
   )
   const closeTask = useCallback(() => update((current) => ({ ...current, task: null })), [update])
+  const savedView = parameters.get('savedView')
+  const views = useQuery({ queryKey: viewKeys.views(projectId), queryFn: () => listProjectTaskViews(projectId), staleTime: 60_000, enabled: Boolean(savedView) })
+  const triage = Boolean(savedView) && views.data?.views.some((entry) => entry.id === savedView && entry.builtin === 'triage') === true
 
   // Until the page can draw, the shell keeps the space the address names.
   useShellPage(
@@ -169,6 +176,11 @@ export function WorkItemsPage() {
           <Banner className="aw-page__banner" icon="archive">
             This project is archived, so its tasks can’t change.
           </Banner>
+        ) : null}
+        {triage ? (
+          <Suspense fallback={null}>
+            <TriageBar disabled={readOnly} onDone={closeTask} projectId={projectId} taskId={state.task} />
+          </Suspense>
         ) : null}
         {workflow.isPending ? (view === 'board' ? <BoardSkeleton /> : <ListSkeleton label={`Loading ${experience.word('task', 'many')}`} rows={6} />) : null}
         {workflow.isError ? <ErrorState error={workflow.error} onRetry={() => void workflow.refetch()} title={`${experience.label('task', 'many')} didn’t load`} /> : null}

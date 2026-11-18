@@ -144,6 +144,7 @@ mod t1_relations;
 mod t1_rules;
 mod t1_task_record_owner;
 mod t1_task_records_migration;
+mod t1_triage;
 mod t1_views_at_scale;
 mod templates;
 mod tenancy_backfill;
