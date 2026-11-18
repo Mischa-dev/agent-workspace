@@ -354,6 +354,21 @@ const CAPABILITY: &str = "the secret token in the request is the permission; it 
 /// Mutating routes this suite deliberately doesn't call, and why.
 const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     (
+        "POST /api/v1/setup",
+        "first run (H1.14): only while nobody has an account, with the server's setup code; \
+         no workspace exists to reach; covered in first_run",
+    ),
+    (
+        "POST /api/v1/setup/import",
+        "first run (H1.14): only the account that made the first account to import, before \
+         any workspace exists; covered in first_run",
+    ),
+    (
+        "POST /api/v1/setup/workspace",
+        "first run (H1.14): only the account that made the first account to import, before \
+         any workspace exists; covered in first_run",
+    ),
+    (
         "POST /internal/work/tick",
         "runs the server's own due work across every workspace (K5.18), for an outside timer \
          holding the operator's tick token; no session or workspace reaches it; covered in \

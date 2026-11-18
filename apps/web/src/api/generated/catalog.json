@@ -1709,5 +1709,19 @@
     "preview": false,
     "proposable": false,
     "title": "List workspace exports"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "workspace_usage_get",
+    "permission": "settings.manage",
+    "preview": false,
+    "proposable": false,
+    "title": "See the workspace's usage"
   }
 ]

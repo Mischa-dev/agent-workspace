@@ -41,6 +41,7 @@
     "workspace_export_start": "create",
     "workspace_transfer_get": "describe",
     "workspace_transfer_list": "query",
+    "workspace_usage_get": "describe",
     "module_list": "describe",
     "module_create": "create",
     "module_open": "describe",

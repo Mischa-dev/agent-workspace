@@ -147,6 +147,11 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("history_archives", WORKSPACE_ID),
     ("workspace_transfers", WORKSPACE_ID),
     ("workspace_import_ids", WORKSPACE_ID),
+    ("workspace_plans", WORKSPACE_ID),
+    ("usage_events", WORKSPACE_ID),
+    ("usage_counters", WORKSPACE_ID),
+    ("spend_limits", WORKSPACE_ID),
+    ("limit_notices", WORKSPACE_ID),
     ("project_page_suggestions", WORKSPACE_ID),
     ("project_pages", WORKSPACE_ID),
     ("project_task_settings", WORKSPACE_ID),
@@ -335,6 +340,10 @@ pub const GLOBAL_TABLES: &[(&str, &str)] = &[
     (
         "server_instances",
         "the server processes sharing this database and their heartbeats (K5.2)",
+    ),
+    (
+        "plans",
+        "the plans a workspace can be on, with their limits: the server's offer, not a workspace's (H1.25)",
     ),
     (
         "server_setup",

@@ -70,6 +70,7 @@ pub mod memberships;
 pub mod memory;
 pub mod message_content;
 pub mod message_edits;
+pub mod metering;
 pub mod metrics;
 pub mod migration_preflight;
 pub mod modules;

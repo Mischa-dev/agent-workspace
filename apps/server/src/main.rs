@@ -544,6 +544,16 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // New workspaces start on the free plan when hosted, else on the
+    // self-hosted plan, which limits nothing (H1.25).
+    if config.roles.work {
+        agent_workspace_server::metering::set_default_plan(
+            &pool,
+            config.profile == agent_workspace_server::config::Profile::Hosted,
+        )
+        .await
+        .context("set the default plan")?;
+    }
     // First run in the browser (H1.14): while nobody has an account, a
     // setup code waits in the data root. Only its file's path is logged.
     if config.roles.work {

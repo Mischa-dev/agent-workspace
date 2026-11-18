@@ -112,6 +112,10 @@ export type MessageContent = { nodes: MessageNode[]; version: number }
 
 export type MessageNode = { text: string; type: "text" } | { actorId: string; type: "mention" } | { type: "work_item_ref"; workItemId: string }
 
+export type MeterKind = "gauge" | "counter" | "each"
+
+export type MeterUsage = { kind: MeterKind; limit?: number | null; meter: string; name: string; resetsAt?: string | null; unit: string; used: number }
+
 export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
 
 export type NavEntry = { icon?: string | null; label: string; target: unknown }
@@ -646,6 +650,10 @@ export type WorkspaceTransferListInput = Record<string, never>
 
 export type WorkspaceTransferListOutput = { transfers: TransferOutput[] }
 
+export type WorkspaceUsageGetInput = Record<string, never>
+
+export type WorkspaceUsageGetOutput = { meters: MeterUsage[]; planId: string; planName: string; status: string }
+
 export type Operations = {
   activity_list: { input: ActivityListInput; output: ActivityListOutput }
   agent_create: { input: AgentCreateInput; output: AgentCreateOutput }
@@ -758,6 +766,7 @@ export type Operations = {
   workspace_store_set: { input: WorkspaceStoreSetInput; output: WorkspaceStoreSetOutput }
   workspace_transfer_get: { input: WorkspaceTransferGetInput; output: WorkspaceTransferGetOutput }
   workspace_transfer_list: { input: WorkspaceTransferListInput; output: WorkspaceTransferListOutput }
+  workspace_usage_get: { input: WorkspaceUsageGetInput; output: WorkspaceUsageGetOutput }
 }
 
 export type OpName = keyof Operations

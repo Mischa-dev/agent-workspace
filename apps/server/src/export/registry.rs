@@ -259,6 +259,26 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "where this server keeps cold page versions (K3.25); an export carries each version's body in its row",
             ),
             (
+                "workspace_plans",
+                "the plan this server has the workspace on (H1.25): the destination's own billing decides it",
+            ),
+            (
+                "usage_events",
+                "usage this server counted (H1.25); the destination counts its own from the import on",
+            ),
+            (
+                "usage_counters",
+                "totals of this server's usage ledger (H1.25), kept with it",
+            ),
+            (
+                "limit_notices",
+                "which limit notices this server already gave (H1.25)",
+            ),
+            (
+                "spend_limits",
+                "nothing sets one yet: H1.27, which adds the operations that do, adds them to the export",
+            ),
+            (
                 "workspace_transfers",
                 "this server's record of exports and imports (H1.9): an archive never carries itself",
             ),

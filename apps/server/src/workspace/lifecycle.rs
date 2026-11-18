@@ -166,6 +166,7 @@ pub async fn create(
     .bind(owner)
     .execute(&mut *connection)
     .await?;
+    crate::metering::start_plan(connection, id).await?;
     Ok(id)
 }
 

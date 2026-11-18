@@ -1812,6 +1812,70 @@
           }
         ]
       },
+      "MeterKind": {
+        "description": "How a meter is counted.",
+        "oneOf": [
+          {
+            "const": "gauge",
+            "description": "Read live from what exists.",
+            "type": "string"
+          },
+          {
+            "const": "counter",
+            "description": "Added up from recorded usage, per day and month.",
+            "type": "string"
+          },
+          {
+            "const": "each",
+            "description": "One ask on its own (a file's size).",
+            "type": "string"
+          }
+        ]
+      },
+      "MeterUsage": {
+        "description": "One meter's use this month and its limit, as Settings › Usage shows it.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/MeterKind"
+          },
+          "limit": {
+            "description": "The smallest limit on the whole workspace, if any.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "meter": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "resetsAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          },
+          "used": {
+            "description": "Now, for a gauge; this month so far (UTC), for a counter.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "meter",
+          "name",
+          "kind",
+          "unit",
+          "used"
+        ],
+        "type": "object"
+      },
       "ModelUsageLine": {
         "description": "Tokens and cost for one model.",
         "properties": {
@@ -38330,6 +38394,256 @@
           "workspace"
         ],
         "x-operation-kind": "query"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/workspace_usage_get": {
+      "post": {
+        "description": "The workspace's plan and its use of each meter: people and stored bytes now, and this month's counted use (emails, model calls on the server's key, automation runs, form submissions and the rest), each with the workspace's limit where it has one and when the count resets. Needs \"Manage settings\" where it acts.",
+        "operationId": "workspace_usage_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "title": "WorkspaceUsageGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "The workspace's plan and its use of every meter.",
+                          "properties": {
+                            "meters": {
+                              "items": {
+                                "$ref": "#/components/schemas/MeterUsage"
+                              },
+                              "type": "array"
+                            },
+                            "planId": {
+                              "type": "string"
+                            },
+                            "planName": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "description": "`active`, `trialing`, `past_due`, `grace` or `over_limit`.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "planId",
+                            "planName",
+                            "status",
+                            "meters"
+                          ],
+                          "title": "UsageReport",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "The workspace's plan and its use of every meter.",
+                          "properties": {
+                            "meters": {
+                              "items": {
+                                "$ref": "#/components/schemas/MeterUsage"
+                              },
+                              "type": "array"
+                            },
+                            "planId": {
+                              "type": "string"
+                            },
+                            "planName": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "description": "`active`, `trialing`, `past_due`, `grace` or `over_limit`.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "planId",
+                            "planName",
+                            "status",
+                            "meters"
+                          ],
+                          "title": "UsageReport",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "See the workspace's usage",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "describe"
       }
     }
   },

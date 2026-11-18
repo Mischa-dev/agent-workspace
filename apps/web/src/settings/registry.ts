@@ -81,6 +81,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('workspace', 'templates', 'Workspace templates', Package, ['templates', 'workspace template', 'starter', 'setup', 'packages', 'software team', 'personal', 'company', 'small team', 'save as template'], () => import('./workspace/TemplatesPage')),
   page('workspace', 'modules', 'Modules', Blocks, ['modules', 'features', 'turn off', 'switch off', 'presets', 'projects', 'pages only', 'dms only', 'chat with my agents'], () => import('./workspace/ModulesPage')),
   page('workspace', 'github', 'GitHub', 'pull-request', ['installation', 'app', 'repositories'], () => import('./workspace/GitHubPage'), { visible: manager }),
+  page('workspace', 'usage', 'Usage', 'activity', ['usage', 'plan', 'limits', 'quota', 'storage', 'seats', 'people', 'emails', 'spend', 'billing'], () => import('./workspace/UsagePage'), { visible: manager }),
   page('workspace', 'audit-log', 'Audit log', ScrollText, ['history', 'activity', 'who changed', 'events'], () => import('./workspace/AuditLogPage'), { visible: manager }),
   page('workspace', 'server', 'Server', Server, ['version', 'commit', 'backup', 'backups', 'health', 'preflight', 'disk', 'migrations', 'self-hosting'], () => import('./workspace/ServerPage'), { visible: serverOperator }),
   // Project

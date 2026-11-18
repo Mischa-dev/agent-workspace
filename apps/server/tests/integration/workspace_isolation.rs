@@ -245,6 +245,16 @@ const HTTP_ROUTES: &[&str] = &[
 /// sign-in plumbing, so the guard only looks under `/api/v1`.)
 const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
     (
+        "/api/v1/setup",
+        "first run (H1.14): whether nobody has an account yet, and the built-in shapes; no \
+         workspace's data; covered in first_run",
+    ),
+    (
+        "/api/v1/setup/import/{transfer}",
+        "first run (H1.14): the requester's own import, by its id and their account alone; \
+         covered in first_run",
+    ),
+    (
         "/api/v1/host/commands",
         "a host's own command queue (A1.12), signed in with the host's key, never a \
          person's session; it lists only that host's commands; covered in a1_host_protocol",
@@ -2157,6 +2167,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "workspace_template_list",
     "workspace_transfer_get",
     "workspace_transfer_list",
+    "workspace_usage_get",
 ];
 
 pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
@@ -2331,6 +2342,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         // K5.20: B's own bucket never shows in A.
         case(
             "workspace_store_get",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        // H1.25: B's usage never shows in A.
+        case(
+            "workspace_usage_get",
             vec![json!({})],
             vec![json!({"workspace": b.organization})],
             vec![],
