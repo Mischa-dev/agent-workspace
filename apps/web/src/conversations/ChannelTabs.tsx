@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { isApiError } from '../api/errors'
 import { callOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { toastError } from '../app/mutations'
@@ -44,7 +45,7 @@ export function ChannelTabs({
     })
   const add = () => {
     setBusy(true)
-    void createPage(projectId, { title: channelName })
+    void newTabPage(projectId, channelName)
       .then((page) => set(page.id, false).then(() => onSelect(page.id)))
       .catch((reason: unknown) => toastError('The page tab wasn’t added', reason))
       .finally(() => setBusy(false))
@@ -81,4 +82,18 @@ export function ChannelTabs({
       {canAdd && items.length < 20 ? <IconButton disabled={busy} icon="plus" label="Add a page tab" onClick={add} size="sm" /> : null}
     </nav>
   )
+}
+
+/**
+ * A new page for a tab, titled after the channel: a space's pages have
+ * distinct titles, so a second tab is "name 2", then "name 3".
+ */
+async function newTabPage(projectId: string, channelName: string) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await createPage(projectId, { title: attempt === 1 ? channelName : `${channelName} ${attempt}` })
+    } catch (reason) {
+      if (!(isApiError(reason) && reason.status === 409) || attempt >= 20) throw reason
+    }
+  }
 }

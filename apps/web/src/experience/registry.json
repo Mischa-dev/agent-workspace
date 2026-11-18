@@ -404,6 +404,13 @@
       "default": true
     },
     {
+      "id": "workspace.inbox_views",
+      "group": "workspace",
+      "label": "Saved inbox views",
+      "description": "Tabs on the inbox for filters you keep.",
+      "default": true
+    },
+    {
       "id": "workspace.runs",
       "group": "workspace",
       "label": "Runs page",
@@ -474,7 +481,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" },
@@ -514,7 +522,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" },
@@ -602,7 +611,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" },
@@ -648,6 +658,7 @@
         "workspace.threads",
         "workspace.later",
         "workspace.inbox_triage",
+        "workspace.inbox_views",
         "workspace.runs"
       ],
       "words": {
@@ -686,7 +697,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "assignment", "many": "assignments" },
@@ -731,7 +743,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" }
@@ -769,7 +782,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "post", "many": "posts" },
@@ -815,7 +829,8 @@
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
-        "workspace.inbox_triage"
+        "workspace.inbox_triage",
+        "workspace.inbox_views"
       ],
       "words": {
         "task": { "one": "ticket", "many": "tickets" }

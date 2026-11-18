@@ -145,7 +145,9 @@ export function InboxPage() {
   // The inbox and Unread split into what needs you and what's for your
   // information; Snoozed and Archived stay one list.
   // A layout can turn the Needs you / FYI split off; the inbox is one list then.
-  const triage = useHomeExperience().shows('workspace.inbox_triage')
+  const experience = useHomeExperience()
+  const triage = experience.shows('workspace.inbox_triage')
+  const viewTabs = experience.shows('workspace.inbox_views')
   const split = triage && (view === 'inbox' || view === 'unread')
   const sections = useMemo(
     () =>
@@ -380,16 +382,16 @@ export function InboxPage() {
         }
       : null
 
-  /** Marks what the current filter shows read: everything, or one kind. */
+  /** Marks what the current filter shows read: everything, or one kind, in the chosen spaces. */
   const markAllRead = async () => {
     setKept(new Map())
-    if (category === 'all') {
+    if (category === 'all' && spaces.length === 0) {
       change({ action: 'read', all: true }, { success: markedRead, failed: 'Nothing was marked read' })
       return
     }
     setMarking(true)
     try {
-      const ids = await unreadIds(category)
+      const ids = await unreadIds(category, spaces)
       if (ids.length) change({ action: 'read', ids }, { success: markedRead, failed: 'Nothing was marked read' })
       else showToast({ title: 'Nothing here is unread' })
     } catch (reason) {
@@ -519,11 +521,13 @@ export function InboxPage() {
           }
           icon="inbox"
           title="Inbox" />
-        <InboxViewTabs
-          filter={shown}
-          onApply={applyFilter}
-          suggestedName={suggestedName(shown, filter.label, VIEWS.find((option) => option.value === view)?.label ?? 'Inbox')}
-        />
+        {viewTabs ? (
+          <InboxViewTabs
+            filter={shown}
+            onApply={applyFilter}
+            suggestedName={suggestedName(shown, filter.label, VIEWS.find((option) => option.value === view)?.label ?? 'Inbox')}
+          />
+        ) : null}
         <div className="aw-inbox__filters">
           <SegmentedControl label="Show" onChange={(value) => setFilter('view', value)} options={VIEWS} value={view} />
           <div aria-label="Kind" className="aw-inbox__chips" role="group">

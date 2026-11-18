@@ -301,11 +301,12 @@ const MAX_CATEGORY_READ = 1_000
  * The unread notifications of one kind, every page of them, so "mark all
  * read" under a filter marks exactly what the filter shows.
  */
-export async function unreadIds(category: InboxCategory): Promise<string[]> {
+export async function unreadIds(category: InboxCategory, spaces: readonly string[] = []): Promise<string[]> {
   const ids: string[] = []
   let cursor: string | null = null
   do {
     const search = new URLSearchParams({ view: 'unread', category, limit: '100' })
+    if (spaces.length > 0) search.set('spaces', spaces.join(','))
     if (cursor) search.set('cursor', cursor)
     const page = normalizePage(await requestJson<unknown>(`/api/v1/inbox?${search}`))
     ids.push(...page.notifications.map((item) => item.id))

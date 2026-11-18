@@ -27,7 +27,7 @@
   "web": { "folder": "inbox" },
   "slots": {
     "pages": ["/inbox", "/threads", "/later"],
-    "parts": ["workspace.threads", "workspace.later", "workspace.inbox_triage"],
+    "parts": ["workspace.threads", "workspace.later", "workspace.inbox_triage", "workspace.inbox_views"],
     "sidebar": ["home.inbox"],
     "home": ["needsYou"],
     "settings": [],

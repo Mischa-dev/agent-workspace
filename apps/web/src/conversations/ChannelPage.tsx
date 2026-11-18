@@ -162,17 +162,6 @@ export function ChannelPage() {
     () => queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) }),
     [projectId, queryClient],
   )
-  useAutoMarkSeen(
-    {
-      conversationId: channelId,
-      highestSequence: page?.highestSequence ?? 0,
-      highestSeenSequence: page?.readState.highestSeenSequence ?? 0,
-      // Only once the newest entry is on screen.
-      ready: Boolean(validBoundary && page?.capabilities.markSeen && entries.at(-1)?.sequence === page.highestSequence),
-    },
-    refreshSidebar,
-  )
-
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'channel', conversationId: channelId },
@@ -192,6 +181,16 @@ export function ChannelPage() {
   const channelExperience = useProjectExperience(projectId)
   const tabsShown = channelExperience.shows('channel.tabs') && channelExperience.shows('area.pages')
   const pageTab = tabsShown && validBoundary ? tabParam : null
+  useAutoMarkSeen(
+    {
+      conversationId: channelId,
+      highestSequence: page?.highestSequence ?? 0,
+      highestSeenSequence: page?.readState.highestSeenSequence ?? 0,
+      // Only once the newest entry is on screen, and not while a page tab hides the messages.
+      ready: Boolean(validBoundary && !pageTab && page?.capabilities.markSeen && entries.at(-1)?.sequence === page.highestSequence),
+    },
+    refreshSidebar,
+  )
   // Without the details panel, a private channel still lists its members.
   const detailsTab = detailsParam && (detailsShown || (detailsParam === 'members' && isPrivate)) ? detailsParam : null
   const membersOpen = detailsTab === 'members' && isPrivate && !detailsShown

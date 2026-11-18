@@ -57,6 +57,7 @@ export const PART_IDS = [
   'workspace.threads',
   'workspace.later',
   'workspace.inbox_triage',
+  'workspace.inbox_views',
   'workspace.runs',
   'workspace.hosts',
 ] as const
