@@ -233,11 +233,31 @@ pub(crate) async fn readable_file(
     file_id: Uuid,
 ) -> Result<FileRow, AppError> {
     let sql = format!("SELECT {FILE_COLUMNS} FROM files file WHERE file.id = $1 AND {READABLE}");
-    bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(file_id), reader)
+    let row = bind_reader(sqlx::query_as::<_, FileRow>(&sql).bind(file_id), reader)
         .fetch_optional(crate::db::scoped(pool))
         .await?
         .filter(|row| !hidden_by_agent_limit(reader, row))
-        .ok_or(AppError::NotFound("file"))
+        .ok_or(AppError::NotFound("file"))?;
+    // A file in a task's discussion (a comment's, C1.4) keeps the task
+    // limit its message has: hidden while the reader, or an app acting for
+    // them, can't see tasks there.
+    let mut connection = crate::db::scoped_tx(pool).await?;
+    let conversation =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT conversation_id FROM files WHERE id = $1")
+            .bind(row.id)
+            .fetch_one(&mut *connection)
+            .await?;
+    if let Some(conversation) = conversation
+        && crate::conversations::task_discussion_hidden(
+            &mut connection,
+            reader.actor_id(),
+            conversation,
+        )
+        .await?
+    {
+        return Err(AppError::NotFound("file"));
+    }
+    Ok(row)
 }
 
 /// The files of one message the reader may see, in order.

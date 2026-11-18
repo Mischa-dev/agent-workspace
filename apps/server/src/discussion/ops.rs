@@ -364,6 +364,12 @@ impl Operation for CommentList {
         let Some(conversation_id) =
             crate::conversations::threads::comments_of(connection, kind.as_str(), thing_id).await?
         else {
+            if kind == SubjectKind::Task
+                && let Some(space) = home.project_id
+                && !crate::conversations::sees_tasks_in(&mut *connection, viewer, space).await?
+            {
+                return Err(OpError::not_found("That thing"));
+            }
             return Ok(CommentListOutput {
                 conversation_id: None,
                 space_id: home.project_id,
@@ -374,6 +380,12 @@ impl Operation for CommentList {
                 accepts_comments,
             });
         };
+        // A task's discussion only while the caller, and an app acting for
+        // them, still sees tasks there.
+        if crate::conversations::task_discussion_hidden(connection, viewer, conversation_id).await?
+        {
+            return Err(OpError::not_found("That thing"));
+        }
         let (space_id, message_count, unread) = sqlx::query_as::<_, (Uuid, i64, bool)>(
             r#"
             SELECT conversation.project_id, conversation.next_entry_sequence - 1,

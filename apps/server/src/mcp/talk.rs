@@ -849,6 +849,14 @@ async fn readable_conversation(
     {
         return Ok(Err(ToolResult::not_found("That conversation")));
     }
+    // A task's discussion only while the caller, and an app acting for
+    // them, still sees tasks there.
+    let mut connection = crate::db::scoped_tx(&state.pool).await?;
+    if crate::conversations::task_discussion_hidden(&mut connection, principal.actor_id, row.id)
+        .await?
+    {
+        return Ok(Err(ToolResult::not_found("That conversation")));
+    }
     Ok(Ok(row))
 }
 

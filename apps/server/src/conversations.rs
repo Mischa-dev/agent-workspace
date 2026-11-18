@@ -4433,6 +4433,38 @@ where
     .await?)
 }
 
+/// Whether `viewer` is kept from a task's discussion (its comments
+/// conversation or one of that conversation's threads) because they don't
+/// see tasks in its space: by their role, or by the agent limit of an app
+/// acting for them. False for any other conversation, which the usual
+/// visibility rule decides alone.
+pub(crate) async fn task_discussion_hidden(
+    connection: &mut sqlx::PgConnection,
+    viewer: Uuid,
+    conversation_id: Uuid,
+) -> Result<bool, AppError> {
+    let space = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT discussion.project_id
+        FROM conversations place
+        LEFT JOIN conversations parent ON parent.id = place.parent_channel_id
+        JOIN conversations discussion
+          ON discussion.id = CASE WHEN parent.kind = 'comments' THEN parent.id ELSE place.id END
+        WHERE place.id = $1 AND discussion.kind = 'comments'
+          AND discussion.subject_kind = 'task'
+          AND conversation_visible_to(place.id, $2)
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(viewer)
+    .fetch_optional(&mut *connection)
+    .await?;
+    match space {
+        Some(space) => Ok(!sees_tasks_in(&mut *connection, viewer, space).await?),
+        None => Ok(false),
+    }
+}
+
 /// Whether a message `author` sends or edits now may notify everyone in a
 /// large conversation (`@everyone` past the small-audience allowance): an
 /// owner or admin whose role keeps "moderate channels", and, while an app
