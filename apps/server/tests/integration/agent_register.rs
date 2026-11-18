@@ -87,7 +87,7 @@ async fn a_host_proposes_an_agent_and_someone_who_may_add_agents_approves_it() {
     // The built-in host's own offers come first; this host's follow.
     let from_host: Vec<&Value> = offers["value"]["offers"]
         .as_array()
-        .unwrap()
+        .expect("offers")
         .iter()
         .filter(|offer| offer["hostId"] == host.id.to_string())
         .collect();

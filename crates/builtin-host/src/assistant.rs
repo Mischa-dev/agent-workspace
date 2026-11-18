@@ -355,7 +355,7 @@ pub async fn run(reporter: &RunReporter, start: &AssistantStart) -> Outcome {
         };
         let reply: ModelReply = match reporter.model_turn(&turn).await {
             Ok(reply) => reply,
-            Err(error) if matches!(error, ClientError::Refused(401 | 404 | 410, _)) => {
+            Err(ClientError::Refused(401 | 404 | 410, _)) => {
                 return Outcome::Ended;
             }
             Err(error) => return fail(reporter, &reason(&error)).await,
