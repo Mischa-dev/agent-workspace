@@ -128,6 +128,8 @@ export const FILTER_RULES: Record<keyof FilterValues, Rule> = {
     const clauses = parseClauses(value)
     return clauses.length > 0 && clausesWithinLimits(clauses)
   },
+  // A saved view whose filters the controls here can't show: the server reads it.
+  viewId: id,
 }
 
 export const FILTER_KEYS = Object.keys(FILTER_RULES) as Array<keyof FilterValues>

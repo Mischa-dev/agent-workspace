@@ -244,7 +244,7 @@ async fn board_columns_and_calendar_months_read_only_their_own_records() {
         let mut cursor = None::<String>;
         loop {
             let mut path = format!(
-                "{uri}/records?view={pipeline}&group={key}&limit=15&sort=%5B%7B%22field%22%3A%22title%22%7D%5D"
+                "{uri}/records?view={pipeline}&group={key}&limit=15&sort=%5B%7B%22field%22%3A%22title%22%2C%22direction%22%3A%22asc%22%7D%5D"
             );
             if let Some(cursor) = &cursor {
                 path.push_str(&format!("&cursor={cursor}"));
@@ -374,45 +374,19 @@ async fn board_columns_and_calendar_months_read_only_their_own_records() {
     }
 
     // The app makes a board from the page, on the field that fits.
-    let (status, made) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &format!("{uri}/views"),
-        json!({"name": "Stages", "type": "board"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
-    assert_eq!(made["type"], "board");
-    assert_eq!(made["groupBy"], stage["id"]);
-    let (status, made) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &format!("{uri}/views"),
-        json!({"name": "Months", "type": "calendar", "config": {"dateField": ships}}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
-    assert_eq!(made["dateField"], json!(ships));
-    let (status, refused) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &format!("{uri}/views"),
-        json!({"name": "Wrong", "type": "calendar", "config": {"dateField": notes}}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
-    let (status, refused) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &format!("{uri}/views"),
-        json!({"name": "Odd", "type": "timeline"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let ops = format!("/api/v2/w/{}/ops/view_create", setup.organization_id);
+    let make = |body: Value| write(&setup, &setup.browser, "POST", &ops, body);
+    let (status, made) =
+        make(json!({"collection": collection, "name": "Stages", "type": "board", "shared": true}))
+            .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    assert_eq!(made["value"]["type"], "board");
+    assert_eq!(made["value"]["config"]["groupBy"], stage["id"]);
+    let (status, made) = make(json!({"collection": collection, "name": "Months", "type": "calendar", "config": {"dateField": ships}})).await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    assert_eq!(made["value"]["config"]["dateField"], json!(ships));
+    let (status, refused) = make(json!({"collection": collection, "name": "Wrong", "type": "calendar", "config": {"dateField": notes}})).await;
+    assert_ne!(refused["outcome"], "ok", "{status} {refused}");
 }
 
 fn urlencode(value: &str) -> String {
@@ -425,4 +399,316 @@ fn urlencode(value: &str) -> String {
             _ => format!("%{byte:02X}"),
         })
         .collect()
+}
+
+/// T1.14: a timeline reads the records whose bar, from the start date to the
+/// end date (one day without an end), touches the weeks asked for, and no
+/// others; a list and a timeline are views any collection can have.
+#[tokio::test]
+async fn timeline_ranges_read_only_bars_that_touch_them() {
+    let Some(setup) = setup("awd110_timeline").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let created = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "name": "Trips",
+            "fields": [
+                {"name": "Leaves", "type": "date"},
+                {"name": "Returns", "type": "date"},
+            ],
+            "views": [
+                {"name": "Plan", "type": "timeline"},
+                {"name": "Lines", "type": "list"},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Trips"}),
+    )
+    .await;
+    let views = described["value"]["definition"]["views"].clone();
+    let plan = views
+        .as_array()
+        .expect("views")
+        .iter()
+        .find(|view| view["name"] == "Plan")
+        .expect("Plan")
+        .clone();
+    assert_eq!(plan["type"], "timeline", "{views}");
+    assert_eq!(plan["dateField"], "Leaves", "{views}");
+    assert_eq!(plan["endField"], "Returns", "{views}");
+
+    // Before: ends before the range. Across: starts before and ends after.
+    // Inside, Late (starts on its last day), Day (no end, inside), After
+    // (starts on the day after), Undated (no start).
+    let trips = [
+        ("Before", Some("2026-10-01"), Some("2026-10-31")),
+        ("Across", Some("2026-10-20"), Some("2026-12-20")),
+        ("Inside", Some("2026-11-05"), Some("2026-11-08")),
+        ("Late", Some("2026-11-30"), Some("2027-01-10")),
+        ("Day", Some("2026-11-15"), None),
+        ("After", Some("2026-12-01"), Some("2026-12-03")),
+        ("Undated", None, Some("2026-11-10")),
+    ];
+    let records = trips
+        .iter()
+        .map(|(title, leaves, returns)| {
+            let mut fields = json!({});
+            if let Some(leaves) = leaves {
+                fields["Leaves"] = json!(leaves);
+            }
+            if let Some(returns) = returns {
+                fields["Returns"] = json!(returns);
+            }
+            json!({"title": title, "fields": fields})
+        })
+        .collect::<Vec<_>>();
+    let written = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Trips", "records": records, "clientRequestId": "trips"}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+
+    let base = format!("/api/v1/projects/{work}/collections");
+    let (_, list) = get(&setup, &setup.browser, &base).await;
+    let collection = list["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .find(|entry| entry["name"] == "Trips")
+        .expect("Trips")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let uri = format!("{base}/{collection}");
+    let (_, body) = get(&setup, &setup.browser, &uri).await;
+    let field = |name: &str| {
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .find(|field| field["name"] == name)
+            .unwrap_or_else(|| panic!("{name}"))["id"]
+            .as_str()
+            .expect("id")
+            .to_owned()
+    };
+    let (leaves, returns) = (field("Leaves"), field("Returns"));
+    let (status, november) = get(
+        &setup,
+        &setup.browser,
+        &format!("{uri}/records?dateField={leaves}&endField={returns}&from=2026-11-01&to=2026-12-01&sort=%5B%7B%22field%22%3A%22title%22%2C%22direction%22%3A%22asc%22%7D%5D"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{november}");
+    assert_eq!(
+        titles(&november),
+        ["Across", "Day", "Inside", "Late"],
+        "{november}"
+    );
+    // A timeline's range may run longer than a calendar's, but not past a
+    // year and a bit, and its two fields differ.
+    let (status, year) = get(
+        &setup,
+        &setup.browser,
+        &format!(
+            "{uri}/records?dateField={leaves}&endField={returns}&from=2026-01-01&to=2027-01-01"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{year}");
+    for query in [
+        format!("dateField={leaves}&endField={returns}&from=2026-01-01&to=2028-01-01"),
+        format!("dateField={leaves}&endField={leaves}&from=2026-11-01&to=2026-12-01"),
+        format!("endField={returns}&from=2026-11-01&to=2026-12-01"),
+    ] {
+        let (status, refused) =
+            get(&setup, &setup.browser, &format!("{uri}/records?{query}")).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{query}: {refused}"
+        );
+    }
+}
+
+/// T1.31: a chart's groups add up a number field (sum, average, least,
+/// most) beside their counts, and the whole adds up each record once even
+/// when a record is in several groups; a count reads no field, and a sum
+/// of a field that isn't a number is refused.
+#[tokio::test]
+async fn charts_add_up_a_number_field_by_group() {
+    let Some(setup) = setup("awd110_charts").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let created = call(
+        "collection_write",
+        json!({
+            "projectId": "WORK",
+            "name": "Deals",
+            "fields": [
+                {"name": "Stage", "type": "single_choice", "options": [{"name": "Open"}, {"name": "Won"}]},
+                {"name": "Tags", "type": "multiple_choice", "options": [{"name": "Big"}, {"name": "New"}]},
+                {"name": "Amount", "type": "number"},
+                {"name": "Note", "type": "text"},
+            ],
+            "views": [
+                {"name": "By stage", "type": "chart", "chart": {"measure": "sum", "field": "Amount"}},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let records = [
+        ("A", "Open", vec!["Big", "New"], Some(100)),
+        ("B", "Open", vec!["Big"], Some(50)),
+        ("C", "Won", vec!["New"], Some(30)),
+        ("D", "Won", vec![], None),
+    ]
+    .iter()
+    .map(|(title, stage, tags, amount)| {
+        let mut fields = json!({"Stage": stage, "Tags": tags});
+        if let Some(amount) = amount {
+            fields["Amount"] = json!(amount);
+        }
+        json!({"title": title, "fields": fields})
+    })
+    .collect::<Vec<_>>();
+    let written = call(
+        "record_write",
+        json!({"projectId": "WORK", "collection": "Deals", "records": records, "clientRequestId": "deals"}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+
+    // The view groups by its first choice field and sums Amount.
+    let described = call(
+        "collection_describe",
+        json!({"projectId": "WORK", "collection": "Deals"}),
+    )
+    .await;
+    let view = described["value"]["definition"]["views"][0].clone();
+    assert_eq!(view["groupBy"], "Stage", "{view}");
+    assert_eq!(view["chart"]["measure"], "sum", "{view}");
+    assert_eq!(view["chart"]["field"], "Amount", "{view}");
+    let by_stage = call(
+        "record_query",
+        json!({"projectId": "WORK", "collection": "Deals", "view": "By stage", "limit": 1}),
+    )
+    .await;
+    let groups = by_stage["value"]["groups"].clone();
+    assert_eq!(
+        groups,
+        json!([
+            {"name": "Open", "count": 2, "value": 150.0},
+            {"name": "Won", "count": 2, "value": 30.0},
+        ]),
+        "{by_stage}"
+    );
+    assert_eq!(by_stage["value"]["value"], 180.0, "{by_stage}");
+
+    // By a many-valued field each record adds to each of its groups, but
+    // to the whole once.
+    let base = format!("/api/v1/projects/{work}/collections");
+    let (_, list) = get(&setup, &setup.browser, &base).await;
+    let collection = list["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .find(|entry| entry["name"] == "Deals")
+        .expect("Deals")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let uri = format!("{base}/{collection}");
+    let (_, body) = get(&setup, &setup.browser, &uri).await;
+    let field = |name: &str| {
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .find(|field| field["name"] == name)
+            .unwrap_or_else(|| panic!("{name}"))["id"]
+            .as_str()
+            .expect("id")
+            .to_owned()
+    };
+    let (tags, amount, note) = (field("Tags"), field("Amount"), field("Note"));
+    let (status, by_tag) = get(
+        &setup,
+        &setup.browser,
+        &format!("{uri}/records?groupBy={tags}&measure=average&measureField={amount}&limit=1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{by_tag}");
+    let values = by_tag["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .map(|group| {
+            (
+                group["label"].as_str().unwrap_or("").to_owned(),
+                group["count"].clone(),
+                group["value"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        values.contains(&("Big".into(), json!(2), json!(75.0))),
+        "{by_tag}"
+    );
+    assert!(
+        values.contains(&("New".into(), json!(2), json!(65.0))),
+        "{by_tag}"
+    );
+    assert_eq!(by_tag["value"], json!(60.0), "{by_tag}");
+    let (status, most) = get(
+        &setup,
+        &setup.browser,
+        &format!("{uri}/records?groupBy=&measure=max&measureField={amount}&limit=1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{most}");
+    assert_eq!(most["value"], json!(100.0), "{most}");
+    assert_eq!(most["total"], json!(4), "{most}");
+
+    for query in [
+        format!("measure=sum&measureField={note}"),
+        format!("measure=count&measureField={amount}"),
+        "measure=sum".to_owned(),
+        "measure=median".to_owned(),
+        format!("measureField={amount}"),
+    ] {
+        let (status, refused) =
+            get(&setup, &setup.browser, &format!("{uri}/records?{query}")).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{query}: {refused}"
+        );
+    }
 }

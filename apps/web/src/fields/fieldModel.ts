@@ -11,34 +11,16 @@
  */
 
 /**
- * A field's type: the one list (T1.2) tasks, collections and module
- * manifests name types from; `modules/contract.ts` re-exports it. The
- * server's `crate::fields::FieldType` is the same list. `FIELD_TYPES` are
- * the ones a field can be made with; `people` and `labels` are named by
- * manifests only, for now. System types (`isSystemType`) show the record's
- * own columns and take no values.
+ * A field's type: the one list (T1.2, T1.13a), in `fieldTypes.ts`;
+ * `modules/contract.ts` re-exports it. The server's
+ * `crate::fields::FieldType` is the same list. `FIELD_TYPES` are the ones a
+ * field can be made with; `people` and `labels` are named by manifests only,
+ * for now. System types (`isSystemType`) show the record's own columns and
+ * take no values.
  */
-export type FieldType =
-  | 'text'
-  | 'long_text'
-  | 'number'
-  | 'date'
-  | 'single_choice'
-  | 'multiple_choice'
-  | 'status'
-  | 'person'
-  | 'people'
-  | 'labels'
-  | 'url'
-  | 'email'
-  | 'phone'
-  | 'checkbox'
-  | 'link'
-  | 'created_time'
-  | 'edited_time'
-  | 'created_by'
-  | 'edited_by'
-  | 'auto_id'
+export type { FieldType, FieldOp } from './fieldTypes'
+import type { FieldDecl } from '../modules/contract'
+import { FIELD_TYPE_INFO, FIELD_TYPE_LIST, isFieldType, typeInfo, type FieldOp, type FieldType } from './fieldTypes'
 
 /** What kind of status a status option is, in workflow order (the server's STATUS_CATEGORIES). */
 export const STATUS_CATEGORIES = ['backlog', 'unstarted', 'started', 'review', 'verification', 'completed', 'canceled'] as const
@@ -67,61 +49,77 @@ export type FieldDefinition = {
   target: LinkTarget | null
   /** Record links: the collection whose records they hold. */
   collection?: string | null
+  /** Formula fields: the formula as stored (fields as `{#<id>}`, the title as `{#title}`) and what it gives. */
+  formula?: FormulaSettings | null
+  /** Button fields: what it says and the operations pressing it runs (placeholders as stored). */
+  button?: ButtonSettings | null
   /** 1 is first. */
   position: number
   archived: boolean
   version: number
 }
 
-export type FieldValue = string | number | boolean | string[]
+/** One operation a button runs: its name, its title, and its arguments with `{{...}}` placeholders (fields as `{{#<id>}}`). */
+export type ButtonStep = { operation: string; title: string; arguments: Record<string, unknown> }
+export type ButtonSettings = { label: string; steps: ButtonStep[] }
+
+/** What a formula gives, which decides how it filters, sorts and groups. */
+export type FormulaResult = 'number' | 'text' | 'boolean' | 'date' | 'list'
+export type FormulaSettings = { source: string; result: FormulaResult }
+
+/** A formula's error for one record ("Divide by zero"): shown in the cell, filtered as empty. */
+export type FormulaError = { error: string }
+
+export type FieldValue = string | number | boolean | string[] | FormulaError
 export type FieldValues = Record<string, FieldValue>
+
+export function isFormulaError(value: unknown): value is FormulaError {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) && typeof (value as FormulaError).error === 'string'
+}
 
 export type LinkTarget = 'task' | 'page' | 'record'
 
 export type FieldReference = { id: string; kind: 'person' | 'task' | 'page' | 'record'; label: string; key: string | null }
 
-export type FieldOp = 'is' | 'isNot' | 'empty' | 'notEmpty' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'within' | 'categoryIs' | 'categoryIsNot'
-
 /** One field filter, with stored values (option IDs, actor IDs, "true", numbers, dates). */
 export type FieldClause = { field: string; op: FieldOp; values?: string[] }
 
-/** The types a field can be made with. `tasks: false` ones are for collections only. */
-export const FIELD_TYPES: Array<{ type: FieldType; label: string; hint: string; tasks?: false }> = [
-  { type: 'text', label: 'Text', hint: 'A line or a few lines of text' },
-  { type: 'long_text', label: 'Long text', hint: 'Paragraphs, such as notes' },
-  { type: 'number', label: 'Number', hint: 'Such as 3 or 2.5' },
-  { type: 'date', label: 'Date', hint: 'A day' },
-  { type: 'single_choice', label: 'Choice', hint: 'One of a set of options' },
-  { type: 'multiple_choice', label: 'Choices', hint: 'Any of a set of options' },
-  { type: 'status', label: 'Status', hint: 'Where it is: options in categories such as started or done', tasks: false },
-  { type: 'person', label: 'Person', hint: 'Someone in the project' },
-  { type: 'url', label: 'Link (URL)', hint: 'A web address' },
-  { type: 'email', label: 'Email', hint: 'An email address' },
-  { type: 'phone', label: 'Phone', hint: 'A phone number' },
-  { type: 'checkbox', label: 'Checkbox', hint: 'Yes or no' },
-  { type: 'link', label: 'Task, page or record', hint: 'A task, a page or a collection’s record in the project' },
-  { type: 'created_time', label: 'Created time', hint: 'When the record was made', tasks: false },
-  { type: 'edited_time', label: 'Edited time', hint: 'When the record last changed', tasks: false },
-  { type: 'created_by', label: 'Created by', hint: 'Who made the record', tasks: false },
-  { type: 'edited_by', label: 'Edited by', hint: 'Who last changed the record', tasks: false },
-  { type: 'auto_id', label: 'ID', hint: 'The record’s number', tasks: false },
-]
+/** The types a field can be made with, from the registry. `tasks: false` ones are for collections only. */
+export const FIELD_TYPES: Array<{ type: FieldType; label: string; hint: string; tasks?: false }> = FIELD_TYPE_LIST.filter(
+  (type) => FIELD_TYPE_INFO[type].creatable,
+).map((type) => {
+  const { label, hint, tasks } = FIELD_TYPE_INFO[type]
+  return tasks ? { type, label, hint } : { type, label, hint, tasks: false as const }
+})
 
 /** Whether a type shows the record's own columns: nobody fills it in. */
 export function isSystemType(type: FieldType) {
-  return type === 'created_time' || type === 'edited_time' || type === 'created_by' || type === 'edited_by' || type === 'auto_id'
+  return typeInfo(type).system
+}
+
+/** Whether nobody fills in a field of the type: a system field, a formula the server works out, or a button. */
+export function isReadOnlyType(type: FieldType) {
+  return typeInfo(type).system || type === 'formula' || type === 'button'
+}
+
+/** A field, or only its type. */
+export type TypeOrField = FieldType | Pick<FieldDefinition, 'type' | 'formula'>
+
+const RESULT_LIKE: Record<FormulaResult, FieldType> = { number: 'number', date: 'date', boolean: 'checkbox', text: 'text', list: 'text' }
+
+/** The type a field reads like: a formula's result's, any other field's own. */
+export function likeOf(of: TypeOrField): FieldType {
+  if (typeof of === 'string') return of
+  return of.type === 'formula' && of.formula ? RESULT_LIKE[of.formula.result] : of.type
 }
 
 /** The type it filters, sorts and groups like (the server's `behaves_as`). */
-export function behavesAs(type: FieldType): FieldType {
-  if (type === 'created_time' || type === 'edited_time') return 'date'
-  if (type === 'created_by' || type === 'edited_by') return 'person'
-  if (type === 'auto_id') return 'number'
-  return type
+export function behavesAs(of: TypeOrField): FieldType {
+  return typeInfo(likeOf(of)).behavesAs
 }
 
 export function typeLabel(type: FieldType) {
-  return FIELD_TYPES.find((entry) => entry.type === type)?.label ?? type
+  return FIELD_TYPE_INFO[type]?.label ?? type
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +131,7 @@ const asRecord = (value: unknown): Wire =>
 const asString = (value: unknown) => (typeof value === 'string' ? value : '')
 
 function fieldType(value: unknown): FieldType {
-  return FIELD_TYPES.some((entry) => entry.type === value) ? (value as FieldType) : 'text'
+  return isFieldType(value) ? value : 'text'
 }
 
 export function normalizeField(value: unknown): FieldDefinition {
@@ -155,19 +153,67 @@ export function normalizeField(value: unknown): FieldDefinition {
     }),
     target: field.target === 'page' || field.target === 'task' || field.target === 'record' ? field.target : null,
     collection: typeof field.collection === 'string' ? field.collection : null,
+    formula: formulaOf(field.formula),
+    button: buttonOf(field.button),
     position: typeof field.position === 'number' ? field.position : 0,
     archived: field.archived === true,
     version: typeof field.version === 'number' ? field.version : 1,
   }
 }
 
-/** A record's values: only the shapes a field can hold. */
+/** A stored formula as people write it: `{#<id>}` by today's field name, `{#title}` by the title's. */
+export function formulaShown(source: string, fields: readonly FieldDefinition[], titleName: string) {
+  return source.replace(/\{#([^}]*)\}/g, (whole, id: string) => {
+    if (id === 'title') return `{${titleName}}`
+    const field = fields.find((entry) => entry.id === id)
+    return field && !/[{}]/.test(field.name) ? `{${field.name}}` : whole
+  })
+}
+
+/** A button's stored arguments as people write them: `{{#<id>}}` by today's field name. */
+export function buttonArgumentsShown(value: unknown, fields: readonly FieldDefinition[]): unknown {
+  if (typeof value === 'string') {
+    return value.replace(/\{\{\s*#([^}]*?)\s*\}\}/g, (whole, id: string) => {
+      const field = fields.find((entry) => entry.id === id)
+      return field && !field.name.includes('}}') ? `{{${field.name}}}` : whole
+    })
+  }
+  if (Array.isArray(value)) return value.map((item) => buttonArgumentsShown(item, fields))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, buttonArgumentsShown(item, fields)]))
+  }
+  return value
+}
+
+function buttonOf(value: unknown): ButtonSettings | null {
+  const button = asRecord(value)
+  if (!Array.isArray(button.steps)) return null
+  return {
+    label: asString(button.label),
+    steps: button.steps.map((entry) => {
+      const step = asRecord(entry)
+      return { operation: asString(step.operation), title: asString(step.title) || asString(step.operation), arguments: asRecord(step.arguments) }
+    }),
+  }
+}
+
+const FORMULA_RESULTS: readonly FormulaResult[] = ['number', 'text', 'boolean', 'date', 'list']
+
+function formulaOf(value: unknown): FormulaSettings | null {
+  const formula = asRecord(value)
+  if (typeof formula.source !== 'string') return null
+  const result = FORMULA_RESULTS.includes(formula.result as FormulaResult) ? (formula.result as FormulaResult) : 'text'
+  return { source: formula.source, result }
+}
+
+/** A record's values: only the shapes a field can hold (a formula's error too). */
 export function normalizeValues(value: unknown): FieldValues {
   const values: FieldValues = {}
   for (const [key, raw] of Object.entries(asRecord(value))) {
     if (typeof raw === 'string' || typeof raw === 'boolean') values[key] = raw
     else if (typeof raw === 'number' && Number.isFinite(raw)) values[key] = raw
     else if (Array.isArray(raw)) values[key] = raw.filter((item): item is string => typeof item === 'string')
+    else if (isFormulaError(raw)) values[key] = { error: raw.error }
   }
   return values
 }
@@ -193,6 +239,22 @@ export function normalizeReferences(value: unknown): FieldReference[] {
 
 export function isEmpty(value: FieldValue | undefined | null) {
   return value === undefined || value === null || value === '' || value === false || (Array.isArray(value) && value.length === 0)
+}
+
+/** A formula's value as it reads: by what it gives. */
+function formulaText(field: FieldDefinition, value: FieldValue): string {
+  if (isFormulaError(value)) return `Error: ${value.error}`
+  if (Array.isArray(value)) return value.join(', ')
+  switch (likeOf(field)) {
+    case 'number':
+      return typeof value === 'number' ? formatNumber(value) : String(value)
+    case 'date':
+      return typeof value === 'string' ? formatFieldDate(value) : String(value)
+    case 'checkbox':
+      return value === true ? 'Yes' : ''
+    default:
+      return String(value)
+  }
 }
 
 /** The options a value names, in the field's order. */
@@ -239,6 +301,8 @@ export function displayText(
   references: readonly FieldReference[] = [],
 ): string {
   if (isEmpty(value)) return ''
+  if (field.type === 'formula') return formulaText(field, value!)
+  if (isFormulaError(value)) return ''
   switch (field.type) {
     case 'number':
       return typeof value === 'number' ? formatNumber(value) : String(value)
@@ -288,8 +352,8 @@ const OP_LABELS: Record<FieldOp, string> = {
   categoryIsNot: 'is not in category',
 }
 
-export function opLabel(op: FieldOp, type?: FieldType) {
-  type = type ? behavesAs(type) : type
+export function opLabel(op: FieldOp, of?: TypeOrField) {
+  const type = of ? behavesAs(of) : undefined
   if (type === 'date') return { gt: 'is after', gte: 'is on or after', lt: 'is before', lte: 'is on or before' }[op as 'gt'] ?? OP_LABELS[op]
   if (type === 'number') return { gt: 'is above', gte: 'is at least', lt: 'is below', lte: 'is at most' }[op as 'gt'] ?? OP_LABELS[op]
   if (type === 'checkbox' && op === 'is') return 'is checked'
@@ -297,26 +361,9 @@ export function opLabel(op: FieldOp, type?: FieldType) {
   return OP_LABELS[op]
 }
 
-/** The filter operations a type offers, as the server accepts them. */
-export function opsFor(type: FieldType): FieldOp[] {
-  switch (behavesAs(type)) {
-    case 'text':
-    case 'url':
-    case 'email':
-    case 'phone':
-      return ['contains', 'is', 'isNot', 'empty', 'notEmpty']
-    case 'long_text':
-      return ['contains', 'empty', 'notEmpty']
-    case 'number':
-    case 'date':
-      return ['is', 'gt', 'gte', 'lt', 'lte', 'empty', 'notEmpty']
-    case 'checkbox':
-      return ['is', 'empty']
-    case 'status':
-      return ['is', 'isNot', 'categoryIs', 'categoryIsNot', 'empty', 'notEmpty']
-    default:
-      return ['is', 'isNot', 'empty', 'notEmpty']
-  }
+/** The filter operations a type offers, as the server accepts them (the registry's). */
+export function opsFor(of: TypeOrField): FieldOp[] {
+  return [...typeInfo(likeOf(of)).ops]
 }
 
 export function opTakesValues(op: FieldOp) {
@@ -324,18 +371,16 @@ export function opTakesValues(op: FieldOp) {
 }
 
 /** Whether a task list groups by a field of the type: one group per task. */
-export function canGroup(type: FieldType) {
-  const like = behavesAs(type)
-  return like === 'single_choice' || like === 'status' || like === 'person' || like === 'checkbox'
+export function canGroup(of: TypeOrField) {
+  return typeInfo(likeOf(of)).grouping === 'one'
 }
 
 /**
  * Whether a collection's views group by a field of the type: also several
  * choices (a record in each of its groups) and dates (by day, week or month).
  */
-export function canGroupRecords(type: FieldType) {
-  const like = behavesAs(type)
-  return canGroup(type) || like === 'multiple_choice' || like === 'date'
+export function canGroupRecords(of: TypeOrField) {
+  return typeInfo(likeOf(of)).grouping !== null
 }
 
 /** How a view grouped by a date puts records together. */
@@ -419,12 +464,35 @@ export function clauseText(clause: FieldClause, field: FieldDefinition | undefin
     if (field.type === 'single_choice' || field.type === 'multiple_choice' || field.type === 'status') {
       return field.options.find((option) => option.id === value)?.name ?? 'an old option'
     }
-    const like = behavesAs(field.type)
+    const like = behavesAs(field)
     if (like === 'person' || like === 'link') return references.find((entry) => entry.id === value)?.label ?? 'someone'
     if (like === 'date') return formatFieldDate(value)
     if (field.type === 'checkbox') return ''
     return value
   })
-  const words = [field.name, opLabel(clause.op, field.type), values.filter(Boolean).join(', ')].filter(Boolean)
+  const words = [field.name, opLabel(clause.op, field), values.filter(Boolean).join(', ')].filter(Boolean)
   return words.join(' ')
+}
+
+// ---------------------------------------------------------------------------
+// Fields module manifests declare
+
+/**
+ * A field a module manifest declares (`FieldDecl`), as a field definition
+ * (T1.13a): manifests declare a subset of a field (an id, a label, a type and
+ * option names), so the registry draws and edits their values the way it does
+ * a project's own fields. An option's id is its name, as manifests' values hold it.
+ */
+export function definitionOfDecl(decl: FieldDecl, position = 1): FieldDefinition {
+  return {
+    id: decl.id,
+    name: decl.label,
+    description: '',
+    type: decl.type,
+    options: (decl.options ?? []).map((name) => ({ id: name, name, color: '#8b8d98', archived: false, category: null })),
+    target: null,
+    position,
+    archived: false,
+    version: 1,
+  }
 }

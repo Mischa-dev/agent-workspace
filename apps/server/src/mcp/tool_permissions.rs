@@ -132,8 +132,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("whiteboard_render", None),
     ("whiteboard_trash_empty", Some(WhiteboardsEdit)),
     ("task_depend", Some(TasksEdit)),
-    ("view_list", Some(TasksView)),
-    ("view_write", Some(TasksView)),
     ("my_work", None),
     ("template_list", None),
     ("template_write", Some(TasksEdit)),

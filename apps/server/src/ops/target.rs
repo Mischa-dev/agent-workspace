@@ -122,6 +122,27 @@ const KINDS: &[(&str, &str)] = &[
          JOIN projects project ON project.id = item.project_id \
          WHERE item.id = $1 AND $2::uuid IS NOT NULL",
     ),
+    (
+        "collection",
+        "SELECT project.organization_id, project.id FROM collections collection \
+         JOIN projects project ON project.id = collection.project_id \
+         WHERE collection.id = $1 AND $2::uuid IS NOT NULL",
+    ),
+    // A view: shared, or the caller's own (another's personal view is
+    // not found).
+    (
+        "view",
+        "SELECT project.organization_id, project.id FROM collection_views view \
+         JOIN projects project ON project.id = view.project_id \
+         WHERE view.id = $1 AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2)",
+    ),
+    // A dashboard: shared, or the caller's own (anyone else's is not found).
+    (
+        "dashboard",
+        "SELECT dashboard.workspace_id, dashboard.space_id FROM dashboards dashboard \
+         WHERE dashboard.id = $1 \
+           AND (dashboard.owner_actor_id IS NULL OR dashboard.owner_actor_id = $2)",
+    ),
     // Any thing by id alone (K3.19), from the registry: a conversation or
     // anything that follows one (a message, a decision from it, a file in
     // it) only when the viewer may see that conversation. Those are checked

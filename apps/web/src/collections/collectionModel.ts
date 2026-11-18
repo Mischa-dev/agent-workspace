@@ -1,6 +1,8 @@
-import { STATUS_CATEGORIES, canGroup, canGroupRecords, isEmpty, isSystemType, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { STATUS_CATEGORIES, behavesAs, canGroup, canGroupRecords, isEmpty, isReadOnlyType, likeOf, type FieldClause, type FieldDefinition, type FieldOption, type FieldReference, type FieldType, type FieldValue, type FieldValues } from '../fields/fieldModel'
+import { typeInfo } from '../fields/fieldTypes'
 import { formatDateLabel } from '../ui/dateModel'
-import type { CollectionRecord, GroupCount, SortRule, ViewConfig } from './api'
+import { dayFromNumber, dayNumber } from '../views/dates'
+import type { ChartConfig, CollectionRecord, FilterItem, GroupCount, MeasureOp, SortRule, ViewConfig } from './api'
 
 /** How a record is named where its title is empty. */
 export const recordName = (record: Pick<CollectionRecord, 'title' | 'number'>) => record.title || `#${record.number}`
@@ -8,28 +10,8 @@ export const recordName = (record: Pick<CollectionRecord, 'title' | 'number'>) =
 /** The title column's width when a view doesn't set one, in pixels. */
 export const TITLE_WIDTH = 280
 
-const WIDTHS: Record<FieldType, number> = {
-  text: 240,
-  long_text: 320,
-  number: 120,
-  date: 140,
-  single_choice: 160,
-  multiple_choice: 220,
-  status: 160,
-  person: 180,
-  people: 220,
-  labels: 220,
-  url: 200,
-  email: 220,
-  phone: 160,
-  checkbox: 104,
-  link: 220,
-  created_time: 170,
-  edited_time: 170,
-  created_by: 180,
-  edited_by: 180,
-  auto_id: 90,
-}
+/** A field's column width when the view doesn't set one: its type's (the field registry's). */
+const widthOf = (field: FieldDefinition) => typeInfo(field.type).width
 
 export type ShownColumn = { field: FieldDefinition; width: number }
 
@@ -47,12 +29,12 @@ export function columnOrder(fields: readonly FieldDefinition[], config: ViewConf
   const active = fields.filter((field) => !field.archived)
   const listed = config.columns.flatMap((column) => {
     const field = active.find((entry) => entry.id === column.field)
-    return field ? [{ field, hidden: column.hidden === true, width: column.width ?? WIDTHS[field.type] }] : []
+    return field ? [{ field, hidden: column.hidden === true, width: column.width ?? widthOf(field) }] : []
   })
   const rest = active
     .filter((field) => !config.columns.some((column) => column.field === field.id))
     .sort((left, right) => left.position - right.position)
-    .map((field) => ({ field, hidden: false, width: WIDTHS[field.type] }))
+    .map((field) => ({ field, hidden: false, width: widthOf(field) }))
   return [...listed, ...rest]
 }
 
@@ -63,7 +45,7 @@ export function withColumnHidden(fields: readonly FieldDefinition[], config: Vie
     columns: columnOrder(fields, config).map(({ field, hidden: wasHidden, width }) => ({
       field: field.id,
       ...((field.id === fieldId ? hidden : wasHidden) ? { hidden: true } : {}),
-      ...(width !== WIDTHS[field.type] ? { width } : {}),
+      ...(width !== widthOf(field) ? { width } : {}),
     })),
   }
 }
@@ -80,6 +62,8 @@ export function sameConfig(left: ViewConfig, right: ViewConfig) {
       config.columns,
       config.titleWidth,
       config.dateField,
+      config.endField ?? null,
+      config.chart ?? null,
     ])
   return comparable(left) === comparable(right)
 }
@@ -98,8 +82,11 @@ export function activeConfig(config: ViewConfig, fields: readonly FieldDefinitio
   const sort = config.sort.filter((rule) => BUILT_IN_SORTS.has(rule.field) || active.has(rule.field))
   const groupBy = config.groupBy !== null && active.has(config.groupBy) ? config.groupBy : null
   const dateField = config.dateField !== null && active.has(config.dateField) ? config.dateField : null
-  if (filters.length === config.filters.length && sort.length === config.sort.length && groupBy === config.groupBy && dateField === config.dateField) return config
-  return { ...config, filters, sort, groupBy, dateField }
+  // A chart adding up a field that's archived counts until it's back.
+  const measured = config.chart?.measure.field
+  const chart = config.chart && measured && !active.has(measured) ? { ...config.chart, measure: { op: 'count' as const } } : config.chart
+  if (filters.length === config.filters.length && sort.length === config.sort.length && groupBy === config.groupBy && dateField === config.dateField && chart === config.chart) return config
+  return { ...config, filters, sort, groupBy, dateField, chart }
 }
 
 /** What a sort key sorts by, in words: the title column, the record's number or a field. */
@@ -113,33 +100,15 @@ export function sortName(rule: SortRule, fields: readonly FieldDefinition[], tit
 /** "Severity, Z to A": a sort key's direction as people read it for its type. */
 export function sortText(rule: SortRule, fields: readonly FieldDefinition[], titleName: string) {
   const field = fields.find((entry) => entry.id === rule.field)
-  const type = rule.field === 'number' ? 'number' : rule.field === 'updated' ? 'date' : (field?.type ?? 'text')
-  const words =
-    type === 'number'
-      ? rule.direction === 'asc'
-        ? '1 to 9'
-        : '9 to 1'
-      : type === 'date'
-        ? rule.direction === 'asc'
-          ? 'oldest first'
-          : 'newest first'
-        : type === 'checkbox'
-          ? rule.direction === 'asc'
-            ? 'checked first'
-            : 'unchecked first'
-          : type === 'single_choice' || type === 'multiple_choice'
-            ? rule.direction === 'asc'
-              ? 'in option order'
-              : 'in reverse option order'
-            : rule.direction === 'asc'
-              ? 'A to Z'
-              : 'Z to A'
+  const type: FieldType = rule.field === 'number' ? 'number' : rule.field === 'updated' ? 'date' : field ? likeOf(field) : 'text'
+  const directions = typeInfo(type).sort ?? { asc: 'A to Z', desc: 'Z to A' }
+  const words = rule.direction === 'asc' ? directions.asc : directions.desc
   return `${sortName(rule, fields, titleName)}, ${words}`
 }
 
 /** Fields a table or cards can group by: choices, a status, a person, a checkbox or a date. */
 export function groupableFields(fields: readonly FieldDefinition[]) {
-  return fields.filter((field) => !field.archived && canGroupRecords(field.type))
+  return fields.filter((field) => !field.archived && canGroupRecords(field))
 }
 
 /**
@@ -147,7 +116,7 @@ export function groupableFields(fields: readonly FieldDefinition[]) {
  * choice, a status, a person or a checkbox someone sets.
  */
 export function boardFields(fields: readonly FieldDefinition[]) {
-  return fields.filter((field) => !field.archived && canGroup(field.type) && !isSystemType(field.type))
+  return fields.filter((field) => !field.archived && canGroup(field) && !isReadOnlyType(field.type))
 }
 
 /** A status field's options by category, in workflow order, then in the field's order (as the server groups them). */
@@ -302,7 +271,7 @@ export function calendarMonth(value: string | null, today = new Date()): Date {
 export const monthKey = (month: Date) => `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`
 
 /** The day (YYYY-MM-DD) a calendar puts a record on, or null when its date field is empty. */
-export function recordDay(record: CollectionRecord, dateField: string): string | null {
+export function recordDay(record: Pick<CollectionRecord, 'values'>, dateField: string): string | null {
   const value = record.values[dateField]
   return typeof value === 'string' && value ? value.slice(0, 10) : null
 }
@@ -310,4 +279,73 @@ export function recordDay(record: CollectionRecord, dateField: string): string |
 /** Fields a calendar can show records by. */
 export function dateFields(fields: readonly FieldDefinition[]) {
   return fields.filter((field) => !field.archived && field.type === 'date').sort((left, right) => left.position - right.position)
+}
+
+/** The weeks a collection's timeline shows: from the Monday of the week before `anchor` (YYYY-MM-DD), `weeks` weeks long; `to` is the day after the last. */
+export function timelineWindow(anchor: string, weeks = 13) {
+  const day = dayNumber(anchor)
+  // Day 0 (1970-01-01) was a Thursday, so a Monday is a day number ≡ 4 (mod 7).
+  const monday = day - ((((day - 4) % 7) + 7) % 7) - 7
+  return { first: monday, last: monday + weeks * 7 - 1, from: dayFromNumber(monday), to: dayFromNumber(monday + weeks * 7) }
+}
+
+/** A record's bar on a timeline, as day numbers: from its start date to its end date (a day when there's none, or it's before the start). Null without a start. */
+export function recordSpan(record: Pick<CollectionRecord, 'values'>, startField: string, endField: string | null | undefined) {
+  const start = recordDay(record, startField)
+  if (!start) return null
+  const first = dayNumber(start)
+  const end = endField ? recordDay(record, endField) : null
+  const last = end ? dayNumber(end) : first
+  return { start: first, end: Math.max(first, last) }
+}
+
+export const isClause = (item: FilterItem): item is FieldClause => !('and' in item) && !('or' in item)
+
+/** The conditions a filter item holds, however deep, counted as the server limits them. */
+export function groupClauses(item: FilterItem): FieldClause[] {
+  if (isClause(item)) return [item]
+  return ('and' in item ? item.and : item.or).flatMap(groupClauses)
+}
+
+/** Fields a chart can add up: numbers, and formulas and lookups that give one. */
+export function numberFields(fields: readonly FieldDefinition[]) {
+  return fields.filter((field) => !field.archived && behavesAs(field) === 'number').sort((left, right) => left.position - right.position)
+}
+
+const MEASURE_WORDS: Record<MeasureOp, string> = { count: 'Records', sum: 'Total', average: 'Average', min: 'Least', max: 'Most' }
+
+/** What a chart shows, in words: "Records", or "Total Amount". */
+export function measureLabel(chart: ChartConfig | null | undefined, fields: readonly FieldDefinition[]) {
+  const op = chart?.measure.op ?? 'count'
+  const field = fields.find((entry) => entry.id === chart?.measure.field)
+  return op === 'count' || !field ? MEASURE_WORDS.count : `${MEASURE_WORDS[op]} ${field.name}`
+}
+
+/** The word for each measure in a menu. */
+export const MEASURE_NAMES: Record<MeasureOp, string> = { count: 'How many records', sum: 'Total', average: 'Average', min: 'Least', max: 'Most' }
+
+/**
+ * A chart's groups as bars, slices or points: each group's count, or with a
+ * measure its value (null where no record in it has one).
+ */
+export function chartPoints(groups: readonly GroupCount[], op: MeasureOp) {
+  return groups.map((group) => ({ key: group.key, label: group.label || 'None', color: group.color, count: group.count, value: op === 'count' ? group.count : (group.value ?? null) }))
+}
+
+/** A number as a chart shows it: whole numbers in full, others to two places; `compact` for an axis (12K). */
+export function chartNumber(value: number, compact = false) {
+  return new Intl.NumberFormat(undefined, compact && Math.abs(value) >= 10_000 ? { notation: 'compact', maximumFractionDigits: 1 } : { maximumFractionDigits: 2 }).format(value)
+}
+
+/** Round tick values from 0 (or the least value, when below 0) to past the most, about `count` of them. */
+export function chartTicks(least: number, most: number, count = 4) {
+  const low = Math.min(0, least)
+  const high = Math.max(0, most)
+  if (high === low) return [low]
+  const raw = (high - low) / count
+  const power = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map((factor) => factor * power).find((candidate) => candidate >= raw) ?? raw
+  const ticks: number[] = []
+  for (let tick = Math.floor(low / step) * step; tick < high + step; tick += step) ticks.push(Number(tick.toPrecision(12)))
+  return ticks
 }

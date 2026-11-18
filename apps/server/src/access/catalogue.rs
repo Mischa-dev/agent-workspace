@@ -356,7 +356,7 @@ pub const PERMISSIONS: [PermissionInfo; 69] = [
         permission(
             Permission::DashboardsView,
             "dashboards.view",
-            "tasks",
+            "dashboards",
             "See dashboards",
             "Read the project's dashboards.",
             PermissionScope::Project,
@@ -369,7 +369,7 @@ pub const PERMISSIONS: [PermissionInfo; 69] = [
         permission(
             Permission::DashboardsEdit,
             "dashboards.edit",
-            "tasks",
+            "dashboards",
             "Edit dashboards",
             "Build and change the project's dashboards.",
             PermissionScope::Project,
@@ -964,7 +964,7 @@ pub const PERMISSIONS: [PermissionInfo; 69] = [
 ];
 
 /// The modules permissions are grouped by, in order, with their names.
-pub const PERMISSION_MODULES: [(&str, &str); 13] = [
+pub const PERMISSION_MODULES: [(&str, &str); 14] = [
     ("projects", "Projects"),
     ("tasks", "Tasks"),
     ("channels", "Channels"),
@@ -972,6 +972,7 @@ pub const PERMISSION_MODULES: [(&str, &str); 13] = [
     ("pages", "Pages and decisions"),
     ("whiteboards", "Whiteboards"),
     ("collections", "Collections"),
+    ("dashboards", "Dashboards"),
     ("sheets", "Sheets"),
     ("runs", "Runs"),
     ("code", "Code"),

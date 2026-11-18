@@ -129,6 +129,12 @@ pub static INCOMING_HOOK_DELIVERIES: Bucket = exact("incoming_hooks.deliveries",
 /// its links (H1.1).
 pub static WORKSPACE_PUBLIC_SUBMISSIONS: Bucket =
     exact("workspace.public_submissions", 300, MINUTE);
+/// Answers to one public form from one sender address (T1.29).
+pub static FORM_ANSWER_SENDERS: Bucket = exact(
+    "form_answers.address",
+    crate::collection_forms::ANSWERS_PER_ADDRESS_PER_HOUR,
+    HOUR,
+);
 /// Password reset requests: a few per account an hour and a few dozen per
 /// sender address; callers with no known address share one ceiling. The mail itself has its own ceiling,
 /// spent only when a reset email really goes out (to a real account).
@@ -596,6 +602,25 @@ impl RateLimiters {
             .check(&BUG_REPORTS, LimitKey::Secret(token_digest))
             .await
     }
+
+    /// An answer to one public form from one sender address. A caller
+    /// whose address isn't known is bounded by the form's own limits.
+    pub async fn check_form_answer_sender(
+        &self,
+        link_id: Uuid,
+        address: Option<&str>,
+    ) -> Result<(), AppError> {
+        let Some(address) = address else {
+            return Ok(());
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(link_id.as_bytes());
+        hasher.update(address.as_bytes());
+        let key: [u8; 32] = hasher.finalize().into();
+        self.limits
+            .check(&FORM_ANSWER_SENDERS, LimitKey::Secret(&key))
+            .await
+    }
 }
 
 impl Default for RateLimiters {
@@ -695,6 +720,7 @@ pub static LIMITS: &[(&Bucket, LimitScope)] = &[
     (&BUG_REPORTS, LimitScope::Link),
     (&INCOMING_HOOK_DELIVERIES, LimitScope::Link),
     (&WORKSPACE_PUBLIC_SUBMISSIONS, LimitScope::Workspace),
+    (&FORM_ANSWER_SENDERS, LimitScope::Address),
     (&PASSWORD_RESETS, LimitScope::Login),
     (&PASSWORD_RESET_SENDERS, LimitScope::Address),
     (&PASSWORD_RESETS_GLOBAL, LimitScope::ServerUnattributed),

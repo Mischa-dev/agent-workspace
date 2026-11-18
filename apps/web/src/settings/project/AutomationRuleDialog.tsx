@@ -26,7 +26,7 @@ import { Banner, Button, Checkbox, Dialog, IconButton, SelectField, TextArea, Te
 import '../../automations/automations.css'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { opQuery } from '../../api/ops'
-import { listViews, viewKeys } from '../../views/api'
+import { listProjectTaskViews, viewKeys } from '../../views/api'
 import { workItemPriorities } from '../../work-items/constants'
 import { useWorkItemWorkflow } from '../../work-items/hooks'
 import { useLabels } from '../../work-items/planningHooks'
@@ -156,8 +156,8 @@ export function RuleDialog({
   const [initial] = useState(() => JSON.stringify({ name, trigger, viewId, actions }))
   const dirty = JSON.stringify({ name, trigger, viewId, actions }) !== initial
   const views = useQuery({
-    queryKey: viewKeys.viewChoices(projectId),
-    queryFn: () => listViews(projectId),
+    queryKey: viewKeys.views(projectId),
+    queryFn: () => listProjectTaskViews(projectId),
   })
   const environments = useQuery({
     queryKey: launchKeys.environments(projectId),

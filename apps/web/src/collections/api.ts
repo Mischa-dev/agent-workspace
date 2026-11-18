@@ -1,6 +1,7 @@
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { callOp, type OpInput, type OpOutput } from '../api/ops'
 import { normalizeField, normalizeReferences, normalizeValues, type DateBucket, type FieldClause, type FieldDefinition, type FieldReference, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import type { ViewKind } from '../views/kinds'
 import { collectionKeys } from './keys'
@@ -50,17 +51,30 @@ export type ViewConfig = {
   groupBucket?: DateBucket | null
   columns: ViewColumn[]
   titleWidth: number | null
-  /** The date field a calendar puts records on. */
+  /** The date field a calendar puts records on; where a timeline's bars start. */
   dateField: string | null
+  /** Where a timeline's bars end; none, and each record is one day. */
+  endField?: string | null
+  /** A chart's style and what it adds up for each group (T1.31). */
+  chart?: ChartConfig | null
+  /** Words every record the view shows contains: a search kept with it. */
+  search?: string | null
 }
+
+export type MeasureOp = 'count' | 'sum' | 'average' | 'min' | 'max'
+export const MEASURE_OPS: readonly MeasureOp[] = ['count', 'sum', 'average', 'min', 'max']
+export type ChartStyle = 'bar' | 'line' | 'donut' | 'number'
+export const CHART_STYLES: readonly ChartStyle[] = ['bar', 'line', 'donut', 'number']
+/** A count reads no field; the others read a number field. */
+export type ChartConfig = { style: ChartStyle; measure: { op: MeasureOp; field?: string | null } }
 
 /** How a view lays out its records. */
 /** The kinds of view a collection draws today, of the one list (views/kinds.ts). */
-export type ViewType = Extract<ViewKind, 'table' | 'board' | 'gallery' | 'calendar'>
-export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'gallery', 'calendar']
+export type ViewType = Extract<ViewKind, 'table' | 'board' | 'list' | 'gallery' | 'calendar' | 'timeline' | 'chart'>
+export const VIEW_TYPES: readonly ViewType[] = ['table', 'board', 'list', 'gallery', 'calendar', 'timeline', 'chart']
 const asViewType = (value: unknown): ViewType => (VIEW_TYPES as readonly unknown[]).includes(value) ? (value as ViewType) : 'table'
 
-export type CollectionView = { id: string; name: string; type: ViewType; config: ViewConfig; position: number; version: number }
+export type CollectionView = { id: string; name: string; type: ViewType; config: ViewConfig; position: number; version: number; /** Everyone's; false for the person's own. */ shared: boolean }
 
 export type CollectionBody = {
   collection: CollectionSummary
@@ -70,7 +84,12 @@ export type CollectionBody = {
   archivedRecords: number
   canEditRecords: boolean
   canBuild: boolean
+  /** Adds, changes and archives its fields; for Tasks, the task field settings' permission too. */
+  canChangeFields: boolean
 }
+
+/** The built-in fields of a collection whose records are tasks (status, assignee, priority, dates, labels): changed in the task settings, not here. */
+export const BUILT_IN_TASK_FIELDS: ReadonlySet<string> = new Set(['1', '2', '3', '4', '5', '6'].map((n) => `0192f5c0-0000-7000-8000-00000000000${n}`))
 
 export type PersonRef = { id: string; name: string }
 
@@ -89,12 +108,15 @@ export type CollectionRecord = {
   group: { key: string; label: string } | null
 }
 
-export type GroupCount = { key: string; label: string; count: number; color: string | null }
+/** A group of the records, how many, and with a measure what they add up to. */
+export type GroupCount = { key: string; label: string; count: number; color: string | null; value?: number | null }
 
 export type RecordPage = {
   records: CollectionRecord[]
   references: FieldReference[]
   total: number
+  /** With a measure other than a count: what every record adds up to. */
+  value?: number | null
   groups: GroupCount[]
   nextCursor: string | null
 }
@@ -190,6 +212,20 @@ export function normalizeConfig(value: unknown): ViewConfig {
     }),
     titleWidth: typeof raw.titleWidth === 'number' ? raw.titleWidth : null,
     dateField: typeof raw.dateField === 'string' && raw.dateField ? raw.dateField : null,
+    endField: typeof raw.endField === 'string' && raw.endField ? raw.endField : null,
+    chart: normalizeChart(raw.chart),
+    search: typeof raw.search === 'string' && raw.search.trim() ? raw.search : null,
+  }
+}
+
+function normalizeChart(value: unknown): ChartConfig | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = asRecord(value)
+  const measure = asRecord(raw.measure)
+  const op = (MEASURE_OPS as readonly unknown[]).includes(measure.op) ? (measure.op as MeasureOp) : 'count'
+  return {
+    style: (CHART_STYLES as readonly unknown[]).includes(raw.style) ? (raw.style as ChartStyle) : 'bar',
+    measure: { op, field: op !== 'count' && typeof measure.field === 'string' && measure.field ? measure.field : null },
   }
 }
 
@@ -203,6 +239,7 @@ function normalizeView(value: unknown): CollectionView {
     config: normalizeConfig(raw),
     position: asNumber(raw.position),
     version: asNumber(raw.version, 1),
+    shared: raw.shared !== false,
   }
 }
 
@@ -215,6 +252,7 @@ function normalizeBody(value: unknown): CollectionBody {
     archivedRecords: asNumber(raw.archivedRecords),
     canEditRecords: raw.canEditRecords === true,
     canBuild: raw.canBuild === true,
+    canChangeFields: raw.canChangeFields === true,
   }
 }
 
@@ -247,9 +285,16 @@ function normalizePage(value: unknown): RecordPage {
     records: asArray(raw.records).map(normalizeRecord),
     references: normalizeReferences(raw.references),
     total: asNumber(raw.total),
+    value: typeof raw.value === 'number' ? raw.value : null,
     groups: asArray(raw.groups).map((entry) => {
       const group = asRecord(entry)
-      return { key: asString(group.key), label: asString(group.label), count: asNumber(group.count), color: typeof group.color === 'string' ? group.color : null }
+      return {
+        key: asString(group.key),
+        label: asString(group.label),
+        count: asNumber(group.count),
+        color: typeof group.color === 'string' ? group.color : null,
+        value: typeof group.value === 'number' ? group.value : null,
+      }
     }),
     nextCursor: typeof raw.nextCursor === 'string' && raw.nextCursor ? raw.nextCursor : null,
   }
@@ -321,34 +366,60 @@ export function configJson(config: ViewConfig) {
     ...(config.columns.length ? { columns: config.columns } : {}),
     ...(config.titleWidth ? { titleWidth: config.titleWidth } : {}),
     ...(config.dateField ? { dateField: config.dateField } : {}),
+    ...(config.dateField && config.endField ? { endField: config.endField } : {}),
+    ...(config.chart
+      ? {
+          chart: {
+            style: config.chart.style,
+            measure: config.chart.measure.op === 'count' || !config.chart.measure.field ? { op: 'count' } : { op: config.chart.measure.op, field: config.chart.measure.field },
+          },
+        }
+      : {}),
+    ...(config.search ? { search: config.search } : {}),
   }
 }
 
-export async function createView(projectId: string, collectionId: string, input: { name: string; type?: ViewType; config: ViewConfig }) {
-  return normalizeView(
-    await requestJson<unknown>(`${collectionPath(projectId, collectionId)}/views`, {
-      method: 'POST',
-      idempotencyKey: crypto.randomUUID(),
-      json: { name: input.name, type: input.type ?? 'table', config: configJson(input.config) },
+function viewFromEntry(entry: OpOutput<'view_create'>): CollectionView {
+  return {
+    id: entry.id,
+    name: entry.name,
+    type: asViewType(entry.type),
+    config: normalizeConfig(entry.config),
+    position: entry.position,
+    version: entry.version,
+    shared: entry.shared,
+  }
+}
+
+/** Adds a view: shared with everyone who sees the collection, or the person's own. */
+export async function createView(collectionId: string, input: { name: string; type?: ViewType; config: ViewConfig; shared: boolean }) {
+  return viewFromEntry(
+    await callOp('view_create', {
+      collection: collectionId,
+      name: input.name,
+      type: input.type ?? 'table',
+      config: configJson(input.config) as OpInput<'view_create'>['config'],
+      shared: input.shared,
     }),
   )
 }
 
-export async function updateView(projectId: string, collectionId: string, view: CollectionView, change: { name?: string; config?: ViewConfig }) {
-  return normalizeView(
-    await requestJson<unknown>(`${collectionPath(projectId, collectionId)}/views/${encodeURIComponent(view.id)}`, {
-      method: 'PATCH',
-      idempotencyKey: crypto.randomUUID(),
-      json: { expectedVersion: view.version, ...(change.name ? { name: change.name } : {}), ...(change.config ? { config: configJson(change.config) } : {}) },
-    }),
+export async function updateView(view: CollectionView, change: { name?: string; config?: ViewConfig }) {
+  return viewFromEntry(
+    await callOp(
+      'view_update',
+      {
+        view: view.id,
+        ...(change.name ? { name: change.name } : {}),
+        ...(change.config ? { config: configJson(change.config) as OpInput<'view_update'>['config'] } : {}),
+      },
+      { expectedVersion: view.version },
+    ),
   )
 }
 
-export async function deleteView(projectId: string, collectionId: string, viewId: string) {
-  await requestJson<unknown>(`${collectionPath(projectId, collectionId)}/views/${encodeURIComponent(viewId)}`, {
-    method: 'DELETE',
-    idempotencyKey: crypto.randomUUID(),
-  })
+export async function deleteView(viewId: string) {
+  await callOp('view_delete', { view: viewId })
 }
 
 /** What a list of records asks for: a saved view, and whatever the person changed on top of it. */
@@ -362,8 +433,14 @@ export type RecordsQuery = {
   archived?: 'only'
   /** One group of the grouping: a board's column. */
   group?: string
-  /** Records whose date field is from `from` up to `to` (YYYY-MM-DD, `to` left out): a calendar's weeks. */
-  dates?: { field: string; from: string; to: string }
+  /**
+   * Records whose date field is from `from` up to `to` (YYYY-MM-DD, `to` left
+   * out): a calendar's weeks. With `endField`, records whose bar from one to
+   * the other touches those days: a timeline's.
+   */
+  dates?: { field: string; endField?: string | null; from: string; to: string }
+  /** What each group adds up beside its count: a chart's measure. */
+  measure?: { op: MeasureOp; field?: string | null }
 }
 
 /** The records list's parameters, in a fixed order, so one query has one cache entry. */
@@ -379,8 +456,15 @@ export function recordsParams(query: RecordsQuery) {
   if (query.group !== undefined) params.set('group', query.group)
   if (query.dates) {
     params.set('dateField', query.dates.field)
+    if (query.dates.endField) params.set('endField', query.dates.endField)
     params.set('from', query.dates.from)
     params.set('to', query.dates.to)
+  }
+  // A count is said out loud, so a saved chart's own measure doesn't apply.
+  if (query.measure) {
+    const counts = query.measure.op === 'count' || !query.measure.field
+    params.set('measure', counts ? 'count' : query.measure.op)
+    if (!counts && query.measure.field) params.set('measureField', query.measure.field)
   }
   return params.toString()
 }
