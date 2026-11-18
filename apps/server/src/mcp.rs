@@ -1998,6 +1998,7 @@ impl ServerHandler for McpServer {
         let mut tools = Self::tools().list_all();
         let Some(principal) = context_principal(&context) else {
             tools.extend(crate::ops::mcp::tools());
+            let tools = tools.into_iter().map(slim_for_listing).collect();
             return Ok(ListToolsResult::with_all_items(tools)
                 .with_ttl_ms(LIST_TTL_MS)
                 .with_cache_scope(CacheScope::Private));
@@ -2031,6 +2032,7 @@ impl ServerHandler for McpServer {
                 .into_iter()
                 .filter(|tool| tool_listed(&tool.name, reach) && modules.allows_tool(&tool.name))
                 .chain(listed)
+                .map(slim_for_listing)
                 .collect(),
         )
         .with_ttl_ms(LIST_TTL_MS)
@@ -2335,6 +2337,43 @@ fn refusal(tool: &str, message: String) -> rmcp::model::CallToolResponse {
         Some(body) => rmcp::model::CallToolResult::structured(body),
         None => rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]),
     })
+}
+
+/// A tool as `tools/list` sends it. Clients check a result against its
+/// output schema; they don't read prose there, and every agent loads the list
+/// on connecting, so the output schema's descriptions and titles (the public
+/// API document keeps them) and both schemas' `$schema` are left out.
+fn slim_for_listing(mut tool: rmcp::model::Tool) -> rmcp::model::Tool {
+    fn strip(value: &mut serde_json::Value, keys: &[&str]) {
+        match value {
+            serde_json::Value::Object(object) => {
+                // A property called `description` is a schema (an object),
+                // never a string, so only annotations go.
+                object.retain(|key, value| !(value.is_string() && keys.contains(&key.as_str())));
+                for (key, value) in object.iter_mut() {
+                    // Literal values are data, not schemas.
+                    if !matches!(key.as_str(), "const" | "default" | "enum" | "examples") {
+                        strip(value, keys);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                items.iter_mut().for_each(|value| strip(value, keys))
+            }
+            _ => {}
+        }
+    }
+    if let Some(output) = tool.output_schema.take() {
+        let mut output = serde_json::Value::Object(std::sync::Arc::unwrap_or_clone(output));
+        strip(&mut output, &["description", "title", "$schema"]);
+        if let serde_json::Value::Object(output) = output {
+            tool.output_schema = Some(std::sync::Arc::new(output));
+        }
+    }
+    let mut input = std::sync::Arc::unwrap_or_clone(tool.input_schema);
+    input.remove("$schema");
+    tool.input_schema = std::sync::Arc::new(input);
+    tool
 }
 
 /// The structured refusal for `tool`, or `None` when its results can't say
