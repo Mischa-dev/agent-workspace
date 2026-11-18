@@ -351,3 +351,23 @@ export function viewRows(cells: Map<string, SheetCell>, view: ViewSpec, from: nu
   }
   return rows
 }
+
+/**
+ * The cells a block of `height` by `breadth` covers from `start` as the grid
+ * shows them: in a view, its rows in its order after the frozen ones and only
+ * its shown columns, so a paste lands where it is seen. Past the end, undefined.
+ */
+export function shownBlock(
+  start: Position,
+  height: number,
+  breadth: number,
+  shown: { frozen: number; order: readonly number[] | null; columns: readonly number[] | null },
+): { rows: (number | undefined)[]; columns: (number | undefined)[] } {
+  const shownRows = shown.order ? [...Array.from({ length: shown.frozen }, (_, index) => index + 1), ...shown.order] : null
+  const rowIndex = shownRows ? shownRows.indexOf(start.row) : -1
+  const columnIndex = shown.columns ? shown.columns.indexOf(start.column) : -1
+  return {
+    rows: Array.from({ length: height }, (_, offset) => (shownRows && rowIndex >= 0 ? shownRows[rowIndex + offset] : start.row + offset)),
+    columns: Array.from({ length: breadth }, (_, offset) => (shown.columns && columnIndex >= 0 ? shown.columns[columnIndex + offset] : start.column + offset)),
+  }
+}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { SheetBody, SheetCell } from './api'
-import { cards, cellLook, cellMap, columnName, columnNumber, display, formatTable, inkOn, parseRange, parseTable, patched, rangeName, viewRows } from './sheetModel'
+import { cards, cellLook, cellMap, columnName, columnNumber, display, formatTable, inkOn, parseRange, parseTable, patched, rangeName, shownBlock, viewRows } from './sheetModel'
 import { replaced } from './sheetViews'
 
 const body = (): SheetBody => ({
@@ -213,5 +213,17 @@ describe('replacing what was found', () => {
     expect(replaced('Rent and rent', 'rent', 'lease', { matchCase: true, wholeCell: false })).toBe('Rent and lease')
     expect(replaced('a.b', '.', '$&', { matchCase: false, wholeCell: false })).toBe('a$&b')
     expect(replaced('Rent', 'rent', 'Lease', { matchCase: false, wholeCell: true })).toBe('Lease')
+  })
+})
+
+describe('shownBlock', () => {
+  it('pastes onto the rows and columns a view shows, in its order', () => {
+    const shown = { frozen: 1, order: [7, 3, 9], columns: [1, 3, 4] }
+    expect(shownBlock({ row: 1, column: 1 }, 3, 2, shown)).toEqual({ rows: [1, 7, 3], columns: [1, 3] })
+    expect(shownBlock({ row: 3, column: 3 }, 3, 2, shown)).toEqual({ rows: [3, 9, undefined], columns: [3, 4] })
+  })
+
+  it('goes straight down and across without a view', () => {
+    expect(shownBlock({ row: 2, column: 2 }, 2, 2, { frozen: 0, order: null, columns: null })).toEqual({ rows: [2, 3], columns: [2, 3] })
   })
 })

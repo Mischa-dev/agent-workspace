@@ -18,6 +18,7 @@ import {
   parseTable,
   type Position,
   type Selection,
+  shownBlock,
 } from './sheetModel'
 import { markTitle, ruleBook } from './sheetValidation'
 
@@ -266,25 +267,30 @@ export function SheetGrid({
     if (cut) clearSelection()
   }
 
+  const shownFrom = (row: number, column: number, height: number, breadth: number) => shownBlock({ row, column }, height, breadth, { frozen, order, columns: hidden ? columns : null })
+
   const onPaste = (event: ClipboardEvent<HTMLDivElement>) => {
     if (editing || !editable) return
     const rows = parseTable(event.clipboardData.getData('text/plain'))
     if (!rows.length) return
     event.preventDefault()
     const box = bounds(selection)
+    const top = order && indexOf(selection.focus.row) < indexOf(selection.anchor.row) ? selection.focus.row : order ? selection.anchor.row : box.top
+    const breadth = Math.max(...rows.map((line) => line.length))
+    const target = shownFrom(top, box.left, rows.length, breadth)
     const edits: GridEdit[] = []
     rows.forEach((line, rowOffset) =>
       line.forEach((input, columnOffset) => {
-        const row = box.top + rowOffset
-        const column = box.left + columnOffset
-        if (row <= MAX_ROWS && column <= MAX_COLUMNS) edits.push({ row, column, input })
+        const row = target.rows[rowOffset]
+        const column = target.columns[columnOffset]
+        if (row !== undefined && column !== undefined && row <= MAX_ROWS && column <= MAX_COLUMNS) edits.push({ row, column, input })
       }),
     )
     onEdits(edits)
-    const lastRow = Math.min(MAX_ROWS, box.top + rows.length - 1)
-    const lastColumn = Math.min(MAX_COLUMNS, box.left + Math.max(...rows.map((line) => line.length)) - 1)
+    const lastRow = target.rows.filter((row): row is number => row !== undefined && row <= MAX_ROWS).at(-1) ?? top
+    const lastColumn = target.columns.filter((column): column is number => column !== undefined && column <= MAX_COLUMNS).at(-1) ?? box.left
     onSelect({
-      anchor: { row: box.top, column: box.left },
+      anchor: { row: top, column: box.left },
       focus: { row: lastRow, column: lastColumn },
     })
   }

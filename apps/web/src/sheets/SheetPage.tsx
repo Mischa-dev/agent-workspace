@@ -302,18 +302,31 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   /** A suggest-only edit: kept in the draft until it's sent as a proposal. */
   const suggestEdit = (edits: GridEdit[]) => {
     if (!tab || !edits.length) return
+    // Each keeps the revision its edit opened at, so a cell changed since is refused rather than overwritten.
+    const revision = body.sheet.revision
     setDraft((current) => {
       const next = new Map(current)
-      for (const entry of edits) next.set(`${tab.id}:${cellKey(entry.row, entry.column)}`, { type: 'cell', tab: tab.id, row: entry.row, column: entry.column, input: entry.input })
+      for (const entry of edits) {
+        const at = `${tab.id}:${cellKey(entry.row, entry.column)}`
+        const kept = current.get(at)
+        const ifRevision = kept?.type === 'cell' && kept.ifRevision !== undefined ? kept.ifRevision : (entry.revision ?? revision)
+        next.set(at, { type: 'cell', tab: tab.id, row: entry.row, column: entry.column, input: entry.input, ifRevision })
+      }
       return next
     })
   }
 
   const sendDraft = async () => {
     setSendingDraft(true)
+    const sending = new Map(draft)
     try {
-      const sent = await proposeCells(projectId, sheetId, [...draft.values()])
-      setDraft(new Map())
+      const sent = await proposeCells(projectId, sheetId, [...sending.values()])
+      // Edits made while it was on its way stay in the draft.
+      setDraft((current) => {
+        const next = new Map(current)
+        for (const [at, change] of sending) if (next.get(at) === change) next.delete(at)
+        return next
+      })
       void client.invalidateQueries({ queryKey: opPrefix('proposal_list') })
       showToast(
         sent.proposalId
