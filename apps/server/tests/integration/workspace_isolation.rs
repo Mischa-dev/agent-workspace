@@ -2070,6 +2070,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "launch_list",
     "message_history",
     "conversation_member_list",
+    "conversation_task_list",
+    "conversation_file_list",
     "channel_list",
     "channel_get",
     "message_draft_list",
@@ -2631,6 +2633,24 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"conversationId": b.dm}),
                 json!({"conversationId": b.channel}),
+            ],
+            vec![],
+        ),
+        case(
+            "conversation_file_list",
+            vec![json!({"conversationId": a.dm})],
+            vec![
+                json!({"conversationId": b.dm}),
+                json!({"conversationId": b.channel}),
+            ],
+            vec![],
+        ),
+        case(
+            "conversation_task_list",
+            vec![json!({"conversationId": a.channel})],
+            vec![
+                json!({"conversationId": b.channel}),
+                json!({"conversationId": b.dm}),
             ],
             vec![],
         ),

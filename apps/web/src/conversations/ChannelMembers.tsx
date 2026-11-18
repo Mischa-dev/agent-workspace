@@ -17,12 +17,15 @@ type Member = { id: string; displayName: string; kind: string }
  */
 export function ChannelMembers({
   channelId,
+  embedded = false,
   onClose,
   onLeft,
   projectId,
   viewerId,
 }: {
   channelId: string
+  /** Inside the channel's details (C2.8), which have their own heading. */
+  embedded?: boolean
   onClose: () => void
   onLeft: () => void
   projectId: string
@@ -82,12 +85,15 @@ export function ChannelMembers({
       .finally(() => setBusy(null))
   }
 
+  const Wrapper = embedded ? 'div' : 'aside'
   return (
-    <aside aria-label="Channel members" className="context-drawer aw-members">
-      <div className="aw-members__head">
-        <h2>Members</h2>
-        <IconButton className="aw-panelclose" icon="x" label="Close members" onClick={onClose} size="sm" />
-      </div>
+    <Wrapper aria-label="Channel members" className={embedded ? 'aw-members' : 'context-drawer aw-members'}>
+      {embedded ? null : (
+        <div className="aw-members__head">
+          <h2>Members</h2>
+          <IconButton className="aw-panelclose" icon="x" label="Close members" onClick={onClose} size="sm" />
+        </div>
+      )}
       {members.isError ? <ErrorState error={members.error} onRetry={() => void members.refetch()} title="Members didn’t load" /> : null}
       <ul className="aw-members__list">
         {(members.data?.members ?? []).map((member) => {
@@ -144,6 +150,6 @@ export function ChannelMembers({
           ) : null}
         </div>
       ) : null}
-    </aside>
+    </Wrapper>
   )
 }

@@ -140,6 +140,12 @@ export const queryKeys = {
   /** A private channel's or group's members (C2.6). */
   conversationMembers: (projectId: string, conversationId: string) =>
     ['project', projectId, 'conversation', conversationId, 'members'] as const,
+  /** The tasks a conversation is about or made (C2.8). */
+  conversationTasks: (projectId: string, conversationId: string) =>
+    ['project', projectId, 'conversation', conversationId, 'tasks'] as const,
+  /** The files sent in a conversation (C2.8). */
+  conversationFiles: (projectId: string, conversationId: string) =>
+    ['project', projectId, 'conversation', conversationId, 'files'] as const,
   conversationRestorable: (projectId: string, conversationId: string) =>
     ['project', projectId, 'conversation', conversationId, 'restorable'] as const,
   conversationSidebarRoot: (projectId: string) =>

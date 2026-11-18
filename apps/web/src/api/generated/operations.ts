@@ -56,7 +56,11 @@ export type Content = { body?: Record<string, unknown> | null; key: string; kind
 
 export type ContentKind = "switches" | "layout" | "role" | "space" | "channels" | "module" | "collection" | "form" | "automation" | "page" | "skill" | "agent"
 
+export type ConversationFile = { contentType: string; createdAt: string; height?: number | null; id: string; messageId: string; name: string; size: number; width?: number | null }
+
 export type ConversationMember = { displayName: string; handle: string; id: string; kind: string; manager: boolean }
+
+export type ConversationTask = { how: string; id: string; key: string; statusCategory: string; title: string }
 
 export type CriterionOp = "add" | "edit" | "check" | "uncheck" | "remove" | "move"
 
@@ -396,6 +400,10 @@ export type ConnectionUpdateInput = { connectionId: string; expectedVersion?: nu
 
 export type ConnectionUpdateOutput = { connection: ConnectionView; webhookSecret?: string | null }
 
+export type ConversationFileListInput = { conversationId: string }
+
+export type ConversationFileListOutput = { files: ConversationFile[] }
+
 export type ConversationMarkReadInput = { conversationId: string; fromMessageId?: string | null; unread?: boolean | null; upToSequence?: number | null }
 
 export type ConversationMarkReadOutput = { conversationId: string; lastReadSequence: number; unreadCount: number }
@@ -403,6 +411,10 @@ export type ConversationMarkReadOutput = { conversationId: string; lastReadSeque
 export type ConversationMemberListInput = { conversationId: string }
 
 export type ConversationMemberListOutput = { canManage: boolean; conversationId: string; members: ConversationMember[] }
+
+export type ConversationTaskListInput = { conversationId: string }
+
+export type ConversationTaskListOutput = { tasks: ConversationTask[] }
 
 export type ConversationsMarkReadInput = { spaceId?: string | null }
 
@@ -648,6 +660,10 @@ export type ProfileUpdateInput = { account?: string | null; avatarBase64?: strin
 
 export type ProfileUpdateOutput = { accountId: string; avatarUrl?: string | null; canEdit: boolean; dmPolicy?: string | null; handle: string; kind: string; name: string; pronouns?: string | null; sharedSpaces: SharedSpace[]; statuses: StatusView[]; timeZone?: string | null; title?: string | null }
 
+export type RecordCreateInput = { collection: string; fields?: Record<string, unknown>; fromMessageId?: string | null; saySo?: boolean; title?: string | null }
+
+export type RecordCreateOutput = { collectionId: string; id: string; number: number; title: string }
+
 export type RequestCancelInput = { requestId: string }
 
 export type RequestCancelOutput = { addressedAccounts: string[]; addressedRoles: string[]; allowText: boolean; answer?: RequestAnswerView | null; answeredAt?: string | null; answeredBy?: string | null; conversationId?: string | null; createdAt: string; detail?: string | null; expiresAt?: string | null; id: string; kind: string; options: RequestOption[]; raisedBy: string; runId?: string | null; spaceId?: string | null; status: string; taskId?: string | null; title: string; version: number }
@@ -879,8 +895,10 @@ export type Operations = {
   connection_secret_rotate: { input: ConnectionSecretRotateInput; output: ConnectionSecretRotateOutput }
   connection_test: { input: ConnectionTestInput; output: ConnectionTestOutput }
   connection_update: { input: ConnectionUpdateInput; output: ConnectionUpdateOutput }
+  conversation_file_list: { input: ConversationFileListInput; output: ConversationFileListOutput }
   conversation_mark_read: { input: ConversationMarkReadInput; output: ConversationMarkReadOutput }
   conversation_member_list: { input: ConversationMemberListInput; output: ConversationMemberListOutput }
+  conversation_task_list: { input: ConversationTaskListInput; output: ConversationTaskListOutput }
   conversations_mark_read: { input: ConversationsMarkReadInput; output: ConversationsMarkReadOutput }
   custom_emoji_create: { input: CustomEmojiCreateInput; output: CustomEmojiCreateOutput }
   custom_emoji_list: { input: CustomEmojiListInput; output: CustomEmojiListOutput }
@@ -942,6 +960,7 @@ export type Operations = {
   profile_avatar_list: { input: ProfileAvatarListInput; output: ProfileAvatarListOutput }
   profile_get: { input: ProfileGetInput; output: ProfileGetOutput }
   profile_update: { input: ProfileUpdateInput; output: ProfileUpdateOutput }
+  record_create: { input: RecordCreateInput; output: RecordCreateOutput }
   request_cancel: { input: RequestCancelInput; output: RequestCancelOutput }
   request_create: { input: RequestCreateInput; output: RequestCreateOutput }
   request_get: { input: RequestGetInput; output: RequestGetOutput }

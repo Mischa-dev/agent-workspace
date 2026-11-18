@@ -35,6 +35,8 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<MessageReact>()
         .add::<ConversationMarkRead>()
         .add::<ConversationMemberList>()
+        .add::<ConversationTaskList>()
+        .add::<ConversationFileList>()
         .add::<MessageSchedule>()
         .add::<ScheduledMessageUpdate>();
 }
@@ -808,6 +810,239 @@ impl Operation for ConversationMemberList {
                 )
                 .collect(),
             can_manage,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// conversation_task_list
+
+/// The tasks a conversation is about or made (C2.8's Tasks tab).
+pub struct ConversationTaskList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationTaskListInput {
+    /// The channel, thread, DM or group: its id or a link.
+    pub conversation_id: IdRef,
+}
+
+impl Targeted for ConversationTaskListInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTask {
+    #[schemars(with = "String")]
+    pub id: uuid::Uuid,
+    /// Such as AWD-12.
+    pub key: String,
+    pub title: String,
+    /// backlog, unstarted, started, completed or canceled.
+    pub status_category: String,
+    /// made_from: made from a message here; about: linked to the conversation.
+    pub how: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTasks {
+    /// Newest link first; archived tasks are left out.
+    pub tasks: Vec<ConversationTask>,
+}
+
+impl Operation for ConversationTaskList {
+    const NAME: &'static str = "conversation_task_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "tasks";
+    const PERMISSION: Option<Perm> = Some(Perm::TasksView);
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List a conversation's tasks";
+    const DESCRIPTION: &'static str = "The tasks linked to a conversation or made from one of \
+        its messages, in the conversation's own space, newest first. task_open opens one.";
+
+    type Input = ConversationTaskListInput;
+    type Output = ConversationTasks;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConversationTaskListInput,
+    ) -> Result<ConversationTasks, OpError> {
+        let caller = call.ctx.caller.account_id;
+        let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let tx = call.tx().await?;
+        let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, String, String)>(
+            r#"
+            WITH linked AS (
+                SELECT link.work_item_id, 'about' AS how, link.created_at
+                FROM work_item_links link
+                WHERE link.target_kind = 'conversation' AND link.target_id = $1
+                UNION ALL
+                SELECT link.work_item_id, 'about', link.created_at
+                FROM work_item_conversation_links link
+                WHERE link.conversation_id = $1
+                UNION ALL
+                SELECT link.work_item_id, 'made_from', link.created_at
+                FROM work_item_links link
+                JOIN messages message ON message.id = link.target_id
+                WHERE link.target_kind = 'message' AND message.conversation_id = $1
+                  AND message.removed_at IS NULL
+            ),
+            newest AS (
+                SELECT DISTINCT ON (work_item_id) work_item_id, how, created_at
+                FROM linked
+                ORDER BY work_item_id, created_at DESC
+            )
+            SELECT item.id, project.project_key || '-' || item.number::text, item.title,
+                   status.semantic_category, newest.how
+            FROM newest
+            JOIN task_rows item ON item.id = newest.work_item_id
+            JOIN projects project ON project.id = item.project_id
+            JOIN work_item_statuses status
+              ON status.project_id = item.project_id AND status.id = item.status_id
+            WHERE item.project_id = $3 AND item.archived_at IS NULL
+              AND conversation_visible_to($1, $2)
+            ORDER BY newest.created_at DESC, item.id
+            LIMIT 200
+            "#,
+        )
+        .bind(input.conversation_id.id())
+        .bind(caller)
+        .bind(space)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?;
+        Ok(ConversationTasks {
+            tasks: rows
+                .into_iter()
+                .map(|(id, key, title, status_category, how)| ConversationTask {
+                    id,
+                    key,
+                    title,
+                    status_category,
+                    how,
+                })
+                .collect(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// conversation_file_list
+
+/// The files sent in a conversation (C2.8's Files tab).
+pub struct ConversationFileList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationFileListInput {
+    /// The channel, thread, DM or group: its id or a link.
+    pub conversation_id: IdRef,
+}
+
+impl Targeted for ConversationFileListInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationFile {
+    #[schemars(with = "String")]
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub content_type: String,
+    pub size: i64,
+    /// Set for images that show inline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i32>,
+    /// The message it was sent with.
+    #[schemars(with = "String")]
+    pub message_id: uuid::Uuid,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationFiles {
+    /// Newest first, at most 200; files of removed messages are left out.
+    pub files: Vec<ConversationFile>,
+}
+
+impl Operation for ConversationFileList {
+    const NAME: &'static str = "conversation_file_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "messages";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List a conversation's files";
+    const DESCRIPTION: &'static str = "The files sent in a conversation, newest first, with \
+        the message each came with. file_read opens one.";
+
+    type Input = ConversationFileListInput;
+    type Output = ConversationFiles;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ConversationFileListInput,
+    ) -> Result<ConversationFiles, OpError> {
+        let caller = call.ctx.caller.account_id;
+        let tx = call.tx().await?;
+        let rows = sqlx::query_as::<
+            _,
+            (
+                uuid::Uuid,
+                String,
+                String,
+                i64,
+                Option<i32>,
+                Option<i32>,
+                uuid::Uuid,
+                String,
+            ),
+        >(
+            r#"
+            SELECT file.id, file.name, file.content_type, file.byte_size, file.image_width,
+                   file.image_height, file.message_id,
+                   to_char(file.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            FROM files file
+            JOIN messages message ON message.id = file.message_id
+            WHERE file.conversation_id = $1 AND file.removed_at IS NULL
+              AND file.attached_at IS NOT NULL AND message.removed_at IS NULL
+              AND conversation_visible_to($1, $2)
+            ORDER BY file.created_at DESC, file.id
+            LIMIT 200
+            "#,
+        )
+        .bind(input.conversation_id.id())
+        .bind(caller)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(crate::error::AppError::from)?;
+        Ok(ConversationFiles {
+            files: rows
+                .into_iter()
+                .map(
+                    |(id, name, content_type, size, width, height, message_id, created_at)| {
+                        ConversationFile {
+                            id,
+                            name,
+                            content_type,
+                            size,
+                            width,
+                            height,
+                            message_id,
+                            created_at,
+                        }
+                    },
+                )
+                .collect(),
         })
     }
 }

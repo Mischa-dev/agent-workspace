@@ -989,6 +989,62 @@ h2.aw-card__title {
   justify-content: space-between;
 }
 
+.aw-chdetails {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+}
+
+.aw-chdetails__body {
+  min-width: 0;
+}
+
+.aw-chdetails__about h3 {
+  margin: var(--space-3) 0 var(--space-1);
+  font: var(--t-ui-strong);
+}
+
+.aw-chdetails__about h3:first-child {
+  margin-top: 0;
+}
+
+.aw-chdetails__about p {
+  margin: 0 0 var(--space-2);
+  color: var(--content-fg-muted);
+  white-space: pre-wrap;
+}
+
+.aw-chdetails__list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-chdetails__list li {
+  display: grid;
+  gap: var(--space-half);
+  min-width: 0;
+}
+
+.aw-chdetails__list a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-chdetails__key {
+  margin-right: var(--space-1);
+  color: var(--content-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-chdetails__meta {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
 .aw-members__list {
   display: grid;
   gap: var(--space-half);
