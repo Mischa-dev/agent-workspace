@@ -300,6 +300,12 @@ pub async fn state_at(
     Ok(Some(state))
 }
 
+/// A name no tab takes: a tab steps aside under it while a restore
+/// gives its name to another.
+fn aside(id: Uuid) -> String {
+    format!("Restoring {}", &id.simple().to_string()[..20])
+}
+
 /// The changes that make the sheet as it is now (`now`, with its tabs'
 /// current settings) into `target`: tabs added, removed, renamed and put
 /// in order, their settings, and every input that differs.
@@ -323,6 +329,21 @@ pub fn changes_to(now: &State, target: &State) -> Vec<Change> {
             name: tab.name.clone(),
         })
         .collect::<Vec<_>>();
+    // A current tab whose name a different tab takes back steps aside
+    // first, under a name of its own, so no add or rename meets it; a
+    // surviving one gets its old name back below.
+    for tab in &now.tabs {
+        if target
+            .tabs
+            .iter()
+            .any(|wanted| wanted.id != tab.id && wanted.name.eq_ignore_ascii_case(&tab.name))
+        {
+            changes.push(Change::RenameTab {
+                tab: Some(tab.id.to_string()),
+                name: aside(tab.id),
+            });
+        }
+    }
     // A sheet keeps at least one tab: when none survives, add first.
     if any_survives {
         changes.extend(removals);
@@ -633,6 +654,47 @@ mod tests {
         assert_eq!(
             shorts,
             vec!["removeTab", "renameTab", "moveTab", "cell", "cell"]
+        );
+    }
+
+    #[test]
+    fn a_tab_steps_aside_when_a_restored_one_takes_its_name() {
+        // The only tab was replaced by one now called what it was called.
+        let now = State {
+            tabs: vec![tab(2, "Plan", &[])],
+        };
+        let target = State {
+            tabs: vec![tab(1, "plan", &[])],
+        };
+        let changes = changes_to(&now, &target);
+        let shorts = changes.iter().map(Change::short).collect::<Vec<_>>();
+        assert_eq!(shorts, vec!["renameTab", "addTab", "removeTab", "moveTab"]);
+        assert!(
+            matches!(&changes[0], Change::RenameTab { name, .. } if name.starts_with("Restoring "))
+        );
+        assert!(super::super::normalize_tab_name(&aside(Uuid::from_u128(2))).is_some());
+
+        // Two tabs swap names: each steps aside, then takes its old name.
+        let now = State {
+            tabs: vec![tab(1, "B", &[]), tab(2, "A", &[])],
+        };
+        let target = State {
+            tabs: vec![tab(1, "A", &[]), tab(2, "B", &[])],
+        };
+        let shorts = changes_to(&now, &target)
+            .iter()
+            .map(Change::short)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shorts,
+            vec![
+                "renameTab",
+                "renameTab",
+                "renameTab",
+                "moveTab",
+                "renameTab",
+                "moveTab"
+            ]
         );
     }
 }

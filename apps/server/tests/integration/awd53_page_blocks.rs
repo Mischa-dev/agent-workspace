@@ -4,6 +4,7 @@
 //! someone who may only read pages editing one, and blocks of a page in a
 //! project the agent isn't in reaching it.
 
+use agent_workspace_server::mcp::{IssueCredentialCommand, issue_credential};
 use serde_json::{Value, json};
 
 use super::{
@@ -352,4 +353,58 @@ async fn a_page_made_from_messages_or_moved_blocks() {
     )
     .await;
     assert_eq!(refused["outcome"], "not_found", "{refused}");
+
+    // A credential kept to WORK can't copy a page from another space its
+    // account belongs to, though the page goes in WORK.
+    let other_space = create_project(&setup, "ELSE", "Elsewhere").await;
+    let elsewhere = call(
+        "page_write",
+        json!({"projectId": "ELSE", "title": "Secret plan", "body": BODY}),
+    )
+    .await;
+    assert_eq!(elsewhere["outcome"], "ok", "{elsewhere}");
+    let elsewhere = elsewhere["value"]["id"].as_str().expect("page").to_owned();
+    let first_block =
+        call("page_blocks", json!({"pageId": elsewhere})).await["value"]["blocks"][0]["id"].clone();
+    let owner = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(setup.organization_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owner");
+    let confined = issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            actor_id: owner,
+            project_id: work.parse().expect("work"),
+            client_name: "Confined".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("credential");
+    let confined_session = initialize(app, &confined.token).await.expect("session");
+    let copied = tool(
+        app,
+        &confined.token,
+        &confined_session,
+        "page_make",
+        json!({"pageId": elsewhere, "blocks": [first_block], "spaceId": work,
+               "clientRequestId": "confined-make"}),
+    )
+    .await;
+    assert_eq!(copied["outcome"], "not_found", "{copied}");
+    let from_work = tool(
+        app,
+        &confined.token,
+        &confined_session,
+        "page_make",
+        json!({"pageId": plan, "blocks": [id_at(0)], "spaceId": work,
+               "clientRequestId": "confined-make-work"}),
+    )
+    .await;
+    assert_eq!(from_work["outcome"], "ok", "{from_work}");
+    assert!(!other_space.is_empty());
 }
