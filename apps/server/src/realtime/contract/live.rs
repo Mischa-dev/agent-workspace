@@ -428,15 +428,18 @@ async fn serve(
                     };
                     match ticket::verify(&token, keys, now()) {
                         // While stale, only a ticket cut at or after the
-                        // change counts: an older one (its own, resent)
-                        // still verifies but may name what this account can
-                        // no longer see.
+                        // change counts: an older one (its own, resent, or
+                        // one cut between two changes) still verifies but
+                        // may name what this account can no longer see. The
+                        // client is told it is still stale, to ask again.
                         Some(fresh)
                             if fresh.account == ticket.account
                                 && fresh.session == ticket.session
                                 && stale_at.is_some_and(|at| fresh.head < at) =>
                         {
-                            continue;
+                            if !send(&mut socket, json!({"type": "ticket.stale"}).to_string()).await {
+                                return;
+                            }
                         }
                         Some(fresh)
                             if fresh.account == ticket.account && fresh.session == ticket.session =>

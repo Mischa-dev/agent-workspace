@@ -112,7 +112,9 @@ The client sends a new ticket on the open connection with
 `{"type": "ticket", "ticket": "<ticket>"}`. It must be for the same account
 and session, or the connection closes with 4401. Its audiences replace the
 old ones from the next frame on, and the live side answers
-`{"type": "ticket.accepted", "position": "…"}`.
+`{"type": "ticket.accepted", "position": "…"}`. A ticket cut before the
+latest change to what the connection may hear is refused with
+`{"type": "ticket.stale"}` again, and the client fetches another.
 
 ## Document rooms
 
