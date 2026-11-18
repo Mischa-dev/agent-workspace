@@ -5,7 +5,7 @@
 //! PostgreSQL's own statistics for the test database, so the rest of the
 //! suite running beside it doesn't blur the numbers.
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -34,15 +34,62 @@ async fn counts(pool: &PgPool) -> (i64, i64) {
     .expect("statistics")
 }
 
-/// What the database did over one idle window.
-async fn idle(pool: &PgPool) -> (i64, i64) {
+/// Rows read and scans so far, table by table.
+async fn tables(pool: &PgPool) -> HashMap<String, (i64, i64)> {
+    let mut connection = pool.acquire().await.expect("connection");
+    sqlx::query("SELECT pg_stat_clear_snapshot()")
+        .execute(&mut *connection)
+        .await
+        .expect("clear snapshot");
+    sqlx::query_as::<_, (String, i64, i64)>(
+        "SELECT relname::text, \
+                (COALESCE(seq_tup_read, 0) + COALESCE(idx_tup_fetch, 0))::bigint, \
+                (COALESCE(seq_scan, 0) + COALESCE(idx_scan, 0))::bigint \
+         FROM pg_stat_user_tables",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .expect("table statistics")
+    .into_iter()
+    .map(|(table, rows, scans)| (table, (rows, scans)))
+    .collect()
+}
+
+/// The tables read most over a window, so a failure names its cause.
+fn busiest(before: &HashMap<String, (i64, i64)>, after: &HashMap<String, (i64, i64)>) -> String {
+    let mut grown = after
+        .iter()
+        .map(|(table, (rows, scans))| {
+            let (rows_before, scans_before) = before.get(table).copied().unwrap_or_default();
+            (rows - rows_before, scans - scans_before, table.as_str())
+        })
+        .filter(|(rows, scans, _)| *rows > 0 || *scans > 0)
+        .collect::<Vec<_>>();
+    grown.sort_unstable_by(|a, b| b.cmp(a));
+    grown
+        .iter()
+        .take(8)
+        .map(|(rows, scans, table)| format!("{table} {rows} rows in {scans} scans"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// What the database did over one idle window, and the tables it read
+/// most.
+async fn idle(pool: &PgPool) -> (i64, i64, String) {
     let (transactions, rows) = counts(pool).await;
+    let before = tables(pool).await;
     tokio::time::sleep(WINDOW).await;
     // Busy connections report their statistics within a second of going
     // idle; let the last of them land.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let (transactions_after, rows_after) = counts(pool).await;
-    (transactions_after - transactions, rows_after - rows)
+    let after = tables(pool).await;
+    (
+        transactions_after - transactions,
+        rows_after - rows,
+        busiest(&before, &after),
+    )
 }
 
 /// Until the server has caught up with what making the workspaces wrote,
@@ -77,7 +124,7 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
     };
     let pool = &cluster.pool;
     settle(pool).await;
-    let (one_transactions, one_rows) = idle(pool).await;
+    let (one_transactions, one_rows, one_tables) = idle(pool).await;
 
     // Ten thousand empty workspaces, made in one batch as
     // `lifecycle::create` makes one: the row, its owner and its plan. (Most
@@ -119,11 +166,12 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
         .await
         .expect("analyze");
     settle(pool).await;
-    let (many_transactions, many_rows) = idle(pool).await;
+    let (many_transactions, many_rows, many_tables) = idle(pool).await;
 
     eprintln!(
         "idle over {}s: one workspace {one_transactions} transactions, {one_rows} rows read; \
-         {WORKSPACES} more {many_transactions} transactions, {many_rows} rows read",
+         {WORKSPACES} more {many_transactions} transactions, {many_rows} rows read\n\
+         busiest with one: {one_tables}\nbusiest with many: {many_tables}",
         WINDOW.as_secs()
     );
     // A query per workspace on any pass shows as thousands of transactions;
@@ -131,10 +179,11 @@ async fn ten_thousand_quiet_workspaces_cost_what_one_does() {
     // rows. The margins leave room for timing, not for either.
     assert!(
         many_transactions <= one_transactions * 3 / 2 + 50,
-        "transactions grew with workspaces: {one_transactions} -> {many_transactions}"
+        "transactions grew with workspaces: {one_transactions} -> {many_transactions}; \
+         busiest: {many_tables}"
     );
     assert!(
         many_rows <= one_rows * 2 + 4 * WORKSPACES,
-        "rows read grew with workspaces: {one_rows} -> {many_rows}"
+        "rows read grew with workspaces: {one_rows} -> {many_rows}; busiest: {many_tables}"
     );
 }
