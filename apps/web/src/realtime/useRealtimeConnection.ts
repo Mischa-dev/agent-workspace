@@ -370,6 +370,16 @@ export function useRealtimeConnection(): RealtimeContextValue {
             })
             return
           }
+          if (envelope.type === 'dm_rules.changed') {
+            // A block, or a message request answered (C2.39): read DM
+            // standings, blocks and the DM list again.
+            void queryClient.invalidateQueries({
+              predicate: (query) =>
+                query.queryKey[0] === 'op' && (query.queryKey[2] === 'dm_standing_get' || query.queryKey[2] === 'account_block_list'),
+            })
+            void queryClient.invalidateQueries({ queryKey: queryKeys.direct })
+            return
+          }
           if (envelope.type === 'saved_searches.changed') {
             // Your saved searches changed on another device.
             void queryClient.invalidateQueries({

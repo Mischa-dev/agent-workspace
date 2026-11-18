@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -47,6 +47,8 @@ import {
   showToast,
 } from '../ui'
 import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, useDirectOverview } from './api'
+import { DmStandingBar } from './DmStandingBar'
+import { useDmStanding } from './dmRules'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { ThreadPanel } from '../threads/ThreadPanel'
 import { uploadFile } from '../files/api'
@@ -157,7 +159,16 @@ export function DirectConversationPage() {
     )
   }
 
-  const canPost = Boolean(valid && page?.capabilities.sendMessage)
+  // C2.39: a request, a block or no shared workspace can stand between you
+  // and sending; read again as the conversation moves (a reply accepts).
+  const standing = useDmStanding(conversationId, Boolean(valid) && !isGroup)
+  const lastEntryId = entries.at(-1)?.id
+  const refetchStanding = standing.refetch
+  useEffect(() => {
+    if (lastEntryId) void refetchStanding()
+  }, [lastEntryId, refetchStanding])
+  const standingAllows = isGroup || standing.data?.canSend !== false
+  const canPost = Boolean(valid && page?.capabilities.sendMessage && standingAllows)
   const startThread = (origin: { messageId: string; text: string; author: string }) => setThreadDialog({ conversationId, origin })
   const reply = useReplyTarget(conversationId, null)
   const messageActions = useMessageActions({
@@ -434,6 +445,7 @@ export function DirectConversationPage() {
           They’ll wait here until someone steps in.
         </Banner>
       ) : null}
+      {!isGroup && standing.data ? <DmStandingBar conversationId={conversationId} name={title} standing={standing.data} /> : null}
       {canPost ? (
         <StructuredComposer
           autoFocus={searchParams.get('compose') === '1'}

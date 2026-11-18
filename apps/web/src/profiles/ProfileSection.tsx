@@ -3,7 +3,7 @@ import { useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { toastError } from '../app/toastError'
 import { TimeZoneField } from '../settings/TimeZoneField'
 import { deviceTimeZone } from '../settings/timeZones'
-import { Avatar, Banner, Button, Section, SettingsSkeleton, TextField, describeLoadError, showToast } from '../ui'
+import { Avatar, Banner, Button, Section, SelectField, SettingsSkeleton, TextField, describeLoadError, showToast } from '../ui'
 import { fileBase64, profileKind, useProfile, useProfileUpdate, type Profile } from './api'
 import './profiles.css'
 
@@ -69,6 +69,11 @@ function ProfileForm({ account, name, profile }: { account?: string; name: strin
       .catch((reason: unknown) => toastError('Your picture didn’t change', reason))
       .finally(() => setBusy(null))
   }
+  const setDmPolicy = (dmPolicy: string) => {
+    update({ account, dmPolicy })
+      .then(() => showToast({ tone: 'success', title: dmPolicy === 'ask' ? 'New people ask first' : 'Anyone you share a workspace with can message you' }))
+      .catch((reason: unknown) => toastError('Your setting wasn’t saved', reason))
+  }
   const remove = () => {
     setBusy('avatar')
     update({ account, removeAvatar: true })
@@ -97,6 +102,18 @@ function ProfileForm({ account, name, profile }: { account?: string; name: strin
       <TextField id="profile-title" label="Title" maxLength={80} onChange={(event) => setTitle(event.target.value)} placeholder="What you do" value={title} />
       <TextField id="profile-pronouns" label="Pronouns" maxLength={40} onChange={(event) => setPronouns(event.target.value)} placeholder="Such as she/her" value={pronouns} />
       <TimeZoneField hint="Others see your local time." id="profile-time-zone" onChange={setTimeZone} value={timeZone} />
+      {profile.dmPolicy ? (
+        <SelectField
+          hint="With “Ask me first”, someone’s first message is a request you accept or decline."
+          id="profile-dm-policy"
+          label="Who can message you"
+          onChange={(event) => setDmPolicy(event.target.value)}
+          value={profile.dmPolicy}
+        >
+          <option value="anyone">Anyone you share a workspace with</option>
+          <option value="ask">Ask me first</option>
+        </SelectField>
+      ) : null}
       <div className="aw-form__row">
         <Button busy={busy === 'save'} disabled={!changed} type="submit" variant="primary">
           Save

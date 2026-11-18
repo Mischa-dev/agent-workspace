@@ -1,9 +1,12 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import { toastError } from '../app/toastError'
+import { useBlockedAccounts, useSetBlock } from '../direct/dmRules'
 import { projectLocationHref } from '../projects/locations'
 import { accountSettingsHref } from '../settings/paths'
 import { StatusText } from '../status/StatusText'
-import { ActorTag, Avatar, Banner, ButtonLink, DetailList, Dialog, ListSkeleton, describeLoadError } from '../ui'
+import { ActorTag, Avatar, Banner, Button, ButtonLink, DetailList, Dialog, ListSkeleton, describeLoadError, showToast } from '../ui'
 import { localTime, profileKind, profileStatus, useProfile } from './api'
 import './profiles.css'
 
@@ -32,6 +35,8 @@ export default function ProfileDialog({ accountId, name, onClose }: { accountId:
           <ButtonLink icon="pencil" onClick={onClose} to={accountSettingsHref('profile')}>
             Edit your profile
           </ButtonLink>
+        ) : shown && !shown.canEdit ? (
+          <BlockButton accountId={shown.accountId} name={shown.name || name} />
         ) : null
       }
       onClose={onClose}
@@ -75,5 +80,32 @@ export default function ProfileDialog({ accountId, name, onClose }: { accountId:
         </div>
       ) : null}
     </Dialog>
+  )
+}
+
+/** Block or unblock someone (C2.39). They aren't told either way. */
+function BlockButton({ accountId, name }: { accountId: string; name: string }) {
+  const blocks = useBlockedAccounts()
+  const setBlock = useSetBlock()
+  const [busy, setBusy] = useState(false)
+  if (!blocks.data) return null
+  const blocked = blocks.data.blocked.some((account) => account.accountId === accountId)
+  const toggle = () => {
+    setBusy(true)
+    setBlock(accountId, !blocked)
+      .then(() =>
+        showToast(
+          blocked
+            ? { tone: 'success', title: `${name} unblocked` }
+            : { tone: 'success', title: `${name} blocked`, description: 'Your DM leaves your list, and their mentions don’t reach you. They aren’t told.' },
+        ),
+      )
+      .catch((reason: unknown) => toastError(blocked ? 'They weren’t unblocked' : 'They weren’t blocked', reason))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <Button busy={busy} onClick={toggle} variant={blocked ? 'secondary' : 'ghost'}>
+      {blocked ? 'Unblock' : 'Block'}
+    </Button>
   )
 }
