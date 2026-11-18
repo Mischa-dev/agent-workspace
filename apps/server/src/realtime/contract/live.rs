@@ -70,9 +70,19 @@ pub enum Publish {
         frame: String,
     },
     /// What these audiences may hear changed: their connections fetch a
-    /// new ticket.
+    /// new ticket, and take none cut before `position` (the change's place
+    /// in the log). Kept in the window, so a connection that opens later
+    /// with an older ticket is stale from the start.
     #[serde(rename = "ticket.stale")]
-    Stale { audiences: Vec<Audience> },
+    Stale {
+        audiences: Vec<Audience>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "optional_position"
+        )]
+        position: Option<i64>,
+    },
     /// A signed-out session: its connections close.
     Revoke { session: Uuid },
 }
@@ -161,14 +171,26 @@ impl LiveRouter {
         if let Publish::Frame {
             position: Some(position),
             ..
+        }
+        | Publish::Stale {
+            position: Some(position),
+            ..
         } = item.as_ref()
         {
             let mut recent = self
                 .recent
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if recent.back().is_some_and(|(last, _)| last >= position) {
-                // Already routed (a publish sent twice).
+            // An event can publish a frame and a `ticket.stale` at its one
+            // position; anything else at or before the newest was routed
+            // already (a publish sent twice).
+            let routed = recent.back().is_some_and(|(last, _)| last > position)
+                || recent
+                    .iter()
+                    .rev()
+                    .take_while(|(last, _)| last == position)
+                    .any(|(_, routed)| routed == &item);
+            if routed {
                 return;
             }
             // The first frame an outside publisher sends starts what this
@@ -299,8 +321,14 @@ async fn serve(
         return;
     };
     let mut last = ticket.from;
-    // What it missed between its ticket and now, from the window.
-    let Some(missed) = router.after(last) else {
+    // While stale: when the grace runs out, and the position of the newest
+    // change to what this connection may hear (a new ticket must be cut at
+    // or after it).
+    let mut stale_until: Option<tokio::time::Instant> = None;
+    let mut stale_at: Option<i64> = None;
+    // What it missed between its ticket and now, from the window, and any
+    // change to its access since the ticket was cut.
+    let Some(missed) = router.after(last.min(ticket.head)) else {
         let frame =
             json!({"type": "resync", "reason": "resume_through_api", "position": last.to_string()});
         let _ = send(&mut socket, frame.to_string()).await;
@@ -308,6 +336,17 @@ async fn serve(
         return;
     };
     for item in missed {
+        if let Publish::Stale {
+            audiences,
+            position: Some(position),
+        } = item.as_ref()
+            && *position > ticket.head
+            && hears(&ticket, audiences)
+        {
+            // Cut before a change to what it may hear (an older ticket
+            // brought to a new connection): stale from the start.
+            stale_at = stale_at.max(Some(*position));
+        }
         if let Publish::Frame {
             audiences,
             position: Some(position),
@@ -331,9 +370,12 @@ async fn serve(
     if !send(&mut socket, ready.to_string()).await {
         return;
     }
-    let mut stale_until: Option<tokio::time::Instant> = None;
-    // When it went stale, in unix milliseconds.
-    let mut stale_since: Option<i64> = None;
+    if stale_at.is_some() {
+        stale_until = Some(tokio::time::Instant::now() + STALE_GRACE);
+        if !send(&mut socket, json!({"type": "ticket.stale"}).to_string()).await {
+            return;
+        }
+    }
     loop {
         let expires = tokio::time::Instant::now()
             + Duration::from_secs(u64::try_from(ticket.expires - now()).unwrap_or(0));
@@ -345,13 +387,14 @@ async fn serve(
                         continue;
                     };
                     match ticket::verify(&token, keys, now()) {
-                        // While stale, only a ticket cut after access changed
-                        // counts: the old one (or any earlier) still verifies
-                        // but may name what this account can no longer see.
+                        // While stale, only a ticket cut at or after the
+                        // change counts: an older one (its own, resent)
+                        // still verifies but may name what this account can
+                        // no longer see.
                         Some(fresh)
                             if fresh.account == ticket.account
                                 && fresh.session == ticket.session
-                                && stale_since.is_some_and(|since| fresh.issued_ms <= since) =>
+                                && stale_at.is_some_and(|at| fresh.head < at) =>
                         {
                             continue;
                         }
@@ -361,7 +404,7 @@ async fn serve(
                             last = last.max(fresh.from);
                             ticket = fresh;
                             stale_until = None;
-                            stale_since = None;
+                            stale_at = None;
                             let accepted = json!({"type": "ticket.accepted", "position": last.to_string()});
                             if !send(&mut socket, accepted.to_string()).await {
                                 return;
@@ -405,10 +448,15 @@ async fn serve(
                             return;
                         }
                     }
-                    Publish::Stale { audiences } => {
-                        if hears(&ticket, audiences) && stale_until.is_none() {
+                    Publish::Stale { audiences, position } => {
+                        // A change the ticket was cut after is in it already.
+                        let at = position.unwrap_or(ticket.head.saturating_add(1));
+                        if !hears(&ticket, audiences) || at <= ticket.head {
+                            continue;
+                        }
+                        stale_at = stale_at.max(Some(at));
+                        if stale_until.is_none() {
                             stale_until = Some(tokio::time::Instant::now() + STALE_GRACE);
-                            stale_since = Some(chrono::Utc::now().timestamp_millis());
                             if !send(&mut socket, json!({"type": "ticket.stale"}).to_string()).await {
                                 return;
                             }
@@ -510,11 +558,28 @@ mod tests {
     }
 
     #[test]
+    fn the_window_keeps_a_change_to_access_beside_its_frame() {
+        let router = LiveRouter::new(16, false);
+        let stale = Publish::Stale {
+            audiences: vec![Audience::Account(Uuid::nil())],
+            position: Some(7),
+        };
+        router.publish(frame(7));
+        router.publish(stale.clone());
+        router.publish(stale.clone());
+        router.publish(frame(7));
+        let kept = router.after(6).expect("window");
+        assert_eq!(kept.len(), 2, "the frame and the change, once each");
+        assert_eq!(kept[1].as_ref(), &stale);
+    }
+
+    #[test]
     fn publishes_read_as_written() {
         let items = vec![
             frame(9_007_199_254_740_993),
             Publish::Stale {
                 audiences: vec![Audience::Account(Uuid::now_v7())],
+                position: Some(9_007_199_254_740_994),
             },
             Publish::Revoke {
                 session: Uuid::now_v7(),
