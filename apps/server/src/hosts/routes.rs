@@ -147,20 +147,24 @@ async fn command_caller(
         return host_caller(state, headers).await;
     }
     protocol_header(headers)?;
-    let mut connection = state.pool.acquire().await.map_err(AppError::from)?;
+    let mut transaction = crate::db::scoped_tx(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     let host_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT command.host_id FROM host_commands command \
          JOIN hosts host ON host.id = command.host_id AND host.builtin \
          WHERE command.id = $1",
     )
     .bind(command_id)
-    .fetch_optional(&mut *connection)
+    .fetch_optional(&mut *transaction)
     .await
     .map_err(AppError::from)?
     .ok_or(HostError::CommandUnknown)?;
-    super::get(&mut connection, host_id)
+    let host = super::get(&mut transaction, host_id)
         .await?
-        .ok_or(HostError::CommandUnknown)
+        .ok_or(HostError::CommandUnknown)?;
+    transaction.commit().await.map_err(AppError::from)?;
+    Ok(host)
 }
 
 async fn enrol_route(

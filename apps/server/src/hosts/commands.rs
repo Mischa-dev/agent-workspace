@@ -874,6 +874,27 @@ async fn push(state: &AppState, command_id: Uuid) -> Result<(), JobError> {
     Ok(())
 }
 
+/// A1.16: a start written for a run its host already runs (one the
+/// built-in host started before its runs went through the protocol):
+/// accepted at once, so fetching it gives the run a credential.
+pub async fn adopted(
+    transaction: &mut Transaction<'_, Postgres>,
+    command_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE host_commands
+           SET state = 'acked', ack = '{"outcome": "accepted"}'::jsonb, acked_at = now(),
+               ack_due_at = NULL, updated_at = now()
+         WHERE id = $1 AND kind = 'start'
+        "#,
+    )
+    .bind(command_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register_with_timeout(
         SWEEP_KIND,
