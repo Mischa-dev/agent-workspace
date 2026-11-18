@@ -87,12 +87,39 @@ pub async fn pump_with(state: &AppState, client: &HostClient) -> Result<usize, A
     }
 }
 
+/// Carry out at once what the built-in host has waiting for one run, of
+/// these kinds: a person's Stop is heard before the answer to it returns,
+/// still through the protocol (listed, fetched, acknowledged).
+pub async fn hear_now(
+    state: &AppState,
+    run_id: Uuid,
+    kinds: &[CommandKind],
+) -> Result<(), AppError> {
+    let client = super::transport::client(state);
+    let listed = client
+        .commands(0, 0)
+        .await
+        .map_err(|_| AppError::Internal("read the built-in host's commands"))?;
+    for summary in listed.commands {
+        if summary.run_id != Some(run_id) || !kinds.contains(&summary.kind) {
+            continue;
+        }
+        let Ok(command) = client.command(summary.command_id).await else {
+            continue;
+        };
+        if let Some(ack) = carry_out(state, &client, &command).await {
+            let _ = client.ack(command.command_id, &ack).await;
+        }
+    }
+    Ok(())
+}
+
 async fn carry_out(state: &AppState, client: &HostClient, command: &Command) -> Option<Ack> {
     match command.kind {
         CommandKind::Start => Some(start(state, client, command).await),
         CommandKind::Inspect => Some(inspect(state, command).await),
         CommandKind::Answer => Some(answered(state, command).await),
-        CommandKind::Cancel => Some(Ack::new(AckOutcome::Done)),
+        CommandKind::Cancel => Some(cancelled(state, command).await),
         CommandKind::Steer => Some(refused(
             "unsupported",
             "The built-in host takes a new message as a new run.",
@@ -180,35 +207,57 @@ pub(crate) async fn go_on(
     }
 }
 
-/// Stop a run whose approval was denied, or whose request went unanswered:
-/// its record finishes as cancelled (which withdraws what else it asked),
-/// and the host keeps its worktree. Safe to call twice.
-pub(crate) async fn stop_unanswered(
-    state: &AppState,
-    reports: &RunReports,
-    run_id: Uuid,
-    approval: bool,
-) -> Result<(), AppError> {
-    let done = detail_state(state, run_id).await.is_none_or(|current| {
+/// A cancel: the turn stops (it watches the run's detail), the worktree is
+/// kept, and the run's record hears that it stopped.
+async fn cancelled(state: &AppState, command: &Command) -> Ack {
+    let Some(run_id) = command.run_id else {
+        return Ack::new(AckOutcome::Done);
+    };
+    if is_done(state, run_id).await {
+        return Ack::new(AckOutcome::Done);
+    }
+    let reason = command
+        .detail
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(crate::runs::state::STOPPED_BY_REQUESTER)
+        .to_owned();
+    let stopped = match RunReports::open(state, run_id).await {
+        Ok(reports) => stop(state, &reports, run_id, &reason, "The run was interrupted.").await,
+        Err(error) => Err(error),
+    };
+    match stopped {
+        Ok(()) => Ack::new(AckOutcome::Done),
+        Err(error) => {
+            tracing::warn!(%run_id, error_category = error.log_category(), "a run didn't stop");
+            Ack::new(AckOutcome::Uncertain)
+        }
+    }
+}
+
+/// Whether the host is done with the run (or never had it).
+async fn is_done(state: &AppState, run_id: Uuid) -> bool {
+    detail_state(state, run_id).await.is_none_or(|current| {
         matches!(
             current.as_str(),
             "completed" | "failed" | "canceled" | "interrupted"
         )
-    });
-    if done {
+    })
+}
+
+/// Stop a run: its record finishes as cancelled (which withdraws what else
+/// it asked), its detail is interrupted (its turn, watching it, stops) and
+/// the host keeps its worktree. Safe to call twice.
+async fn stop(
+    state: &AppState,
+    reports: &RunReports,
+    run_id: Uuid,
+    reason: &str,
+    summary: &str,
+) -> Result<(), AppError> {
+    if is_done(state, run_id).await {
         return Ok(());
     }
-    let (reason, summary) = if approval {
-        (
-            "The requested approval was denied.",
-            "The run was interrupted after the approval was denied.",
-        )
-    } else {
-        (
-            "The question went unanswered.",
-            "The run was interrupted after its question went unanswered.",
-        )
-    };
     reports
         .step(
             &format!("run_interrupted:{run_id}"),
@@ -230,6 +279,27 @@ pub(crate) async fn stop_unanswered(
     provider::idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
     transaction.commit().await?;
     Ok(())
+}
+
+/// Stop a run whose approval was denied, or whose request went unanswered.
+pub(crate) async fn stop_unanswered(
+    state: &AppState,
+    reports: &RunReports,
+    run_id: Uuid,
+    approval: bool,
+) -> Result<(), AppError> {
+    let (reason, summary) = if approval {
+        (
+            "The requested approval was denied.",
+            "The run was interrupted after the approval was denied.",
+        )
+    } else {
+        (
+            "The question went unanswered.",
+            "The run was interrupted after its question went unanswered.",
+        )
+    };
+    stop(state, reports, run_id, reason, summary).await
 }
 
 /// Whether the built-in host knows the run.

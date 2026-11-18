@@ -377,5 +377,22 @@ pub async fn move_detail(
             .execute(&mut **transaction)
             .await?;
     }
+    // Open screens showing the run's card in its thread refresh it.
+    let place = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT conversation.project_id, conversation.id
+        -- visibility: the run's own thread, to tell its open screens
+        FROM agent_runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        WHERE run.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if let Some((space_id, conversation_id)) = place {
+        crate::outbox::enqueue_agent_run_updated(transaction, space_id, conversation_id, run_id)
+            .await?;
+    }
     Ok(next)
 }

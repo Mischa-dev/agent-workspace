@@ -2499,6 +2499,7 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .expect("runs blocked");
     for run in &runs {
         crate::support::builtin_run_moved(pool, *run, "blocked").await;
+        crate::support::builtin_run_started(pool, *run).await;
     }
     for (index, run) in runs.iter().enumerate() {
         crate::support::requests::approval(pool, *run, &format!("net-{index}"), "Net approval")
