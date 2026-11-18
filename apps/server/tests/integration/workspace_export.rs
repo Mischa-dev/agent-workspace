@@ -31,7 +31,7 @@ async fn an_export_holds_the_workspace_and_nothing_it_must_not() {
     let (dm_run, dm_activity) = (Uuid::now_v7(), Uuid::now_v7());
     sqlx::query(
         "INSERT INTO runs (id, workspace_id, account_id, title, cause_kind, conversation_id, state) \
-         VALUES ($1, $2, $3, 'Run in a DM', 'thread', $4::uuid, 'running')",
+         VALUES ($1, $2, $3, 'Run in a DM', 'thread', $4::uuid, 'working')",
     )
     .bind(dm_run)
     .bind(a.organization)

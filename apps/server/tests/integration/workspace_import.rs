@@ -209,7 +209,7 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
     // Its job, run while another worker's lease on the transfer still
     // holds (one that stopped without letting go), tries again later
     // rather than finishing and leaving the workspace importing.
-    import::enqueue(state, target, resumed.transfer.id)
+    crate::support::as_job(target, import::enqueue(state, target, resumed.transfer.id))
         .await
         .expect("enqueue");
     sqlx::query(

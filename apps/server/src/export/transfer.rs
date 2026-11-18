@@ -735,7 +735,7 @@ struct LeftOut {
 }
 
 impl LeftOut {
-    /// ` AND NOT (...)` for a table: none of its rows' foreign keys may
+    /// ` AND (...) IS NOT TRUE` for a table: none of its rows' foreign keys may
     /// name a left-out row, nor may its own id be one. The ids are at
     /// parameter `$<parameter>`.
     fn filter(&self, table: &str, parameter: u8) -> String {
@@ -749,7 +749,9 @@ impl LeftOut {
         if tests.is_empty() {
             String::new()
         } else {
-            format!(" AND NOT ({})", tests.join(" OR "))
+            // A null foreign key names nothing: `IS NOT TRUE` keeps the
+            // row, where `NOT (NULL)` would drop it.
+            format!(" AND ({}) IS NOT TRUE", tests.join(" OR "))
         }
     }
 }
@@ -770,20 +772,26 @@ async fn left_out(
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
-    // Single-column foreign keys between tables that have a workspace
-    // column and an id, so each step can ask one table at a time.
+    // Each foreign key's column that names its target's id (a key with
+    // more columns, such as a run's space and conversation, by the one
+    // pointing at the id), so each step can ask one table at a time.
     let keys = sqlx::query_as::<_, (String, String, String)>(
         r#"
-        SELECT child.relname::text, column_name.attname::text, parent.relname::text
+        SELECT DISTINCT child.relname::text, column_name.attname::text, parent.relname::text
         FROM pg_constraint constraint_row
+        CROSS JOIN LATERAL unnest(constraint_row.conkey, constraint_row.confkey)
+            AS pair(child_column, parent_column)
         JOIN pg_class child ON child.oid = constraint_row.conrelid
         JOIN pg_class parent ON parent.oid = constraint_row.confrelid
         JOIN pg_namespace space ON space.oid = child.relnamespace
         JOIN pg_attribute column_name
-          ON column_name.attrelid = child.oid AND column_name.attnum = constraint_row.conkey[1]
-        WHERE constraint_row.contype = 'f' AND array_length(constraint_row.conkey, 1) = 1
+          ON column_name.attrelid = child.oid AND column_name.attnum = pair.child_column
+        JOIN pg_attribute target
+          ON target.attrelid = parent.oid AND target.attnum = pair.parent_column
+        WHERE constraint_row.contype = 'f' AND target.attname = 'id'
           AND space.nspname = current_schema()
           AND column_name.atttypid = 'uuid'::regtype
+        ORDER BY 1, 2, 3
         "#,
     )
     .fetch_all(&mut *connection)

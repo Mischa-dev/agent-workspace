@@ -1875,6 +1875,9 @@ async fn insert_rows(
     } else {
         None
     };
+    if take_over.is_some() {
+        make_way(connection, workspace, step, info, &rows).await?;
+    }
     let conflict = match (take_over, info.deferred_unique, info.has_id) {
         (Some(take_over), _, _) => take_over,
         (None, false, _) => " ON CONFLICT DO NOTHING".to_owned(),
@@ -1977,6 +1980,82 @@ async fn insert_rows(
     }
     record_map(connection, transfer, workspace, &matched).await?;
     Ok((inserted.len() as u64, skipped))
+}
+
+/// Rows the new workspace made for itself give way to arriving rows on
+/// their other unique keys: when the person importing has a profile whose
+/// handle an arriving profile also uses (the same name on two servers), the
+/// one made here takes a suffix, and the archive's arrives as it was.
+/// Only keys of the workspace column and one text column are eased.
+async fn make_way(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    step: &Step,
+    info: &TableInfo,
+    rows: &[Value],
+) -> Result<(), ImportError> {
+    let table = identifier(step.table);
+    let tenant = identifier(info.tenant);
+    let primary = info
+        .primary
+        .iter()
+        .map(|column| plain(column))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (key, predicate) in &info.keys {
+        if predicate.is_some() || *key == info.primary || key.len() != 2 {
+            continue;
+        }
+        let Some(other) = key.iter().find(|column| column.as_str() != info.tenant) else {
+            continue;
+        };
+        if !key.iter().any(|column| column.as_str() == info.tenant) {
+            continue;
+        }
+        let text = sqlx::query_scalar::<_, bool>(
+            "SELECT data_type IN ('text', 'character varying') FROM information_schema.columns \
+             WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2",
+        )
+        .bind(step.table)
+        .bind(other)
+        .fetch_optional(&mut *connection)
+        .await?
+        .unwrap_or(false);
+        if !text {
+            continue;
+        }
+        let other = plain(other)?;
+        let same_row = primary
+            .iter()
+            .map(|column| format!("existing.{column} IS NOT DISTINCT FROM arriving.{column}"))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        sqlx::query(&format!(
+            "UPDATE {table} existing \
+             SET {other} = left(existing.{other}, 27) || '-' || substr(md5(random()::text), 1, 4) \
+             FROM jsonb_populate_recordset(NULL::{table}, $1) arriving \
+             WHERE existing.{tenant} = $2 AND existing.{other} = arriving.{other} \
+               AND NOT ({same_row})"
+        ))
+        .bind(Value::Array(rows.to_vec()))
+        .bind(workspace)
+        .execute(&mut *connection)
+        .await?;
+    }
+    // A workspace profile's handle is the one its space memberships carry
+    // (`canonical_member_profile`): touching them takes the new one.
+    if step.table == "organization_actor_profiles" {
+        sqlx::query(
+            "UPDATE project_memberships membership SET handle = profile.handle \
+             FROM organization_actor_profiles profile \
+             WHERE membership.workspace_id = $1 AND profile.organization_id = $1 \
+               AND profile.actor_id = membership.actor_id \
+               AND membership.handle IS DISTINCT FROM profile.handle",
+        )
+        .bind(workspace)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(())
 }
 
 /// A row the new workspace made for itself (its workspace space, a
