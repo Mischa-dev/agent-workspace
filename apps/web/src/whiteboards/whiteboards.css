@@ -294,6 +294,8 @@
 /* Comments on elements (C1.31): pins and the selection's actions sit over
    the canvas without taking its pointer. */
 .aw-wb__overlay {
+  /* Above Excalidraw's canvases (1 and 2), below its toolbars and menus (4). */
+  z-index: 3;
   pointer-events: none;
   overflow: hidden;
 }
