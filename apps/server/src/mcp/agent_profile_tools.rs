@@ -162,7 +162,6 @@ pub(super) async fn agent_profile_write(
         let organization_id = environments::authorize_project(
             &state.pool,
             principal.actor_id,
-            ActorKind::Human,
             project_id,
             Action::SettingsManage,
         )

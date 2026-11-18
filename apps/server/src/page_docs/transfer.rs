@@ -26,7 +26,6 @@ use super::{docx, pdf, tree, write};
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::parse_actor_kind,
     error::{ApiPath, ApiQuery, AppError},
     files::http::{content_disposition, read_body},
     memory::{
@@ -100,7 +99,6 @@ pub async fn export_page(
     project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::ProjectView,
     )
@@ -176,14 +174,7 @@ pub async fn import_page(
             message: "Import a Word document (.docx) or a Markdown file (.md).",
         })?;
     // Check access before reading the file.
-    let direct = project_access(
-        &state.pool,
-        writer.actor_id,
-        writer.actor_kind,
-        project_id,
-        Action::PageEdit,
-    )
-    .await?;
+    let direct = project_access(&state.pool, writer.actor_id, project_id, Action::PageEdit).await?;
     if direct {
         return Err(AppError::Validation("project"));
     }
@@ -494,7 +485,6 @@ async fn sheet_picture(
     if project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::ProjectView,
     )

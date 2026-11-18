@@ -287,7 +287,6 @@ pub async fn access(
     let can_edit = memory::project_access(
         &mut *connection,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WhiteboardEdit,
     )
@@ -354,7 +353,6 @@ async fn project_for_board(
     let direct = memory::project_access(
         &mut *connection,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WhiteboardEdit,
     )
@@ -721,7 +719,6 @@ pub async fn empty_trash(
         if memory::project_access(
             &mut **transaction,
             caller.actor_id,
-            caller.actor_kind,
             project,
             Action::WhiteboardEdit,
         )
@@ -833,7 +830,6 @@ pub async fn set_link(
     memory::project_access(
         &mut **transaction,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WhiteboardEdit,
     )
@@ -981,15 +977,9 @@ pub async fn linked_to(
     target_id: Uuid,
 ) -> Result<Vec<BoardSummary>, AppError> {
     let (project_id, _) = target_project(pool, kind, target_id).await?;
-    memory::project_access(
-        pool,
-        caller.actor_id,
-        caller.actor_kind,
-        project_id,
-        Action::ProjectView,
-    )
-    .await
-    .map_err(|_| AppError::NotFound("link target"))?;
+    memory::project_access(pool, caller.actor_id, project_id, Action::ProjectView)
+        .await
+        .map_err(|_| AppError::NotFound("link target"))?;
     let reachable = caller
         .confined_project
         .is_none_or(|confined| confined == project_id)

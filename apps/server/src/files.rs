@@ -171,7 +171,7 @@ const READABLE: &str = r#"
             WHERE task_membership.project_id = file.project_id
               AND task_membership.actor_id = $2
               AND task_membership.enabled
-              AND custom_role_allows(task_membership.role_id, 'tasks.view')
+              AND role_allows(task_membership.role, task_membership.role_id, 'tasks.view')
         )
     END
 "#;

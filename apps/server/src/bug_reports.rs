@@ -239,7 +239,6 @@ async fn can_add_records(pool: &PgPool, caller: &Caller, project_id: Uuid) -> bo
         && crate::memory::project_access(
             pool,
             caller.actor_id,
-            caller.actor_kind,
             project_id,
             PolicyAction::CollectionRecordEdit,
         )
@@ -326,19 +325,14 @@ async fn project_rights(
 ) -> Result<Rights, AppError> {
     // Seeing the project is enough to reach its forms (collections only
     // need that); task links also need task view.
-    let direct = crate::memory::project_access(
-        pool,
-        caller.actor_id,
-        caller.actor_kind,
-        project_id,
-        PolicyAction::ProjectView,
-    )
-    .await?;
+    let direct =
+        crate::memory::project_access(pool, caller.actor_id, project_id, PolicyAction::ProjectView)
+            .await?;
     if direct {
         return Err(AppError::NotFound("project"));
     }
     let allowed = async |action| {
-        crate::memory::project_access(pool, caller.actor_id, caller.actor_kind, project_id, action)
+        crate::memory::project_access(pool, caller.actor_id, project_id, action)
             .await
             .is_ok()
     };
@@ -919,14 +913,8 @@ async fn maker_refusal(pool: &PgPool, link: &ReportLink) -> Result<Option<String
     .await?;
     let allowed = reachable
         && matches!(
-            crate::memory::project_access(
-                pool,
-                link.owner_actor_id,
-                ActorKind::Human,
-                link.project_id,
-                action,
-            )
-            .await,
+            crate::memory::project_access(pool, link.owner_actor_id, link.project_id, action,)
+                .await,
             Ok(false)
         );
     Ok((!allowed).then(|| {

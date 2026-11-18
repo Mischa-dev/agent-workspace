@@ -881,7 +881,6 @@ async fn can_manage(state: &AppState, caller: &LaunchCaller, project_id: Uuid) -
     memory::project_access(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::SettingsManage,
     )
@@ -1193,7 +1192,6 @@ async fn plan_for(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WorkItemView,
     )
@@ -1203,8 +1201,7 @@ async fn plan_for(
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
         run_defaults(&mut connection, project_id, caller.actor_id).await?
     };
-    let list =
-        environments::list_for(state, caller.actor_id, caller.actor_kind, project_id).await?;
+    let list = environments::list_for(state, caller.actor_id, project_id).await?;
     let environment_id = query
         .environment_id
         .filter(|id| {
@@ -1419,7 +1416,6 @@ pub(crate) async fn launch_tasks(
     let organization_id = environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WorkerInvoke,
     )
@@ -1431,7 +1427,6 @@ pub(crate) async fn launch_tasks(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::WorkItemView,
     )
@@ -1774,7 +1769,6 @@ async fn task_thread(
     memory::project_access(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::ThreadCreate,
     )
@@ -2316,7 +2310,6 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
         let access = memory::project_access(
             &state.pool,
             queued.requested_by_actor_id,
-            kind,
             queued.project_id,
             Action::WorkerInvoke,
         );
@@ -2342,7 +2335,6 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
             let view = memory::project_access(
                 &state.pool,
                 queued.requested_by_actor_id,
-                kind,
                 queued.project_id,
                 Action::WorkItemView,
             );
@@ -2559,7 +2551,6 @@ pub(crate) async fn list_for(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::ProjectView,
     )
@@ -2623,7 +2614,6 @@ pub(crate) async fn cancel(
     environments::authorize_project(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         Action::ProjectView,
     )
@@ -2832,7 +2822,6 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
     let access = memory::project_access(
         &state.pool,
         caller.actor_id,
-        caller.actor_kind,
         message.project_id,
         Action::WorkerInvoke,
     );

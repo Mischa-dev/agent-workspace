@@ -189,24 +189,12 @@ pub async fn list_profiles(
     viewer_kind: ActorKind,
     project_id: Uuid,
 ) -> Result<ProfileList, AppError> {
-    let organization_id = authorize_project(
-        &state.pool,
-        viewer,
-        viewer_kind,
-        project_id,
-        Action::ProjectView,
-    )
-    .await?;
+    let organization_id =
+        authorize_project(&state.pool, viewer, project_id, Action::ProjectView).await?;
     let can_manage = viewer_kind == ActorKind::Human
-        && crate::memory::project_access(
-            &state.pool,
-            viewer,
-            viewer_kind,
-            project_id,
-            Action::SettingsManage,
-        )
-        .await
-        .is_ok();
+        && crate::memory::project_access(&state.pool, viewer, project_id, Action::SettingsManage)
+            .await
+            .is_ok();
     let profiles = sqlx::query_as::<_, ProfileView>(&format!(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.hidden_at IS NULL ORDER BY profile.enabled DESC, membership.display_name, profile.id"
     ))
@@ -563,7 +551,6 @@ async fn manage(
     authorize_project(
         &state.pool,
         principal.actor_id,
-        ActorKind::Human,
         project_id,
         Action::SettingsManage,
     )
@@ -1208,17 +1195,9 @@ pub struct PresenceList {
 pub async fn presence(
     state: &AppState,
     viewer: Uuid,
-    viewer_kind: ActorKind,
     project_id: Uuid,
 ) -> Result<PresenceList, AppError> {
-    authorize_project(
-        &state.pool,
-        viewer,
-        viewer_kind,
-        project_id,
-        Action::ProjectView,
-    )
-    .await?;
+    authorize_project(&state.pool, viewer, project_id, Action::ProjectView).await?;
     let agents = sqlx::query_as::<_, AgentPresence>(&format!(
         r#"
         WITH members AS (
@@ -1306,9 +1285,8 @@ async fn presence_http(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<PresenceList>, AppError> {
-    let kind = principal_kind(&principal)?;
     Ok(Json(
-        presence(&state, principal.actor_id, kind, project_id).await?,
+        presence(&state, principal.actor_id, project_id).await?,
     ))
 }
 

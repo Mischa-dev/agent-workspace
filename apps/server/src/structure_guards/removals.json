@@ -18,7 +18,6 @@
   },
   "custom_role_allows": {
     "ai/ready.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
-    "files.rs": "K1.17: a custom role read by hand in SQL; becomes access::sql_filter",
     "later.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
     "notifications.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
     "runs/reads.rs": "K1.20: a custom role read by hand in SQL; becomes access::sql_filter",
@@ -61,7 +60,6 @@
     "mcp/oauth.rs": "K1.6: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "mcp/reads.rs": "K1.20: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "memberships.rs": "K1.19: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
-    "memory.rs": "K1.17: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "notifications.rs": "K1.20: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "projects.rs": "K1.19: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",
     "repositories.rs": "K1.18: a hand-built Subject, a direct authorize call or an agent limit by hand; becomes access::check, access::holding or access::sql_filter",

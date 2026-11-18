@@ -295,7 +295,6 @@ pub(super) async fn page_list(
         memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::McpRead,
         )
@@ -410,7 +409,6 @@ pub(super) async fn page_get(
             || memory::project_access(
                 &state.pool,
                 principal.actor_id,
-                principal.actor_kind,
                 page.project_id,
                 Action::McpRead,
             )
@@ -591,7 +589,6 @@ pub(super) async fn page_write(
         let direct = memory::project_access(
             &mut *transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::ProjectView,
         )
@@ -961,7 +958,6 @@ async fn readable_page(
         || memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             page.project_id,
             Action::McpRead,
         )
@@ -1557,7 +1553,6 @@ pub(super) async fn skill_list(
         memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::McpRead,
         )
@@ -1643,7 +1638,6 @@ pub(super) async fn skill_get(
         memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             Action::McpRead,
         )

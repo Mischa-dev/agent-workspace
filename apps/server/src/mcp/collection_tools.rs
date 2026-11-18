@@ -87,7 +87,6 @@ async fn read_access(state: &AppState, principal: &McpPrincipal) -> Result<Readi
     let messages_space = match memory::project_access(
         &state.pool,
         principal.actor_id,
-        principal.actor_kind,
         principal.project_id,
         Action::ProjectView,
     )

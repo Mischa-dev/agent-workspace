@@ -26,10 +26,7 @@ use crate::{
     conversations::{authorize_conversation_row_for, fetch_conversation_access, parse_actor_kind},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     page_docs,
-    policy::{
-        Action, ActorKind, Decision, Membership, ProjectScope, Resource, RoleGrant, Subject,
-        authorize,
-    },
+    policy::{Action, ActorKind, RoleGrant},
 };
 
 pub mod ops;
@@ -305,12 +302,12 @@ struct ProjectAccessRow {
     kind: String,
 }
 
-/// Check that an actor may take an action in a Project. Returns whether the
-/// Project is the hidden Messages space, where pages aren't offered.
+/// Check that an account may take an action in a space, by the access rule
+/// (role, enabled membership, an app's agent limit). Returns whether the
+/// space is the hidden Messages space, where pages aren't offered.
 pub async fn project_access(
     executor: impl sqlx::PgExecutor<'_>,
     actor_id: Uuid,
-    actor_kind: ActorKind,
     project_id: Uuid,
     action: Action,
 ) -> Result<bool, AppError> {
@@ -338,24 +335,13 @@ pub async fn project_access(
     if row.archived {
         return Err(AppError::NotFound("project"));
     }
-    let subject = Subject::new(
+    let grant = RoleGrant::stored(&row.role, row.role_permissions.as_deref())?;
+    if !crate::access::membership_allows(
         actor_id,
-        actor_kind,
-        true,
-        Some(Membership::project(
-            project_id,
-            RoleGrant::stored(&row.role, row.role_permissions.as_deref())?,
-            row.enabled,
-        )),
-        None,
-    );
-    if !matches!(
-        authorize(
-            &subject,
-            action,
-            Resource::Project(ProjectScope::project(project_id))
-        ),
-        Decision::Allow
+        project_id,
+        grant,
+        row.enabled,
+        action.permission(),
     ) {
         return Err(AppError::NotFound("project"));
     }
@@ -1378,11 +1364,9 @@ async fn list_pages_http(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<ListQuery>,
 ) -> Result<Json<PagesResponse>, AppError> {
-    let kind = parse_actor_kind(&principal.actor_kind)?;
     project_access(
         &state.pool,
         principal.actor_id,
-        kind,
         project_id,
         Action::ProjectView,
     )
@@ -1390,7 +1374,6 @@ async fn list_pages_http(
     let can_edit = project_access(
         &state.pool,
         principal.actor_id,
-        kind,
         project_id,
         Action::PageEdit,
     )
@@ -1420,7 +1403,6 @@ async fn create_page_http(
     let direct = project_access(
         &mut *transaction,
         writer.actor_id,
-        writer.actor_kind,
         project_id,
         Action::PageEdit,
     )
@@ -1495,7 +1477,6 @@ async fn get_page_http(
     project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::ProjectView,
     )
@@ -1521,7 +1502,6 @@ async fn update_page_http(
     project_access(
         &mut *transaction,
         writer.actor_id,
-        writer.actor_kind,
         project_id,
         Action::PageEdit,
     )
@@ -1553,7 +1533,6 @@ async fn get_revision_http(
     project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::ProjectView,
     )
@@ -1596,18 +1575,14 @@ async fn list_decisions_http(
         Ok(value) => value,
         Err(response) => return response,
     };
-    let can_record = match parse_actor_kind(&principal.actor_kind) {
-        Ok(kind) => project_access(
-            &state.pool,
-            principal.actor_id,
-            kind,
-            project_id,
-            Action::PageEdit,
-        )
-        .await
-        .is_ok(),
-        Err(_) => false,
-    };
+    let can_record = project_access(
+        &state.pool,
+        principal.actor_id,
+        project_id,
+        Action::PageEdit,
+    )
+    .await
+    .is_ok();
     Json(serde_json::json!({
         "decisions": listed["decisions"],
         "canRecord": can_record,
@@ -1763,7 +1738,6 @@ async fn get_claim_http(
     project_access(
         &state.pool,
         principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
         project_id,
         Action::WorkItemView,
     )

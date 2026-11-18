@@ -149,7 +149,6 @@ pub(super) async fn environment_write(
         let organization_id = environments::authorize_project(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             if check {
                 Action::WorkerInvoke

@@ -81,7 +81,6 @@ async fn read_access<T>(
     match memory::project_access(
         &state.pool,
         principal.actor_id,
-        principal.actor_kind,
         principal.project_id,
         Action::ProjectView,
     )

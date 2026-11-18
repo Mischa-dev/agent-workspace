@@ -822,7 +822,6 @@ pub(super) async fn milestone_list(
         crate::memory::project_access(
             &state.pool,
             principal.actor_id,
-            principal.actor_kind,
             principal.project_id,
             crate::policy::Action::WorkItemView,
         )

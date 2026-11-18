@@ -138,7 +138,6 @@ pub(super) async fn channel_create(
         let messages_space = match memory::project_access(
             &mut *transaction,
             principal.actor_id,
-            principal.actor_kind,
             project_id,
             Action::ChannelCreate,
         )

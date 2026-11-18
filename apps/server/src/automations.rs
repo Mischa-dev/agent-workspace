@@ -867,7 +867,6 @@ async fn reader_access(
     let can_edit = crate::memory::project_access(
         pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         PolicyAction::WorkItemEdit,
     )
@@ -876,7 +875,6 @@ async fn reader_access(
     let admin = crate::memory::project_access(
         pool,
         caller.actor_id,
-        caller.actor_kind,
         project_id,
         PolicyAction::ProjectManage,
     )
@@ -2115,7 +2113,6 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
     let can_edit = crate::memory::project_access(
         pool,
         rule.owner_actor_id,
-        actor_kind,
         rule.project_id,
         PolicyAction::WorkItemEdit,
     )

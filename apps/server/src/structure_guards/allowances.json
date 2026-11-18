@@ -18,7 +18,6 @@
     "mcp/oauth.rs": 1,
     "mcp/reads.rs": 2,
     "memberships.rs": 2,
-    "memory.rs": 2,
     "notifications.rs": 2,
     "projects.rs": 7,
     "repositories.rs": 2,
@@ -164,7 +163,6 @@
   },
   "custom_role_allows": {
     "ai/ready.rs": 2,
-    "files.rs": 1,
     "later.rs": 1,
     "notifications.rs": 3,
     "runs/reads.rs": 1,

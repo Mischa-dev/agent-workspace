@@ -418,14 +418,7 @@ pub(super) async fn environment_list(
     if !project_is_chosen(principal) {
         return ToolResult::invalid("projectId", CHOOSE_PROJECT);
     }
-    match crate::environments::list_for(
-        state,
-        principal.actor_id,
-        principal.actor_kind,
-        principal.project_id,
-    )
-    .await
-    {
+    match crate::environments::list_for(state, principal.actor_id, principal.project_id).await {
         Ok(list) => ToolResult::ok(EnvironmentListValue {
             default_environment_id: list.default_environment_id.map(|id| id.to_string()),
             environments: list
