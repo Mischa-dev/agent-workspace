@@ -556,6 +556,14 @@
   width: 28px;
 }
 
+/* A swatch is a color picker: big enough to tap. */
+@media (pointer: coarse) {
+  .aw-slot__swatch {
+    width: 40px;
+    height: 40px;
+  }
+}
+
 /* A theme of your own, or one the workspace offers: pick it, or open its menu. */
 .aw-preset--custom {
   position: relative;
@@ -608,28 +616,41 @@
 
 .aw-token-group__rows {
   display: grid;
-  gap: var(--space-1);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.25fr) auto;
+  gap: var(--space-1) var(--space-2);
   margin-top: var(--space-2);
 }
 
+/* One token per line: its name, a swatch for colors, the value, and reset. */
 .aw-token {
-  display: flex;
-  align-items: end;
-  gap: var(--space-2);
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
 }
 
-.aw-token > .aw-field {
-  flex: 1;
+.aw-token__name {
+  display: grid;
   min-width: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
 }
 
-.aw-token > .aw-slot__swatch {
-  margin-bottom: var(--space-half);
+.aw-token__name code {
+  overflow: hidden;
+  font: var(--t-code-sm);
+  color: var(--content-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.aw-token.is-set .aw-field__label {
+.aw-token.is-set .aw-token__name span {
   color: var(--content-fg);
-  font-weight: var(--weight-bold);
+  font-weight: var(--weight-semibold);
+}
+
+.aw-token > .aw-field .aw-field__note {
+  grid-column: 1 / -1;
 }
 
 .aw-theme-editor__css textarea {

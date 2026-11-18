@@ -1,19 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Upload } from 'lucide-react'
-import { Suspense, lazy, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 
 import type { ThemeDocument, ThemeSummary } from '../api/generated/operations'
 import { callOp, invalidateOps, opQuery } from '../api/ops'
 import {
-  ActorTag,
-  Avatar,
-  Badge,
   Banner,
   Button,
   ButtonLink,
   ConfirmDialog,
-  Dots,
-  Icon,
   IconButton,
   Menu,
   PageHeader,
@@ -21,7 +16,6 @@ import {
   SegmentedControl,
   SettingsSkeleton,
   describeError,
-  formatTime,
   showToast,
   type MenuEntry,
 } from '../ui'
@@ -30,6 +24,7 @@ import { blankDocument, readDocument } from './contract'
 import type { EditorStart } from './ThemeEditor'
 import { THEME_PRESETS, isDarkScheme, loadThemeSheets } from './slots'
 import type { AppearancePreferences, ThemeChoice } from './preferences'
+import { PresetMini, ThemePreview } from './ThemePreview'
 import { useTheme } from './themeContext'
 import '../styles/conversation.css'
 import '../styles/pages.css'
@@ -39,125 +34,6 @@ const PRESET_GROUPS = [
   { id: 'dark', label: 'Classic dark' },
   { id: 'light', label: 'Classic light' },
 ] as const
-
-function PresetMini({ id }: { id: string }) {
-  return (
-    <span aria-hidden="true" className="aw-mini" data-theme={id}>
-      <span className="aw-mini__rail" />
-      <span className="aw-mini__side">
-        <i />
-        <i />
-        <i />
-      </span>
-      <span className="aw-mini__main">
-        <i />
-        <i />
-        <b />
-      </span>
-    </span>
-  )
-}
-
-/** A time today, as the clock on this device shows it: "10:24 AM" or "10:24". */
-function todayAt(hours: number, minutes: number) {
-  const date = new Date()
-  date.setHours(hours, minutes, 0, 0)
-  return formatTime(date.toISOString())
-}
-
-/** A small, real rendering of the shell so the sidebar and rail colors show on this page too. */
-function ThemePreview({ name, seed }: { name: string; seed: string }) {
-  return (
-    <div aria-hidden="true" className="aw-preview">
-      <div className="aw-preview__rail" data-region="rail">
-        <span className="aw-tile aw-tile--utility is-active">
-          <span className="aw-tile__indicator" />
-          <span className="aw-tile__face">
-            <Icon name="message" size={16} />
-          </span>
-        </span>
-        <span className="aw-tile aw-tile--space is-unread">
-          <span className="aw-tile__indicator" />
-          <span className="aw-tile__face" style={{ '--tile-bg': 'var(--swatch-indigo)' } as CSSProperties}>
-            AW
-          </span>
-          <Badge className="aw-tile__badge" count={2} />
-        </span>
-        <span className="aw-tile aw-tile--space">
-          <span className="aw-tile__face" style={{ '--tile-bg': 'var(--swatch-teal)' } as CSSProperties}>
-            HL
-          </span>
-        </span>
-      </div>
-      <div className="aw-preview__side" data-region="sidebar">
-        <div className="aw-preview__title">Agent Workspace</div>
-        <span className="aw-item">
-          <span className="aw-item__lead">
-            <Icon name="hash" />
-          </span>
-          <span className="aw-item__label">general</span>
-        </span>
-        <span className="aw-item is-active">
-          <span className="aw-item__lead">
-            <Icon name="hash" />
-          </span>
-          <span className="aw-item__label">design</span>
-        </span>
-        <span className="aw-item is-unread">
-          <span className="aw-item__lead">
-            <Icon name="hash" />
-          </span>
-          <span className="aw-item__label">deploys</span>
-          <span className="aw-item__trail">
-            <Badge count={3} />
-          </span>
-        </span>
-        <span className="aw-item">
-          <span className="aw-item__lead">
-            <Avatar kind="agent" name="Muse" size={20} />
-          </span>
-          <span className="aw-item__label">Muse</span>
-          <span className="aw-item__trail">
-            <Dots />
-          </span>
-        </span>
-      </div>
-      <div className="aw-preview__main" data-region="content">
-        <div className="aw-preview__msg">
-          <Avatar name={name} seed={seed} size={28} />
-          <div>
-            <div className="aw-msg__meta">
-              <span className="aw-msg__author">{name}</span>
-              <span className="aw-msg__time">{todayAt(10, 24)}</span>
-            </div>
-            <p className="aw-preview__text">
-              <span className="aw-mention">@Muse</span> can you check the new colors? <a href="#preview">Link</a>
-            </p>
-          </div>
-        </div>
-        <div className="aw-preview__msg is-highlighted">
-          <Avatar kind="agent" name="Muse" size={28} />
-          <div>
-            <div className="aw-msg__meta">
-              <span className="aw-msg__author">Muse</span>
-              <ActorTag kind="agent" />
-              <span className="aw-msg__time">{todayAt(10, 27)}</span>
-            </div>
-            <p className="aw-preview__text">
-              Looks good. <span className="aw-mention is-you">@you</span>, the unread badge reads clearly.
-            </p>
-          </div>
-        </div>
-        <div className="aw-preview__composer">
-          <span>Message #design</span>
-          <span className="aw-composer__send">
-            <Icon name="send" />
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 const ThemeEditor = lazy(() => import('./ThemeEditor'))
 
@@ -324,7 +200,7 @@ export default function AppearancePage({ session, workspace }: SettingsPageProps
         title: next ? `${entry.name} is offered to everyone here` : `${entry.name} is yours alone again`,
       })
     } catch (reason) {
-      failed('That didn’t change')(reason)
+      failed(next ? 'The theme wasn’t offered' : 'The theme is still offered')(reason)
     }
   }
   const remove = async (entry: ThemeSummary) => {
@@ -430,8 +306,7 @@ export default function AppearancePage({ session, workspace }: SettingsPageProps
         icon="palette"
         title="Appearance"
       >
-        Pick a built-in theme or make your own: every colour, font, size, spacing and shape, for light and dark, and CSS. Your choice follows you to every
-        device you sign in on.
+        Pick a built-in theme or make your own; your choice follows you to every device you sign in on.
       </PageHeader>
 
       <div className="aw-appearance__layout">
@@ -446,7 +321,7 @@ export default function AppearancePage({ session, workspace }: SettingsPageProps
                 actions={
                   workspaceId ? (
                     <>
-                      <Button icon="plus" onClick={startNew} size="sm">
+                      <Button icon="plus" onClick={startNew} size="sm" variant="ghost">
                         New theme
                       </Button>
                       <Button icon={Upload} onClick={() => importInput.current?.click()} size="sm" variant="ghost">
@@ -466,10 +341,14 @@ export default function AppearancePage({ session, workspace }: SettingsPageProps
                     </>
                   ) : null
                 }
-                description="Themes you made, and ones this workspace offers to everyone. A theme sets light and dark; which shows follows Mode below."
+                description="Themes you made, and ones this workspace offers."
                 title="Your themes"
               >
-                {themes.isError ? <Banner tone="danger">{describeError(themes.error).message}</Banner> : null}
+                {themes.isError ? (
+                  <Banner onRetry={() => void themes.refetch()} tone="danger">
+                    {describeError(themes.error).message}
+                  </Banner>
+                ) : null}
                 {mine.length ? (
                   <div aria-label="Your themes" role="radiogroup">
                     {themeRows(mine)}
@@ -495,7 +374,7 @@ export default function AppearancePage({ session, workspace }: SettingsPageProps
                       label="Mode"
                       onChange={theme.setMode}
                       options={[
-                        { value: 'system', label: 'Match device' },
+                        { value: 'system', label: 'Match system' },
                         { value: 'light', label: 'Light' },
                         { value: 'dark', label: 'Dark' },
                       ]}

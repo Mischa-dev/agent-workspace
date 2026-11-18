@@ -18,6 +18,20 @@ export const THEME_TOKENS: ReadonlySet<string> = new Set(TOKEN_GROUPS.flatMap((g
 export const TOKEN_KIND: ReadonlyMap<string, TokenKind> = new Map(TOKEN_GROUPS.flatMap((group) => group.tokens.map((token) => [token, group.kind] as const)))
 export const BASE_SCHEME: ReadonlyMap<string, ThemeModeName> = new Map(contract.presets.map((preset) => [preset.id, preset.scheme as ThemeModeName]))
 export const PARTS = contract.parts
+
+const TOKEN_WORDS: Record<string, string> = { bg: 'background', fg: 'text', t: 'type', on: 'text on' }
+
+/** A token in plain words for the editor: "rail-bg" is "Rail background", "space-1-5" is "Space 1.5". */
+export function tokenLabel(token: string): string {
+  const words: string[] = []
+  for (const part of token.split('-')) {
+    const previous = words[words.length - 1]
+    if (/^\d+$/.test(part) && previous && /^\d+$/.test(previous)) words[words.length - 1] = `${previous}.${part}`
+    else words.push(TOKEN_WORDS[part] ?? part)
+  }
+  const text = words.join(' ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
 export const LIMITS = contract.limits
 
 const VALUE_FUNCTIONS = new Set(contract.valueFunctions.map((name) => name.toLowerCase()))
@@ -63,7 +77,7 @@ export function valueProblem(raw: string): string | null {
   const brackets = unbalanced(value)
   if (brackets) return brackets
   for (const name of functions(value)) {
-    if (!VALUE_FUNCTIONS.has(name)) return `A value can't call ${name}(): use colours, lengths and math (calc, color-mix, var).`
+    if (!VALUE_FUNCTIONS.has(name)) return `A value can't call ${name}(): use colors, lengths and math (calc, color-mix, var).`
   }
   for (const [, name] of value.matchAll(/--([A-Za-z0-9-]*)/g)) {
     if (!THEME_TOKENS.has(name) && name !== 'text-scale') return `var(--${name}) isn't a theme token.`

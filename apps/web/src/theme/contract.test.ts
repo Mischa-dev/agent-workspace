@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import contract from './contract.json'
-import { PARTS, THEME_TOKENS, blankDocument, cssProblem, documentProblems, readDocument, valueProblem } from './contract'
+import { PARTS, THEME_TOKENS, blankDocument, cssProblem, documentProblems, readDocument, tokenLabel, valueProblem } from './contract'
 import { THEME_PRESETS } from './slots'
 
 // Read from disk: vitest hands CSS imports over empty.
@@ -29,6 +29,14 @@ const UNPUBLISHED_BLOCKS: Record<string, string> = {
 const RAW_COLOR = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(\s*[\d.]/i
 
 describe('the theme contract', () => {
+  it('names tokens in plain words in the editor', () => {
+    expect(tokenLabel('rail-bg')).toBe('Rail background')
+    expect(tokenLabel('sidebar-fg-muted')).toBe('Sidebar text muted')
+    expect(tokenLabel('on-accent')).toBe('Text on accent')
+    expect(tokenLabel('space-1-5')).toBe('Space 1.5')
+    expect(tokenLabel('t-body')).toBe('Type body')
+  })
+
   it('lists every built-in theme, as the app has them', () => {
     expect(contract.presets).toEqual(THEME_PRESETS.map((preset) => ({ id: preset.id, name: preset.name, scheme: preset.scheme })))
   })

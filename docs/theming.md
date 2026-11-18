@@ -30,7 +30,7 @@ A theme is one document, stored in the workspace it was made in:
 `apps/web/src/theme/contract.json` is the contract, and it is versioned by
 `format`. It lists:
 
-- the tokens and their groups: colour, type, spacing, shape, depth and motion;
+- the tokens and their groups: color, type, spacing, shape, depth and motion;
 - the built-in themes;
 - the published part names;
 - the functions and at-rules the CSS may use;
@@ -41,18 +41,18 @@ The server (`apps/server/src/themes.rs`) and the web
 
 ## Tokens
 
-Token values are colours, lengths, font stacks, shadows, durations and
+Token values are colors, lengths, font stacks, shadows, durations and
 easings. A value may use:
 
-- `calc()`, `color-mix()` and the colour functions;
+- `calc()`, `color-mix()` and the color functions;
 - `var()` of another theme token.
 
 A value can't contain `;`, braces, `<`, `>`, `\`, `@`, `!`, a comment or
 `url()`.
 
-A colour token that other colours follow also moves the colours derived
+A color token that other colors follow also moves the colors derived
 from it, unless the theme sets those too. For example, `content-bg` moves
-the hover and divider colours.
+the hover and divider colors.
 
 ## Part names
 
@@ -99,7 +99,7 @@ same operations the Appearance page runs.
 
 - Every token in the contract is defined in `tokens.css`.
 - Every part name is styled somewhere in the app's CSS.
-- No CSS outside `tokens.css` writes a colour out, unless its line says why
+- No CSS outside `tokens.css` writes a color out, unless its line says why
   with `/* design-exception: … */`.
 - Every block in the shared pieces (`src/ui`, `src/pieces`) is a published
   part, or is listed as unpublished with a reason.

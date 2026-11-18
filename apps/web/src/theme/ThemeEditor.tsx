@@ -1,10 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 
 import type { ThemeDocument } from '../api/generated/operations'
 import { callOp, invalidateOps, isVersionConflict } from '../api/ops'
 import { Banner, Button, IconButton, Section, SegmentedControl, SelectField, TextArea, TextField, countLabel, describeError, showToast } from '../ui'
-import { LIMITS, PARTS, TOKEN_GROUPS, cssProblem, documentProblems, valueProblem, type ThemeModeName, type TokenGroup } from './contract'
+import { LIMITS, PARTS, TOKEN_GROUPS, cssProblem, documentProblems, tokenLabel, valueProblem, type ThemeModeName, type TokenGroup } from './contract'
 import { CONTRAST_PAIRS, contrastRatio, fixContrast } from './slotEditing'
 import { THEME_PRESETS, toHex, type Rgb } from './slots'
 import { useTheme } from './themeContext'
@@ -64,31 +64,38 @@ function TokenRow({
   value: string | undefined
   onChange: (value: string | undefined) => void
 }) {
+  const id = useId()
   const problem = value === undefined ? null : valueProblem(value)
-  const label = token.replace(/-/g, ' ')
+  const label = tokenLabel(token)
   return (
     <div className={value === undefined ? 'aw-token' : 'aw-token is-set'}>
+      <label className="aw-token__name" htmlFor={id}>
+        <span>{label}</span>
+        <code>--{token}</code>
+      </label>
       {group.kind === 'color' ? (
         <span className="aw-slot__swatch" style={{ background: `var(--${token})` }}>
           <input
-            aria-label={`${label}, ${mode}`}
+            aria-label={`Pick ${label.toLowerCase()}, ${mode}`}
             onChange={(event) => onChange(event.target.value.toLowerCase())}
             type="color"
             value={colors[token] ? toHex(colors[token]) : '#000000'}
           />
         </span>
-      ) : null}
+      ) : (
+        <span />
+      )}
       <TextField
         compact
         error={problem ?? undefined}
-        label={label}
+        id={id}
         mono
         onChange={(event) => onChange(event.target.value === '' ? undefined : event.target.value)}
         placeholder={value === undefined ? inherited(token) : undefined}
         value={value ?? ''}
       />
       {value !== undefined ? (
-        <IconButton icon="undo" label={`Use the built-in ${label}`} onClick={() => onChange(undefined)} size="sm" />
+        <IconButton icon="undo" label={`Use the built-in ${label.toLowerCase()}`} onClick={() => onChange(undefined)} size="sm" />
       ) : (
         <span className="aw-slot__spacer" />
       )}
@@ -165,7 +172,7 @@ export default function ThemeEditor({ start, workspaceId, onDone }: { start: Edi
             value={mode}
           />
         }
-        description="A theme sets light and dark, each starting from a built-in theme. Change any token; the app shows it as you go."
+        description="Light and dark each start from a built-in theme. The whole app shows your changes as you make them."
         title={start.id ? `Edit ${start.name}` : 'New theme'}
       >
         <TextField error={nameProblem ?? undefined} label="Name" maxLength={LIMITS.name} onChange={(event) => setName(event.target.value)} value={name} />
@@ -185,14 +192,14 @@ export default function ThemeEditor({ start, workspaceId, onDone }: { start: Edi
 
       {failing.length ? (
         <div className="aw-contrast">
-          <Banner tone="warning" title={`${countLabel(failing.length, 'colour')} ${failing.length === 1 ? 'is' : 'are'} hard to read in ${mode}.`}>
-            Fix nudges the text colour until it passes.
+          <Banner tone="warning" title={`${countLabel(failing.length, 'color')} ${failing.length === 1 ? 'is' : 'are'} hard to read in ${mode}.`}>
+            Fix nudges the text color until it passes.
           </Banner>
           <ul>
             {failing.slice(0, 5).map((pair) => (
               <li key={`${pair.fg}-${pair.bg}`}>
                 <span>
-                  {pair.fg.replace(/-/g, ' ')} on {pair.bg.replace(/-/g, ' ')}: <b>{pair.ratio.toFixed(1)}:1</b>, needs {pair.floor}:1
+                  {tokenLabel(pair.fg)} on {tokenLabel(pair.bg).toLowerCase()}: <b>{pair.ratio.toFixed(1)}:1</b>, needs {pair.floor}:1
                 </span>
                 <Button onClick={() => setToken(pair.fg, fixContrast(colors[pair.fg], colors[pair.bg], pair.floor))} size="sm">
                   Fix

@@ -293,7 +293,7 @@ pub fn check_value(value: &str) -> Result<(), String> {
     for function in functions(value) {
         if !contract.value_functions.contains(&function) {
             return Err(format!(
-                "A value can't call {function}(): use colours, lengths and math (calc, color-mix, var)."
+                "A value can't call {function}(): use colors, lengths and math (calc, color-mix, var)."
             ));
         }
     }

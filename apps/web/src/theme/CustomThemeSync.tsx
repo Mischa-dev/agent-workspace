@@ -40,7 +40,7 @@ export default function CustomThemeSync() {
     if (customTheme && isApiError(current.error) && GONE.has(current.error.code)) setTheme(theme.theme)
   }, [current.error, customTheme, setTheme, theme.theme])
 
-  // One-time: the old colour overrides become "My colours", on the theme they were made for.
+  // One-time: the old colour overrides become "My colors", on the theme they were made for.
   const converting = useRef(false)
   const overrides = theme.overrides
   useEffect(() => {
@@ -53,7 +53,7 @@ export default function CustomThemeSync() {
       dark: { base: dark ? theme.theme : 'quiet-dark', tokens: dark ? overrides : {} },
       css: '',
     }
-    void callOp('theme_create', { name: 'My colours', document }, { workspaceId })
+    void callOp('theme_create', { name: 'My colors', document }, { workspaceId })
       .then((created) => {
         setCustomTheme({ id: created.id, workspaceId, version: created.version, name: created.name, document: created.document })
         theme.setMode(dark ? 'dark' : 'light')
