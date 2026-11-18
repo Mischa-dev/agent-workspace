@@ -29,6 +29,7 @@ pub mod ops;
 pub mod proposals;
 pub mod ranges;
 pub mod transfer;
+pub mod validation;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -148,12 +149,24 @@ pub struct Tab {
     pub column_widths: Json,
     /// Its conditional formats (C1.17), as [`conditional::ConditionalRule`]s.
     pub conditional_formats: Json,
+    /// Its validation rules (C1.15), as [`validation::ValidationRule`]s.
+    pub validations: Json,
 }
 
 impl Tab {
     /// Its conditional formats; any that don't read are left out.
     pub fn rules(&self) -> Vec<conditional::ConditionalRule> {
         self.conditional_formats
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|rule| serde_json::from_value(rule.clone()).ok())
+            .collect()
+    }
+
+    /// Its validation rules; any that don't read are left out.
+    pub fn validation_rules(&self) -> Vec<validation::ValidationRule> {
+        self.validations
             .as_array()
             .into_iter()
             .flatten()
@@ -349,7 +362,7 @@ pub async fn tabs(
 ) -> Result<Vec<Tab>, AppError> {
     Ok(sqlx::query_as::<_, Tab>(
         "SELECT id, name, position, structure_revision, frozen_rows, column_widths, \
-                conditional_formats \
+                conditional_formats, validations \
          FROM sheet_tabs WHERE sheet_id = $1 ORDER BY position, id",
     )
     .bind(sheet_id)
@@ -703,6 +716,12 @@ pub enum Change {
         tab: TabRef,
         rules: Vec<conditional::ConditionalRule>,
     },
+    /// Replace a tab's validation rules (C1.15); an empty list removes
+    /// them all.
+    Validations {
+        tab: TabRef,
+        rules: Vec<validation::ValidationRule>,
+    },
 }
 
 impl Change {
@@ -723,6 +742,7 @@ impl Change {
             Self::Format { .. } => "format",
             Self::Sort { .. } => "sort",
             Self::ConditionalFormats { .. } => "conditionalFormats",
+            Self::Validations { .. } => "validations",
         }
     }
 }
@@ -898,6 +918,8 @@ struct WorkingTab {
     sorted: bool,
     /// Its conditional formats as this write leaves them.
     rules: Vec<conditional::ConditionalRule>,
+    /// Its validation rules as this write leaves them.
+    validations: Vec<validation::ValidationRule>,
     /// Where the tab stands among the others now, from 0. Moves change it
     /// as they come; the engine keeps its own stable indexes.
     rank: usize,
@@ -1149,6 +1171,7 @@ async fn apply_unbounded(
             moves: Vec::new(),
             sorted: false,
             rules: tab.rules(),
+            validations: tab.validation_rules(),
             rank: 0,
         })
         .collect::<Vec<_>>();
@@ -1573,6 +1596,7 @@ async fn apply_unbounded(
                     moves: Vec::new(),
                     sorted: false,
                     rules: Vec::new(),
+                    validations: Vec::new(),
                     rank: working.len(),
                 });
                 operations.push((index, Operation::AddTab { name }));
@@ -1780,6 +1804,19 @@ async fn apply_unbounded(
                     operations.push((index, Operation::Rules { tab, rules }));
                 }
             }
+            Change::Validations { tab, rules } => {
+                let tab = tab!(tab);
+                let rules = match validation::checked(rules.clone()) {
+                    Ok(rules) => rules,
+                    Err(message) => {
+                        return Ok(Err(problem(index, ProblemKind::Invalid, message)));
+                    }
+                };
+                if working[tab].validations != rules {
+                    working[tab].validations = rules;
+                    working[tab].settings_changed = true;
+                }
+            }
         }
     }
 
@@ -1907,6 +1944,120 @@ async fn apply_unbounded(
         }
     }
 
+    // Validation rules follow inserted and deleted rows and columns too; a
+    // rule whose cells all went goes.
+    for tab in working.iter_mut().filter(|tab| !tab.moves.is_empty()) {
+        let moves = tab
+            .moves
+            .iter()
+            .map(|step| crate::discussion::anchors::GridMove {
+                rows: step.rows,
+                insert: step.insert,
+                at: i64::from(step.at) - 1,
+                count: i64::from(step.count),
+            })
+            .collect::<Vec<_>>();
+        let moved = tab
+            .validations
+            .iter()
+            .filter_map(|rule| {
+                let range = address::range(&rule.range, MAX_ROWS, MAX_COLUMNS)?;
+                let anchor = json!({
+                    "kind": "range",
+                    "from": [range.rows.0 - 1, range.columns.0 - 1],
+                    "to": [range.rows.1 - 1, range.columns.1 - 1],
+                });
+                let followed = crate::discussion::anchors::follow(&anchor, &moves)?;
+                let corner = |key: &str, index: usize| {
+                    followed
+                        .get(key)?
+                        .get(index)?
+                        .as_i64()
+                        .and_then(|place| i32::try_from(place + 1).ok())
+                };
+                let moved = address::Range {
+                    rows: (corner("from", 0)?, corner("to", 0)?),
+                    columns: (corner("from", 1)?, corner("to", 1)?),
+                };
+                Some(validation::ValidationRule {
+                    range: moved.name(),
+                    ..rule.clone()
+                })
+            })
+            .collect::<Vec<_>>();
+        if moved != tab.validations {
+            tab.validations = moved;
+            tab.settings_changed = true;
+        }
+    }
+
+    // A strict validation rule refuses what was typed into its cells, naming
+    // the rule (C1.15). Formulas and cleared cells pass.
+    // Only what this write typed is checked, so rows moving past a rule
+    // never trip over older inputs.
+    let typed = changes
+        .iter()
+        .flat_map(|change| match change {
+            Change::Cell { input, .. } => vec![input.trim().to_owned()],
+            Change::Row { values, .. } => values
+                .iter()
+                .filter_map(|(_, value)| match value {
+                    Json::String(text) => Some(text.trim().to_owned()),
+                    Json::Null => None,
+                    other => Some(other.to_string()),
+                })
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect::<std::collections::HashSet<_>>();
+    if let Some(outputs) = &outputs {
+        for (tab, output) in outputs.iter().enumerate() {
+            let rules = &working[tab].validations;
+            if rules.is_empty() || typed.is_empty() {
+                continue;
+            }
+            for cell in &output.cells {
+                let before = stored_at
+                    .get(&(ids[tab], cell.row, cell.column))
+                    .map(|stored| stored.input.as_str());
+                if before == Some(cell.input.as_str())
+                    || cell.input.is_empty()
+                    || !typed.contains(cell.input.trim())
+                {
+                    continue;
+                }
+                if let Some(rule) = validation::refusing(rules, cell.row, cell.column, &cell.input)
+                {
+                    let index = changes
+                        .iter()
+                        .position(|change| {
+                            matches!(change, Change::Cell { row, column, .. }
+                                if *row == cell.row && *column == cell.column)
+                        })
+                        .unwrap_or(0);
+                    let hint = rule
+                        .hint
+                        .as_deref()
+                        .map(|hint| format!(" ({hint})"))
+                        .unwrap_or_default();
+                    return Ok(Err(problem(
+                        index,
+                        ProblemKind::Invalid,
+                        format!(
+                            "\"{}\" isn't allowed in {}{} of \"{}\": the rule on {} allows {}{hint}.",
+                            cell.input.chars().take(60).collect::<String>(),
+                            column_name(cell.column),
+                            cell.row,
+                            working[tab].name,
+                            rule.range,
+                            rule.describe()
+                        ),
+                    )));
+                }
+            }
+        }
+    }
+
     // Tabs: removed ones go (with their cells), added ones come, the rest
     // take their names, positions and settings.
     let kept: Vec<Uuid> = working.iter().filter_map(|tab| tab.id).collect();
@@ -1962,8 +2113,8 @@ async fn apply_unbounded(
                 sqlx::query(
                     "INSERT INTO sheet_tabs \
                        (id, project_id, sheet_id, name, position, structure_revision, frozen_rows, \
-                        column_widths, conditional_formats) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                        column_widths, conditional_formats, validations) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                 )
                 .bind(id)
                 .bind(sheet.project_id)
@@ -1974,6 +2125,7 @@ async fn apply_unbounded(
                 .bind(tab.frozen_rows)
                 .bind(Json::Object(tab.column_widths.clone()))
                 .bind(json!(tab.rules))
+                .bind(json!(tab.validations))
                 .execute(&mut *connection)
                 .await?;
             }
@@ -1985,7 +2137,7 @@ async fn apply_unbounded(
                         "UPDATE sheet_tabs SET name = $3, position = $4, \
                            structure_revision = CASE WHEN $5 THEN $6 ELSE structure_revision END, \
                            frozen_rows = $7, column_widths = $8, conditional_formats = $9, \
-                           updated_at = now() \
+                           validations = $10, updated_at = now() \
                          WHERE sheet_id = $1 AND id = $2",
                     )
                     .bind(sheet.id)
@@ -1997,6 +2149,7 @@ async fn apply_unbounded(
                     .bind(tab.frozen_rows)
                     .bind(Json::Object(tab.column_widths.clone()))
                     .bind(json!(tab.rules))
+                    .bind(json!(tab.validations))
                     .execute(&mut *connection)
                     .await?;
                 }

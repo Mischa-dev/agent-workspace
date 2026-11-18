@@ -185,6 +185,38 @@
   pointer-events: none;
 }
 
+/* Validation (C1.15): a cell breaking a lenient rule gets a mark in its top-left corner. */
+.aw-grid__cell.is-invalid::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  content: '';
+  border-top: 7px solid var(--danger);
+  border-right: 7px solid transparent;
+  pointer-events: none;
+}
+
+/* A cell with a list of choices shows a small arrow. */
+.aw-grid__cell.has-choices {
+  padding-right: var(--space-4);
+}
+
+.aw-grid__cell.has-choices .aw-grid__text::after {
+  position: absolute;
+  top: 0;
+  right: var(--space-1);
+  content: '▾';
+  color: var(--content-fg-muted);
+  pointer-events: none;
+}
+
+.aw-grid__check {
+  display: block;
+  margin: 0 auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .aw-grid__editor {
   position: absolute;
   inset: 0;
@@ -331,6 +363,14 @@
   align-items: end;
   display: flex;
   gap: var(--space-2);
+}
+
+.aw-sheet__validation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  padding-bottom: var(--space-2);
+  border-bottom: var(--border-width) solid var(--content-border);
 }
 
 .aw-sheet__rules-empty {

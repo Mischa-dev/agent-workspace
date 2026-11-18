@@ -124,6 +124,7 @@ pub async fn snapshot(
                        'id', tab.id, 'name', tab.name, 'frozenRows', tab.frozen_rows,
                        'columnWidths', tab.column_widths,
                        'conditionalFormats', tab.conditional_formats,
+                       'validations', tab.validations,
                        'cells', COALESCE((
                            SELECT jsonb_agg(jsonb_build_array(cell.row_number, cell.column_number, cell.input)
                                             ORDER BY cell.row_number, cell.column_number)
@@ -174,6 +175,9 @@ pub struct TabState {
     /// Its conditional formats (C1.17).
     #[serde(default)]
     pub conditional_formats: Vec<super::conditional::ConditionalRule>,
+    /// Its validation rules (C1.15).
+    #[serde(default)]
+    pub validations: Vec<super::validation::ValidationRule>,
 }
 
 impl State {
@@ -389,6 +393,15 @@ pub fn changes_to(now: &State, target: &State) -> Vec<Change> {
                 rules: tab.conditional_formats.clone(),
             });
         }
+        let had_validations = current
+            .map(|current| current.validations.as_slice())
+            .unwrap_or_default();
+        if had_validations != tab.validations.as_slice() {
+            changes.push(Change::Validations {
+                tab: reference.clone(),
+                rules: tab.validations.clone(),
+            });
+        }
         let had_cells: BTreeMap<(i32, i32), &str> = current
             .map(|current| {
                 current
@@ -488,6 +501,7 @@ async fn current(connection: &mut PgConnection, sheet_id: Uuid) -> Result<State,
                     .filter(|(_, _, look)| !look.is_plain())
                     .collect(),
                 conditional_formats: tab.rules(),
+                validations: tab.validation_rules(),
                 name: tab.name,
                 frozen_rows: tab.frozen_rows,
                 column_widths: tab.column_widths,
@@ -547,6 +561,7 @@ mod tests {
                 .collect(),
             looks: Vec::new(),
             conditional_formats: Vec::new(),
+            validations: Vec::new(),
         }
     }
 

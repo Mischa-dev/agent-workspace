@@ -882,3 +882,103 @@ async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
     .await;
     assert_eq!(removed["outcome"], "not_found", "{removed}");
 }
+
+/// C1.15: a strict rule refuses what breaks it, naming the rule, whether a
+/// cell or a row by header is written; a lenient one keeps the input; the
+/// rules move with inserted rows.
+#[tokio::test]
+async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
+    let Some(setup) = setup("c1_sheet_validation").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "VAL", "Validation").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "VAL",
+            "name": "Tracker",
+            "tabs": [{"add": "Work"}],
+            "cells": [
+                {"cell": "A1", "input": "Task"},
+                {"cell": "B1", "input": "Done"},
+                {"cell": "C1", "input": "Effort"},
+                {"cell": "A2", "input": "Paint"},
+            ],
+            "validations": [{"tab": "Work", "rules": [
+                {"range": "b2:b50", "allow": "list", "choices": ["Yes", "No"], "hint": "Pick one"},
+                {"range": "C2:C50", "allow": "number", "min": 1, "max": 5, "whole": true, "strict": false},
+            ]}],
+            "clientRequestId": "tracker-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+
+    let maybe = call(
+        "sheet_write",
+        json!({"sheetId": sheet, "cells": [{"tab": "Work", "cell": "B2", "input": "Maybe"}], "clientRequestId": "maybe"}),
+    )
+    .await;
+    assert_eq!(maybe["outcome"], "invalid_request", "{maybe}");
+    let said = maybe.to_string();
+    assert!(
+        said.contains("B2:B50") && said.contains("Yes, No") && said.contains("Pick one"),
+        "the rule is named: {said}"
+    );
+    let by_row = call(
+        "sheet_write",
+        json!({"sheetId": sheet, "rows": [{"tab": "Work", "keyColumn": "Task", "values": {"Task": "Paint", "Done": "Later"}}],
+               "clientRequestId": "later"}),
+    )
+    .await;
+    assert_eq!(by_row["outcome"], "invalid_request", "{by_row}");
+
+    let fine = call(
+        "sheet_write",
+        json!({"sheetId": sheet, "cells": [
+            {"tab": "Work", "cell": "B2", "input": "yes"},
+            {"tab": "Work", "cell": "C2", "input": "9"},
+        ], "clientRequestId": "fine"}),
+    )
+    .await;
+    assert_eq!(
+        fine["outcome"], "ok",
+        "lenient rules keep the input: {fine}"
+    );
+
+    let inserted = call(
+        "sheet_write",
+        json!({"sheetId": sheet, "tabs": [{"tab": "Work", "insertRowsAt": 1, "count": 2}], "clientRequestId": "insert"}),
+    )
+    .await;
+    assert_eq!(inserted["outcome"], "ok", "{inserted}");
+    let read = call("sheet_read", json!({"sheetId": sheet, "tab": "Work"})).await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    let tab = read["value"]["tabs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|tab| tab["name"] == "Work")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(tab["validations"][0]["range"], "B4:B52", "{tab}");
+    assert_eq!(tab["validations"][1]["range"], "C4:C52", "{tab}");
+    let moved = call(
+        "sheet_write",
+        json!({"sheetId": sheet, "cells": [{"tab": "Work", "cell": "B4", "input": "Maybe"}], "clientRequestId": "maybe-2"}),
+    )
+    .await;
+    assert_eq!(
+        moved["outcome"], "invalid_request",
+        "the rule moved: {moved}"
+    );
+}

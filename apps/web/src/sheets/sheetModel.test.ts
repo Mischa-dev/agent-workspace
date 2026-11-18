@@ -24,6 +24,7 @@ const body = (): SheetBody => ({
       frozenRows: 1,
       columnWidths: {},
       conditionalFormats: [],
+      validations: [],
       rows: 2,
       columns: 2,
     },

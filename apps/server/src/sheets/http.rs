@@ -349,6 +349,8 @@ struct TabBody {
     column_widths: Json_,
     /// Its conditional formats, the first that applies winning.
     conditional_formats: Json_,
+    /// Its validation rules (dropdowns, checkboxes, limits).
+    validations: Json_,
     /// The last row and column holding something (0 when it's empty).
     rows: i32,
     columns: i32,
@@ -466,6 +468,7 @@ async fn sheet_body(
                     frozen_rows: tab.frozen_rows,
                     column_widths: tab.column_widths,
                     conditional_formats: tab.conditional_formats,
+                    validations: tab.validations,
                     rows,
                     columns,
                 }
@@ -804,6 +807,12 @@ enum ChangeRequest {
         tab: String,
         rules: Vec<super::conditional::ConditionalRule>,
     },
+    /// Replace a tab's validation rules.
+    #[serde(rename_all = "camelCase")]
+    Validations {
+        tab: String,
+        rules: Vec<super::validation::ValidationRule>,
+    },
 }
 
 impl ChangeRequest {
@@ -885,6 +894,10 @@ impl ChangeRequest {
                 patch: look.patch()?,
             },
             Self::ConditionalFormats { tab, rules } => Change::ConditionalFormats {
+                tab: Some(tab),
+                rules,
+            },
+            Self::Validations { tab, rules } => Change::Validations {
                 tab: Some(tab),
                 rules,
             },
@@ -1466,6 +1479,7 @@ mod tests {
             frozen_rows: 1,
             column_widths: Json_::Object(Map::new()),
             conditional_formats: Json_::Array(Vec::new()),
+            validations: Json_::Array(Vec::new()),
         };
         let tabs = vec![tab("Summary"), tab("Data")];
         assert_eq!(
