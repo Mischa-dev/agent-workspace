@@ -49,7 +49,7 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -490,7 +490,7 @@ async fn owners_add_change_and_remove_members() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -598,7 +598,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -1560,7 +1560,7 @@ async fn people_create_projects_through_their_apps() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();

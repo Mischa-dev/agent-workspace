@@ -1936,8 +1936,44 @@ async fn set_default_workspace(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The workspace someone works in: the one they chose if they still belong
-/// to it, else the earliest they joined.
+/// The workspace a workspace-level request acts in (K4.6): the one it
+/// names, if the account is an enabled member of it and it is active; with
+/// none named, the account's only workspace. It is never inferred from the
+/// last one used: an account in several must say which.
+pub(crate) async fn named_or_only(
+    connection: &mut sqlx::PgConnection,
+    actor_id: Uuid,
+    named: Option<Uuid>,
+) -> Result<Uuid, AppError> {
+    let reach = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT membership.organization_id
+        FROM organization_memberships membership
+        JOIN organizations workspace
+          ON workspace.id = membership.organization_id AND workspace.lifecycle = 'active'
+        JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
+        WHERE membership.actor_id = $1 AND membership.enabled
+          AND ($2::uuid IS NULL OR membership.organization_id = $2)
+        LIMIT 2
+        "#,
+    )
+    .bind(actor_id)
+    .bind(named)
+    .fetch_all(&mut *connection)
+    .await?;
+    match reach.as_slice() {
+        [only] => Ok(*only),
+        [] => Err(AppError::NotFound("organization")),
+        _ => Err(AppError::Refused {
+            field: "workspaceId",
+            message: "You belong to more than one workspace: say which one.",
+        }),
+    }
+}
+
+/// Where `/` lands and what an old address without a workspace means: the
+/// workspace the person last chose if they still belong to it, else the
+/// earliest they joined. Never the target of a request (K4.6).
 pub(crate) async fn default_workspace<'e, E: sqlx::PgExecutor<'e>>(
     executor: E,
     actor_id: Uuid,

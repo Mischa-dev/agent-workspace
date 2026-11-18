@@ -204,7 +204,6 @@ async fn list_connections(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<ConnectionsResponse>, AppError> {
-    let project_id = home_space(&state, principal.actor_id, project_id).await?;
     let access = load_access(&state, principal.actor_id, project_id, false)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -225,7 +224,6 @@ async fn create_connection(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreateConnectionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    let project_id = home_space(&state, principal.actor_id, project_id).await?;
     require_authenticated_write(&state, &headers, &principal).await?;
     let webhook_url = validate_webhook_url(
         request.webhook_url.clone(),
@@ -368,26 +366,6 @@ struct CreatedAgent {
 }
 
 /// Create the agent's Actor, memberships, connection, and first credential.
-/// Where an agent added under Messages lives: DMs are in no space (K4.17),
-/// so "Messages only" means the caller's default workspace's own space.
-pub(crate) async fn home_space(
-    state: &AppState,
-    actor: Uuid,
-    place: Uuid,
-) -> Result<Uuid, AppError> {
-    if place != crate::spaces::DIRECT {
-        return Ok(place);
-    }
-    let mut connection = state.pool.acquire().await?;
-    let workspace = crate::workspace::default_workspace(&mut *connection, actor)
-        .await?
-        .map(|(workspace, _)| workspace)
-        .ok_or(AppError::NotFound("project"))?;
-    crate::spaces::workspace::find(&mut connection, workspace)
-        .await?
-        .ok_or(AppError::NotFound("project"))
-}
-
 async fn insert_agent(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
@@ -696,7 +674,6 @@ async fn update_connection(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<UpdateConnectionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    let project_id = home_space(&state, principal.actor_id, project_id).await?;
     require_authenticated_write(&state, &headers, &principal).await?;
     if request.expected_version < 1
         || request.role.is_none() && request.enabled.is_none() && request.scopes.is_none()
@@ -757,7 +734,6 @@ async fn set_webhook(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<WebhookRequest>,
 ) -> Result<Json<WebhookResponse>, AppError> {
-    let project_id = home_space(&state, principal.actor_id, project_id).await?;
     require_authenticated_write(&state, &headers, &principal).await?;
     let to_typed = match request.wakeup_format.as_deref() {
         None => false,
@@ -849,7 +825,6 @@ async fn test_webhook(
     principal: AuthenticatedActor,
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<crate::replies::TestWakeup>, AppError> {
-    let project_id = home_space(&state, principal.actor_id, project_id).await?;
     require_authenticated_write(&state, &headers, &principal).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
@@ -921,7 +896,6 @@ async fn rotate_credential(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<ExpectedVersionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    let project_id = home_space(&state, principal.actor_id, project_id).await?;
     require_authenticated_write(&state, &headers, &principal).await?;
     mutate_connection(
         &state,
@@ -950,7 +924,6 @@ async fn create_setup_link(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<SetupLinkRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    let project_id = home_space(&state, principal.actor_id, project_id).await?;
     require_authenticated_write(&state, &headers, &principal).await?;
     mutate_connection(
         &state,
@@ -977,7 +950,6 @@ async fn remove_connection(
     ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<ExpectedVersionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
-    let project_id = home_space(&state, principal.actor_id, project_id).await?;
     require_authenticated_write(&state, &headers, &principal).await?;
     mutate_connection(
         &state,

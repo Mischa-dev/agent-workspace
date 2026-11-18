@@ -1635,7 +1635,10 @@ async fn fixture(prefix: &str) -> Option<Fixture> {
     let (_, overview) = owner
         .call(&app, "GET", "/api/v1/direct", None, Value::Null)
         .await;
-    let space = overview["projectId"].as_str().expect("space").to_owned();
+    let space = overview["workspaceSpaceId"]
+        .as_str()
+        .expect("space")
+        .to_owned();
     Some(Fixture {
         admin,
         schema,

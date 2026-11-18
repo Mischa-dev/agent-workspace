@@ -168,7 +168,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();

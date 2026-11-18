@@ -296,7 +296,7 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();

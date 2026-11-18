@@ -458,6 +458,7 @@ pub(crate) async fn add_person(
             r#"
             INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
             VALUES ($1, $2, $3, 'member', $4, $5)
+            ON CONFLICT (project_id, actor_id) DO NOTHING
             "#,
         )
         .bind(Uuid::now_v7())

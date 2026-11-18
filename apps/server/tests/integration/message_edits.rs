@@ -38,7 +38,7 @@ pub(super) async fn direct_space(setup: &Setup) -> String {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned()
@@ -172,6 +172,7 @@ pub(super) async fn add_person(setup: &Setup, projects: &[&str], login: &str) ->
             r#"
             INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
             VALUES ($1, $2, $3, 'member', $4, $4)
+            ON CONFLICT (project_id, actor_id) DO NOTHING
             "#,
         )
         .bind(Uuid::now_v7())
@@ -237,8 +238,19 @@ pub(super) async fn add_person(setup: &Setup, projects: &[&str], login: &str) ->
 
 pub(super) async fn set_role(pool: &PgPool, project: &str, actor: Uuid, role: &str) {
     // DMs and groups are in no space: there the workspace role counts, and
-    // a workspace has no built-in viewer, so a custom role reads only.
-    if project.parse::<Uuid>().expect("project") == agent_workspace_server::spaces::DIRECT {
+    // a workspace has no built-in viewer, so a custom role reads only. The
+    // workspace's own space follows the workspace role too (the place an
+    // agent added without a project lives, K4.6), and its membership row is
+    // set as well.
+    let place = project.parse::<Uuid>().expect("project");
+    let own_space = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND kind = 'workspace')",
+    )
+    .bind(place)
+    .fetch_one(pool)
+    .await
+    .expect("space kind");
+    if place == agent_workspace_server::spaces::DIRECT || own_space {
         sqlx::query(
             "INSERT INTO workspace_roles (id, organization_id, key, base_role, name) \
              SELECT gen_random_uuid(), organization_id, 'reader', 'viewer', 'Reader' \
@@ -262,7 +274,9 @@ pub(super) async fn set_role(pool: &PgPool, project: &str, actor: Uuid, role: &s
         .execute(pool)
         .await
         .expect("set workspace role");
-        return;
+        if !own_space {
+            return;
+        }
     }
     sqlx::query("UPDATE project_memberships SET role = $3 WHERE project_id = $1 AND actor_id = $2")
         .bind(project.parse::<Uuid>().expect("project"))

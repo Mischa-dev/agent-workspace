@@ -35,12 +35,15 @@ async fn agent_in(setup: &Setup, project: &str, name: &str, handle: &str) -> (Uu
     let app = &setup.app;
     let space = send(
         app,
-        setup
-            .browser
-            .request("GET", "/api/v1/direct", None, Value::Null),
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/direct?workspaceId={}", setup.organization_id),
+            None,
+            Value::Null,
+        ),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();

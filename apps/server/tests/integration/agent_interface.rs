@@ -58,13 +58,13 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
     let app = test_app(pool.clone(), &database_url);
     let browser = login(&app).await;
 
-    // The Messages space, two agents in it, and a separate project.
+    // The workspace's own space, two agents in it, and a separate project.
     let space = send(
         &app,
         browser.request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();

@@ -744,7 +744,7 @@ async fn a_saved_key_never_shows_in_a_dump_a_response_a_log_or_a_run_environment
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -882,7 +882,7 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();
@@ -1609,7 +1609,7 @@ async fn retention_runs_as_scheduled_jobs() {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned();

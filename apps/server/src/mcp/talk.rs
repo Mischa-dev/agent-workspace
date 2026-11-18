@@ -104,6 +104,10 @@ pub(super) struct ConversationStartArguments {
     pub name: Option<String>,
     /// An optional first message. @handles become mentions.
     pub text: Option<String>,
+    /// The workspace to start it in, by id or slug, for one that keeps its
+    /// members' DMs. Without one, an agent starts it in its own workspace
+    /// and an app acting for a person starts a personal DM.
+    pub workspace: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -1897,16 +1901,24 @@ pub(super) async fn conversation_start(
                 "Name someone other than yourself.",
             ));
         }
-        // Started in the connection's own workspace, or the person's current
-        // one for an app acting across their account (R20's kept DMs).
-        let anchored =
-            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-                .bind(principal.project_id)
-                .fetch_optional(&mut *transaction)
-                .await?
-                .filter(|_| !principal.account_wide);
-        let inside =
-            crate::direct::started_inside(&mut transaction, principal.actor_id, anchored).await?;
+        // Started in the workspace named, else the connection's own; an app
+        // acting across a person's account names one or starts a personal
+        // DM (K4.6: never the last workspace used).
+        let inside = match arguments.workspace.as_deref() {
+            Some(named) => {
+                match crate::ops::target::workspace_named(&mut transaction, named).await {
+                    Ok(workspace) => Some(workspace),
+                    Err(_) => return Ok(ToolResult::not_found("That workspace")),
+                }
+            }
+            None => {
+                sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                    .bind(principal.project_id)
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                    .filter(|_| !principal.account_wide)
+            }
+        };
         let (conversation_id, created, kind) = if people.len() == 1 && name.is_none() {
             let (id, created) =
                 crate::direct::open_dm_in(&mut transaction, principal.actor_id, people[0], inside)

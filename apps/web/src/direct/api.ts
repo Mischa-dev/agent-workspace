@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
+import { useWorkspaceId } from '../app/workspace'
 import { normalizeConversationActor } from '../conversations/sidebarApi'
 import type { ConversationActor } from '../conversations/types'
 
@@ -27,8 +28,10 @@ export type DirectConversation = {
 
 export type DirectOverview = {
   projectId: string
-  /** The workspace the Messages space belongs to. */
+  /** The workspace the list was asked for: the one the person is in. */
   organizationId: string
+  /** That workspace's own space, where an agent added without a project lives. */
+  workspaceSpaceId: string
   conversations: DirectConversation[]
   people: ConversationActor[]
   capabilities: { startConversation: boolean; manageAgents: boolean }
@@ -79,8 +82,13 @@ function normalizeConversation(value: unknown): DirectConversation | null {
   }
 }
 
-export async function getDirectOverview(): Promise<DirectOverview> {
-  const root = asRecord(await requestJson<unknown>('/api/v1/direct'))
+/** Names the workspace the person is in: a workspace-level request never leaves the server to guess (K4.6). */
+function inWorkspace(path: string, workspaceId: string | null | undefined) {
+  return workspaceId ? `${path}?workspaceId=${encodeURIComponent(workspaceId)}` : path
+}
+
+export async function getDirectOverview(workspaceId?: string | null): Promise<DirectOverview> {
+  const root = asRecord(await requestJson<unknown>(inWorkspace('/api/v1/direct', workspaceId)))
   const capabilities = asRecord(root.capabilities)
   if (typeof root.projectId !== 'string') {
     throw new Error('Direct messages are unavailable.')
@@ -88,6 +96,7 @@ export async function getDirectOverview(): Promise<DirectOverview> {
   return {
     projectId: root.projectId,
     organizationId: typeof root.organizationId === 'string' ? root.organizationId : '',
+    workspaceSpaceId: typeof root.workspaceSpaceId === 'string' ? root.workspaceSpaceId : '',
     conversations: Array.isArray(root.conversations)
       ? root.conversations
           .map(normalizeConversation)
@@ -107,11 +116,12 @@ function conversationId(value: unknown) {
   return id
 }
 
-export async function openDm(actorId: string) {
+/** Opens the pair's DM, started in the workspace the person is in (a workspace that keeps DMs keeps it). */
+export async function openDm(actorId: string, workspaceId?: string | null) {
   return conversationId(
     await requestJson<unknown>('/api/v1/direct/dms', {
       method: 'POST',
-      json: { actorId },
+      json: workspaceId ? { actorId, workspaceId } : { actorId },
     }),
   )
 }
@@ -120,6 +130,7 @@ export async function createGroup(input: {
   name?: string
   memberIds: string[]
   idempotencyKey: string
+  workspaceId?: string | null
 }) {
   return conversationId(
     await requestJson<unknown>('/api/v1/direct/groups', {
@@ -128,6 +139,7 @@ export async function createGroup(input: {
       json: {
         name: input.name?.trim() ? input.name.trim() : null,
         memberIds: input.memberIds,
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       },
     }),
   )
@@ -151,9 +163,10 @@ export async function removeGroupMember(
 }
 
 export function useDirectOverview() {
+  const workspaceId = useWorkspaceId()
   return useQuery({
-    queryKey: directQueryKey,
-    queryFn: getDirectOverview,
+    queryKey: [...directQueryKey, workspaceId] as const,
+    queryFn: () => getDirectOverview(workspaceId),
     staleTime: 15_000,
     retry: false,
   })

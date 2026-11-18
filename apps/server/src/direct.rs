@@ -30,7 +30,7 @@ use crate::{
         ActorView, ConversationCreateResponse, ConversationView, ReadStateView, enqueue_event,
         insert_audit_event, lock_seen_conversation_for, normalize_conversation_name,
     },
-    error::{ApiJson, ApiPath, AppError},
+    error::{ApiJson, ApiPath, ApiQuery, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     outbox::{
         ConversationCreatedPayload, ConversationMemberAddedPayload,
@@ -89,9 +89,13 @@ struct AddMemberRequest {
 struct DirectOverview {
     /// The place DMs and groups are named by (the direct scope).
     project_id: Uuid,
-    /// The person's current workspace, so the web app can offer its
+    /// The workspace the list was asked for, so the web app can offer its
     /// projects as places for an agent to work.
     organization_id: Uuid,
+    /// That workspace's own space: where an agent added without a project
+    /// lives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace_space_id: Option<Uuid>,
     conversations: Vec<DirectConversationItem>,
     people: Vec<ActorView>,
     capabilities: DirectCapabilities,
@@ -170,15 +174,27 @@ impl From<PersonRow> for ActorView {
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OverviewQuery {
+    /// The workspace the person is in: its kept DMs are listed with their
+    /// own (K4.6: never inferred from the last one used).
+    workspace_id: Option<Uuid>,
+}
+
 async fn direct_overview(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
+    ApiQuery(query): ApiQuery<OverviewQuery>,
 ) -> Result<Json<DirectOverview>, AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (organization_id, _) =
-        crate::workspace::default_workspace(&mut *transaction, principal.actor_id)
-            .await?
-            .ok_or(AppError::NotFound("organization"))?;
+    let organization_id =
+        crate::workspace::named_or_only(&mut transaction, principal.actor_id, query.workspace_id)
+            .await?;
+    // Made on first use, like every workspace's own space (K4.10).
+    let workspace_space_id =
+        crate::spaces::workspace::join(&mut transaction, organization_id, principal.actor_id)
+            .await?;
     let rows = sqlx::query_as::<_, DirectConversationRow>(
         r#"
         SELECT
@@ -346,6 +362,7 @@ async fn direct_overview(
     Ok(Json(DirectOverview {
         project_id: DIRECT,
         organization_id,
+        workspace_space_id,
         conversations,
         people,
         capabilities,
@@ -376,23 +393,6 @@ pub(crate) async fn may_start_any(
     .await?)
 }
 
-/// The workspace a person starts a DM or group in: the one they name, else
-/// their current one.
-pub(crate) async fn started_inside(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor_id: Uuid,
-    named: Option<Uuid>,
-) -> Result<Option<Uuid>, AppError> {
-    if named.is_some() {
-        return Ok(named);
-    }
-    Ok(
-        crate::workspace::default_workspace(&mut **transaction, actor_id)
-            .await?
-            .map(|(workspace, _)| workspace),
-    )
-}
-
 async fn open_dm(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -404,7 +404,9 @@ async fn open_dm(
         return Err(AppError::Validation("DM recipient"));
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let inside = started_inside(&mut transaction, principal.actor_id, request.workspace_id).await?;
+    // Started inside the workspace the person is in, a kept workspace's
+    // DM is its own; with none named it is personal (K4.6).
+    let inside = request.workspace_id;
     let (conversation_id, created) = open_dm_in(
         &mut transaction,
         principal.actor_id,
@@ -483,7 +485,9 @@ async fn create_group(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let inside = started_inside(&mut transaction, principal.actor_id, request.workspace_id).await?;
+    // Started inside the workspace the person is in, a kept workspace's
+    // DM is its own; with none named it is personal (K4.6).
+    let inside = request.workspace_id;
     let conversation_id =
         create_group_in(&mut transaction, principal.actor_id, &others, name, inside).await?;
     announce_created(

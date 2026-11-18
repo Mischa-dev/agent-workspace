@@ -120,7 +120,7 @@ pub(super) async fn space(setup: &Setup) -> String {
             .request("GET", "/api/v1/direct", None, Value::Null),
     )
     .await
-    .1["projectId"]
+    .1["workspaceSpaceId"]
         .as_str()
         .expect("space")
         .to_owned()

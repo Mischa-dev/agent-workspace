@@ -40,8 +40,17 @@ impl SpaceKind {
         match self {
             // Messages too: channels need it, and comments on the
             // workspace's own boards and sheets belong to it. Inbox: a
-            // reminder filed in the workspace is kept in its space.
-            Self::Workspace => Some(&["pages", "whiteboards", "channels", "messages", "inbox"]),
+            // reminder filed in the workspace is kept in its space. Agents:
+            // they belong to the workspace (K1.6), and one added without a
+            // project lives here (K4.6).
+            Self::Workspace => Some(&[
+                "pages",
+                "whiteboards",
+                "channels",
+                "messages",
+                "inbox",
+                "agents",
+            ]),
             // Drafts and notes: pages, boards, sheets and collections; no
             // chat, since nobody else is there.
             Self::Personal => Some(&["pages", "whiteboards", "sheets", "collections"]),

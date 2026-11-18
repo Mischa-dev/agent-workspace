@@ -679,7 +679,7 @@ async fn sidebar_never_lists_other_peoples_direct_threads() {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{overview}");
-        assert_eq!(overview["projectId"], space.as_str());
+        assert_eq!(overview["workspaceSpaceId"], space.as_str());
     }
     let agent = add_agent(&setup.pool, space_id, "Mara", "mara").await;
 
@@ -1232,14 +1232,6 @@ async fn one_dm_per_pair_and_kept_dms_stay_in_their_workspace() {
         .await
         .expect("joins the second workspace");
     }
-    let current = |actor: Uuid, workspace: Uuid| async move {
-        sqlx::query("UPDATE users SET default_organization_id = $2 WHERE actor_id = $1")
-            .bind(actor)
-            .bind(workspace)
-            .execute(pool)
-            .await
-            .expect("switch workspace");
-    };
     let open = |browser: &super::support::app::Browser, body: Value| {
         let request = browser.request("POST", "/api/v1/direct/dms", None, body);
         let app = world.app.clone();
@@ -1252,8 +1244,14 @@ async fn one_dm_per_pair_and_kept_dms_stay_in_their_workspace() {
             )
         }
     };
-    let listed = |browser: &super::support::app::Browser| {
-        let request = browser.request("GET", "/api/v1/direct", None, Value::Null);
+    // The list names the workspace the person is in (K4.6); an account in
+    // one workspace may leave it out.
+    let listed = |browser: &super::support::app::Browser, workspace: Option<Uuid>| {
+        let path = workspace.map_or_else(
+            || "/api/v1/direct".to_owned(),
+            |workspace| format!("/api/v1/direct?workspaceId={workspace}"),
+        );
+        let request = browser.request("GET", &path, None, Value::Null);
         let app = world.app.clone();
         async move {
             let (status, body) = send(&app, request).await;
@@ -1272,8 +1270,16 @@ async fn one_dm_per_pair_and_kept_dms_stay_in_their_workspace() {
         }
     };
 
+    // In two workspaces, the list has to be told which one (K4.6).
+    let (status, unnamed) = send(
+        &world.app,
+        ana.browser
+            .request("GET", "/api/v1/direct", None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{unnamed}");
+
     // From either shared workspace, the same personal DM.
-    current(ana.actor, first).await;
     let (status, personal) = open(&ana.browser, json!({"actorId": ben.actor})).await;
     assert_eq!(status, StatusCode::CREATED);
     let (status, again) = open(
@@ -1283,9 +1289,8 @@ async fn one_dm_per_pair_and_kept_dms_stay_in_their_workspace() {
     .await;
     assert_eq!((status, &again), (StatusCode::OK, &personal));
     for workspace in [first, second] {
-        current(ben.actor, workspace).await;
         assert_eq!(
-            listed(&ben.browser).await.get(&personal),
+            listed(&ben.browser, Some(workspace)).await.get(&personal),
             Some(&None),
             "ben sees the DM in every workspace"
         );
@@ -1330,16 +1335,14 @@ async fn one_dm_per_pair_and_kept_dms_stay_in_their_workspace() {
     assert_eq!(from_first, personal);
 
     // Listed only there, with the personal one beside it, labelled.
-    current(ana.actor, second).await;
-    let there = listed(&ana.browser).await;
+    let there = listed(&ana.browser, Some(second)).await;
     assert_eq!(there.get(&kept), Some(&None), "{there:?}");
     assert_eq!(
         there.get(&personal),
         Some(&Some("Personal".to_owned())),
         "{there:?}"
     );
-    current(ana.actor, first).await;
-    let elsewhere = listed(&ana.browser).await;
+    let elsewhere = listed(&ana.browser, Some(first)).await;
     assert!(!elsewhere.contains_key(&kept), "{elsewhere:?}");
     assert_eq!(elsewhere.get(&personal), Some(&None), "{elsewhere:?}");
 
@@ -1371,15 +1374,17 @@ async fn one_dm_per_pair_and_kept_dms_stay_in_their_workspace() {
         .expect("pre-R20 member");
     }
     for workspace in [first, second] {
-        current(ana.actor, workspace).await;
-        assert!(listed(&ana.browser).await.contains_key(&old.to_string()));
+        assert!(
+            listed(&ana.browser, Some(workspace))
+                .await
+                .contains_key(&old.to_string())
+        );
     }
     let (status, found) = open(&ana.browser, json!({"actorId": cal.actor})).await;
     assert_eq!((status, found), (StatusCode::OK, old.to_string()));
 
     // The kept DM ends with ben's membership; the personal one doesn't.
-    current(ben.actor, second).await;
-    assert!(listed(&ben.browser).await.contains_key(&kept));
+    assert!(listed(&ben.browser, Some(second)).await.contains_key(&kept));
     sqlx::query(
         "UPDATE organization_memberships SET enabled = false WHERE organization_id = $1 AND actor_id = $2",
     )
@@ -1393,7 +1398,8 @@ async fn one_dm_per_pair_and_kept_dms_stay_in_their_workspace() {
         !visible(pool, kept_id, ben.actor).await,
         "ben, after leaving"
     );
-    let after = listed(&ben.browser).await;
+    // Now in one workspace, ben needn't name it.
+    let after = listed(&ben.browser, None).await;
     assert!(!after.contains_key(&kept), "{after:?}");
     assert_eq!(after.get(&personal), Some(&None), "{after:?}");
     world.finish().await;

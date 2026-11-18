@@ -459,30 +459,6 @@ pub(crate) async fn list_in(
     })
 }
 
-/// The workspace a webhook across one goes to: the one asked for, else the
-/// caller's first.
-pub(crate) async fn default_workspace(
-    pool: &PgPool,
-    actor_id: Uuid,
-    requested: Option<Uuid>,
-) -> Result<Option<Uuid>, AppError> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT membership.organization_id
-        FROM organization_memberships membership
-        JOIN actors actor ON actor.id = membership.actor_id AND actor.status = 'active'
-        WHERE membership.actor_id = $1 AND membership.enabled
-          AND ($2::uuid IS NULL OR membership.organization_id = $2)
-        ORDER BY membership.created_at, membership.organization_id
-        LIMIT 1
-        "#,
-    )
-    .bind(actor_id)
-    .bind(requested)
-    .fetch_optional(crate::db::scoped(pool))
-    .await?)
-}
-
 pub(crate) async fn create(
     state: &AppState,
     caller: &Caller,
@@ -513,9 +489,14 @@ pub(crate) async fn create(
                 // A token for one project can't hear the whole workspace.
                 return Err(AppError::Validation("projectId"));
             }
-            let chosen =
-                default_workspace(&state.pool, caller.actor_id, request.organization_id).await?;
-            chosen.ok_or(AppError::NotFound("workspace"))?
+            // The workspace asked for, or the caller's only one (K4.6).
+            let mut connection = state.pool.acquire().await?;
+            crate::workspace::named_or_only(
+                &mut connection,
+                caller.actor_id,
+                request.organization_id,
+            )
+            .await?
         }
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;

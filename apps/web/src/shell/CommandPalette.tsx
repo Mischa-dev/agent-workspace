@@ -380,7 +380,7 @@ export function CommandPalette() {
           mark: <Avatar name={person.displayName} seed={person.id} size={20} />,
           keywords: [person.displayName, person.handle],
           onSelect: () => {
-            void openDm(person.id)
+            void openDm(person.id, homeId)
               .then((conversationId) => navigate(`/messages/${encodeURIComponent(conversationId)}`))
               .catch((reason: unknown) =>
                 showToast({ tone: 'danger', title: `The conversation with ${person.displayName} didn’t open`, description: reason instanceof Error ? reason.message : 'Try again.' }),

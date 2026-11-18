@@ -623,6 +623,11 @@ pub async fn anywhere(
 #[derive(Clone, Debug, Default)]
 pub struct ProjectModules {
     projects: Vec<(Uuid, ModuleSet, bool)>,
+    /// The workspace's own spaces among them, with what the workspace has
+    /// on for the account before the space's shape narrows it: a notice
+    /// about something elsewhere (an automation in a project its maker has
+    /// left) is filed there, and follows the module it is about.
+    homes: Vec<(Uuid, ModuleSet)>,
 }
 
 impl ProjectModules {
@@ -642,6 +647,17 @@ impl ProjectModules {
         organizations.sort();
         organizations.dedup();
         let switches = switches_of(connection, &organizations).await?;
+        let homes = rows
+            .iter()
+            .filter(|row| SpaceKind::from_stored(&row.kind) == Some(SpaceKind::Workspace))
+            .map(|row| {
+                let found = switches
+                    .get(&row.organization_id)
+                    .cloned()
+                    .unwrap_or_default();
+                (row.id, narrowed(&found, &row.role_off))
+            })
+            .collect::<Vec<_>>();
         let mut found_projects = rows
             .iter()
             .map(|row| {
@@ -667,6 +683,7 @@ impl ProjectModules {
         }
         Ok(Self {
             projects: found_projects,
+            homes,
         })
     }
 
@@ -731,7 +748,14 @@ impl ProjectModules {
             Some(module) if Registry::global().governs_conversations(&module.id) => {
                 set.allows_conversations_in(if *direct { "direct" } else { "standard" })
             }
-            Some(module) => set.contains(&module.id),
+            Some(module) => {
+                set.contains(&module.id)
+                    || self
+                        .homes
+                        .iter()
+                        .find(|(home, _)| *home == project_id)
+                        .is_some_and(|(_, unshaped)| unshaped.contains(&module.id))
+            }
             None => true,
         }
     }

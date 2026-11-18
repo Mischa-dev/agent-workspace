@@ -28,6 +28,10 @@ fn to_value(value: impl Serialize) -> Result<Value, AppError> {
 fn refusal(error: AppError, operation: &'static str) -> ToolResult<Value> {
     match error {
         AppError::Invalid(message) => ToolResult::invalid("request", message),
+        AppError::Refused {
+            field: "workspaceId",
+            message,
+        } => ToolResult::invalid("workspace", message),
         AppError::SecretsNotConfigured => ToolResult::conflict(
             "Webhooks need the server's secrets keyring; ask whoever runs this workspace to set it up.",
         ),
@@ -188,6 +192,9 @@ pub(super) struct WebhookWriteArguments {
     /// create: hear only this project (ID, link or key); left out, every
     /// project in the workspace you can see.
     pub project_id: Option<String>,
+    /// create: the workspace to hear, by id or slug, when you belong to
+    /// more than one.
+    pub workspace: Option<String>,
     /// update: active or paused.
     pub state: Option<String>,
     /// update: the version you last read.
@@ -217,20 +224,46 @@ pub(super) async fn webhook_write(
             Some(_) => return ToolResult::not_found("That project"),
             None => None,
         };
-        // AWD-75: a webhook across a workspace goes to the person's first
-        // one, so Automations must be on there, not only where the call was
-        // checked. (One limited to a project was checked in that project.)
+        let workspace = match arguments.workspace.as_deref() {
+            Some(named) => {
+                let found = match state.pool.acquire().await {
+                    Ok(mut connection) => {
+                        crate::ops::target::workspace_named(&mut connection, named)
+                            .await
+                            .ok()
+                    }
+                    Err(error) => return refusal(error.into(), "webhook_write"),
+                };
+                match found {
+                    Some(workspace) => Some(workspace),
+                    None => return ToolResult::not_found("That workspace"),
+                }
+            }
+            None => None,
+        };
+        // AWD-75: a webhook across a workspace goes to the workspace named,
+        // or the caller's only one, so Automations must be on there, not
+        // only where the call was checked. (One limited to a project was
+        // checked in that project.)
         if project_id.is_none()
             && caller.token_project_id.is_none()
             && caller.actor_kind == crate::policy::ActorKind::Human
         {
             let off = async {
                 Ok::<_, AppError>(
-                    match webhooks::default_workspace(&state.pool, caller.actor_id, None).await? {
-                        Some(organization_id) => {
+                    match crate::workspace::named_or_only(
+                        &mut *state.pool.acquire().await?,
+                        caller.actor_id,
+                        workspace,
+                    )
+                    .await
+                    {
+                        Ok(organization_id) => {
                             !automations_on(state, caller.actor_id, organization_id, None).await?
                         }
-                        None => false,
+                        // Creating it says which workspace to name.
+                        Err(AppError::NotFound(_) | AppError::Refused { .. }) => false,
+                        Err(error) => return Err(error),
                     },
                 )
             }
@@ -252,7 +285,7 @@ pub(super) async fn webhook_write(
                             url,
                             event_types,
                             project_id,
-                            organization_id: None,
+                            organization_id: workspace,
                         },
                     )
                     .await?,
