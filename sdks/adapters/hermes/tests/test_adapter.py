@@ -291,6 +291,20 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sends[0]["clientRequestId"], sends[1]["clientRequestId"])
         self.assertEqual(self.workspace.named("reply_release"), [])
 
+    async def test_a_follow_up_waits_for_the_turn_before_it(self):
+        await self.hear(reply_event("reply.requested", "r1", "e1"))
+        await self.hear(reply_event("reply.requested", "r2", "e2"))
+        # Claimed, but not handed over while r1 is being answered.
+        self.assertEqual([event.message_id for event in self.adapter.handled], ["r1"])
+        await self.adapter.send(CONVERSATION, "Two tasks are left.")
+        await self.adapter.on_processing_complete(self.adapter.handled[0], Outcome.SUCCESS)
+        await self.hear({})
+
+        sends = self.workspace.named("reply_send")
+        self.assertEqual([(s["requestId"], s["text"]) for s in sends], [("r1", "Two tasks are left.")])
+        self.assertEqual(self.workspace.named("reply_release"), [])
+        self.assertEqual([event.message_id for event in self.adapter.handled], ["r1", "r2"])
+
     async def test_a_turn_with_no_answer_or_an_error_gives_the_request_back(self):
         await self.hear(reply_event("reply.requested", "r1", "e1"))
         await self.adapter.on_processing_complete(self.adapter.handled[0], Outcome.SUCCESS)

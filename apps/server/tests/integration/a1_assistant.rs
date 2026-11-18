@@ -245,6 +245,54 @@ async fn the_assistant_is_offered_with_a_model_and_answers_a_dm_with_its_tools()
     .expect("ai usage");
     assert_eq!(calls, 2, "one call to choose the tool, one to answer");
 
+    // Stopped before its turn, it ends cancelled and says nothing more.
+    let (status, sent) = send(
+        &app,
+        owner.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{conversation}/messages"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"content": {"version": 1, "nodes": [
+                {"type": "text", "text": "And the tasks? [[call projects_list {}]]"}]}}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{sent}");
+    run_due_jobs(&state).await;
+    agent_workspace_server::scheduler::drain_now(&state)
+        .await
+        .expect("drain");
+    let second = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM runs WHERE account_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(assistant)
+    .fetch_one(world.pool())
+    .await
+    .expect("a second run");
+    assert_ne!(second, run.0);
+    let (status, stopped) = op(&app, &world, owner, "run_cancel", json!({"runId": second})).await;
+    assert_eq!(status, StatusCode::OK, "{stopped}");
+    // The host hears the stop before the turn it accepted gets to run.
+    agent_workspace_server::scheduler::drain_now(&state)
+        .await
+        .expect("drain");
+    settle(&state).await;
+    let ended = sqlx::query_scalar::<_, String>("SELECT state FROM runs WHERE id = $1")
+        .bind(second)
+        .fetch_one(world.pool())
+        .await
+        .expect("run");
+    assert_eq!(ended, "cancelled");
+    let answers = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM messages WHERE conversation_id = $1::uuid AND author_actor_id = $2",
+    )
+    .bind(&conversation)
+    .bind(assistant)
+    .fetch_one(world.pool())
+    .await
+    .expect("answers");
+    assert_eq!(answers, 1, "nothing said after the stop");
+
     // The key is nowhere but the secrets store.
     for (table, column) in [
         ("host_commands", "body::text"),

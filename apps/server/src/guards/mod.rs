@@ -194,7 +194,7 @@ pub async fn check(
     // A change in a conversation is shown only to reviewers who can read
     // that conversation, and its request is tied to it, so nobody else in
     // the space sees what was going to be said there.
-    let conversation = conversation_of(&mut transaction, kind, target_id, caller.account_id)
+    let conversation = conversation_of(&mut transaction, kind, target_id, input, caller.account_id)
         .await
         .map_err(logged)?;
     if let Some(conversation) = conversation {
@@ -242,8 +242,21 @@ async fn conversation_of(
     transaction: &mut Transaction<'_, Postgres>,
     kind: &str,
     target_id: Uuid,
+    input: &Value,
     caller: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
+    // A call aimed at a space can still carry a conversation, such as a
+    // decision recorded from one: that conversation counts, whatever the
+    // target, so its words stay with its readers.
+    for key in ["conversationId", "sourceConversationId"] {
+        if let Some(named) = input
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+        {
+            return Ok(Some(named));
+        }
+    }
     Ok(match kind {
         "conversation" => Some(target_id),
         "message" | "message_record" => sqlx::query_scalar::<_, Uuid>(

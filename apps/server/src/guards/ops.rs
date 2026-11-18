@@ -167,10 +167,15 @@ impl Operation for GuardWrite {
         let existing = match input.guard_id {
             Some(guard) => Some(
                 sqlx::query_as::<_, GuardView>(&format!(
-                    "{SELECT} WHERE id = $1 AND workspace_id = $2 FOR UPDATE"
+                    // In the scope the caller was authorized for: a guard
+                    // of the whole workspace or another space is not one
+                    // a space's managers can change.
+                    "{SELECT} WHERE id = $1 AND workspace_id = $2 \
+                     AND space_id IS NOT DISTINCT FROM $3 FOR UPDATE"
                 ))
                 .bind(guard.id())
                 .bind(workspace_id)
+                .bind(space_id)
                 .fetch_optional(&mut **tx)
                 .await
                 .map_err(AppError::from)?

@@ -216,6 +216,18 @@ async fn cancelled(state: &AppState, command: &Command) -> Ack {
     let Some(run_id) = command.run_id else {
         return Ack::new(AckOutcome::Done);
     };
+    if detail_state(state, run_id).await.is_none() {
+        // An assistant run has no detail: its record ends here, which
+        // retires its credential, so its next model or tool call is
+        // refused and its turn stops there.
+        return match end_without_detail(state, run_id).await {
+            Ok(()) => Ack::new(AckOutcome::Done),
+            Err(error) => {
+                tracing::warn!(%run_id, error_category = error.log_category(), "a run didn't stop");
+                Ack::new(AckOutcome::Uncertain)
+            }
+        };
+    }
     if is_done(state, run_id).await {
         return Ack::new(AckOutcome::Done);
     }
@@ -236,6 +248,21 @@ async fn cancelled(state: &AppState, command: &Command) -> Ack {
             Ack::new(AckOutcome::Uncertain)
         }
     }
+}
+
+/// End, as cancelled, a run of this host that has no detail row (an
+/// assistant's): nothing if it already finished.
+async fn end_without_detail(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    crate::runs::ops::end_by_service(
+        &mut transaction,
+        run_id,
+        crate::runs::RunState::Cancelled,
+        "Stopped.",
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
 }
 
 /// Whether the host is done with the run (or never had it).

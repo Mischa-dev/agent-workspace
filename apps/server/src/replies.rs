@@ -222,6 +222,19 @@ pub(crate) async fn ask_for_replies(
             )
             .await?;
             insert_requests(transaction, &message, &ambient, false, false, depth).await?;
+            // One a host runs (the built-in assistant too) is started, as a
+            // mention would start it; others hear the request.
+            if !ambient.is_empty() {
+                crate::launch::queue_tag_launches(
+                    transaction,
+                    message.project_id,
+                    message.conversation_id,
+                    message.message_id,
+                    &ambient,
+                    true,
+                )
+                .await?;
+            }
         }
         return Ok(());
     }

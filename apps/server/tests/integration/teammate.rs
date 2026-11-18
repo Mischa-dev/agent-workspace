@@ -384,6 +384,19 @@ async fn guards_stop_or_hold_changes_for_people_and_agents_alike() {
     )
     .await;
     assert_ne!(not_rooks["outcome"], "ok", "{not_rooks}");
+    // A workspace's guard isn't changed under a space's name: who may
+    // change it is decided by its own scope.
+    let (_, elsewhere) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/guard_set", world.organization),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"guardId": deny_guard, "space": space, "remove": true}),
+        ),
+    )
+    .await;
+    assert_eq!(elsewhere["outcome"], "not_found", "{elsewhere}");
     op(
         &world,
         "guard_set",
@@ -553,6 +566,36 @@ async fn guards_stop_or_hold_changes_for_people_and_agents_alike() {
     )
     .await;
     assert!(owners.to_string().contains(&word), "{owners}");
+    // A decision recorded from the channel is the channel's too, though it
+    // is made in the space.
+    let held = tool(
+        &world,
+        rook,
+        "decision_record",
+        json!({"spaceId": space, "sourceConversationId": channel,
+               "title": format!("Go with {word}")}),
+    )
+    .await;
+    assert_eq!(held["value"]["status"], "pending_review", "{held}");
+    let request: Uuid = held["value"]["requestId"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .expect("request");
+    let conversation =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT conversation_id FROM requests WHERE id = $1")
+            .bind(request)
+            .fetch_one(world.pool())
+            .await
+            .expect("request row");
+    assert_eq!(conversation.map(|id| id.to_string()), Some(channel.clone()));
+    let lenas = person_op(
+        &world,
+        &lena.browser,
+        "request_get",
+        json!({"requestId": request}),
+    )
+    .await;
+    assert!(!lenas.to_string().contains(&word), "{lenas}");
     let kept = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM information_schema.columns \
          WHERE table_name = 'guard_holds' AND column_name = 'input'",

@@ -3167,6 +3167,43 @@ async fn a_private_channels_memory_stays_with_its_members() {
     )
     .await;
     assert!(!found.to_string().contains(&word), "{found}");
+    // Made a template by a reader, it still isn't hers: not listed, not
+    // copied into a page of her own.
+    let (status, marked) = send(
+        &world.app,
+        owner.request(
+            "PATCH",
+            &format!("/api/v1/pages/{page}"),
+            None,
+            json!({ "isTemplate": true }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {marked}");
+    let (_, templates) = send(
+        &world.app,
+        lena.request(
+            "POST",
+            &op("page_template_list"),
+            None,
+            json!({ "spaceId": work }),
+        ),
+    )
+    .await;
+    assert_eq!(templates["outcome"], "ok", "{templates}");
+    assert!(!templates.to_string().contains(&page), "{templates}");
+    assert!(!templates.to_string().contains(&word), "{templates}");
+    let (_, copied) = send(
+        &world.app,
+        lena.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/pages"),
+            None,
+            json!({ "fromTemplateId": page }),
+        ),
+    )
+    .await;
+    assert!(!copied.to_string().contains(&word), "{copied}");
     // The space's memory is the space's.
     let (_, opened) = send(
         &world.app,

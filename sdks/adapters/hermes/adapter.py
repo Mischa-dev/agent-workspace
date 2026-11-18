@@ -102,6 +102,9 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
         self._answering: Dict[str, str] = {}
         # Requests being claimed now: the stream and the pick-up can name one twice.
         self._claiming: set = set()
+        # Requests claimed in a conversation that is still answering an
+        # earlier one: each is handed over, in order, once the one before ends.
+        self._waiting: Dict[str, list] = {}
 
     @property
     def name(self) -> str:
@@ -207,6 +210,22 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
             await self._finish(held, release="This agent only answers the people it's set up for.")
             return
         self._held[request_id] = held
+        if conversation_id in self._answering:
+            self._waiting.setdefault(conversation_id, []).append((held, claim))
+            return
+        await self._hand_over(held, claim)
+
+    async def _hand_over(self, held: Held, claim: Dict[str, Any]) -> None:
+        """Gives Hermes a claimed request as a message; the conversation's
+        answers go to it until its turn ends."""
+        request = claim["request"]
+        request_id = held.request_id
+        conversation_id = held.conversation_id
+        asked = next(
+            (m for m in claim.get("recentMessages") or [] if m.get("messageId") == request.get("messageId")),
+            {},
+        )
+        author_id = asked.get("authorId") or ""
         self._answering[conversation_id] = request_id
         text = _runner().strip_leading_mentions(asked.get("text") or request.get("messageExcerpt") or "")
         source = self.build_source(
@@ -239,6 +258,13 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
             return
         held.stopped = True
         held.pending = None
+        waiting = self._waiting.get(held.conversation_id) or []
+        if any(queued is held for queued, _ in waiting):
+            # Never handed over: let it go now.
+            waiting[:] = [entry for entry in waiting if entry[0] is not held]
+            await self._finish(held, release="Stopped before the agent started.")
+            self._held.pop(request_id, None)
+            return
         if held.session_key:
             try:
                 await self.cancel_session_processing(held.session_key)
@@ -366,6 +392,23 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
         self._held.pop(held.request_id, None)
         if self._answering.get(held.conversation_id) == held.request_id:
             self._answering.pop(held.conversation_id, None)
+            waiting = self._waiting.get(held.conversation_id) or []
+            if waiting:
+                asyncio.ensure_future(self._next(held.conversation_id))
+
+    async def _next(self, conversation_id: str) -> None:
+        """Hands over the next request waiting in a conversation; one stopped
+        while it waited is let go."""
+        waiting = self._waiting.get(conversation_id) or []
+        while waiting and conversation_id not in self._answering:
+            held, claim = waiting.pop(0)
+            if held.stopped:
+                await self._finish(held, release="Stopped before the agent started.")
+                self._held.pop(held.request_id, None)
+                continue
+            await self._hand_over(held, claim)
+        if not waiting:
+            self._waiting.pop(conversation_id, None)
 
     def _call(self, name: str, arguments: Dict[str, Any]) -> Any:
         return _runner().unwrap(self._tools.call_tool(name, arguments))
