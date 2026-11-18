@@ -406,6 +406,8 @@ struct SheetBody {
     /// The role only suggests here: cell changes are kept as a proposal
     /// for someone who edits the sheet (C1.11).
     can_suggest: bool,
+    /// The sheet's named ranges, by name (C1.20).
+    ranges: Vec<super::ranges::NamedRange>,
 }
 
 async fn sheet_body(
@@ -435,6 +437,7 @@ async fn sheet_body(
         false,
     )
     .await?;
+    let ranges = super::ranges::named(&mut *connection, sheet.id).await?;
     Ok(SheetBody {
         sheet: SheetSummary {
             id: sheet.id.to_string(),
@@ -474,6 +477,7 @@ async fn sheet_body(
         // restore. The screen keeps its cells read only while archived.
         can_edit,
         can_suggest,
+        ranges,
     })
 }
 

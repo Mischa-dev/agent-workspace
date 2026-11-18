@@ -32,6 +32,7 @@ use crate::{
     },
 };
 
+pub mod make;
 pub mod ops;
 pub mod templates;
 

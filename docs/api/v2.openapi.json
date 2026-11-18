@@ -813,6 +813,7 @@
         "description": "A dashboard as a reader sees it.",
         "properties": {
           "description": {
+            "description": "Left out when there is none.",
             "type": "string"
           },
           "id": {
@@ -847,7 +848,6 @@
         "required": [
           "id",
           "name",
-          "description",
           "shared",
           "tiles",
           "position",
@@ -2252,6 +2252,31 @@
           "outputTokens",
           "cachedInputTokens",
           "confidence"
+        ],
+        "type": "object"
+      },
+      "NamedRange": {
+        "description": "A named range as the web app and agents see it.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "range": {
+            "description": "The block, such as \"A1:B12\".",
+            "type": "string"
+          },
+          "tab": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "tabId",
+          "tab",
+          "range"
         ],
         "type": "object"
       },
@@ -4229,7 +4254,7 @@
                 "type": "null"
               }
             ],
-            "description": "With figures: what the view finds, read as you."
+            "description": "With figures: what the view (or sheet block) shows, read as you."
           },
           "height": {
             "format": "uint8",
@@ -4242,6 +4267,25 @@
           },
           "kind": {
             "$ref": "#/components/schemas/TileKind"
+          },
+          "range": {
+            "type": "string"
+          },
+          "sheet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "style": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartStyle"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "text": {
             "type": "string"
@@ -4272,8 +4316,6 @@
         "required": [
           "id",
           "kind",
-          "title",
-          "text",
           "width",
           "height"
         ],
@@ -4310,7 +4352,33 @@
                 "type": "null"
               }
             ],
-            "description": "\"view\" (the default when view is given) or \"text\"."
+            "description": "\"view\" (the default when view is given), \"sheet\" (when sheet is) or\n\"text\"."
+          },
+          "range": {
+            "description": "A sheet tile's block: a named range of the sheet (sheet_range_set),\nor such as \"A1:B9\" or \"Summary!A1:B9\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sheet": {
+            "description": "A sheet tile's sheet, by id. The tile charts a block of it: labels\nfrom the first column, numbers from the second.",
+            "maxLength": 2048,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "style": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartStyle"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A sheet tile's chart: bar (the default), line, donut or number."
           },
           "text": {
             "description": "A text tile's note, up to 2,000 characters.",
@@ -4358,6 +4426,11 @@
           {
             "const": "text",
             "description": "A note.",
+            "type": "string"
+          },
+          {
+            "const": "sheet",
+            "description": "A block of a sheet (a named range, or such as Summary!A1:B9) as a\nchart: labels from its first column, numbers from its second.",
             "type": "string"
           }
         ]
@@ -16968,7 +17041,7 @@
     },
     "/api/v2/w/{workspace}/ops/dashboard_create": {
       "post": {
-        "description": "Make a dashboard in a project: tiles that each show one of a collection's views (a chart view as its chart) or a note. Make chart views first with view_create (type chart). Shared dashboards need a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
+        "description": "Make a dashboard in a project: tiles that each show one of a collection's views (a chart view as its chart), a block of a sheet as a chart, or a note. Make chart views first with view_create (type chart). Shared dashboards need a role that can edit dashboards. Needs \"See dashboards\" where it acts.",
         "operationId": "dashboard_create",
         "parameters": [
           {
@@ -17068,6 +17141,7 @@
                           "description": "A dashboard as a reader sees it.",
                           "properties": {
                             "description": {
+                              "description": "Left out when there is none.",
                               "type": "string"
                             },
                             "id": {
@@ -17102,7 +17176,6 @@
                           "required": [
                             "id",
                             "name",
-                            "description",
                             "shared",
                             "tiles",
                             "position",
@@ -17236,6 +17309,7 @@
                           "description": "A dashboard as a reader sees it.",
                           "properties": {
                             "description": {
+                              "description": "Left out when there is none.",
                               "type": "string"
                             },
                             "id": {
@@ -17270,7 +17344,6 @@
                           "required": [
                             "id",
                             "name",
-                            "description",
                             "shared",
                             "tiles",
                             "position",
@@ -17785,6 +17858,7 @@
                           "description": "A dashboard as a reader sees it.",
                           "properties": {
                             "description": {
+                              "description": "Left out when there is none.",
                               "type": "string"
                             },
                             "id": {
@@ -17819,7 +17893,6 @@
                           "required": [
                             "id",
                             "name",
-                            "description",
                             "shared",
                             "tiles",
                             "position",
@@ -17953,6 +18026,7 @@
                           "description": "A dashboard as a reader sees it.",
                           "properties": {
                             "description": {
+                              "description": "Left out when there is none.",
                               "type": "string"
                             },
                             "id": {
@@ -17987,7 +18061,6 @@
                           "required": [
                             "id",
                             "name",
-                            "description",
                             "shared",
                             "tiles",
                             "position",
@@ -18542,6 +18615,7 @@
                           "description": "A dashboard as a reader sees it.",
                           "properties": {
                             "description": {
+                              "description": "Left out when there is none.",
                               "type": "string"
                             },
                             "id": {
@@ -18576,7 +18650,6 @@
                           "required": [
                             "id",
                             "name",
-                            "description",
                             "shared",
                             "tiles",
                             "position",
@@ -18710,6 +18783,7 @@
                           "description": "A dashboard as a reader sees it.",
                           "properties": {
                             "description": {
+                              "description": "Left out when there is none.",
                               "type": "string"
                             },
                             "id": {
@@ -18744,7 +18818,6 @@
                           "required": [
                             "id",
                             "name",
-                            "description",
                             "shared",
                             "tiles",
                             "position",
@@ -35965,6 +36038,409 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/page_make": {
+      "post": {
+        "description": "Make a page from messages (quoted in order, with a link back), a whole thread, or blocks of another page (copied, or moved so a link to the new page takes their place; change_undo puts them back). The page shows what it was made from. From a DM or group, name the space. Needs \"Edit pages and decisions\" where it acts.",
+        "operationId": "page_make",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "blocks": {
+                    "description": "The blocks to take, by id (page_blocks lists them).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "messages": {
+                    "description": "Messages to quote, all from one conversation (up to 50). They're\nquoted in the order they were sent.",
+                    "items": {
+                      "description": "a message's id, or a link to it",
+                      "maxLength": 2048,
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "move": {
+                    "description": "With pageId: move the blocks rather than copy them. A link to the\nnew page takes their place; change_undo puts them back.",
+                    "type": "boolean"
+                  },
+                  "pageId": {
+                    "description": "A page to take blocks from, with blocks.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "spaceId": {
+                    "description": "The space the page goes in: its id, link or key. Needed for messages\nin a DM or group; otherwise it's where they are.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "threadId": {
+                    "description": "A thread: the page quotes its messages, oldest first (up to 200).",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "title": {
+                    "description": "The page's title; left out, the thread's name or the first words.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "title": "PageMakeInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "sourceVersion": {
+                              "description": "With move: the version of the page the blocks left.",
+                              "format": "int64",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "title",
+                            "spaceId",
+                            "url"
+                          ],
+                          "title": "PageMade",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "sourceVersion": {
+                              "description": "With move: the version of the page the blocks left.",
+                              "format": "int64",
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "spaceId": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "title",
+                            "spaceId",
+                            "url"
+                          ],
+                          "title": "PageMade",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Make a page from messages or blocks",
+        "tags": [
+          "pages"
+        ],
+        "x-operation-kind": "create"
+      }
+    },
     "/api/v2/w/{workspace}/ops/page_template_list": {
       "post": {
         "description": "List what a new page in a space can start from: the built-in templates and pages marked as templates. Pass a template's id to page_write as fromTemplateId.",
@@ -45410,6 +45886,350 @@
         "summary": "Change scheduled message",
         "tags": [
           "messages"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/sheet_range_set": {
+      "post": {
+        "description": "Give a block of a sheet a name, such as Budget for Summary!A1:B12, or move or remove one. Dashboards, page embeds and sheet_read read a named range by its name; it moves with rows and columns inserted around it. Needs \"Edit sheets\" where it acts.",
+        "operationId": "sheet_range_set",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "description": "The range's name, such as \"Budget\": a letter first, then letters,\ndigits, _ and dots. Setting a name the sheet has moves it.",
+                    "type": "string"
+                  },
+                  "range": {
+                    "description": "The block it names: \"A1:B12\" on the first tab, or \"Summary!A1:B12\".",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "remove": {
+                    "description": "Remove the named range instead (the cells stay as they are).",
+                    "type": "boolean"
+                  },
+                  "sheetId": {
+                    "description": "The sheet: its id or link.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sheetId",
+                  "name"
+                ],
+                "title": "SheetRangeSetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "ranges": {
+                              "description": "The sheet's named ranges now, by name.",
+                              "items": {
+                                "$ref": "#/components/schemas/NamedRange"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "ranges"
+                          ],
+                          "title": "SheetRangesOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "ranges": {
+                              "description": "The sheet's named ranges now, by name.",
+                              "items": {
+                                "$ref": "#/components/schemas/NamedRange"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "ranges"
+                          ],
+                          "title": "SheetRangesOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": true
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "status": {
+                              "const": "paused"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "paused",
+                        "value"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Name a sheet range",
+        "tags": [
+          "sheets"
         ],
         "x-operation-kind": "change"
       }

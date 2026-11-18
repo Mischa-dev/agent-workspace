@@ -35,6 +35,7 @@ import { changeSheet, proposeCells, sheetExportHref, sheetKeys, updateSheet, use
 import { SheetDetailsDialog, TabNameDialog } from './SheetDialogs'
 import { SheetGrid, type GridEdit, type GridShown } from './SheetGrid'
 import { SheetProposalsDialog } from './SheetProposals'
+import { SheetRangesDialog } from './SheetRanges'
 import { proposedOn, useSheetProposals } from './sheetProposals'
 import { SheetFind, SheetRulesDialog, SheetViewDialog } from './SheetTools'
 import { deleteSheetView, useSheetViews, viewSpec, type SheetView } from './sheetViews'
@@ -113,7 +114,8 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const cells = useMemo(() => cellMap(body?.cells ?? []), [body?.cells])
   // Comments on cells (C1.19): marks in the grid, and a panel for the
   // thread about the selected cell or range.
-  const showComments = useProjectExperience(projectId).shows('thing.comments')
+  const experience = useProjectExperience(projectId)
+  const showComments = experience.shows('thing.comments')
   const comments = useQuery({ ...opQuery('comment_list', { thing: { kind: 'sheet', id: sheetId } }), enabled: showComments })
   // The open discussion: by its thread's id once it has one, since rows and
   // columns moving around it move its anchor.
@@ -123,6 +125,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const [viewId, setViewId] = useState<string | null>(null)
   const [viewDialog, setViewDialog] = useState<{ view: SheetView | null } | null>(null)
   const [editingRules, setEditingRules] = useState(false)
+  const [naming, setNaming] = useState(false)
   const views = useSheetViews(sheetId, body?.tab, !phone)
   // Proposals (C1.11): a role that only suggests edits a draft, sent as one
   // proposal; editors see the waiting ones outlined and decide them.
@@ -561,6 +564,7 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
   const sheetItems: MenuEntry[] = [
     { label: 'Download as Excel (.xlsx)', icon: Download, onSelect: () => download('xlsx') },
     { label: 'Download this tab as CSV', icon: Download, onSelect: () => download('csv') },
+    { label: body.ranges.length ? `Named ranges and links (${body.ranges.length})` : 'Named ranges and links', onSelect: () => setNaming(true) },
     ...(editable ? [{ separator: true as const }] : []),
     ...(editable && !body.sheet.archived
       ? [
@@ -822,6 +826,18 @@ function SheetWorkspace({ project, sheetId, user }: { project: Project; sheetId:
           }}
           selection={`${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`}
           tab={tab}
+        />
+      ) : null}
+      {naming && tab ? (
+        <SheetRangesDialog
+          canEdit={editable && !body.sheet.archived}
+          onChanged={() => void refresh()}
+          onClose={() => setNaming(false)}
+          ranges={body.ranges}
+          references={experience.shows('page.references')}
+          selection={`${cellName({ row: box.top, column: box.left })}:${cellName({ row: box.bottom, column: box.right })}`}
+          sheetId={sheetId}
+          tab={tab.name}
         />
       ) : null}
       {viewDialog && tab ? (

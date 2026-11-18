@@ -382,3 +382,34 @@
   display: flex;
   gap: var(--space-2);
 }
+
+/* Named ranges (C1.20) */
+.aw-sheet__ranges {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.aw-sheet__ranges li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.aw-sheet__range-name {
+  font-weight: 600;
+}
+
+.aw-sheet__range-where {
+  flex: 1;
+  color: var(--content-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-sheet__range-form {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}

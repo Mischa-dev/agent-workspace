@@ -414,6 +414,12 @@ pub static SHEET_VIEWS_CHANGED: EventType = fact(
     Some("sheet"),
     "A sheet's filter views were added, changed or removed",
 );
+pub static SHEET_RANGES_CHANGED: EventType = fact(
+    "sheet.ranges_changed",
+    "sheets",
+    Some("sheet"),
+    "A sheet's named ranges were added, changed or removed",
+);
 pub static SHEET_PROPOSALS_CHANGED: EventType = fact(
     "sheet.proposals_changed",
     "sheets",
@@ -665,6 +671,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SHEET_UPDATED,
         &SHEET_VERSION_RESTORED,
         &SHEET_VIEWS_CHANGED,
+        &SHEET_RANGES_CHANGED,
         &SHEET_PROPOSALS_CHANGED,
         &DASHBOARD_UPDATED,
         &WHITEBOARD_SCENE_CHANGED,

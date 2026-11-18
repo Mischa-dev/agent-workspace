@@ -704,3 +704,181 @@ async fn any_revision_comes_back_as_a_new_one() {
     assert_eq!(listed["outcome"], "ok", "{listed}");
     let _ = Uuid::nil();
 }
+
+/// C1.20: a sheet as a source. A named range follows the rows inserted
+/// above it, agents read it by name, and a dashboard tile over it charts its
+/// rows (same labels added up) and changes when a cell does. A range whose
+/// cells are all deleted goes, and the tile says so instead of failing.
+#[tokio::test]
+async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
+    let Some(setup) = setup("c1_sheet_source").await else {
+        return;
+    };
+    let app = &setup.app;
+    let project = create_project(&setup, "SRC", "Source").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_write",
+        json!({
+            "projectId": "SRC",
+            "name": "Spend",
+            "tabs": [{"add": "Costs"}],
+            "cells": [
+                {"cell": "A1", "input": "Item"},
+                {"cell": "B1", "input": "Cost"},
+                {"cell": "A2", "input": "Rent"},
+                {"cell": "B2", "input": "1200"},
+                {"cell": "A3", "input": "Power"},
+                {"cell": "B3", "input": "80"},
+                {"cell": "A4", "input": "Rent"},
+                {"cell": "B4", "input": "100"},
+            ],
+            "clientRequestId": "spend-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+
+    for bad in ["Q1", "two words"] {
+        let refused = call(
+            "sheet_range_set",
+            json!({"sheetId": sheet, "name": bad, "range": "A1:B4", "clientRequestId": format!("bad-{bad}")}),
+        )
+        .await;
+        assert_eq!(refused["outcome"], "invalid_request", "{bad}: {refused}");
+    }
+    let named = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Totals", "range": "Costs!A1:B4", "clientRequestId": "name-1"}),
+    )
+    .await;
+    assert_eq!(named["outcome"], "ok", "{named}");
+    assert_eq!(
+        named["value"]["ranges"],
+        json!([{"name": "Totals", "tabId": named["value"]["ranges"][0]["tabId"], "tab": "Costs", "range": "A1:B4"}]),
+        "{named}"
+    );
+
+    let made = call(
+        "dashboard_create",
+        json!({
+            "spaceId": project,
+            "name": "Money",
+            "shared": false,
+            "tiles": [{"sheet": sheet, "range": "totals", "style": "donut"}],
+            "clientRequestId": "money-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let dashboard = made["value"]["id"].as_str().expect("dashboard").to_owned();
+    let figures = || async {
+        let read = call("dashboard_get", json!({"dashboard": dashboard})).await;
+        assert_eq!(read["outcome"], "ok", "{read}");
+        read["value"]["tiles"][0].clone()
+    };
+    let tile = figures().await;
+    assert_eq!(tile["kind"], "sheet", "{tile}");
+    let shown = &tile["figures"];
+    assert_eq!(shown["collectionName"], "Spend", "{tile}");
+    assert_eq!(shown["viewName"], "Totals", "{tile}");
+    assert_eq!(shown["style"], "donut", "{tile}");
+    assert_eq!(shown["measure"], "sum of Cost", "{tile}");
+    assert_eq!(shown["value"], json!(1380.0), "{tile}");
+    let groups = |shown: &Value| {
+        shown["groups"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|group| (group["name"].clone(), group["value"].clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        groups(shown),
+        [
+            (json!("Rent"), json!(1300.0)),
+            (json!("Power"), json!(80.0))
+        ],
+        "{tile}"
+    );
+
+    // A row above moves the range down; agents read it by name.
+    let moved = call(
+        "sheet_write",
+        json!({
+            "projectId": "SRC",
+            "sheet": sheet,
+            "tabs": [{"tab": "Costs", "insertRowsAt": 1, "count": 1}],
+            "cells": [{"tab": "Costs", "cell": "A1", "input": "Spend this month"}],
+            "clientRequestId": "spend-2",
+        }),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let read = call(
+        "sheet_read",
+        json!({"projectId": "SRC", "sheet": sheet, "range": "TOTALS"}),
+    )
+    .await;
+    assert_eq!(read["value"]["tab"], "Costs", "{read}");
+    assert_eq!(read["value"]["range"], "A2:B5", "{read}");
+    assert_eq!(value_at(&read, "B3"), json!(1200.0), "{read}");
+    assert_eq!(read["value"]["namedRanges"][0]["range"], "A2:B5", "{read}");
+
+    // A cell changing changes the tile.
+    let changed = call(
+        "sheet_write",
+        json!({
+            "projectId": "SRC",
+            "sheet": sheet,
+            "cells": [{"tab": "Costs", "cell": "B4", "input": "90"}],
+            "clientRequestId": "spend-3",
+        }),
+    )
+    .await;
+    assert_eq!(changed["outcome"], "ok", "{changed}");
+    let tile = figures().await;
+    assert_eq!(tile["figures"]["value"], json!(1390.0), "{tile}");
+    assert_eq!(
+        groups(&tile["figures"]),
+        [
+            (json!("Rent"), json!(1300.0)),
+            (json!("Power"), json!(90.0))
+        ],
+        "{tile}"
+    );
+
+    // Deleting every row of it removes the name; the tile says so.
+    let gone = call(
+        "sheet_write",
+        json!({
+            "projectId": "SRC",
+            "sheet": sheet,
+            "tabs": [{"tab": "Costs", "deleteRowsAt": 2, "count": 4}],
+            "clientRequestId": "spend-4",
+        }),
+    )
+    .await;
+    assert_eq!(gone["outcome"], "ok", "{gone}");
+    let tile = figures().await;
+    assert!(tile["figures"].is_null(), "{tile}");
+    assert!(
+        tile["unseen"]
+            .as_str()
+            .is_some_and(|text| text.contains("range is gone")),
+        "{tile}"
+    );
+    let removed = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Totals", "remove": true, "clientRequestId": "name-2"}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "not_found", "{removed}");
+}

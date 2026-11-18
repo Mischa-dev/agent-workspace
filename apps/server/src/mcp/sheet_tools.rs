@@ -275,8 +275,9 @@ pub(super) struct SheetReadArguments {
     /// The tab, by name or ID. Defaults to the first.
     pub tab: Option<String>,
     /// Cells to read in A1 form: "A1:D20", "B:D" (whole columns), "2:10"
-    /// (whole rows) or "C4". Defaults to everything the tab uses. At most
-    /// 2,000 filled cells come back.
+    /// (whole rows), "C4" or "Tab!A1:D20", or a named range's name (which
+    /// picks its tab). Defaults to everything the tab uses. At most 2,000
+    /// filled cells come back.
     pub range: Option<String>,
     /// Read the tab as rows instead of cells: row 1 is the header, and each
     /// row below comes back as {header: value} with its row number.
@@ -380,6 +381,9 @@ pub(super) struct SheetReadValue {
     pub truncated: bool,
     pub can_edit: bool,
     pub url: String,
+    /// The sheet's named ranges: pass a name as range to read one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named_ranges: Vec<sheets::ranges::NamedRange>,
 }
 
 fn tab_line(tab: &Tab, used: (i32, i32)) -> TabLine {
@@ -449,8 +453,22 @@ pub(super) async fn sheet_read(
                 Ok(sheet) => sheet,
                 Err(refusal) => return Ok(refusal),
             };
+        // A named range, or a block naming its tab ("Summary!A1:B9"),
+        // picks the tab itself (C1.20).
+        let pointed = match arguments.range.as_deref() {
+            Some(text) if sheets::ranges::name_of(text).is_some() || text.contains('!') => {
+                sheets::ranges::resolve(&mut connection, sheet.id, text).await?
+            }
+            _ => None,
+        };
+        let named_ranges = sheets::ranges::named(&mut *connection, sheet.id).await?;
         let tabs = sheets::tabs(&mut *connection, sheet.id).await?;
-        let wanted = arguments.tab.as_deref().map(str::trim).unwrap_or_default();
+        let pointed_tab = pointed.as_ref().map(|found| found.tab_id.to_string());
+        let wanted = pointed_tab
+            .as_deref()
+            .or(arguments.tab.as_deref())
+            .map(str::trim)
+            .unwrap_or_default();
         let wanted_id = wanted.parse::<Uuid>().ok();
         let Some(tab) = (if wanted.is_empty() {
             tabs.first()
@@ -520,6 +538,7 @@ pub(super) async fn sheet_read(
                     truncated: false,
                     can_edit,
                     url,
+                    named_ranges,
                 }));
             }
             let all = sheets::cells_in(
@@ -612,20 +631,22 @@ pub(super) async fn sheet_read(
                 truncated,
                 can_edit,
                 url,
+                named_ranges,
             }));
         }
 
-        let range = match arguments.range.as_deref() {
-            Some(text) => match address::range(text, sheets::MAX_ROWS, sheets::MAX_COLUMNS) {
+        let range = match (pointed.as_ref(), arguments.range.as_deref()) {
+            (Some(found), _) => found.range,
+            (None, Some(text)) => match address::range(text, sheets::MAX_ROWS, sheets::MAX_COLUMNS) {
                 Some(range) => range,
                 None => {
                     return Ok(ToolResult::invalid(
                         "range",
-                        "Name cells in A1 form: \"A1:D20\", \"B:D\", \"2:10\" or \"C4\".",
+                        "Name cells in A1 form (\"A1:D20\", \"B:D\", \"2:10\", \"C4\", \"Tab!A1:D20\") or by a named range of the sheet.",
                     ));
                 }
             },
-            None => address::Range {
+            (None, None) => address::Range {
                 rows: (1, used.0.max(1)),
                 columns: (1, used.1.max(1)),
             },
@@ -664,6 +685,7 @@ pub(super) async fn sheet_read(
             truncated,
             can_edit,
             url,
+            named_ranges,
         }))
     }
     .await;

@@ -28,7 +28,8 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<SheetViewList>()
         .add::<SheetViewCreate>()
         .add::<SheetViewUpdate>()
-        .add::<SheetViewDelete>();
+        .add::<SheetViewDelete>()
+        .add::<SheetRangeSet>();
 }
 
 const SHEET: &str = "That sheet";
@@ -865,6 +866,153 @@ impl Operation for SheetViewDelete {
             .map_err(db)?;
         announce(call, view.sheet_id, owner).await?;
         Ok(SheetViewDeleteOutput { deleted: id })
+    }
+}
+
+// ------------------------------------------------------------ named ranges
+
+pub struct SheetRangeSet;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SheetRangeSetInput {
+    /// The sheet: its id or link.
+    pub sheet_id: IdRef,
+    /// The range's name, such as "Budget": a letter first, then letters,
+    /// digits, _ and dots. Setting a name the sheet has moves it.
+    pub name: String,
+    /// The block it names: "A1:B12" on the first tab, or "Summary!A1:B12".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    /// Remove the named range instead (the cells stay as they are).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove: bool,
+}
+
+impl Targeted for SheetRangeSetInput {
+    fn target(&self) -> Target {
+        Target::thing("sheet", self.sheet_id.id())
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetRangesOutput {
+    /// The sheet's named ranges now, by name.
+    pub ranges: Vec<super::ranges::NamedRange>,
+}
+
+impl Operation for SheetRangeSet {
+    const NAME: &'static str = "sheet_range_set";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "sheets";
+    const PERMISSION: Option<Perm> = Some(Perm::SheetsEdit);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Name a sheet range";
+    const DESCRIPTION: &'static str = "Give a block of a sheet a name, such as Budget for \
+        Summary!A1:B12, or move or remove one. Dashboards, page embeds and sheet_read read a \
+        named range by its name; it moves with rows and columns inserted around it.";
+    const EMITS: &'static [&'static str] = &["sheet.ranges_changed"];
+
+    type Input = SheetRangeSetInput;
+    type Output = SheetRangesOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: SheetRangeSetInput,
+    ) -> Result<SheetRangesOutput, OpError> {
+        let name = super::ranges::name_of(&input.name).ok_or(OpError::invalid(
+            "name",
+            "A range's name starts with a letter and holds letters, digits, _ and dots (up to \
+             60), and isn't a cell's name such as Q1.",
+        ))?;
+        let sheet_id = input.sheet_id.id();
+        let actor = call.account_id();
+        let tx = call.tx().await?;
+        // The sheet's row orders writes to its names.
+        let found = sqlx::query_scalar::<_, Uuid>("SELECT id FROM sheets WHERE id = $1 FOR UPDATE")
+            .bind(sheet_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db)?;
+        if found.is_none() {
+            return Err(OpError::not_found(SHEET));
+        }
+        let id = if input.remove {
+            sqlx::query_scalar::<_, Uuid>(
+                "DELETE FROM sheet_named_ranges WHERE sheet_id = $1 AND lower(name) = lower($2) \
+                 RETURNING id",
+            )
+            .bind(sheet_id)
+            .bind(&name)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db)?
+            .ok_or(OpError::not_found("That named range"))?
+        } else {
+            let reference = input.range.as_deref().unwrap_or("").trim();
+            let located = super::ranges::locate_block(tx, sheet_id, None, reference)
+                .await?
+                .ok_or(OpError::invalid(
+                    "range",
+                    "Name a block of the sheet, such as A1:B12 or Summary!A1:B12.",
+                ))?;
+            let count = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM sheet_named_ranges \
+                 WHERE sheet_id = $1 AND lower(name) <> lower($2)",
+            )
+            .bind(sheet_id)
+            .bind(&name)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
+            if count >= super::ranges::MAX_NAMED_RANGES {
+                return Err(OpError::invalid(
+                    "name",
+                    "A sheet keeps up to 100 named ranges. Remove one first.",
+                ));
+            }
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO sheet_named_ranges (id, workspace_id, space_id, sheet_id, tab_id, \
+                   name, first_row, last_row, first_column, last_column, created_by_actor_id) \
+                 SELECT $1, project.organization_id, sheet.project_id, sheet.id, $3, $4, $5, $6, \
+                        $7, $8, $9 \
+                 FROM sheets sheet JOIN projects project ON project.id = sheet.project_id \
+                 WHERE sheet.id = $2 \
+                 ON CONFLICT (sheet_id, lower(name)) DO UPDATE SET name = EXCLUDED.name, \
+                   tab_id = EXCLUDED.tab_id, first_row = EXCLUDED.first_row, \
+                   last_row = EXCLUDED.last_row, first_column = EXCLUDED.first_column, \
+                   last_column = EXCLUDED.last_column, updated_at = now() \
+                 RETURNING id",
+            )
+            .bind(Uuid::now_v7())
+            .bind(sheet_id)
+            .bind(located.tab_id)
+            .bind(&name)
+            .bind(located.range.rows.0)
+            .bind(located.range.rows.1)
+            .bind(located.range.columns.0)
+            .bind(located.range.columns.1)
+            .bind(actor)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?
+        };
+        let ranges = super::ranges::named(&mut **tx, sheet_id).await?;
+        let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
+        let workspace = call.ctx.workspace_id;
+        let event = NewEvent::thing(&catalog::SHEET_RANGES_CHANGED, space, "sheet", sheet_id)
+            .payload(json!({"sheetId": sheet_id}))
+            .actor(actor)
+            .workspace(workspace);
+        let tx = call.tx().await?;
+        events::emit(tx, event).await?;
+        call.audit_target(
+            "sheet_named_range",
+            id,
+            json!({"sheet": sheet_id, "removed": input.remove}),
+        );
+        Ok(SheetRangesOutput { ranges })
     }
 }
 

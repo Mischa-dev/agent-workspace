@@ -1978,7 +1978,7 @@ async fn personal_views_stay_their_owners() {
 /// Sheet filter views (C1.16) keep to their owner: someone else's personal
 /// view of a sheet is not listed to you and can't be renamed or removed by
 /// you, and a role that can't edit sheets can keep a view of its own but
-/// can't share one.
+/// can't share one or name a range.
 #[tokio::test]
 async fn personal_sheet_views_stay_their_owners() {
     let Some(world) = super::support::world::WorldBuilder::default()
@@ -2084,6 +2084,21 @@ async fn personal_sheet_views_stay_their_owners() {
     )
     .await;
     assert_ne!(body["outcome"], "ok", "nate shares a view: {status} {body}");
+    // Naming a range (C1.20) changes the sheet for everyone: sheets.edit.
+    let (status, body) = op(
+        nate,
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Nates", "range": "A1:B2"}),
+    )
+    .await;
+    assert_ne!(body["outcome"], "ok", "nate names a range: {status} {body}");
+    let (status, body) = op(
+        &world.people["lena"].browser,
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Lenas", "range": "A1:B2"}),
+    )
+    .await;
+    assert_eq!(body["outcome"], "ok", "lena names a range: {status} {body}");
     world.finish().await;
 }
 

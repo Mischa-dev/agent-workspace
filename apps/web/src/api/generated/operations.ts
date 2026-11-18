@@ -62,7 +62,7 @@ export type CriterionValue = { completed: boolean; completedAt?: string | null; 
 
 export type CustomEmojiView = { createdAt: string; createdByAccountId: string; id: string; imageUrl: string; name: string; retired: boolean }
 
-export type DashboardEntry = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+export type DashboardEntry = { description?: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 
 export type DateBucket = "day" | "week" | "month"
 
@@ -137,6 +137,8 @@ export type MessageContent = { nodes: MessageNode[]; version: number }
 export type MessageNode = { text: string; type: "text" } | { actorId: string; type: "mention" } | { type: "work_item_ref"; workItemId: string }
 
 export type ModelUsageLine = { cachedInputTokens: number; confidence: string; cost?: number | null; currency?: string | null; inputTokens: number; model: string; outputTokens: number }
+
+export type NamedRange = { name: string; range: string; tab: string; tabId: string }
 
 export type NavEntry = { icon?: string | null; label: string; target: unknown }
 
@@ -230,11 +232,11 @@ export type ThingInput = { id: string; kind: SubjectKind }
 
 export type ThreadRef = { id: string; name: string; status: string }
 
-export type TileEntry = { collection?: string | null; figures?: Figures | null; height: number; id: string; kind: TileKind; text: string; title: string; unseen?: string | null; view?: string | null; width: number }
+export type TileEntry = { collection?: string | null; figures?: Figures | null; height: number; id: string; kind: TileKind; range?: string; sheet?: string | null; style?: ChartStyle | null; text?: string; title?: string; unseen?: string | null; view?: string | null; width: number }
 
-export type TileInput = { height?: number | null; id?: string | null; kind?: TileKind | null; text?: string | null; title?: string | null; view?: string | null; width?: number | null }
+export type TileInput = { height?: number | null; id?: string | null; kind?: TileKind | null; range?: string | null; sheet?: string | null; style?: ChartStyle | null; text?: string | null; title?: string | null; view?: string | null; width?: number | null }
 
-export type TileKind = "view" | "text"
+export type TileKind = "view" | "text" | "sheet"
 
 export type UnattributedUsageLine = { accountId: string; cost?: number | null; currency?: string | null; inputTokens: number; name?: string | null; outputTokens: number; reports: number }
 
@@ -388,7 +390,7 @@ export type CustomEmojiUpdateOutput = { createdAt: string; createdByAccountId: s
 
 export type DashboardCreateInput = { description?: string | null; name: string; shared?: boolean | null; spaceId: string; tiles?: TileInput[] }
 
-export type DashboardCreateOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+export type DashboardCreateOutput = { description?: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 
 export type DashboardDeleteInput = { dashboard: string }
 
@@ -396,7 +398,7 @@ export type DashboardDeleteOutput = { id: string; removed: boolean }
 
 export type DashboardGetInput = { dashboard: string; figures?: boolean | null }
 
-export type DashboardGetOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+export type DashboardGetOutput = { description?: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 
 export type DashboardListInput = { spaceId: string }
 
@@ -404,7 +406,7 @@ export type DashboardListOutput = { canShare: boolean; dashboards: DashboardEntr
 
 export type DashboardUpdateInput = { dashboard: string; description?: string | null; expectedVersion?: number | null; name?: string | null; share?: boolean | null; tiles?: TileInput[] | null }
 
-export type DashboardUpdateOutput = { description: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
+export type DashboardUpdateOutput = { description?: string; id: string; name: string; position: number; shared: boolean; tiles: TileEntry[]; updatedAt: string; version: number }
 
 export type DecisionListInput = { includeSuperseded?: boolean; limit?: number | null; spaceId: string }
 
@@ -578,6 +580,10 @@ export type PackageRemoveInput = { installId: string; parts: RemoveParts }
 
 export type PackageRemoveOutput = { id: string; installedAt: string; name: string; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
 
+export type PageMakeInput = { blocks?: string[]; messages?: string[]; move?: boolean; pageId?: string | null; spaceId?: string | null; threadId?: string | null; title?: string | null }
+
+export type PageMakeOutput = { id: string; sourceVersion?: number | null; spaceId: string; title: string; url: string }
+
 export type PageTemplateListInput = { spaceId: string }
 
 export type PageTemplateListOutput = { templates: PageTemplateView[] }
@@ -665,6 +671,10 @@ export type ScheduleUpdateOutput = { createdAt: string; everyMinutes?: number | 
 export type ScheduledMessageUpdateInput = { cancel?: boolean | null; id: string; sendAt?: string | null; sendNow?: boolean | null; text?: string | null }
 
 export type ScheduledMessageUpdateOutput = { canceled: boolean; scheduled?: ScheduledLine | null }
+
+export type SheetRangeSetInput = { name: string; range?: string | null; remove?: boolean; sheetId: string }
+
+export type SheetRangeSetOutput = { ranges: NamedRange[] }
 
 export type SheetSearchInput = { inFormulas?: boolean; limit?: number | null; matchCase?: boolean; query: string; sheetId: string; tab?: string | null; wholeCell?: boolean }
 
@@ -873,6 +883,7 @@ export type Operations = {
   package_list: { input: PackageListInput; output: PackageListOutput }
   package_preview: { input: PackagePreviewInput; output: PackagePreviewOutput }
   package_remove: { input: PackageRemoveInput; output: PackageRemoveOutput }
+  page_make: { input: PageMakeInput; output: PageMakeOutput }
   page_template_list: { input: PageTemplateListInput; output: PageTemplateListOutput }
   person_create: { input: PersonCreateInput; output: PersonCreateOutput }
   proposal_decide: { input: ProposalDecideInput; output: ProposalDecideOutput }
@@ -895,6 +906,7 @@ export type Operations = {
   schedule_list: { input: ScheduleListInput; output: ScheduleListOutput }
   schedule_update: { input: ScheduleUpdateInput; output: ScheduleUpdateOutput }
   scheduled_message_update: { input: ScheduledMessageUpdateInput; output: ScheduledMessageUpdateOutput }
+  sheet_range_set: { input: SheetRangeSetInput; output: SheetRangeSetOutput }
   sheet_search: { input: SheetSearchInput; output: SheetSearchOutput }
   sheet_view_create: { input: SheetViewCreateInput; output: SheetViewCreateOutput }
   sheet_view_delete: { input: SheetViewDeleteInput; output: SheetViewDeleteOutput }

@@ -370,7 +370,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
             envelope.type === 'page.discussion.updated' ||
             envelope.type === 'collection.updated' ||
             envelope.type === 'dashboard.updated' ||
-            envelope.type === 'sheet.updated'
+            envelope.type === 'sheet.updated' ||
+            envelope.type === 'sheet.ranges_changed'
           ) {
             // An open board or page fetches what changed itself, and lists
             // (and a collection's records) refetch; that code loads with the

@@ -108,3 +108,24 @@ export function setLink(editor: Editor, address: string) {
 export function removeLink(editor: Editor) {
   return editor.chain().focus().extendMarkRange('link').unsetMark('link').run()
 }
+
+/**
+ * The ids of the top-level blocks the selection touches, in order: what
+ * "Make a page" takes. A block typed a moment ago has no id until it
+ * reaches the server.
+ */
+export function selectedBlockIds(state: EditorState): string[] | 'empty' | 'unsaved' {
+  const { from, to, empty } = state.selection
+  if (empty) return 'empty'
+  const ids: string[] = []
+  let unsaved = false
+  state.doc.forEach((block, offset) => {
+    const end = offset + block.nodeSize
+    if (end <= from || offset >= to) return
+    const id: unknown = block.attrs.id
+    if (typeof id === 'string') ids.push(id)
+    else unsaved = true
+  })
+  if (unsaved) return 'unsaved'
+  return ids.length ? ids : 'empty'
+}

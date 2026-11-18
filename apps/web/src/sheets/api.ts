@@ -106,7 +106,12 @@ export type SheetBody = {
   canEdit: boolean
   /** The role only suggests here: cell changes wait as a proposal (C1.11). */
   canSuggest: boolean
+  /** The sheet's named ranges, by name (C1.20). */
+  ranges: NamedRange[]
 }
+
+/** A block of one tab with a name, such as Totals for Costs!A1:B9 (C1.20). */
+export type NamedRange = { name: string; tabId: string; tab: string; range: string }
 
 /** One change from the grid, as the server takes it. */
 export type SheetChange =
@@ -250,6 +255,12 @@ export function normalizeBody(value: unknown): SheetBody {
     cells: asArray(raw.cells).map(normalizeCell),
     canEdit: raw.canEdit === true,
     canSuggest: raw.canSuggest === true,
+    ranges: asArray(raw.ranges).flatMap((entry) => {
+      const range = asRecord(entry)
+      return typeof range.name === 'string' && typeof range.tabId === 'string' && typeof range.range === 'string'
+        ? [{ name: range.name, tabId: range.tabId, tab: asString(range.tab), range: range.range }]
+        : []
+    }),
   }
 }
 

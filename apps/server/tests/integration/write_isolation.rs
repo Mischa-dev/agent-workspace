@@ -482,6 +482,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "dashboard_delete",
     "dashboard_update",
     "decision_record",
+    "page_make",
     "environment_write",
     "file_delete",
     "file_upload",
@@ -506,6 +507,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "sheet_view_create",
     "sheet_view_update",
     "sheet_view_delete",
+    "sheet_range_set",
     "later_save",
     "later_update",
     "schedule_create",
@@ -7003,6 +7005,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"viewId": ax.sheet_view}),
             vec![json!({"viewId": bx.sheet_view})],
         ),
+        // C1.20: B's sheet can't be given a named range from A.
+        mcp_case(
+            "sheet_range_set",
+            json!({"sheetId": a.sheet, "name": "NetRange", "range": "A1:B2", "clientRequestId": "net-range"}),
+            vec![json!({"sheetId": b.sheet, "name": "NetTaken", "range": "A1:B2", "clientRequestId": "net-range-b"})],
+        ),
         // Views (T1.6): a view goes in the collection named; B's views and
         // collections can't be changed, pinned or made a default from A,
         // and a filter can't name B's things.
@@ -7289,6 +7297,17 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "title": "Net mcp decision", "fromMessageId": b.message}),
             json!({"projectId": a.project, "title": "Net mcp decision", "conversationId": b.channel}),
             json!({"projectId": a.project, "title": "Net mcp decision", "supersedes": bx.decision}),
+        ]),
+        // C1.25: a page made from B's message, thread or page can't
+        // happen from A, nor can A's page land in B's space.
+        mcp_case(
+            "page_make",
+            json!({"messages": [a.message], "clientRequestId": "net-page-make"}),
+            vec![json!({"messages": [b.message], "clientRequestId": "net-page-make-b"})],
+        )
+        .rejecting(vec![
+            json!({"messages": [b.message], "projectId": a.project, "clientRequestId": "net-page-make-c"}),
+            json!({"messages": [a.message], "projectId": b.project, "clientRequestId": "net-page-make-d"}),
         ]),
         mcp_case(
             "task_depend",

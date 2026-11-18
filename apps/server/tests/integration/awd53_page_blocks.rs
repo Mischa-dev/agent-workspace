@@ -168,3 +168,188 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
     let after = call("page_get", json!({"pageId": page})).await;
     assert_eq!(after["value"]["version"], 2, "{after}");
 }
+
+/// C1.25: a page made from three picked messages quotes them in the order
+/// they were sent, with a link back and a made-from link; one made by
+/// moving blocks out of a page leaves a link to it in their place, and
+/// undoing that change puts the blocks back. Messages in a conversation
+/// the maker can't read don't reach the page.
+#[tokio::test]
+async fn a_page_made_from_messages_or_moved_blocks() {
+    let Some(setup) = setup("c1_page_make").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+
+    let channel = call(
+        "channel_create",
+        json!({"projectId": "WORK", "name": "planning"}),
+    )
+    .await;
+    assert_eq!(channel["outcome"], "ok", "{channel}");
+    let channel = channel["value"]["id"].as_str().expect("channel").to_owned();
+    let mut sent = Vec::new();
+    for (index, text) in [
+        "First we sketch",
+        "Skip this one",
+        "Then we *build*",
+        "Then we ship",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let message = call(
+            "message_send",
+            json!({"conversationId": channel, "text": text, "clientRequestId": format!("make-{index}")}),
+        )
+        .await;
+        assert_eq!(message["outcome"], "ok", "{message}");
+        sent.push(
+            message["value"]["messageId"]
+                .as_str()
+                .expect("message")
+                .to_owned(),
+        );
+    }
+    // Picked out of order; quoted in the order they were sent.
+    let made = call(
+        "page_make",
+        json!({"messages": [sent[3], sent[0], sent[2]], "clientRequestId": "make-page-1"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    assert_eq!(made["value"]["title"], "First we sketch", "{made}");
+    let page = made["value"]["id"].as_str().expect("page").to_owned();
+    let read = call("page_get", json!({"pageId": page})).await;
+    let body = read["value"]["body"].as_str().expect("body").to_owned();
+    let at = |text: &str| {
+        body.find(text)
+            .unwrap_or_else(|| panic!("{text} in {body}"))
+    };
+    assert!(at("First we sketch") < at("Then we *build*"), "{body}");
+    assert!(at("Then we *build*") < at("Then we ship"), "{body}");
+    assert!(!body.contains("Skip this one"), "{body}");
+    assert!(body.starts_with("From [planning]("), "{body}");
+    let made_from = sqlx::query_scalar::<_, String>(
+        "SELECT kind FROM links WHERE from_thing_id = $1 AND to_thing_id = $2",
+    )
+    .bind(uuid::Uuid::parse_str(&page).expect("page id"))
+    .bind(uuid::Uuid::parse_str(&sent[0]).expect("message id"))
+    .fetch_all(&setup.pool)
+    .await
+    .expect("links");
+    assert_eq!(made_from, ["made_from"]);
+    // A retry makes no second page.
+    let again = call(
+        "page_make",
+        json!({"messages": [sent[3], sent[0], sent[2]], "clientRequestId": "make-page-1"}),
+    )
+    .await;
+    assert_eq!(again["value"]["id"], made["value"]["id"], "{again}");
+
+    // Blocks moved out of a page leave a link to the new one.
+    let written = call(
+        "page_write",
+        json!({"projectId": "WORK", "title": "Plan", "body": BODY}),
+    )
+    .await;
+    assert_eq!(written["outcome"], "ok", "{written}");
+    let plan = written["value"]["id"].as_str().expect("plan").to_owned();
+    let blocks = call("page_blocks", json!({"pageId": plan})).await;
+    let id_at = |position: usize| {
+        blocks["value"]["blocks"][position]["id"]
+            .as_str()
+            .expect("block id")
+            .to_owned()
+    };
+    let moved = call(
+        "page_make",
+        json!({"pageId": plan, "blocks": [id_at(2), id_at(3)], "move": true, "spaceId": work,
+               "clientRequestId": "make-page-2"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    assert_eq!(moved["value"]["title"], "Risks", "{moved}");
+    assert_eq!(moved["value"]["sourceVersion"], 2, "{moved}");
+    let risks = moved["value"]["id"].as_str().expect("risks").to_owned();
+    let new_body = call("page_get", json!({"pageId": risks})).await["value"]["body"].clone();
+    assert_eq!(
+        new_body, "## Risks\n\n- slow CI\n- flaky test",
+        "{new_body}"
+    );
+    let left = call("page_get", json!({"pageId": plan})).await["value"]["body"]
+        .as_str()
+        .expect("plan body")
+        .to_owned();
+    assert!(!left.contains("slow CI"), "{left}");
+    assert!(left.contains(&format!("{risks} \"embed\")")), "{left}");
+
+    let changes = call("change_list", json!({"thingKind": "page", "thingId": plan})).await;
+    assert_eq!(changes["outcome"], "ok", "{changes}");
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": changes["value"]["changes"][0]["id"], "clientRequestId": "make-undo"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    let back = call("page_get", json!({"pageId": plan})).await["value"]["body"]
+        .as_str()
+        .expect("plan body")
+        .to_owned();
+    assert_eq!(back, BODY, "{back}");
+
+    // Someone else's DM can't be quoted into a page.
+    let (mara, mara_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
+    add_member(&setup, &work, mara, "member").await;
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+    let not_hers = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "page_make",
+        json!({"messages": [sent[0]], "spaceId": work, "clientRequestId": "mara-make"}),
+    )
+    .await;
+    assert_eq!(
+        not_hers["outcome"], "ok",
+        "a channel she can read: {not_hers}"
+    );
+    let dm = call(
+        "conversation_start",
+        json!({"people": ["@mara"], "text": "Just between us"}),
+    )
+    .await;
+    assert_eq!(dm["outcome"], "ok", "{dm}");
+    let dm_id = dm["value"]["conversation"]["id"]
+        .as_str()
+        .expect("dm")
+        .to_owned();
+    let dm_message =
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM messages WHERE conversation_id = $1")
+            .bind(uuid::Uuid::parse_str(&dm_id).expect("dm id"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("dm message");
+    let (other, other_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Nate", "nate").await;
+    add_member(&setup, &work, other, "member").await;
+    let other_session = initialize(app, &other_token).await.expect("Nate MCP");
+    let refused = tool(
+        app,
+        &other_token,
+        &other_session,
+        "page_make",
+        json!({"messages": [dm_message], "spaceId": work, "clientRequestId": "nate-make"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+}

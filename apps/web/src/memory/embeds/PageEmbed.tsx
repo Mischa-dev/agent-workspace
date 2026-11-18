@@ -7,13 +7,14 @@ import './embeds.css'
 
 const CollectionEmbed = lazy(() => import('../../collections/CollectionEmbed'))
 const SheetEmbed = lazy(() => import('../../sheets/SheetEmbed'))
+const FileEmbed = lazy(() => import('../../files/FileEmbed'))
 // Anything else a module's manifest embeds (a task, a task list, a
 // whiteboard), or a link to it.
 const ModuleEmbed = lazy(() => import('./ModuleEmbed'))
 
 /**
  * Something of the app's shown live in a page (an embed block): a
- * collection's view, a sheet's range, or else a link to the path. `framed` draws its box; the
+ * collection's view, a sheet's range, a file of the page, or else a link to the path. `framed` draws its box; the
  * page editor keeps the box itself, around the block it can select.
  */
 export function PageEmbed({ framed = true, href, label }: { framed?: boolean; href: string; label: string }) {
@@ -25,7 +26,11 @@ export function PageEmbed({ framed = true, href, label }: { framed?: boolean; hr
       </Suspense>
     ) : target.kind === 'sheet' ? (
       <Suspense fallback={<ListSkeleton label={`Loading ${label || 'the sheet'}`} rows={3} />}>
-        <SheetEmbed label={label} projectId={target.projectId} range={target.range} sheetId={target.sheetId} tabId={target.tabId} />
+        <SheetEmbed label={label} name={target.name} projectId={target.projectId} range={target.range} sheetId={target.sheetId} tabId={target.tabId} />
+      </Suspense>
+    ) : target.kind === 'file' ? (
+      <Suspense fallback={<ListSkeleton label={`Loading ${label || 'the file'}`} rows={2} />}>
+        <FileEmbed fileId={target.fileId} label={label} />
       </Suspense>
     ) : (
       <Suspense

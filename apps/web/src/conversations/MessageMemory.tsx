@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Pin, PinOff } from 'lucide-react'
-
+import { FilePlus, Pin, PinOff } from 'lucide-react'
 
 import { toastError } from '../app/mutations'
 import { memoryKeys, pin, unpin } from '../memory/api'
@@ -9,11 +8,13 @@ import { usePins } from '../memory/hooks'
 import { useProjects } from '../projects/hooks'
 import { showToast, type MenuEntry } from '../ui'
 import { LazyDecisionDialog } from './LazyDecisionDialog'
+import { LazyMakePageDialog } from '../memory/LazyMakePageDialog'
 import type { ConversationMessage } from './types'
 
 /**
- * Pin and Save as decision, for a message's More menu. Pin is a toggle that
- * says what it did and can be undone from the toast; a failure says why.
+ * Pin, Save as decision and Make a page, for a message's More menu. Pin is
+ * a toggle that says what it did and can be undone from the toast; a
+ * failure says why.
  */
 export function useMessageMemory({
   conversationId,
@@ -31,6 +32,7 @@ export function useMessageMemory({
   const queryClient = useQueryClient()
   const pins = usePins(enabled ? projectId : '', conversationId)
   const [deciding, setDeciding] = useState<ConversationMessage | null>(null)
+  const [making, setMaking] = useState<ConversationMessage | null>(null)
   // A DM's decision goes in a project the person can write in; with none, there's nowhere to save it.
   const projects = useProjects()
   const decisionProjects = direct ? (projects.data?.projects ?? []).filter((project) => !project.archivedAt && project.role !== 'viewer') : []
@@ -64,19 +66,34 @@ export function useMessageMemory({
       },
       ...(direct && decisionProjects.length === 0
         ? []
-        : [{ label: 'Save as decision…', icon: 'checklist' as const, onSelect: () => setDeciding(message) }]),
+        : [
+            { label: 'Save as decision…', icon: 'checklist' as const, onSelect: () => setDeciding(message) },
+            { label: 'Make a page…', icon: FilePlus, onSelect: () => setMaking(message) },
+          ]),
     ]
   }
 
-  const dialogs = deciding ? (
-    <LazyDecisionDialog
-      conversationId={conversationId}
-      message={deciding}
-      onClose={() => setDeciding(null)}
-      projectId={projectId}
-      projects={direct ? decisionProjects : null}
-    />
-  ) : null
+  const dialogs = (
+    <>
+      {deciding ? (
+        <LazyDecisionDialog
+          conversationId={conversationId}
+          message={deciding}
+          onClose={() => setDeciding(null)}
+          projectId={projectId}
+          projects={direct ? decisionProjects : null}
+        />
+      ) : null}
+      {making ? (
+        <LazyMakePageDialog
+          onClose={() => setMaking(null)}
+          projectId={projectId}
+          projects={direct ? decisionProjects : null}
+          source={{ kind: 'messages', messageIds: [making.id] }}
+        />
+      ) : null}
+    </>
+  )
 
   return { itemsFor, dialogs, isPinned: (messageId: string) => pinned.has(messageId) }
 }

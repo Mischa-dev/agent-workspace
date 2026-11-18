@@ -50,6 +50,7 @@ const body = (): SheetBody => ({
   ],
   canEdit: true,
   canSuggest: false,
+  ranges: [],
 })
 
 describe('sheet model', () => {

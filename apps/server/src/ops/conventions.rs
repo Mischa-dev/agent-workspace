@@ -28,6 +28,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "forward",
             "report",
             "install",
+            // A page made from other things (messages, a thread, blocks).
+            "make",
         ],
     ),
     (

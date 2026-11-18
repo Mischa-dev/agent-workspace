@@ -1257,6 +1257,22 @@
     "title": "Remove a package"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "page.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "pages",
+    "name": "page_make",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Make a page from messages or blocks"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -1594,6 +1610,22 @@
     "preview": false,
     "proposable": false,
     "title": "Change scheduled message"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "sheet.ranges_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "sheets",
+    "name": "sheet_range_set",
+    "permission": "sheets.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Name a sheet range"
   },
   {
     "automation": false,

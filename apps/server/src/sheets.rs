@@ -27,6 +27,7 @@ pub mod history;
 pub mod http;
 pub mod ops;
 pub mod proposals;
+pub mod ranges;
 pub mod transfer;
 
 use std::collections::{BTreeMap, HashMap};
@@ -2018,6 +2019,7 @@ async fn apply_unbounded(
                         &moves,
                     )
                     .await?;
+                    ranges::follow_moves(&mut *connection, *id, &moves).await?;
                 }
             }
         }
