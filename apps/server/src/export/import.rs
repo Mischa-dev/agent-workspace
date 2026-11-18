@@ -1003,6 +1003,8 @@ struct TableInfo {
     /// Each unique key's columns, with the predicate of a partial one.
     keys: Vec<(Vec<String>, Option<String>)>,
     fks: Vec<Fk>,
+    /// Columns a CHECK constraint reads, which can't wait for the fixups.
+    checked: HashSet<String>,
     /// A unique constraint checked at commit, which `ON CONFLICT` can't
     /// arbitrate: only the id may then.
     deferred_unique: bool,
@@ -1066,6 +1068,16 @@ async fn table_info(
         referenced,
     })
     .collect();
+    let checked = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT a.attname::text FROM pg_constraint c \
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey) \
+         WHERE c.contype = 'c' AND c.conrelid = $1::regclass",
+    )
+    .bind(table)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .collect::<HashSet<_>>();
     let primary = sqlx::query_scalar::<_, Vec<String>>(
         "SELECT array(SELECT a.attname::text FROM unnest(i.indkey::int2[]) k \
                       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k) \
@@ -1091,6 +1103,7 @@ async fn table_info(
         primary,
         keys,
         fks,
+        checked,
     })
 }
 
@@ -1127,11 +1140,24 @@ fn plan(
         .collect::<BTreeSet<_>>();
     // Edges: table -> (target, nullable columns of that reference).
     let mut edges: BTreeMap<&str, Vec<(&str, Vec<String>)>> = BTreeMap::new();
+    // A table that points at itself (a task's parent, a decision's
+    // successor) is written in creation order, which a reparented row or a
+    // forward pointer breaks, so its nullable side waits for the fixups too,
+    // unless a CHECK reads it (a thread needs its channel as it goes in;
+    // those only ever point back).
+    let mut deferred: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
     for table in &tables {
         for fk in &info[table].fks {
-            if let Some(target) = tables.get(fk.target.as_str())
-                && target != table
-            {
+            if fk.target == *table {
+                deferred.entry(table).or_default().extend(
+                    fk.nullable
+                        .iter()
+                        .filter(|column| !info[table].checked.contains(*column))
+                        .cloned(),
+                );
+                continue;
+            }
+            if let Some(target) = tables.get(fk.target.as_str()) {
                 edges
                     .entry(table)
                     .or_default()
@@ -1156,7 +1182,6 @@ fn plan(
         .iter()
         .map(|table| (*table, reaches(table)))
         .collect::<BTreeMap<_, _>>();
-    let mut deferred: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
     let mut hard: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for (table, after) in AFTER {
         if let (Some(table), Some(after)) = (tables.get(table), tables.get(after)) {
@@ -2065,6 +2090,35 @@ pub fn register_jobs(registry: &mut JobRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_table_pointing_at_itself_fills_that_column_in_the_fixups() {
+        let table = |fks: Vec<Fk>| TableInfo {
+            columns: ["id", "parent_id", "project_id"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            has_id: true,
+            tenant: "organization_id",
+            primary: vec!["id".to_owned()],
+            keys: Vec::new(),
+            fks,
+            checked: HashSet::from(["kind".to_owned()]),
+            deferred_unique: false,
+        };
+        let info = HashMap::from([(
+            "work_items",
+            table(vec![Fk {
+                target: "work_items".to_owned(),
+                columns: vec!["parent_id".to_owned(), "project_id".to_owned()],
+                nullable: vec!["parent_id".to_owned()],
+                referenced: vec!["id".to_owned(), "project_id".to_owned()],
+            }]),
+        )]);
+        let steps = plan(&[("tasks", "tasks", "work_items")], &info).expect("plan");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].deferred, vec!["parent_id".to_owned()]);
+    }
 
     #[test]
     fn names_that_climb_out_or_hide_are_refused() {

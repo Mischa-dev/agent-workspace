@@ -493,12 +493,15 @@ async fn abandon(state: &AppState, store: &FileStore, upload: &UploadRow) {
     }
 }
 
-/// Deletes uploads nobody finished within a day, and their bytes. One whose
-/// bytes can't be deleted stays for the next run.
+/// Deletes uploads nobody finished within a day, and their bytes. Each one
+/// is claimed first: its row goes and its bytes are noted as pending in one
+/// statement, which waits for a finish holding the row and claims nothing
+/// once that finish has recorded its file. Bytes that can't be deleted now
+/// stay pending for the next run.
 pub(crate) async fn sweep(state: &AppState) -> Result<u64, AppError> {
-    let due = sqlx::query_as::<_, (Uuid, String, String)>(
+    let due = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT id, storage_key, store_id FROM file_uploads
+        SELECT id FROM file_uploads
         WHERE finished_at IS NULL AND created_at < now() - make_interval(hours => $1)
         ORDER BY created_at
         LIMIT $2
@@ -509,18 +512,30 @@ pub(crate) async fn sweep(state: &AppState) -> Result<u64, AppError> {
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut swept = 0;
-    for (id, key, store_id) in due {
-        let Ok(store) = FileStore::resolve(state, &store_id).await else {
+    for id in due {
+        let claimed = sqlx::query_as::<_, (String, String)>(
+            r#"
+            WITH claimed AS (
+                DELETE FROM file_uploads
+                WHERE id = $1 AND finished_at IS NULL AND file_id IS NULL
+                RETURNING storage_key, workspace_id, store_id
+            )
+            INSERT INTO file_objects_pending (storage_key, workspace_id, store_id)
+            SELECT storage_key, workspace_id, store_id FROM claimed
+            ON CONFLICT (storage_key) DO UPDATE SET storage_key = EXCLUDED.storage_key
+            RETURNING storage_key, store_id
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
+        let Some((key, store_id)) = claimed else {
             continue;
         };
-        if store.delete(&key).await.is_err() {
-            continue;
-        }
-        sqlx::query("DELETE FROM file_uploads WHERE id = $1 AND finished_at IS NULL")
-            .bind(id)
-            .execute(crate::db::scoped(&state.pool))
-            .await?;
         swept += 1;
+        if let Ok(store) = FileStore::resolve(state, &store_id).await {
+            super::drop_objects(state, &store, &[key.as_str()]).await;
+        }
     }
     Ok(swept)
 }

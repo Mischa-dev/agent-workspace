@@ -973,7 +973,7 @@ async fn direct_uploads_skip_the_server() {
     let (fake, endpoint) = start_fake().await;
     let root = tempfile::tempdir().expect("data root");
     let keys = tempfile::tempdir().expect("keys");
-    let (app, _state) = app_with(&setup, &object_values(root.path(), keys.path(), endpoint));
+    let (app, state) = app_with(&setup, &object_values(root.path(), keys.path(), endpoint));
     let setup = Setup { app, ..setup };
     let work = create_project(&setup, "WORK", "Work").await;
     let channel = create_channel(&setup, &work, "general").await;
@@ -1150,6 +1150,40 @@ async fn direct_uploads_skip_the_server() {
     assert_eq!(status, StatusCode::OK, "{first}");
     let (status, second) = start_twenty("second.bin").await;
     assert_eq!(second["outcome"], "limit_reached", "{status} {second}");
+
+    // A day on, the unfinished upload and its bytes go; the finished one's
+    // bytes stay with its file.
+    assert_eq!(
+        put_direct(&first, twenty.clone()).await,
+        reqwest::StatusCode::OK
+    );
+    let first_key = key_of(&first);
+    let big_key = key_of(&started);
+    sqlx::query("UPDATE file_uploads SET created_at = now() - interval '2 days'")
+        .execute(&setup.pool)
+        .await
+        .expect("a day on");
+    files::cleanup(&state).await.expect("cleanup");
+    let objects = fake.objects.lock().expect("lock").clone();
+    assert!(
+        !objects.contains_key(&first_key),
+        "the unfinished bytes went"
+    );
+    assert!(
+        objects.contains_key(&big_key),
+        "a finished upload keeps its bytes"
+    );
+    let left =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM file_uploads WHERE finished_at IS NULL")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("uploads");
+    assert_eq!(left, 0);
+    let pending = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM file_objects_pending")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("pending");
+    assert_eq!(pending, 0, "deleted bytes leave no pending entry");
 }
 
 /// K5.20: a workspace's own bucket takes its new uploads, through the
