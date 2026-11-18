@@ -688,6 +688,28 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
             .bind(&job.delivery_key)
             .execute(crate::db::scoped(&state.pool))
             .await?;
+            let key = format!("push:{}:{}", device.id, job.delivery_key);
+            let mut connection = crate::db::scoped_tx(&state.pool)
+                .await
+                .map_err(AppError::from)?;
+            crate::metering::record(
+                &mut connection,
+                crate::metering::Usage {
+                    workspace_id: organization_id,
+                    meter: "pushes",
+                    quantity: 1,
+                    account_id: None,
+                    space_id: None,
+                    conversation_id: None,
+                    recorded: crate::metering::Recorded {
+                        source_kind: "push",
+                        source_id: Some(device.id),
+                        dedupe_key: &key,
+                    },
+                },
+            )
+            .await?;
+            connection.commit().await.map_err(AppError::from)?;
         }
         retry |= result == SendResult::Retry;
         record(&state.pool, &device, result).await?;

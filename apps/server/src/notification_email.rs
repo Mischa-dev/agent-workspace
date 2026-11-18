@@ -21,7 +21,7 @@ use crate::{
     error::AppError,
     jobs::{self, JobError, JobRegistry, NewJob},
     mail::{self, Message},
-    notification_settings,
+    metering, notification_settings,
     notifications::{self, NotificationView},
 };
 
@@ -195,6 +195,19 @@ async fn send_one(state: &AppState, job: &SendJob) -> Result<(), JobError> {
     let Some(transport) = mail::notification_transport(state, organization_id).await? else {
         return Ok(());
     };
+    // Counted against the workspace's email limit; over it, the inbox still
+    // has the notification.
+    {
+        let key = format!("email:notification:{}:{}", job.notification_id, job.recipient);
+        let mut connection = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(AppError::from)?;
+        let counted = count_email(&mut connection, organization_id, &key).await?;
+        connection.commit().await.map_err(AppError::from)?;
+        if !counted {
+            return Ok(());
+        }
+    }
     let origin = crate::events::public_origin(state);
     let subject = format!(
         "{} · {}",
@@ -356,8 +369,19 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
         if digest == "daily" { "Daily" } else { "Weekly" }
     );
     // Record first: a digest that half-sent is better skipped than doubled.
+    // Over the workspace's email limit, it is skipped too.
+    let key = format!(
+        "email:digest:{}:{}:{}",
+        candidate.organization_id,
+        candidate.actor_id,
+        Utc::now().timestamp()
+    );
+    let counted = count_email(&mut connection, candidate.organization_id, &key).await?;
     record_digest(&mut connection, candidate).await?;
     connection.commit().await?;
+    if !counted {
+        return Ok(());
+    }
     if let Err(error) = mail::send(
         state,
         &transport,
@@ -374,6 +398,28 @@ async fn send_digest(state: &AppState, candidate: &DigestCandidate) -> Result<()
         tracing::warn!("email digest wasn't sent");
     }
     Ok(())
+}
+
+/// Counts one email against `workspace`'s limit, once per key: false when
+/// the limit refuses it (the refusal is noted for the workspace's admins).
+async fn count_email(
+    connection: &mut sqlx::PgConnection,
+    workspace: Uuid,
+    key: &str,
+) -> Result<bool, AppError> {
+    let ask = metering::Ask {
+        record: Some(metering::Recorded {
+            source_kind: "notification_email",
+            source_id: None,
+            dedupe_key: key,
+        }),
+        ..metering::Ask::new(workspace, "emails", 1)
+    };
+    match metering::admit(connection, ask).await {
+        Ok(_) => Ok(true),
+        Err(AppError::LimitReached(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 async fn record_digest(

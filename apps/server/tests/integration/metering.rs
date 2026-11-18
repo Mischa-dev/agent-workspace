@@ -3,8 +3,9 @@
 //! thing, and a plan limit that never refuses.
 
 use agent_workspace_server::{
-    accounts::{NewPerson, create_person},
+    accounts::{NewAgent, NewPerson, Owner, create_agent, create_person},
     error::AppError,
+    invitations::engine::{self, Admitted},
     metering::{self, Admission, Ask, Recorded, Scope, Who},
     workspace::lifecycle::{self, NewWorkspace},
 };
@@ -179,6 +180,173 @@ async fn the_last_unit_goes_once_and_a_plan_refuses_with_its_numbers() {
         .expect("emails");
     assert_eq!((emails.used, emails.limit), (5, Some(5)));
     drop(connection);
+
+    test.finish().await;
+}
+
+async fn someone(pool: &PgPool, login: &str) -> Uuid {
+    let mut transaction = pool.begin().await.expect("begin");
+    let person = create_person(
+        &mut transaction,
+        NewPerson {
+            login_name: login,
+            display_name: login,
+            default_workspace: None,
+            created_by: None,
+            claimed: true,
+        },
+    )
+    .await
+    .expect("person");
+    transaction.commit().await.expect("commit");
+    person.account_id
+}
+
+fn join(workspace: Uuid, account: Uuid, handle: &str) -> engine::Admission<'_> {
+    engine::Admission {
+        workspace_id: workspace,
+        account_id: account,
+        role: "member",
+        role_id: None,
+        display_name: handle,
+        handle,
+    }
+}
+
+/// H1.26: the meters wired into what costs. Seats are people's only, and
+/// the plan's count of workspaces one account owns holds.
+#[tokio::test]
+async fn seats_are_people_and_owning_workspaces_has_a_limit() {
+    let Some(test) = db("h1_26_meters").await else {
+        return;
+    };
+    let pool = &test.pool;
+    // A hosted server: new workspaces start on the free plan.
+    metering::set_default_plan(pool, true)
+        .await
+        .expect("hosted default");
+    let (workspace, owner) = workspace(pool).await;
+    sqlx::query(
+        "UPDATE workspace_plans SET overrides = '{\"people\": 2}' WHERE workspace_id = $1",
+    )
+    .bind(workspace)
+    .execute(pool)
+    .await
+    .expect("two seats");
+
+    // The second person takes the last seat; a third is refused, and
+    // nothing is written for them.
+    let second = someone(pool, "second").await;
+    let third = someone(pool, "third").await;
+    let mut transaction = pool.begin().await.expect("begin");
+    assert_eq!(
+        engine::admit(&mut transaction, join(workspace, second, "second"))
+            .await
+            .expect("the last seat"),
+        Admitted::Joined
+    );
+    transaction.commit().await.expect("commit");
+    let mut transaction = pool.begin().await.expect("begin");
+    let refused = engine::admit(&mut transaction, join(workspace, third, "third"))
+        .await
+        .expect_err("no seat left");
+    drop(transaction);
+    let AppError::LimitReached(refusal) = refused else {
+        panic!("{refused:?}");
+    };
+    assert_eq!(
+        (refusal.meter, refusal.limit, refusal.used, refusal.who_can_change),
+        ("people", 2, 2, Who::Owners)
+    );
+    // An agent never takes a seat, made here or joining from elsewhere.
+    let mut transaction = pool.begin().await.expect("begin");
+    let agent = create_agent(
+        &mut transaction,
+        NewAgent {
+            workspace_id: workspace,
+            role: "member",
+            role_id: None,
+            owner: Owner::Account(owner),
+            created_by: owner,
+        },
+    )
+    .await
+    .expect("agent");
+    transaction.commit().await.expect("commit");
+    let (elsewhere, _) = {
+        let mut transaction = pool.begin().await.expect("begin");
+        let made = lifecycle::create(
+            &mut transaction,
+            second,
+            NewWorkspace {
+                name: "Elsewhere".to_owned(),
+                slug: None,
+                id: None,
+            },
+        )
+        .await
+        .expect("second's own workspace");
+        transaction.commit().await.expect("commit");
+        (made, ())
+    };
+    let mut transaction = pool.begin().await.expect("begin");
+    engine::admit(&mut transaction, join(elsewhere, agent, "agent"))
+        .await
+        .expect("an agent joins without a seat");
+    transaction.commit().await.expect("commit");
+    // A person leaving frees their seat for the next.
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = false \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(workspace)
+    .bind(second)
+    .execute(pool)
+    .await
+    .expect("leave");
+    let mut transaction = pool.begin().await.expect("begin");
+    engine::admit(&mut transaction, join(workspace, third, "third"))
+        .await
+        .expect("a seat came free");
+    transaction.commit().await.expect("commit");
+
+    // The free plan lets one account own three workspaces: the owner has
+    // one, makes two more, and the fourth is refused.
+    for index in 0..2 {
+        let mut transaction = pool.begin().await.expect("begin");
+        lifecycle::create(
+            &mut transaction,
+            owner,
+            NewWorkspace {
+                name: format!("More {index}"),
+                slug: None,
+                id: None,
+            },
+        )
+        .await
+        .expect("within the plan");
+        transaction.commit().await.expect("commit");
+    }
+    let mut transaction = pool.begin().await.expect("begin");
+    let refused = lifecycle::create(
+        &mut transaction,
+        owner,
+        NewWorkspace {
+            name: "One too many".to_owned(),
+            slug: None,
+            id: None,
+        },
+    )
+    .await
+    .expect_err("over the plan");
+    drop(transaction);
+    let AppError::LimitReached(refusal) = refused else {
+        panic!("{refused:?}");
+    };
+    assert_eq!(
+        (refusal.meter, refusal.scope, refusal.limit, refusal.used),
+        ("workspaces_owned", Scope::Account(owner), 3, 3)
+    );
 
     test.finish().await;
 }

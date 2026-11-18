@@ -646,6 +646,19 @@ fn decide(
 pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admission, AppError> {
     let meter = find_meter(ask.meter).ok_or(AppError::Internal("an unknown meter"))?;
     let quantity = ask.quantity.max(0);
+    // A thing already counted (a retry) goes ahead without counting again.
+    if let Some(recorded) = ask.record {
+        let seen = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM usage_events WHERE workspace_id = $1 AND dedupe_key = $2)",
+        )
+        .bind(ask.workspace_id)
+        .bind(recorded.dedupe_key)
+        .fetch_one(&mut *connection)
+        .await?;
+        if seen {
+            return Ok(Admission::Allowed);
+        }
+    }
     let limits = limits_for(connection, meter, &ask).await?;
     let mut checked = Vec::with_capacity(limits.len());
     for limit in limits {
@@ -794,6 +807,52 @@ pub async fn record(connection: &mut PgConnection, usage: Usage<'_>) -> Result<b
         }
     }
     Ok(true)
+}
+
+/// Whether `account` may join `workspace` (or come back to it): a person
+/// takes a seat on the `people` meter; agents and apps never do. Holds the
+/// workspace's plan row first, so two joins at once can't both take the
+/// last seat.
+pub async fn admit_member(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    account: Uuid,
+) -> Result<(), AppError> {
+    let person = sqlx::query_scalar::<_, bool>(
+        "SELECT kind = 'human' AND account_kind = 'person' FROM actors WHERE id = $1", // kind-check: mechanical (people are seats; agents and apps never are)
+    )
+    .bind(account)
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or(false);
+    if !person {
+        return Ok(());
+    }
+    sqlx::query("SELECT 1 FROM workspace_plans WHERE workspace_id = $1 FOR UPDATE")
+        .bind(workspace)
+        .execute(&mut *connection)
+        .await?;
+    admit(connection, Ask::new(workspace, "people", 1)).await?;
+    Ok(())
+}
+
+/// The largest one thing may be on a per-thing meter (`file_bytes`): the
+/// smallest hard limit on the workspace, if any. For checks that must
+/// refuse mid-stream, before the thing's size is known.
+pub async fn largest(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    meter: &'static str,
+) -> Result<Option<i64>, AppError> {
+    let meter = find_meter(meter)
+        .filter(|meter| meter.kind == MeterKind::Each)
+        .ok_or(AppError::Internal("a size limit on a meter that isn't per thing"))?;
+    Ok(limits_for(connection, meter, &Ask::new(workspace, meter.id, 0))
+        .await?
+        .into_iter()
+        .filter(|limit| limit.scope == Scope::Workspace)
+        .filter_map(|limit| limit.hard)
+        .min())
 }
 
 /// The plan a new workspace starts on, written as it is made.

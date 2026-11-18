@@ -759,7 +759,10 @@ async fn streamed_uploads_keep_nothing_they_refuse() {
         50,
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    // The workspace's storage limit is metering's (H1.26): refused with its
+    // numbers.
+    assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "{refused}");
+    assert_eq!(refused["error"]["code"], "limit_reached", "{refused}");
     assert_eq!(stored(root.path()), 1, "refused uploads keep nothing");
     let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM file_objects_pending")
         .fetch_one(&setup.pool)

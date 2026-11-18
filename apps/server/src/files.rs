@@ -326,7 +326,7 @@ pub(crate) async fn upload_limit(
 ) -> Result<usize, AppError> {
     let organization_id = organization_of(&mut *connection, project_id).await?;
     let effective = settings::resolve(
-        connection,
+        &mut *connection,
         SettingsContext {
             organization_id,
             project_id: None,
@@ -339,10 +339,16 @@ pub(crate) async fn upload_limit(
         .value::<i64>("files.max_upload_mb")
         .unwrap_or(25)
         .clamp(1, 100);
+    // The plan's largest file, when it is smaller.
+    let plan = crate::metering::largest(connection, organization_id, "file_bytes")
+        .await?
+        .and_then(|bytes| usize::try_from(bytes.max(0)).ok())
+        .unwrap_or(usize::MAX);
     Ok(usize::try_from(megabytes)
         .unwrap_or(25)
         .saturating_mul(1024 * 1024)
-        .min(MAX_UPLOAD_BYTES))
+        .min(MAX_UPLOAD_BYTES)
+        .min(plan))
 }
 
 pub(crate) async fn organization_of(
@@ -794,10 +800,11 @@ pub(crate) async fn discard_stored(state: &AppState, row: &FileRow) {
     drop_objects(state, &store, &keys).await;
 }
 
-/// Refuses an upload that would take the workspace over its file quota, or
-/// the server over its storage watermark. The walk of the data root leaves
-/// the file store out (`storage_admission`), so the files the database knows
-/// about are added here.
+/// Refuses an upload that would take the workspace over its storage limit
+/// (metering's: the plan's, `files.workspace_quota_mb` and any spend
+/// limit), or the server over its storage watermark. The walk of the data
+/// root leaves the file store out (`storage_admission`), so the files the
+/// database knows about are added here.
 pub(crate) async fn require_room(
     state: &AppState,
     connection: &mut sqlx::PgConnection,
@@ -805,48 +812,25 @@ pub(crate) async fn require_room(
     incoming: u64,
     already_written: u64,
 ) -> Result<(), AppError> {
-    let effective = settings::resolve(
+    let incoming_i64 = i64::try_from(incoming).unwrap_or(i64::MAX);
+    crate::metering::admit(
         &mut *connection,
-        SettingsContext {
-            organization_id,
-            project_id: None,
-            actor_id: None,
-        },
-        &BTreeMap::new(),
+        crate::metering::Ask::new(organization_id, "storage_bytes", incoming_i64),
     )
     .await?;
-    let quota_mb = effective
-        .value::<i64>("files.workspace_quota_mb")
-        .unwrap_or(10_240)
-        .max(0);
     // Link preview pictures live in the file store too, so they count.
-    let (workspace_bytes, all_bytes) = sqlx::query_as::<_, (i64, i64)>(
+    let all_bytes = sqlx::query_scalar::<_, i64>(
         r#"
-        WITH stored AS (
-            SELECT organization_id, byte_size + COALESCE(thumbnail_bytes, 0) AS bytes
+        SELECT COALESCE(sum(bytes), 0)::bigint FROM (
+            SELECT byte_size + COALESCE(thumbnail_bytes, 0) AS bytes
             FROM files WHERE blob_deleted_at IS NULL
             UNION ALL
-            SELECT organization_id, image_bytes
-            FROM link_previews WHERE image_key IS NOT NULL
-        )
-        SELECT
-            COALESCE(sum(bytes) FILTER (WHERE organization_id = $1), 0)::bigint,
-            COALESCE(sum(bytes), 0)::bigint
-        FROM stored
+            SELECT image_bytes FROM link_previews WHERE image_key IS NOT NULL
+        ) stored
         "#,
     )
-    .bind(organization_id)
     .fetch_one(&mut *connection)
     .await?;
-    let incoming_i64 = i64::try_from(incoming).unwrap_or(i64::MAX);
-    if quota_mb > 0
-        && workspace_bytes.saturating_add(incoming_i64) > quota_mb.saturating_mul(1024 * 1024)
-    {
-        return Err(AppError::Conflict(
-            "storage",
-            "this workspace's storage for files is full",
-        ));
-    }
     let config = &state.config;
     // A fresh install may not have made its data folder yet.
     tokio::fs::create_dir_all(&config.data_root)

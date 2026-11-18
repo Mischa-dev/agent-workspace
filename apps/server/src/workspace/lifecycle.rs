@@ -156,6 +156,17 @@ pub async fn create(
         }
         Err(error) => return Err(error.into()),
     }
+    crate::metering::start_plan(connection, id).await?;
+    // How many workspaces one account may own is the new workspace's plan's
+    // to say (the default plan, for every new workspace).
+    crate::metering::admit(
+        connection,
+        crate::metering::Ask {
+            account_id: Some(owner),
+            ..crate::metering::Ask::new(id, "workspaces_owned", 1)
+        },
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO organization_memberships (organization_id, actor_id, role, enabled)
@@ -166,7 +177,6 @@ pub async fn create(
     .bind(owner)
     .execute(&mut *connection)
     .await?;
-    crate::metering::start_plan(connection, id).await?;
     Ok(id)
 }
 

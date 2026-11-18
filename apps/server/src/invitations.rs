@@ -751,6 +751,7 @@ async fn accept_new_user(
     } else {
         "member"
     };
+    crate::metering::admit_member(&mut transaction, invitation.organization_id, actor_id).await?;
     sqlx::query(
         "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, $3)",
     )
