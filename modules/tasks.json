@@ -157,6 +157,7 @@
       "/new-task",
       "/share",
       "/my-work",
+      "/initiatives",
       "/:taskKey",
       "/projects/:projectId/work-items",
       "/projects/:projectId/work-items/:workItemId",
@@ -185,7 +186,8 @@
       "task.dependencies",
       "task.criteria",
       "tech.task_keys",
-      "workspace.my_work"
+      "workspace.my_work",
+      "workspace.initiatives"
     ],
     "sidebar": [],
     "home": ["tasks"],
@@ -202,6 +204,7 @@
       "a:create-task",
       "a:create-task:*",
       "g:my-work",
+      "g:initiatives",
       "w:*",
       "k:*"
     ],

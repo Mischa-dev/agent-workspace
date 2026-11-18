@@ -911,11 +911,11 @@ button.aw-filtergroup__text:hover {
 
 .aw-collection-workflow legend {
   padding: 0;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .aw-collection-workflow__hint {
   margin: 0;
   color: var(--content-fg-muted);
-  font-size: var(--text-sm);
+  font: var(--t-small);
 }

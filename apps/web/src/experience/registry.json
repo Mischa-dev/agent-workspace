@@ -390,6 +390,13 @@
       "default": true
     },
     {
+      "id": "workspace.initiatives",
+      "group": "workspace",
+      "label": "Initiatives",
+      "description": "Work that spans projects, followed through each project's milestones.",
+      "default": true
+    },
+    {
       "id": "workspace.threads",
       "group": "workspace",
       "label": "Threads",

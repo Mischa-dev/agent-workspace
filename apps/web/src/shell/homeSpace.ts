@@ -4,7 +4,7 @@ import { requestJson } from '../api/client'
 import { legacyPathOf } from '../app/href'
 
 /** The pages in the Home space: what's yours across every project. */
-export const homeSpacePaths = ['/home', '/inbox', '/my-work', '/later', '/runs', '/whiteboards'] as const
+export const homeSpacePaths = ['/home', '/inbox', '/my-work', '/initiatives', '/later', '/runs', '/whiteboards'] as const
 
 export function inHomeSpace(address: string) {
   const pathname = legacyPathOf(address)

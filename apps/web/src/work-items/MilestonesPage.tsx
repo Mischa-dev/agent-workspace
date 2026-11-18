@@ -1,5 +1,10 @@
 import { useState, type FormEvent } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
+
+import { opQuery } from '../api/ops'
+import { useWorkspaceId } from '../app/workspace'
+import { useProjectExperience } from '../experience/layout'
 
 import { isApiError } from '../api/errors'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
@@ -7,7 +12,7 @@ import { useProject } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
 import { useShellPage } from '../shell/shellStore'
 import { WorkTabs } from '../shell/ProjectTabs'
-import { Banner, Button, Dialog, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, TextArea, TextField, countLabel, describeError, showToast } from '../ui'
+import { Banner, Button, Dialog, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, SelectField, TextArea, TextField, countLabel, describeError, showToast } from '../ui'
 import { DatePicker, formatDateLabel } from '../ui/pickers'
 import { workItemsHref } from './links'
 import { useCreateMilestone, useMilestoneList, useUpdateMilestone } from './planningHooks'
@@ -167,6 +172,7 @@ function MilestoneRow({
             )}
             {milestone.overdue ? <strong className="aw-milestone__overdue"> Overdue</strong> : null}
           </span>
+          {milestone.initiative ? <span className="aw-milestone__date">Part of {milestone.initiative}</span> : null}
           {milestone.total ? (
             <Link className="aw-milestone__tasks" to={href}>
               {milestone.open ? `${countLabel(milestone.open, 'open task')}` : 'View tasks'}
@@ -194,6 +200,15 @@ function MilestoneDialog({ milestone, onClose, projectId }: { milestone: Milesto
   const [name, setName] = useState(milestone?.name ?? '')
   const [description, setDescription] = useState(milestone?.description ?? '')
   const [targetDate, setTargetDate] = useState(milestone?.targetDate ?? '')
+  // An existing milestone can join one of the workspace's initiatives.
+  const workspaceId = useWorkspaceId() ?? undefined
+  const showsInitiatives = useProjectExperience(projectId).shows('workspace.initiatives')
+  const initiatives = useQuery({
+    ...opQuery('initiative_list', {}, { workspaceId }),
+    enabled: Boolean(milestone) && showsInitiatives,
+    staleTime: 60_000,
+  })
+  const [initiativeId, setInitiativeId] = useState(milestone?.initiativeId ?? '')
   const pending = create.isPending || update.isPending
   const error = create.error ?? update.error
 
@@ -203,8 +218,9 @@ function MilestoneDialog({ milestone, onClose, projectId }: { milestone: Milesto
     const fields = { name: name.trim(), description: description.trim(), targetDate: targetDate || null }
     const done = { onSuccess: onClose }
     if (milestone) {
+      const joined = initiativeId !== (milestone.initiativeId ?? '') ? { initiativeId: initiativeId || null } : {}
       update.mutate(
-        { projectId, milestoneId: milestone.id, expectedVersion: milestone.version, ...fields, idempotencyKey: crypto.randomUUID() },
+        { projectId, milestoneId: milestone.id, expectedVersion: milestone.version, ...fields, ...joined, idempotencyKey: crypto.randomUUID() },
         done,
       )
     } else {
@@ -224,7 +240,12 @@ function MilestoneDialog({ milestone, onClose, projectId }: { milestone: Milesto
           </Button>
         </>
       }
-      dirty={name !== (milestone?.name ?? '') || description !== (milestone?.description ?? '') || targetDate !== (milestone?.targetDate ?? '')}
+      dirty={
+        name !== (milestone?.name ?? '') ||
+        description !== (milestone?.description ?? '') ||
+        targetDate !== (milestone?.targetDate ?? '') ||
+        initiativeId !== (milestone?.initiativeId ?? '')
+      }
       onClose={onClose}
       onSubmit={submit}
       open
@@ -238,6 +259,26 @@ function MilestoneDialog({ milestone, onClose, projectId }: { milestone: Milesto
         <DatePicker className="aw-milestone__datefield" label="Target date" onChange={(value) => setTargetDate(value ?? '')} placeholder="No target date" value={targetDate || null} />
       </div>
       <TextArea label="Description" maxLength={2000} onChange={(event) => setDescription(event.target.value)} rows={3} value={description} />
+      {milestone && showsInitiatives && (initiatives.data?.initiatives.length || milestone.initiativeId) ? (
+        <SelectField
+          hint="Work that spans projects. Its progress counts this milestone’s tasks."
+          label="Initiative"
+          onChange={(event) => setInitiativeId(event.target.value)}
+          value={initiativeId}
+        >
+          <option value="">None</option>
+          {milestone.initiativeId && !initiatives.data?.initiatives.some((entry) => entry.id === milestone.initiativeId) ? (
+            <option value={milestone.initiativeId}>{milestone.initiative ?? 'Its initiative'}</option>
+          ) : null}
+          {(initiatives.data?.initiatives ?? [])
+            .filter((entry) => !entry.archived)
+            .map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.title}
+              </option>
+            ))}
+        </SelectField>
+      ) : null}
       {error ? <Banner tone="danger">{saveMessage(error)}</Banner> : null}
     </Dialog>
   )

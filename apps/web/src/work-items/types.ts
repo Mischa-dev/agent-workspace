@@ -360,6 +360,9 @@ export type Milestone = {
   progress: number
   overdue: boolean
   version: number
+  /** The initiative it is part of (T1.26), and its name. */
+  initiativeId: string | null
+  initiative: string | null
 }
 
 export type BulkChanges = {
